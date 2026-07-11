@@ -1,0 +1,16 @@
+[Unit]
+Description=Proxima staging workspace
+After=network.target
+
+[Service]
+Type=simple
+User=proxima
+Group=proxima
+EnvironmentFile=/etc/proxima-staging/proxima.env
+WorkingDirectory=/opt/proxima-staging
+ExecStart=/usr/local/bin/proxima serve
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

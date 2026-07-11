@@ -1,0 +1,284 @@
+/* Proxima theme for the local Video Studio fork. */
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: var(--ui-chat-surface-background);
+  color: var(--ui-text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.video-studio-direct {
+  --proxima-video-bg: var(--ui-chat-surface-background);
+  --proxima-video-surface: var(--ui-surface);
+  --proxima-video-surface-soft: var(--ui-surface-subtle);
+  --proxima-video-surface-muted: color-mix(in srgb, var(--ui-accent) 6%, var(--ui-surface-subtle));
+  --proxima-video-border: var(--ui-stroke-secondary);
+  --proxima-video-border-soft: var(--ui-stroke-tertiary);
+  --proxima-video-text: var(--ui-text-primary);
+  --proxima-video-muted: var(--ui-text-secondary);
+  --proxima-video-faint: var(--ui-text-tertiary);
+  --proxima-video-icon: color-mix(in srgb, var(--ui-text-primary) 78%, var(--ui-text-secondary));
+  --proxima-video-icon-muted: color-mix(in srgb, var(--ui-text-secondary) 78%, var(--ui-text-tertiary));
+  --proxima-video-icon-disabled: color-mix(in srgb, var(--ui-text-tertiary) 62%, var(--ui-stroke-primary));
+  --proxima-video-accent: color-mix(in srgb, var(--ui-accent) 70%, white 30%);
+  --proxima-video-accent-strong: var(--ui-accent);
+  --proxima-video-accent-soft: color-mix(in srgb, var(--ui-accent) 13%, transparent);
+  --proxima-video-accent-mid: color-mix(in srgb, var(--ui-accent) 34%, transparent);
+  --proxima-video-timeline-bg: color-mix(in srgb, var(--ui-accent) 2%, var(--proxima-video-surface));
+  --proxima-video-timeline-row: var(--proxima-video-surface);
+  --proxima-video-timeline-gutter: color-mix(in srgb, var(--ui-accent) 4%, var(--proxima-video-surface-soft));
+  --proxima-video-timeline-clip: color-mix(in srgb, var(--ui-accent) 7%, var(--proxima-video-surface));
+  --proxima-video-preview-bg: color-mix(in srgb, var(--ui-accent) 5%, var(--proxima-video-surface-soft));
+  --hf-accent: var(--proxima-video-accent);
+  color-scheme: light;
+}
+
+.video-studio-direct .proxima-studio-root {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-accent) 5%, white), var(--proxima-video-bg) 42%),
+    var(--proxima-video-bg);
+  color: var(--proxima-video-text);
+}
+
+.video-studio-direct .proxima-studio-header {
+  background: color-mix(in srgb, var(--proxima-video-surface) 88%, transparent);
+  border-bottom: 1px solid var(--proxima-video-border);
+  color: var(--proxima-video-text);
+  backdrop-filter: blur(16px);
+}
+
+.video-studio-direct .proxima-studio-brand-mark {
+  display: inline-grid;
+  width: var(--brand-mark-size-sm);
+  height: var(--brand-mark-size-sm);
+  place-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.video-studio-direct .proxima-studio-brand-name {
+  color: var(--proxima-video-text);
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.video-studio-direct :is(.bg-neutral-950, .bg-neutral-950\/70, .bg-neutral-950\/80, .bg-neutral-950\/90, .bg-neutral-950\/96, .bg-\[\#0a0a0b\], .bg-black) {
+  background-color: var(--proxima-video-surface) !important;
+}
+
+.video-studio-direct :is(.bg-neutral-900, .bg-neutral-900\/40, .bg-neutral-900\/50, .bg-neutral-900\/60, .bg-neutral-900\/70, .bg-neutral-900\/80, .bg-neutral-900\/90) {
+  background-color: var(--proxima-video-surface-soft) !important;
+}
+
+.video-studio-direct :is(.bg-neutral-800, .bg-neutral-800\/20, .bg-neutral-800\/30, .bg-neutral-800\/40, .bg-neutral-800\/50, .bg-neutral-800\/60, .bg-neutral-800\/70, .bg-black\/18, .bg-black\/20, .bg-black\/40, .bg-black\/50, .bg-black\/60, .bg-black\/70, .bg-white\/5, .bg-white\/10) {
+  background-color: var(--proxima-video-surface-muted) !important;
+}
+
+.video-studio-direct :is(.hover\:bg-neutral-800:hover, .hover\:bg-neutral-800\/30:hover, .hover\:bg-neutral-800\/40:hover, .hover\:bg-neutral-800\/50:hover, .hover\:bg-neutral-800\/60:hover, .hover\:bg-neutral-800\/70:hover, .hover\:bg-neutral-900:hover, .hover\:bg-neutral-900\/60:hover, .hover\:bg-black\/60:hover, .hover\:bg-black\/70:hover) {
+  background-color: color-mix(in srgb, var(--ui-accent) 10%, var(--proxima-video-surface-soft)) !important;
+}
+
+.video-studio-direct :is(.border-neutral-800, .border-neutral-800\/30, .border-neutral-800\/40, .border-neutral-800\/50, .border-neutral-800\/60, .border-panel-border) {
+  border-color: var(--proxima-video-border-soft) !important;
+}
+
+.video-studio-direct :is(.border-neutral-700, .border-neutral-700\/40, .border-neutral-700\/50, .border-neutral-700\/60, .border-neutral-600) {
+  border-color: var(--proxima-video-border) !important;
+}
+
+.video-studio-direct :is(.text-white, .text-white\/80, .text-white\/90, .text-neutral-50, .text-neutral-100, .text-neutral-200, .text-panel-text-1) {
+  color: var(--proxima-video-text) !important;
+}
+
+.video-studio-direct :is(.text-neutral-300, .text-neutral-400, .text-white\/60, .text-panel-text-2, .text-panel-text-3) {
+  color: var(--proxima-video-muted) !important;
+}
+
+.video-studio-direct :is(.text-neutral-500, .text-panel-text-4, .text-panel-text-5) {
+  color: var(--proxima-video-icon-muted) !important;
+}
+
+.video-studio-direct :is(.text-neutral-600) {
+  color: var(--proxima-video-faint) !important;
+}
+
+.video-studio-direct :is(.text-neutral-700) {
+  color: var(--proxima-video-icon-disabled) !important;
+}
+
+.video-studio-direct :is(button, a, [role="button"]) :is(svg, .ph) {
+  color: currentColor;
+  opacity: .98;
+}
+
+.video-studio-direct :is(button, a, [role="button"]):disabled :is(svg, .ph),
+.video-studio-direct :is(button.cursor-default, button.cursor-not-allowed) :is(svg, .ph) {
+  opacity: .55;
+}
+
+.video-studio-direct :is(button, a, [role="button"]):not(:disabled):hover :is(svg, .ph) {
+  opacity: 1;
+}
+
+.video-studio-direct :is(button, a, [role="button"]).text-neutral-500,
+.video-studio-direct :is(button, a, [role="button"]).text-neutral-600 {
+  color: var(--proxima-video-icon-muted) !important;
+}
+
+.video-studio-direct :is(button, a, [role="button"]).text-neutral-700 {
+  color: var(--proxima-video-icon-disabled) !important;
+}
+
+.video-studio-direct .bg-panel-bg {
+  background-color: var(--proxima-video-surface-soft) !important;
+}
+
+.video-studio-direct .bg-panel-input,
+.video-studio-direct .bg-panel-hover,
+.video-studio-direct .hover\:bg-panel-hover:hover,
+.video-studio-direct .hover\:bg-panel-hover\/30:hover,
+.video-studio-direct .hover\:bg-panel-hover\/40:hover {
+  background-color: var(--proxima-video-surface-muted) !important;
+}
+
+.video-studio-direct :is(.bg-studio-accent, .bg-studio-accent\/70, .bg-studio-accent\/80, .bg-studio-accent\/90, .bg-panel-accent, .hover\:bg-studio-accent:hover, .hover\:bg-studio-accent\/80:hover, .group:active .group-active\:bg-studio-accent\/70) {
+  background-color: var(--proxima-video-accent) !important;
+}
+
+.video-studio-direct :is(.bg-studio-accent\/5, .bg-studio-accent\/10, .bg-studio-accent\/15, .bg-studio-accent\/20, .bg-studio-accent\/25, .bg-studio-accent\/\[0\.03\], .bg-studio-accent\/\[0\.04\], .bg-studio-accent\/\[0\.05\], .bg-studio-accent\/\[0\.06\], .bg-panel-accent\/10, .bg-panel-accent\/14, .bg-panel-accent\/18, .bg-panel-accent\/40, .hover\:bg-studio-accent\/10:hover, .hover\:bg-studio-accent\/25:hover, .hover\:bg-panel-accent\/10:hover) {
+  background-color: var(--proxima-video-accent-soft) !important;
+}
+
+.video-studio-direct :is(.text-studio-accent, .text-studio-accent\/50, .text-studio-accent\/70, .text-studio-accent\/80, .text-panel-accent, .text-panel-accent\/70, .hover\:text-studio-accent:hover, .hover\:text-panel-accent:hover) {
+  color: var(--proxima-video-accent-strong) !important;
+}
+
+.video-studio-direct :is(.border-studio-accent, .border-studio-accent\/25, .border-studio-accent\/30, .border-studio-accent\/50, .border-studio-accent\/60, .border-studio-accent\/70, .border-studio-accent\/80, .border-panel-accent, .hover\:border-studio-accent:hover, .hover\:border-studio-accent\/50:hover, .focus\:border-studio-accent:focus, .focus\:border-studio-accent\/40:focus, .focus\:border-studio-accent\/60:focus, .focus\:border-panel-accent:focus) {
+  border-color: var(--proxima-video-accent) !important;
+}
+
+.video-studio-direct :is(.ring-studio-accent, .ring-panel-accent\/30, .focus\:ring-studio-accent\/30:focus, .focus\:ring-studio-accent\/40:focus, .focus\:ring-panel-accent:focus, .focus\:ring-panel-accent\/40:focus) {
+  --tw-ring-color: var(--proxima-video-accent-mid) !important;
+}
+
+.video-studio-direct :is(.accent-studio-accent, .accent-panel-accent) {
+  accent-color: var(--proxima-video-accent);
+}
+
+.video-studio-direct .shadow-black\/40 {
+  --tw-shadow-color: rgba(15, 23, 42, .14) !important;
+}
+
+.video-studio-direct :is(.shadow-black\/50, .shadow-black\/60) {
+  --tw-shadow-color: rgba(15, 23, 42, .16) !important;
+}
+
+.video-studio-direct :is(input, textarea, select) {
+  color: var(--proxima-video-text);
+  caret-color: var(--proxima-video-accent-strong);
+}
+
+.video-studio-direct :is(input, textarea, select)::placeholder {
+  color: var(--proxima-video-faint);
+}
+
+.video-studio-direct .proxima-timeline-empty {
+  background: var(--proxima-video-timeline-bg) !important;
+}
+
+.video-studio-direct .proxima-timeline-empty > :first-child {
+  background: var(--proxima-video-timeline-gutter);
+}
+
+.video-studio-direct .proxima-timeline-empty .border-dashed {
+  background: color-mix(in srgb, var(--ui-accent) 3%, var(--proxima-video-surface));
+}
+
+.video-studio-direct .proxima-preview-pasteboard {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-accent) 4%, var(--proxima-video-surface)), var(--proxima-video-preview-bg)),
+    var(--proxima-video-preview-bg);
+}
+
+.video-studio-direct .proxima-preview-pasteboard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--proxima-video-border-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--proxima-video-border-soft) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: .28;
+}
+
+.video-studio-direct .proxima-preview-pasteboard > * {
+  position: relative;
+}
+
+.video-studio-direct .proxima-preview-loading {
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--ui-accent) 10%, transparent), transparent 38%),
+    var(--proxima-video-surface) !important;
+  color: var(--proxima-video-text);
+  backdrop-filter: blur(14px);
+}
+
+.video-studio-direct .proxima-tool-switch {
+  border: 1px solid var(--proxima-video-border-soft);
+  background: var(--proxima-video-surface-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--proxima-video-surface) 72%, transparent);
+}
+
+.video-studio-direct .proxima-tool-button {
+  color: var(--proxima-video-icon-muted);
+  background: transparent;
+}
+
+.video-studio-direct .proxima-tool-button:hover {
+  color: var(--proxima-video-accent-strong);
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--proxima-video-surface));
+}
+
+.video-studio-direct .proxima-tool-button.is-active {
+  color: var(--proxima-video-accent-strong);
+  background: color-mix(in srgb, var(--ui-accent) 12%, var(--proxima-video-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent) 28%, transparent);
+}
+
+.video-studio-direct * {
+  scrollbar-color: color-mix(in srgb, var(--ui-accent) 22%, var(--proxima-video-border)) transparent;
+}
+
+.video-studio-direct ::selection {
+  background: color-mix(in srgb, var(--ui-accent) 22%, transparent);
+  color: var(--proxima-video-text);
+}
+
+.video-studio-direct .hf-frame {
+  border-color: var(--proxima-video-border);
+  background: var(--proxima-video-surface-soft);
+}
+
+.video-studio-direct .hf-loader-mark {
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--proxima-video-accent) 28%, transparent));
+}
+
+.video-studio-direct .hf-loader-progress {
+  background: color-mix(in srgb, var(--ui-text-primary) 10%, transparent);
+}
+
+.video-studio-direct .hf-loader-progress__fill,
+.video-studio-direct [role="slider"] .z-\[1\].rounded-full {
+  background: linear-gradient(90deg, var(--proxima-video-accent-strong), var(--proxima-video-accent)) !important;
+}
+
+.video-studio-direct [role="slider"] .z-\[3\],
+.video-studio-direct [role="slider"] .z-\[4\].w-3.h-3.rounded-full {
+  background: var(--proxima-video-accent) !important;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--proxima-video-accent) 42%, transparent), 0 1px 4px rgba(15,23,42,.18) !important;
+}

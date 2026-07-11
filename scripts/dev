@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+API_DIR="$ROOT/apps/api"
+WEB_DIR="$ROOT/apps/web"
+DEV_ROOT="${PROXIMA_DEV_ROOT:-$HOME/.local/share/proxima-dev}"
+
+command -v uv >/dev/null 2>&1 || { echo 'uv is required' >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo 'npm is required' >&2; exit 1; }
+
+mkdir -p "$DEV_ROOT"
+( cd "$API_DIR" && uv sync >/dev/null )
+( cd "$WEB_DIR" && npm install >/dev/null )
+
+export PROXIMA_DB_PATH="${PROXIMA_DB_PATH:-$DEV_ROOT/proxima-dev.db}"
+export PROXIMA_WORKSPACE_ROOT="${PROXIMA_WORKSPACE_ROOT:-$DEV_ROOT}"
+export PROXIMA_PROJECTCTL_COMMAND="${PROXIMA_PROJECTCTL_COMMAND:-/usr/bin/true}"
+export PROXIMA_WEB_DIST="${PROXIMA_WEB_DIST:-$WEB_DIR/dist}"
+export PROXIMA_FEATURE_VIDEO="${PROXIMA_FEATURE_VIDEO:-0}"
+export PROXIMA_FEATURE_DESIGN_STUDIO="${PROXIMA_FEATURE_DESIGN_STUDIO:-0}"
+export PYTHONPATH="$API_DIR"
+
+cleanup() { jobs -p | xargs -r kill 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
+printf '==> Starting Proxima API on http://127.0.0.1:8765\n'
+"$API_DIR/.venv/bin/python" "$API_DIR/scripts/serve.py" &
+printf '==> Starting Proxima web on http://127.0.0.1:5177\n'
+npm --prefix "$WEB_DIR" run dev &
+wait

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Safe, online backup of the Proxima SQLite database (WAL-aware) with rotation.
+# Uses SQLite's backup API so it's consistent even while the server is running.
+#
+#   PROXIMA_DB_PATH       path to the live DB   (default: ~/.local/share/proxima/proxima.db)
+#   PROXIMA_BACKUP_DIR    where to write copies (default: <db dir>/backups)
+#   PROXIMA_BACKUP_KEEP   how many to retain    (default: 14)
+#
+# Schedule it with cron or a systemd timer — see docs/backup.md.
+set -euo pipefail
+
+DB_PATH="${PROXIMA_DB_PATH:-$HOME/.local/share/proxima/proxima.db}"
+BACKUP_DIR="${PROXIMA_BACKUP_DIR:-$(dirname "$DB_PATH")/backups}"
+KEEP="${PROXIMA_BACKUP_KEEP:-14}"
+
+if [ ! -f "$DB_PATH" ]; then
+  echo "backup: database not found at $DB_PATH" >&2
+  exit 1
+fi
+
+mkdir -p "$BACKUP_DIR"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT="$BACKUP_DIR/proxima-$STAMP.db"
+
+python3 - "$DB_PATH" "$OUT" <<'PY'
+import sqlite3, sys
+src, dst = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(src)
+bck = sqlite3.connect(dst)
+with bck:
+    con.backup(bck)          # consistent online snapshot
+bck.execute("VACUUM")        # compact the copy
+bck.close(); con.close()
+PY
+
+echo "backup: wrote $OUT"
+
+# Rotate: keep the newest $KEEP, delete the rest.
+ls -1t "$BACKUP_DIR"/proxima-*.db 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r old; do
+  rm -f "$old" && echo "backup: pruned $old"
+done

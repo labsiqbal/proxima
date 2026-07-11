@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 1; }
+}
+
+need uv
+need npm
+
+printf '==> Syncing API dependencies\n'
+( cd "$ROOT/apps/api" && uv sync )
+
+printf '==> Installing web dependencies\n'
+( cd "$ROOT/apps/web" && npm install )
+
+printf '==> Running API tests\n'
+( cd "$ROOT/apps/api" && .venv/bin/python -m pytest -q tests )
+
+printf '==> Building web PWA\n'
+npm --prefix "$ROOT/apps/web" run build
+
+printf '==> Build complete\n'

@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Proxima workspace/project ACL helper.
+
+Prototype helper for creating runtime workspaces and private-by-default projects.
+This script is intended to be called by an admin/backend with sudo. It validates
+slugs/users/paths and only mutates inside the configured workspace root.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
+DEFAULT_ROOT = Path("/srv/proxima-demo")
+PROJECT_DIRS = ["wiki", "tasks", "repos", "assets", "scratch", "outputs", "reports", "docs"]
+WIKI_FILES = {
+    "wiki/index.md": "# {name} Wiki\n\n## Core\n\n- [brief.md](brief.md)\n- [status.md](status.md)\n- [decisions.md](decisions.md)\n- [log.md](log.md)\n\nWorkspace: `{path}`\n",
+    "wiki/brief.md": "# {name} Brief\n\nTBD.\n",
+    "wiki/status.md": "# {name} Status\n\nStatus: active\n",
+    "wiki/decisions.md": "# {name} Decisions\n\nNewest first.\n",
+    "wiki/log.md": "# {name} Log\n\nNewest first.\n",
+    "AGENTS.md": "# {name} Project Agent Rules\n\n- Read `wiki/index.md`, `wiki/log.md`, and `wiki/status.md` before project work.\n- Keep durable decisions in `wiki/decisions.md`.\n- Keep task work inside `tasks/<task-slug>/`.\n- Do not assume environment admin is a project member.\n",
+    "README.md": "# {name}\n\nProxima project workspace.\n",
+}
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"projectctl: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def run(args: list[str]) -> None:
+    try:
+        subprocess.run(args, check=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        die(f"command failed ({exc.returncode}): {' '.join(args)}")
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        die("must run as root/sudo for ownership and ACL operations")
+
+
+def validate_slug(slug: str) -> str:
+    slug = slug.strip().lower()
+    if not SLUG_RE.match(slug):
+        die("invalid slug; use lowercase letters/numbers/hyphen, 2-64 chars")
+    return slug
+
+
+def validate_user(username: str) -> str:
+    username = username.strip()
+    if not username or username.startswith("-") or "/" in username or "\x00" in username:
+        die(f"invalid username: {username!r}")
+    try:
+        pwd.getpwnam(username)
+    except KeyError:
+        die(f"OS user not found: {username}")
+    return username
+
+
+def resolve_root(raw: str | Path) -> Path:
+    root = Path(raw).expanduser().resolve()
+    if root == Path("/") or len(root.parts) < 3:
+        die(f"refusing unsafe root: {root}")
+    if not str(root).startswith("/srv/"):
+        die(f"workspace root must be under /srv for this prototype: {root}")
+    return root
+
+
+def project_path(root: Path, slug: str) -> Path:
+    slug = validate_slug(slug)
+    path = (root / "projects" / slug).resolve()
+    if root not in path.parents:
+        die(f"project path escaped root: {path}")
+    return path
+
+
+def require_setfacl() -> None:
+    if not shutil.which("setfacl") or not shutil.which("getfacl"):
+        die("setfacl/getfacl not found; install acl package")
+
+
+def set_user_acl(path: Path, username: str, recursive: bool = False) -> None:
+    base = ["setfacl"]
+    if recursive:
+        base.append("-R")
+    run(base + ["-m", f"u:{username}:rwx", str(path)])
+    run(base + ["-m", f"d:u:{username}:rwx", str(path)])
+
+
+def grant_traverse(path: Path, username: str) -> None:
+    """Grant execute-only traversal on a directory.
+
+    Private projects live under a root that is otherwise 700. A user needs `x`
+    on the workspace root and `projects/` parent to reach their project path,
+    but not `r`, so they can traverse known paths without listing everything.
+    """
+    run(["setfacl", "-m", f"u:{username}:x", str(path)])
+
+
+def grant_project_traverse(root: Path, username: str) -> None:
+    grant_traverse(root, username)
+    grant_traverse(root / "projects", username)
+
+
+def remove_user_acl(path: Path, username: str) -> None:
+    run(["setfacl", "-R", "-x", f"u:{username}", str(path)])
+    # default ACL may not exist on regular files; ignore failures by walking dirs only.
+    for dirpath, _dirnames, _filenames in os.walk(path):
+        subprocess.run(["setfacl", "-x", f"d:u:{username}", dirpath], check=False, text=True)
+
+
+def init_workspace(args: argparse.Namespace) -> None:
+    require_root()
+    root = resolve_root(args.root)
+    owner = validate_user(args.owner)
+    require_setfacl()
+
+    for rel in ["admin/wiki", "shared/wiki", "projects", "infra", "tmp"]:
+        (root / rel).mkdir(parents=True, exist_ok=True)
+
+    run(["chown", "-R", f"{owner}:{owner}", str(root)])
+    run(["chmod", "-R", "700", str(root)])
+    # Do not set a default ACL on the workspace root: private projects must not
+    # inherit environment-admin access. Owner perms already cover `owner`; only
+    # execute-only traversal is needed for known project paths.
+    grant_project_traverse(root, owner)
+
+    # Shared area is readable/writable by explicitly invited users later; owner starts with access.
+    for rel, content in {
+        "shared/wiki/index.md": "# Shared Wiki\n\nProxima demo shared wiki.\n",
+        "shared/wiki/log.md": "# Shared Log\n\nNewest first.\n",
+        "admin/wiki/index.md": "# Admin Wiki\n\nEnvironment/admin notes.\n",
+        "admin/wiki/break-glass-log.md": "# Break-glass Log\n\nNewest first.\n",
+    }.items():
+        f = root / rel
+        if not f.exists():
+            f.write_text(content, encoding="utf-8")
+
+    print(f"initialized workspace: {root}")
+
+
+def create_project(args: argparse.Namespace) -> None:
+    require_root()
+    root = resolve_root(args.root)
+    owner = validate_user(args.owner)
+    slug = validate_slug(args.slug)
+    require_setfacl()
+    path = project_path(root, slug)
+    if path.exists():
+        die(f"project already exists: {path}")
+
+    path.mkdir(parents=True)
+    for rel in PROJECT_DIRS:
+        (path / rel).mkdir(parents=True, exist_ok=True)
+    for rel, tmpl in WIKI_FILES.items():
+        f = path / rel
+        if not f.exists():
+            f.write_text(tmpl.format(name=slug, path=str(path)), encoding="utf-8")
+
+    run(["chown", "-R", f"{owner}:{owner}", str(path)])
+    run(["chmod", "-R", "700", str(path)])
+    grant_project_traverse(root, owner)
+    set_user_acl(path, owner, recursive=True)
+    print(f"created project: {path} owner={owner}")
+
+
+def invite(args: argparse.Namespace) -> None:
+    require_root()
+    root = resolve_root(args.root)
+    user = validate_user(args.user)
+    path = project_path(root, args.slug)
+    if not path.is_dir():
+        die(f"project not found: {path}")
+    require_setfacl()
+    grant_project_traverse(root, user)
+    set_user_acl(path, user, recursive=True)
+    print(f"invited {user} to {path}")
+
+
+def remove(args: argparse.Namespace) -> None:
+    require_root()
+    root = resolve_root(args.root)
+    user = validate_user(args.user)
+    path = project_path(root, args.slug)
+    if not path.is_dir():
+        die(f"project not found: {path}")
+    require_setfacl()
+    remove_user_acl(path, user)
+    print(f"removed {user} from {path}")
+
+
+def members(args: argparse.Namespace) -> None:
+    root = resolve_root(args.root)
+    path = project_path(root, args.slug)
+    if not path.is_dir():
+        die(f"project not found: {path}")
+    run(["getfacl", "-p", str(path)])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Proxima workspace/project ACL helper")
+    parser.add_argument("--root", default=str(DEFAULT_ROOT), help="workspace root under /srv")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("init-workspace", help="create workspace skeleton")
+    p.add_argument("root", nargs="?", default=str(DEFAULT_ROOT))
+    p.add_argument("--owner", default=os.environ.get("SUDO_USER") or os.environ.get("USER") or "root")
+    p.set_defaults(func=init_workspace)
+
+    p = sub.add_parser("create-project", help="create private project")
+    p.add_argument("slug")
+    p.add_argument("--owner", required=True)
+    p.set_defaults(func=create_project)
+
+    p = sub.add_parser("invite", help="grant user project access")
+    p.add_argument("slug")
+    p.add_argument("user")
+    p.set_defaults(func=invite)
+
+    p = sub.add_parser("remove", help="revoke user project access")
+    p.add_argument("slug")
+    p.add_argument("user")
+    p.set_defaults(func=remove)
+
+    p = sub.add_parser("members", help="show project ACL")
+    p.add_argument("slug")
+    p.set_defaults(func=members)
+
+    args = parser.parse_args(argv)
+    args.root = getattr(args, "root", str(DEFAULT_ROOT))
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

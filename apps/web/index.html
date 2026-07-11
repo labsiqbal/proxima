@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#070a0f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Proxima" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Nunito:wght@400;600;700&family=Merriweather:wght@400;700&family=Playfair+Display:wght@500;600;700&family=Roboto+Slab:wght@400;600;700&family=JetBrains+Mono:wght@400;600&family=Oswald:wght@400;600&family=Caveat:wght@500;700&family=Lobster&family=Montserrat:wght@400;600;700&family=Raleway:wght@400;600;700&family=Manrope:wght@400;600;700&family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@400;600;700&family=Archivo+Black&family=Sora:wght@400;600;700&family=Outfit:wght@400;600;700&family=Bebas+Neue&family=Anton&family=Lora:wght@400;600;700&family=Fraunces:wght@400;600;700&family=Abril+Fatface&family=Pacifico&family=Dancing+Script:wght@500;700&family=Permanent+Marker&family=Righteous&display=swap" rel="stylesheet" />
+    <title>Proxima</title>
+    <script>
+      // Staging environments get a prefixed title so tabs are distinguishable.
+      if (location.hostname.startsWith("proxima-staging")) {
+        document.title = "Staging - Proxima";
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+# Hermetic first-boot smoke: prove that this checkout starts as Proxima without
+# reading the operator's home, config, data, credentials, or an earlier product.
+set -euo pipefail
+
+ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+API_DIR="$ROOT/apps/api"
+PYTHON_BIN="${PROXIMA_SMOKE_PYTHON:-$API_DIR/.venv/bin/python}"
+NODE_BIN="${PROXIMA_SMOKE_NODE:-$(command -v node 2>/dev/null || true)}"
+TIMEOUT_SECONDS="${PROXIMA_SMOKE_TIMEOUT_SECONDS:-20}"
+IN_PROCESS="${PROXIMA_SMOKE_IN_PROCESS:-0}"
+TMP_ROOT=""
+SERVER_PID=""
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$SERVER_PID" ]]; then
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  [[ -z "$TMP_ROOT" ]] || rm -rf "$TMP_ROOT"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ "$PYTHON_BIN" == */* ]]; then
+  [[ -x "$PYTHON_BIN" ]] || {
+    echo "fresh-install: Python is not executable: $PYTHON_BIN" >&2
+    echo "Set PROXIMA_SMOKE_PYTHON to an interpreter with the API dependencies installed." >&2
+    exit 1
+  }
+else
+  PYTHON_BIN="$(command -v "$PYTHON_BIN" 2>/dev/null || true)"
+  [[ -n "$PYTHON_BIN" ]] || { echo "fresh-install: Python not found" >&2; exit 1; }
+fi
+[[ "$IN_PROCESS" == 0 || "$IN_PROCESS" == 1 ]] || {
+  echo "fresh-install: PROXIMA_SMOKE_IN_PROCESS must be 0 or 1" >&2
+  exit 1
+}
+if [[ "$IN_PROCESS" == 0 ]]; then
+  [[ -n "$NODE_BIN" && -x "$NODE_BIN" ]] || {
+    echo "fresh-install: Node.js is required (or set PROXIMA_SMOKE_NODE)" >&2
+    exit 1
+  }
+fi
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "fresh-install: PROXIMA_SMOKE_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 1
+}
+
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/proxima-fresh.XXXXXX")"
+HOME_DIR="$TMP_ROOT/home"
+XDG_CONFIG_DIR="$TMP_ROOT/config"
+XDG_DATA_DIR="$TMP_ROOT/data"
+DATA_DIR="$XDG_DATA_DIR/proxima"
+WORKSPACE_ROOT="$DATA_DIR/workspace"
+DB_PATH="$DATA_DIR/proxima.db"
+CONFIG_FILE="$XDG_CONFIG_DIR/proxima/proxima.env"
+SERVER_LOG="$TMP_ROOT/server.log"
+VERIFY_LOG="$TMP_ROOT/verify.log"
+LEGACY_POISON="$TMP_ROOT/legacy-poison"
+EXPECTED_VERSION="$(tr -d '\r\n' < "$ROOT/VERSION")"
+
+mkdir -p "$HOME_DIR" "$(dirname "$CONFIG_FILE")" "$DATA_DIR" "$WORKSPACE_ROOT"
+: > "$SERVER_LOG"
+
+# %q is a Bash builtin on both the stock macOS Bash and normal Linux Bash. It
+# keeps generated config valid even when TMPDIR or the checkout contains spaces.
+{
+  printf '# Proxima hermetic fresh-install configuration\n'
+  printf 'PROXIMA_REPO_ROOT=%q\n' "$ROOT"
+  printf 'PROXIMA_CONFIG=%q\n' "$CONFIG_FILE"
+  printf 'PROXIMA_DATA_DIR=%q\n' "$DATA_DIR"
+  printf 'PROXIMA_DB_PATH=%q\n' "$DB_PATH"
+  printf 'PROXIMA_WORKSPACE_ROOT=%q\n' "$WORKSPACE_ROOT"
+  printf 'PROXIMA_HERMES_PROFILES_ROOT=%q\n' "$DATA_DIR/hermes-profiles"
+  printf 'PROXIMA_SOURCE_HERMES_HOME=%q\n' "$HOME_DIR/.hermes"
+  printf 'PROXIMA_WEB_DIST=%q\n' "$ROOT/apps/web/dist"
+  printf 'PROXIMA_HOST=%q\n' '127.0.0.1'
+  printf 'PROXIMA_SINGLE_USER=%q\n' '1'
+  printf 'PROXIMA_SINGLE_USER_NAME=%q\n' 'fresh-owner'
+  printf 'PROXIMA_LINK_ROOTS=%q\n' "$HOME_DIR"
+  printf 'PROXIMA_REFRESH_CREDENTIALS=%q\n' '0'
+  printf 'PROXIMA_UPDATE_CHECK=%q\n' '0'
+  printf 'PROXIMA_FEATURE_VIDEO=%q\n' '0'
+  printf 'PROXIMA_FEATURE_DESIGN_STUDIO=%q\n' '0'
+} > "$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE"
+
+PORT="${PROXIMA_SMOKE_PORT:-}"
+if [[ -z "$PORT" && "$IN_PROCESS" == 0 ]]; then
+  PORT="$($NODE_BIN - <<'NODE'
+const net = require('node:net')
+const server = net.createServer()
+server.unref()
+server.on('error', error => { console.error(error); process.exitCode = 1 })
+server.listen(0, '127.0.0.1', () => {
+  const address = server.address()
+  console.log(address.port)
+  server.close()
+})
+NODE
+)"
+fi
+PORT="${PORT:-8765}"
+[[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 && "$PORT" -le 65535 ]] || {
+  echo "fresh-install: PROXIMA_SMOKE_PORT must be an unprivileged TCP port" >&2
+  exit 1
+}
+printf 'PROXIMA_PORT=%q\n' "$PORT" >> "$CONFIG_FILE"
+
+[[ ! -e "$DB_PATH" ]] || { echo "fresh-install: database existed before first boot" >&2; exit 1; }
+if awk 'NF && $0 !~ /^#/ && $0 !~ /^PROXIMA_[A-Z0-9_]+=/ { exit 1 }' "$CONFIG_FILE"; then
+  :
+else
+  echo "fresh-install: generated config contains a non-Proxima setting" >&2
+  exit 1
+fi
+
+# Construct the retired product token without storing it in the new tree. The
+# poison variables make this gate fail if compatibility reads are reintroduced.
+LEGACY_LOWER="$(printf '%s%s' 'switch' 'board')"
+LEGACY_UPPER="$(printf '%s' "$LEGACY_LOWER" | tr '[:lower:]' '[:upper:]')"
+SMOKE_PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$API_DIR"
+ISOLATED_ENV=(
+  "HOME=$HOME_DIR"
+  "XDG_CONFIG_HOME=$XDG_CONFIG_DIR"
+  "XDG_DATA_HOME=$XDG_DATA_DIR"
+  "PATH=$PATH"
+  "PYTHONPATH=$SMOKE_PYTHONPATH"
+  "TMPDIR=$TMP_ROOT"
+  "LANG=${LANG:-C.UTF-8}"
+  "${LEGACY_UPPER}_DB_PATH=$LEGACY_POISON/legacy.db"
+  "${LEGACY_UPPER}_WORKSPACE_ROOT=$LEGACY_POISON/workspace"
+  "${LEGACY_UPPER}_CONFIG=$LEGACY_POISON/legacy.env"
+  "${LEGACY_UPPER}_FEATURE_VIDEO=1"
+  "${LEGACY_UPPER}_FEATURE_DESIGN_STUDIO=1"
+  "${LEGACY_UPPER}_UPDATE_CHECK=1"
+)
+
+if [[ "$IN_PROCESS" == 1 ]]; then
+  set +e
+  env -i "${ISOLATED_ENV[@]}" /bin/bash -c '
+    set -euo pipefail
+    set -a
+    # shellcheck disable=SC1090
+    source "$1"
+    set +a
+    exec "$2" - "$3" "$4" "$5"
+  ' proxima-fresh "$CONFIG_FILE" "$PYTHON_BIN" "$API_DIR/scripts/serve.py" "$EXPECTED_VERSION" "$WORKSPACE_ROOT" \
+    > "$VERIFY_LOG" 2>&1 <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+serve_path = Path(sys.argv[1])
+expected_version = sys.argv[2]
+workspace = Path(sys.argv[3]).resolve()
+spec = importlib.util.spec_from_file_location("proxima_fresh_serve", serve_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"cannot load current checkout server: {serve_path}")
+serve = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(serve)
+
+with TestClient(serve.app) as client:
+    health_response = client.get("/api/health")
+    health_response.raise_for_status()
+    health = health_response.json()
+    assert health["ok"] is True
+    assert health["product"] == "proxima"
+    assert health["service"] == "proxima"
+    assert health["database"] == "ok"
+    assert health["version"] == expected_version
+    print(f"health: proxima {health['version']}, database ok")
+
+    config_response = client.get("/api/config")
+    config_response.raise_for_status()
+    assert config_response.json()["features"] == {
+        "video": False,
+        "design_studio": False,
+    }
+    print("config: video=false, design_studio=false")
+
+    auth_response = client.post("/auth/auto", json={})
+    auth_response.raise_for_status()
+    auth = auth_response.json()
+    assert auth["user"]["username"] == "fresh-owner"
+    assert auth["user"]["role"] == "environment_admin"
+    assert isinstance(auth["token"], str) and len(auth["token"]) > 20
+    print("auth: first-boot owner and token created")
+
+    projects_response = client.get(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {auth['token']}"},
+    )
+    projects_response.raise_for_status()
+    projects = projects_response.json()["projects"]
+    assert projects
+    projects_root = workspace / "projects"
+    for project in projects:
+        project_path = Path(project["path"]).resolve()
+        assert projects_root in project_path.parents, (
+            f"project escaped temporary workspace: {project_path}"
+        )
+        for relative in ("", "wiki", "tasks", "artifacts", "README.md"):
+            target = project_path / relative
+            assert target.exists(), f"missing provisioned path: {target}"
+    print(
+        f"workspace: {len(projects)} project(s) provisioned under {projects_root}"
+    )
+PY
+  VERIFY_STATUS=$?
+  set -e
+else
+  env -i "${ISOLATED_ENV[@]}" /bin/bash -c '
+      set -euo pipefail
+      set -a
+      # shellcheck disable=SC1090
+      source "$1"
+      set +a
+      exec "$2" "$3"
+    ' proxima-fresh "$CONFIG_FILE" "$PYTHON_BIN" "$API_DIR/scripts/serve.py" \
+    > "$SERVER_LOG" 2>&1 &
+  SERVER_PID=$!
+
+  set +e
+  PROXIMA_FRESH_PORT="$PORT" \
+  PROXIMA_FRESH_VERSION="$EXPECTED_VERSION" \
+  PROXIMA_FRESH_WORKSPACE="$WORKSPACE_ROOT" \
+  PROXIMA_FRESH_TIMEOUT="$TIMEOUT_SECONDS" \
+    "$NODE_BIN" - <<'NODE' > "$VERIFY_LOG" 2>&1
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const http = require('node:http')
+const path = require('node:path')
+
+const port = Number(process.env.PROXIMA_FRESH_PORT)
+const expectedVersion = process.env.PROXIMA_FRESH_VERSION
+const workspace = path.resolve(process.env.PROXIMA_FRESH_WORKSPACE)
+const deadline = Date.now() + Number(process.env.PROXIMA_FRESH_TIMEOUT) * 1000
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+function request(route, { method = 'GET', body, token } = {}) {
+  const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body))
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: route,
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      timeout: 1500,
+    }, res => {
+      let raw = ''
+      res.setEncoding('utf8')
+      res.on('data', chunk => { raw += chunk })
+      res.on('end', () => {
+        let json
+        try { json = JSON.parse(raw) } catch (error) {
+          return reject(new Error(`${method} ${route} returned invalid JSON: ${error.message}`))
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`${method} ${route} returned ${res.statusCode}: ${raw.slice(0, 500)}`))
+        }
+        resolve(json)
+      })
+    })
+    req.on('timeout', () => req.destroy(new Error(`${method} ${route} timed out`)))
+    req.on('error', reject)
+    if (payload) req.write(payload)
+    req.end()
+  })
+}
+
+async function main() {
+  let health
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      health = await request('/api/health')
+      break
+    } catch (error) {
+      lastError = error
+      await sleep(200)
+    }
+  }
+  if (!health) throw lastError || new Error('server did not become ready')
+  assert.equal(health.ok, true)
+  assert.equal(health.product, 'proxima')
+  assert.equal(health.service, 'proxima')
+  assert.equal(health.database, 'ok')
+  assert.equal(health.version, expectedVersion)
+  console.log(`health: proxima ${health.version}, database ok`)
+
+  const config = await request('/api/config')
+  assert.deepEqual(config.features, { video: false, design_studio: false })
+  console.log('config: video=false, design_studio=false')
+
+  const auth = await request('/auth/auto', { method: 'POST', body: {} })
+  assert.equal(auth.user?.username, 'fresh-owner')
+  assert.equal(auth.user?.role, 'environment_admin')
+  assert.equal(typeof auth.token, 'string')
+  assert.ok(auth.token.length > 20)
+  console.log('auth: first-boot owner and token created')
+
+  const projects = await request('/api/projects', { token: auth.token })
+  assert.ok(Array.isArray(projects.projects) && projects.projects.length > 0)
+  const projectsRoot = path.join(workspace, 'projects')
+  for (const project of projects.projects) {
+    const projectPath = path.resolve(project.path)
+    assert.ok(projectPath.startsWith(`${projectsRoot}${path.sep}`), `project escaped temporary workspace: ${projectPath}`)
+    for (const relative of ['', 'wiki', 'tasks', 'artifacts', 'README.md']) {
+      assert.ok(fs.existsSync(path.join(projectPath, relative)), `missing provisioned path: ${relative || projectPath}`)
+    }
+  }
+  console.log(`workspace: ${projects.projects.length} project(s) provisioned under ${projectsRoot}`)
+}
+
+main().catch(error => {
+  console.error(error.stack || error)
+  process.exitCode = 1
+})
+NODE
+  VERIFY_STATUS=$?
+  set -e
+fi
+
+if [[ "$VERIFY_STATUS" -ne 0 ]]; then
+  echo "fresh-install: runtime verification failed" >&2
+  sed -n '1,240p' "$VERIFY_LOG" >&2
+  echo "--- server log ---" >&2
+  sed -n '1,240p' "$SERVER_LOG" >&2
+  exit "$VERIFY_STATUS"
+fi
+
+[[ -f "$CONFIG_FILE" && "$CONFIG_FILE" == "$TMP_ROOT"/* ]] || {
+  echo "fresh-install: config escaped temporary root" >&2
+  exit 1
+}
+[[ -f "$DB_PATH" && "$DB_PATH" == "$TMP_ROOT"/* ]] || {
+  echo "fresh-install: database was not created at the isolated path" >&2
+  exit 1
+}
+[[ ! -e "$LEGACY_POISON" ]] || {
+  echo "fresh-install: runtime read a retired-product path" >&2
+  exit 1
+}
+
+DB_COUNT="$(find "$TMP_ROOT" -type f -name '*.db' -print | wc -l | tr -d '[:space:]')"
+DB_OUTSIDE_DATA="$(find "$TMP_ROOT" -type f -name '*.db' ! -path "$DATA_DIR/*" -print)"
+[[ "$DB_COUNT" -ge 1 && -z "$DB_OUTSIDE_DATA" ]] || {
+  echo "fresh-install: database or migration backup escaped isolated data root" >&2
+  [[ -z "$DB_OUTSIDE_DATA" ]] || printf '%s\n' "$DB_OUTSIDE_DATA" >&2
+  exit 1
+}
+
+if find "$TMP_ROOT" -mindepth 1 -print | grep -Fi "$LEGACY_LOWER" >/dev/null; then
+  echo "fresh-install: retired product path was emitted" >&2
+  exit 1
+fi
+while IFS= read -r -d '' output; do
+  if LC_ALL=C grep -a -Fi "$LEGACY_LOWER" "$output" >/dev/null; then
+    echo "fresh-install: retired product token was emitted in $output" >&2
+    exit 1
+  fi
+done < <(find "$TMP_ROOT" -type f -print0)
+
+cat "$VERIFY_LOG"
+if [[ "$IN_PROCESS" == 1 ]]; then
+  echo "fresh-install: in-process sandbox fallback used (no TCP bind)"
+fi
+echo "fresh-install: config and database isolated under temporary XDG roots"
+echo "fresh-install: no retired product token or path observed"

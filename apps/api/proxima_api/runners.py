@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import os
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+from .runner_specs import RUNNER_SPECS, runner_binary_names, selectable_runner_specs
+
+
+@dataclass(frozen=True)
+class RunnerDefinition:
+    id: str
+    display_name: str
+    binary_names: tuple[str, ...]
+    has_adapter: bool
+    detection_only: bool = False
+    notes: str = ""
+
+
+# Proxima runner registry. Runner capability now has one source of truth:
+# runner_specs.RUNNER_SPECS. This module only translates that model into
+# detection/readiness payloads.
+RUNNER_REGISTRY: tuple[RunnerDefinition, ...] = tuple(
+    RunnerDefinition(
+        spec.id,
+        spec.display_name,
+        runner_binary_names(spec),
+        spec.has_adapter,
+        detection_only=spec.detection_only,
+        notes=spec.notes,
+    )
+    for spec in RUNNER_SPECS.values()
+)
+
+
+def augmented_path(path_env: str | None = None) -> str:
+    """PATH used by non-interactive service processes.
+
+    GUI/server processes often miss Homebrew/user-local bins. Add the common
+    local paths without replacing the provided environment.
+    """
+
+    base = path_env or os.environ.get("PATH", "")
+    if os.name == "nt":  # Windows: common npm/global bin dirs service procs miss
+        appdata = os.environ.get("APPDATA", "")
+        local = os.environ.get("LOCALAPPDATA", "")
+        extras = tuple(p for p in (
+            os.path.join(appdata, "npm") if appdata else "",
+            os.path.join(local, "Microsoft", "WindowsApps") if local else "",
+        ) if p)
+    else:
+        extras = (
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/bin"),
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+        )
+    parts = [p for p in base.split(os.pathsep) if p]
+    for extra in extras:
+        if extra not in parts:
+            parts.append(extra)
+    return os.pathsep.join(parts)
+
+
+def resolve_binary(binary_name: str, path_env: str) -> str | None:
+    return shutil.which(binary_name, path=path_env)
+
+
+def detect_runners(path_env: str | None = None, registry: Iterable[RunnerDefinition] = RUNNER_REGISTRY) -> list[dict]:
+    resolved_path = augmented_path(path_env)
+    detected: list[dict] = []
+
+    for runner in registry:
+        if not runner.binary_names:
+            detected.append(
+                {
+                    "id": runner.id,
+                    "displayName": runner.display_name,
+                    "installed": True,
+                    "path": None,
+                    "hasAdapter": runner.has_adapter,
+                    "detectionOnly": runner.detection_only,
+                    "runnable": runner.has_adapter,
+                    "notes": runner.notes,
+                }
+            )
+            continue
+
+        found_path = None
+        found_binary = None
+        for binary in runner.binary_names:
+            candidate = resolve_binary(binary, resolved_path)
+            if candidate:
+                found_path = candidate
+                found_binary = binary
+                break
+
+        installed = found_path is not None
+        detected.append(
+            {
+                "id": runner.id,
+                "displayName": runner.display_name,
+                "installed": installed,
+                "path": found_path,
+                "binary": found_binary,
+                "hasAdapter": runner.has_adapter,
+                "detectionOnly": runner.detection_only,
+                "runnable": installed and runner.has_adapter,
+                "notes": runner.notes,
+            }
+        )
+
+    return detected
+
+
+def runner_readiness(path_env: str | None = None) -> dict:
+    """For each runner that has a spawn spec, report whether its CLI is
+    installed (selectable) and a hint for authenticating it."""
+    resolved = augmented_path(path_env)
+    out: dict[str, dict] = {}
+    for rid, spec in selectable_runner_specs().items():
+        binary = resolve_binary(spec.binary, resolved)
+        out[rid] = {
+            "id": rid,
+            "displayName": spec.display_name,
+            "installed": binary is not None,
+            "binary": binary,
+            "ready": binary is not None,   # auth is verified at run time (surfaced via stderr)
+            "authHint": "" if binary else spec.auth_hint,
+        }
+    return out
+
+
+def _hermes_home_usable(home: str) -> bool:
+    p = Path(home)
+    return p.is_dir() and ((p / "auth.json").exists() or (p / "config.yaml").exists())
+
+
+def hermes_status(source_home: str | None = None, binary: str | None = None, path_env: str | None = None) -> dict:
+    """Detect a usable Hermes runner without installing anything.
+
+    Bring-your-own: reuse an existing `hermes` binary on PATH plus a Hermes home
+    that has credentials/config. Returns ready + actionable guidance when not.
+
+    If ``binary`` is provided and points to an executable file it is used
+    directly; otherwise the binary is resolved via PATH.
+    """
+    if binary and os.path.isfile(binary) and os.access(binary, os.X_OK):
+        resolved_binary = binary
+    else:
+        resolved = path_env if path_env is not None else augmented_path()
+        resolved_binary = resolve_binary("hermes", resolved)
+    home = source_home or os.path.expanduser("~/.hermes")
+    home_ok = _hermes_home_usable(home)
+    ready = bool(resolved_binary) and home_ok
+    if ready:
+        guidance = ""
+    elif not resolved_binary and not home_ok:
+        guidance = ("Hermes not found. Install the Hermes agent CLI, run `hermes -z` "
+                    "to authenticate, then restart Proxima. See docs/installation.md.")
+    elif not resolved_binary:
+        guidance = ("Hermes credentials found but the `hermes` binary is not on PATH. "
+                    "Install/expose the Hermes CLI, then restart Proxima.")
+    else:
+        guidance = (f"`hermes` is installed but no usable Hermes home at {home}. "
+                    "Run `hermes -z` to authenticate, or set PROXIMA_SOURCE_HERMES_HOME.")
+    return {"ready": ready, "binary": resolved_binary, "home": home if home_ok else None, "guidance": guidance}

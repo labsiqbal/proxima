@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Cut a Proxima release from a clean main checkout. Full QA runs before any
+# release commit, tag, push, or GitHub Release is created.
+ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+usage() { echo "usage: scripts/release patch|minor|major|X.Y.Z" >&2; exit 1; }
+BUMP="${1:-}"; [[ -n "$BUMP" ]] || usage
+EXPECTED_REPO="labsiqbal/proxima"
+command -v gh >/dev/null 2>&1 || { echo "✗ gh CLI required (gh auth login)" >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "✗ gh not authenticated (gh auth login)" >&2; exit 1; }
+[[ "$(git branch --show-current)" == "main" ]] || { echo "✗ releases are cut from main only" >&2; exit 1; }
+[[ -z "$(git status --porcelain)" ]] || { echo "✗ working tree not clean" >&2; git status --short >&2; exit 1; }
+ORIGIN_URL="$(git remote get-url origin)"
+[[ "$ORIGIN_URL" =~ github\.com[:/]labsiqbal/proxima(\.git)?$ ]] || {
+  echo "✗ origin must target $EXPECTED_REPO (found $ORIGIN_URL)" >&2
+  exit 1
+}
+gh repo view "$EXPECTED_REPO" --json nameWithOwner --jq '.nameWithOwner' | grep -qx "$EXPECTED_REPO" || {
+  echo "✗ cannot verify GitHub repository $EXPECTED_REPO" >&2
+  exit 1
+}
+git pull --ff-only
+
+CUR="$(cat VERSION)"
+IFS=. read -r MA MI PA <<<"$CUR"
+if [[ "$BUMP" == "patch" ]]; then NEW="$MA.$MI.$((10#$PA + 1))"
+elif [[ "$BUMP" == "minor" ]]; then NEW="$MA.$((10#$MI + 1)).0"
+elif [[ "$BUMP" == "major" ]]; then NEW="$((10#$MA + 1)).0.0"
+elif [[ "$BUMP" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then NEW="$BUMP"
+else usage; fi
+[[ "$NEW" != "$CUR" ]] || { echo "✗ v$NEW is already the current version" >&2; exit 1; }
+
+git rev-parse -q --verify "refs/tags/v$NEW" >/dev/null && {
+  echo "✗ tag v$NEW already exists" >&2
+  exit 1
+}
+
+echo "==> Running tests, hermetic fresh-install smoke, then live smoke against ${PROXIMA_SMOKE_BASE:-http://127.0.0.1:8767}"
+npm run qa
+
+echo "==> $CUR → $NEW"
+printf '%s\n' "$NEW" > VERSION
+sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$NEW\"/" apps/api/pyproject.toml && rm -f apps/api/pyproject.toml.bak
+node - "$NEW" <<'NODE'
+const fs = require('node:fs')
+const version = process.argv[2]
+for (const file of ['package.json', 'apps/web/package.json']) {
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'))
+  json.version = version
+  fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`)
+}
+const lockFile = 'apps/web/package-lock.json'
+const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
+lock.version = version
+lock.packages[''].version = version
+fs.writeFileSync(lockFile, `${JSON.stringify(lock, null, 2)}\n`)
+NODE
+uv lock --project apps/api
+
+[[ "$(cat VERSION)" == "$NEW" ]]
+grep -qx "version = \"$NEW\"" apps/api/pyproject.toml
+node - "$NEW" <<'NODE'
+const fs = require('node:fs')
+const version = process.argv[2]
+for (const file of ['package.json', 'apps/web/package.json']) {
+  if (JSON.parse(fs.readFileSync(file, 'utf8')).version !== version) throw new Error(`${file} version drift`)
+}
+const lock = JSON.parse(fs.readFileSync('apps/web/package-lock.json', 'utf8'))
+if (lock.version !== version || lock.packages[''].version !== version) throw new Error('package-lock version drift')
+NODE
+grep -A2 -m1 '^name = "proxima-api"$' apps/api/uv.lock | grep -qx "version = \"$NEW\""
+
+git add VERSION apps/api/pyproject.toml apps/api/uv.lock package.json apps/web/package.json apps/web/package-lock.json
+git commit -m "release: v$NEW"
+git tag -a "v$NEW" -m "Proxima v$NEW"
+git push --atomic origin main "v$NEW"
+gh release create "v$NEW" --repo "$EXPECTED_REPO" --title "v$NEW" --generate-notes
+echo "✅ released v$NEW — installs will see it on their next update check (≤6h)"

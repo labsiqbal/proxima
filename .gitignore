@@ -1,0 +1,62 @@
+# Runtime/workspace data
+/srv/
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Misc
+nohup.out
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Logs/cache
+logs/
+*.log
+.cache/
+graphify-out/
+
+# Local dev runtime (DB, seeded credentials, scratch projects)
+apps/api/.dev/
+.dev/
+
+# Not for public repo
+.impeccable.md
+.claude/
+
+# Internal workflow docs (brainstorm specs / implementation plans) — not public
+docs/superpowers/
+docs/plans/
+apps/api/proxima_api.egg-info/
+
+# Maintainer-local docs (operational logs + internal handoffs; not part of the public tree)
+docs/STATUS.md
+docs/DEVELOPING.md
+docs/bugfix-log.md
+docs/feature-debug-checklist.md
+docs/ui-adaptation-spec.md
+docs/wiki/
+docs/archive/
+
+# Engine-local agent config
+.pi/

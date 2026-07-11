@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# One-command install for macOS: build the app, then run it as an always-on
+# launchd LaunchAgent (auto-starts at login, restarts on crash). Re-runnable.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LABEL="com.minarflow.proxima"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+command -v uv  >/dev/null 2>&1 || { echo "missing: uv  (https://docs.astral.sh/uv/)" >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo "missing: npm (install Node.js)" >&2; exit 1; }
+
+echo "==> Building backend deps"
+( cd "$ROOT/apps/api" && uv sync >/dev/null )
+echo "==> Building web PWA"
+( cd "$ROOT/apps/web" && npm install >/dev/null && npm run build >/dev/null )
+
+echo "==> Writing config"
+bash "$ROOT/scripts/proxima" init-config
+
+echo "==> Checking for an agent runner"
+if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v hermes >/dev/null 2>&1; then
+  echo "    Found an agent CLI — Proxima will use your existing install(s)."
+else
+  echo "    NOTE: no agent CLI (claude/codex/hermes) found. Proxima installs fine," >&2
+  echo "    but chats won't run until you install + log into one (e.g. 'claude /login')." >&2
+fi
+
+# Bake Node + common bins into the agent's PATH under launchd's minimal env.
+NODE_BIN="$(dirname "$(command -v node 2>/dev/null || echo /usr/bin/node)")"
+SVC_PATH="$NODE_BIN:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+echo "==> Installing launchd agent -> $PLIST"
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$ROOT/scripts/proxima</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$SVC_PATH</string></dict>
+  <key>WorkingDirectory</key><string>$ROOT</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/proxima.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/proxima.log</string>
+</dict>
+</plist>
+EOF
+
+# Link the `proxima` command onto PATH (so `proxima update` works anywhere).
+mkdir -p "$HOME/.local/bin"
+ln -sf "$ROOT/scripts/proxima" "$HOME/.local/bin/proxima"
+
+launchctl unload "$PLIST" 2>/dev/null || true
+launchctl load "$PLIST"
+
+PORT="$( ( set +u; source "${PROXIMA_CONFIG:-$HOME/.config/proxima/proxima.env}" 2>/dev/null; echo "${PROXIMA_PORT:-8765}" ) )"
+cat <<EOF
+
+✅ Proxima is installed and running (launchd).
+
+   Open:      http://127.0.0.1:$PORT      (first launch asks you to create the admin account)
+   Update:    proxima update              (git pull + rebuild + restart)
+   Logs:      tail -f ~/Library/Logs/proxima.log
+   Restart:   launchctl unload "$PLIST" && launchctl load "$PLIST"
+   Stop:      launchctl unload "$PLIST"
+EOF

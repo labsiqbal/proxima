@@ -1,0 +1,10 @@
+[Unit]
+Description=Proxima database backup
+
+[Service]
+Type=oneshot
+User=proxima
+Group=proxima
+EnvironmentFile=/etc/proxima/proxima.env
+WorkingDirectory=/opt/proxima
+ExecStart=/opt/proxima/scripts/backup

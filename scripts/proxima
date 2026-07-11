@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Resolve the ~/.local/bin/proxima symlink without GNU-only `readlink -f`, which
+# is unavailable on stock macOS.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$SOURCE_DIR/$SOURCE"
+done
+ROOT="${PROXIMA_REPO_ROOT:-$(cd -P "$(dirname "$SOURCE")/.." && pwd)}"
+API_DIR="$ROOT/apps/api"
+WEB_DIR="$ROOT/apps/web"
+DATA_DIR="${PROXIMA_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/proxima}"
+CONFIG_FILE="${PROXIMA_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/proxima/proxima.env}"
+
+load_config() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "$CONFIG_FILE"
+    set +a
+  fi
+  DATA_DIR="${PROXIMA_DATA_DIR:-$DATA_DIR}"
+  export PROXIMA_DB_PATH="${PROXIMA_DB_PATH:-$DATA_DIR/proxima.db}"
+  export PROXIMA_WORKSPACE_ROOT="${PROXIMA_WORKSPACE_ROOT:-$DATA_DIR/workspace}"
+  export PROXIMA_HERMES_PROFILES_ROOT="${PROXIMA_HERMES_PROFILES_ROOT:-$DATA_DIR/hermes-profiles}"
+  export PROXIMA_WEB_DIST="${PROXIMA_WEB_DIST:-$WEB_DIR/dist}"
+  export PROXIMA_HOST="${PROXIMA_HOST:-127.0.0.1}"
+  export PROXIMA_PORT="${PROXIMA_PORT:-8765}"
+  # Per-app remote preview (optional): export whatever the config file set so serve.py sees them.
+  export PROXIMA_ENV_NAME PROXIMA_APPS_DOMAIN PROXIMA_CF_API_TOKEN PROXIMA_CF_ACCOUNT_ID PROXIMA_CF_TUNNEL_ID PROXIMA_CF_ZONE PROXIMA_CF_ZONE_ID PROXIMA_UPDATE_CHECK PROXIMA_UPDATE_REPO
+  export PROXIMA_FEATURE_VIDEO PROXIMA_FEATURE_DESIGN_STUDIO PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
+  export PYTHONPATH="$API_DIR${PYTHONPATH:+:$PYTHONPATH}"
+}
+
+# Run a service action against whichever proxima service is installed:
+# launchd on macOS, else systemd (user, then system with sudo).
+svc() {
+  local action="$1"
+  load_config
+  local service="${PROXIMA_SERVICE_NAME:-proxima}"
+  local launchd_label="${PROXIMA_LAUNCHD_LABEL:-com.minarflow.proxima}"
+  local plist="$HOME/Library/LaunchAgents/$launchd_label.plist"
+  if [[ "$(uname -s)" == "Darwin" && -f "$plist" ]]; then
+    case "$action" in
+      restart) launchctl unload "$plist" 2>/dev/null || true; launchctl load "$plist" ;;
+      stop)    launchctl unload "$plist" ;;
+      start)   launchctl load "$plist" ;;
+      status)  launchctl list | grep -F "$launchd_label" || echo "$launchd_label: not loaded" ;;
+      *)       launchctl "$action" "$plist" ;;
+    esac
+    return $?
+  fi
+  if systemctl --user cat "$service.service" >/dev/null 2>&1; then
+    systemctl --user "$action" "$service" "${@:2}"
+  elif systemctl cat "$service.service" >/dev/null 2>&1; then
+    sudo systemctl "$action" "$service" "${@:2}"
+  else
+    echo "no installed proxima service found (run scripts/install-user or install-macos first)" >&2
+    return 1
+  fi
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  init-config)
+    mkdir -p "$(dirname "$CONFIG_FILE")" "$DATA_DIR"
+    if [[ -f "$CONFIG_FILE" ]]; then
+      echo "config exists: $CONFIG_FILE"
+      exit 0
+    fi
+    cat >"$CONFIG_FILE" <<EOF
+# Proxima local configuration
+PROXIMA_REPO_ROOT="$ROOT"
+PROXIMA_CONFIG="$CONFIG_FILE"
+PROXIMA_DATA_DIR="$DATA_DIR"
+PROXIMA_DB_PATH="$DATA_DIR/proxima.db"
+PROXIMA_WORKSPACE_ROOT="$DATA_DIR/workspace"
+PROXIMA_HERMES_PROFILES_ROOT="$DATA_DIR/hermes-profiles"
+PROXIMA_WEB_DIST="$WEB_DIR/dist"
+PROXIMA_HOST="127.0.0.1"
+PROXIMA_PORT="8765"
+PROXIMA_SERVICE_NAME="proxima"
+PROXIMA_LAUNCHD_LABEL="com.minarflow.proxima"
+PROXIMA_UPDATE_REPO="labsiqbal/proxima"
+PROXIMA_FEATURE_VIDEO="0"
+PROXIMA_FEATURE_DESIGN_STUDIO="0"
+# Dev/no-OS-isolation project helper. Remove this to use real infra/scripts/projectctl.
+PROXIMA_PROJECTCTL_COMMAND="/usr/bin/true"
+EOF
+    echo "wrote $CONFIG_FILE"
+    ;;
+  doctor)
+    load_config
+    ok=1
+    for bin in uv npm python3; do command -v "$bin" >/dev/null 2>&1 && echo "ok: $bin" || { echo "missing: $bin"; ok=0; }; done
+    command -v hermes >/dev/null 2>&1 && echo "ok: hermes ($(command -v hermes))" || echo "warn: hermes not found; install/login Hermes before real runs"
+    [[ -f "$API_DIR/scripts/serve.py" ]] && echo "ok: API serve.py" || { echo "missing API serve.py"; ok=0; }
+    [[ -d "$PROXIMA_WEB_DIST" ]] && echo "ok: web dist $PROXIMA_WEB_DIST" || echo "warn: web dist missing; run scripts/build"
+    mkdir -p "$PROXIMA_WORKSPACE_ROOT" "$PROXIMA_HERMES_PROFILES_ROOT" "$(dirname "$PROXIMA_DB_PATH")"
+    echo "ok: data dirs writable"
+    [[ "$ok" == 1 ]] || exit 1
+    ;;
+  build)
+    exec "$ROOT/scripts/build" "$@"
+    ;;
+  update)
+    load_config
+    REPO="${PROXIMA_REPO_ROOT:-$ROOT}"
+    echo "==> Pulling latest ($REPO)"
+    # The build step can rewrite tracked lockfiles (npm/uv churn), which would
+    # otherwise block the next fast-forward pull. Discard that self-inflicted
+    # churn before pulling so the update never wedges itself.
+    git -C "$REPO" checkout -- apps/web/package-lock.json apps/api/uv.lock 2>/dev/null || true
+    if ! git -C "$REPO" pull --ff-only; then
+      echo "✗ git pull failed — local changes are blocking the update:" >&2
+      git -C "$REPO" status --short >&2
+      echo "   If none of those are edits you made on purpose, run:" >&2
+      echo "     git -C \"$REPO\" checkout -- . && proxima update" >&2
+      exit 1
+    fi
+    echo "==> Rebuilding"
+    ( cd "$REPO/apps/api" && uv sync )
+    # Prefer npm ci (reproducible, doesn't rewrite the lockfile). If the lockfile
+    # has drifted from package.json — common when transitive/optional deps resolve
+    # differently across npm versions — ci aborts with a wall of errors. Swallow
+    # that noise and fall back to npm install, printing one honest line instead.
+    (
+      cd "$REPO/apps/web"
+      if npm ci >/dev/null 2>&1; then
+        echo "    deps: clean install from lockfile"
+      else
+        echo "    deps: lockfile drifted, running npm install"
+        npm install
+      fi
+      npm run build
+    )
+    # Restart whichever service is installed so the new code (and DB migrations) load.
+    echo "==> Restarting"
+    if svc restart 2>/dev/null; then
+      echo "✅ Proxima updated and restarted."
+    else
+      echo "✅ Built. No managed service detected — restart Proxima yourself (e.g. 'proxima serve')."
+    fi
+    ;;
+  restart) svc restart && echo "✅ restarted" ;;
+  stop)    svc stop && echo "✅ stopped" ;;
+  status)  svc status "$@" ;;
+  logs)
+    load_config
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      tail -f "$HOME/Library/Logs/proxima.log"
+    else
+      SERVICE="${PROXIMA_SERVICE_NAME:-proxima}"
+      journalctl --user -u "$SERVICE" -f 2>/dev/null || sudo journalctl -u "$SERVICE" -f
+    fi
+    ;;
+  serve)
+    load_config
+    mkdir -p "$PROXIMA_WORKSPACE_ROOT" "$PROXIMA_HERMES_PROFILES_ROOT" "$(dirname "$PROXIMA_DB_PATH")"
+    exec "$API_DIR/.venv/bin/python" "$API_DIR/scripts/serve.py" "$@"
+    ;;
+  print-env)
+    load_config
+    env | grep '^PROXIMA_' | sort
+    ;;
+  help|*)
+    cat <<EOF
+Proxima installer wrapper
+
+Usage:
+  proxima init-config   Create local config at $CONFIG_FILE
+  proxima doctor        Check dependencies and runtime dirs
+  proxima build         Sync deps, run tests, build web
+  proxima update        git pull + rebuild + restart the service (runs DB migrations)
+  proxima restart       Restart the service
+  proxima stop          Stop the service
+  proxima status        Show service status
+  proxima logs          Tail live service logs
+  proxima serve         Serve API + built PWA on PROXIMA_HOST:PROXIMA_PORT
+  proxima print-env     Print resolved PROXIMA_* env
+EOF
+    ;;
+esac

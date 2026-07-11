@@ -1,0 +1,25 @@
+[project]
+name = "proxima-api"
+version = "1.0.0"
+description = "Proxima API"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.8.0",
+  "python-multipart>=0.0.32",
+  "uvicorn>=0.30.0",
+  "websockets>=16.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

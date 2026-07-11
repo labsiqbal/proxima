@@ -1,0 +1,17 @@
+{
+  "name": "proxima",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted single-user control plane for AI agent work",
+  "scripts": {
+    "dev": "bash scripts/dev",
+    "build": "bash scripts/build",
+    "test": "cd apps/api && .venv/bin/python -m pytest -q tests && cd ../.. && npm --prefix apps/web run build",
+    "smoke:fresh": "bash scripts/smoke-fresh",
+    "smoke": "node scripts/smoke",
+    "qa": "npm test && npm run smoke:fresh && npm run smoke",
+    "doctor": "bash scripts/proxima doctor",
+    "serve": "bash scripts/proxima serve",
+    "install:local": "sudo bash scripts/install-local"
+  }
+}

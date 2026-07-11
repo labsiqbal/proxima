@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PREFIX="${PREFIX:-/opt/proxima}"
+BIN="${BIN:-/usr/local/bin/proxima}"
+DATA_DIR="${PROXIMA_DATA_DIR:-/var/lib/proxima}"
+CONFIG_DIR="${PROXIMA_CONFIG_DIR:-/etc/proxima}"
+DRY_RUN=0
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+
+run() {
+  if [[ "$DRY_RUN" == 1 ]]; then echo "+ $*"; else "$@"; fi
+}
+
+if [[ "$EUID" -ne 0 && "$DRY_RUN" != 1 ]]; then
+  echo "install-local must run with sudo/root (use --dry-run to preview)" >&2
+  exit 1
+fi
+
+command -v uv >/dev/null 2>&1 || { echo "missing uv" >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo "missing npm" >&2; exit 1; }
+
+echo "Installing Proxima"
+echo "  source: $ROOT"
+echo "  prefix: $PREFIX"
+echo "  data:   $DATA_DIR"
+echo "  config: $CONFIG_DIR/proxima.env"
+echo "  bin:    $BIN"
+
+run mkdir -p "$PREFIX" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$BIN")"
+run rsync -a --delete --exclude node_modules --exclude .venv --exclude dist --exclude .dev "$ROOT/" "$PREFIX/"
+run bash "$PREFIX/scripts/build"
+run ln -sf "$PREFIX/scripts/proxima" "$BIN"
+
+if [[ ! -f "$CONFIG_DIR/proxima.env" ]]; then
+  if [[ "$DRY_RUN" == 1 ]]; then
+    echo "+ write $CONFIG_DIR/proxima.env"
+  else
+    cat >"$CONFIG_DIR/proxima.env" <<EOF
+PROXIMA_REPO_ROOT="$PREFIX"
+PROXIMA_CONFIG="$CONFIG_DIR/proxima.env"
+PROXIMA_DATA_DIR="$DATA_DIR"
+PROXIMA_DB_PATH="$DATA_DIR/proxima.db"
+PROXIMA_WORKSPACE_ROOT="$DATA_DIR/workspace"
+PROXIMA_HERMES_PROFILES_ROOT="$DATA_DIR/hermes-profiles"
+PROXIMA_WEB_DIST="$PREFIX/apps/web/dist"
+PROXIMA_HOST="127.0.0.1"
+PROXIMA_PORT="8765"
+PROXIMA_SERVICE_NAME="proxima"
+PROXIMA_UPDATE_REPO="labsiqbal/proxima"
+PROXIMA_FEATURE_VIDEO="0"
+PROXIMA_FEATURE_DESIGN_STUDIO="0"
+PROXIMA_PROJECTCTL_COMMAND="/usr/bin/true"
+EOF
+  fi
+fi
+
+echo "Install complete. Next:"
+echo "  proxima doctor"
+echo "  proxima serve"
+echo "  open http://127.0.0.1:8765"
