@@ -44,7 +44,16 @@ class RunAdvancers:
                 new_status = "capped"
             else:
                 new_status = "running"
-            db.execute("UPDATE sessions SET goal_iteration = ?, goal_status = ? WHERE id = ?", (iteration, new_status, session_id))
+            # Guarded: a concurrent cancel_goal (request thread, separate connection)
+            # may have set goal_status terminal between the read above and here.
+            # Only advance from 'running'; if we lost the race, don't resurrect the
+            # goal or spawn another turn.
+            advanced = db.execute(
+                "UPDATE sessions SET goal_iteration = ?, goal_status = ? WHERE id = ? AND goal_status = 'running'",
+                (iteration, new_status, session_id),
+            ).rowcount > 0
+            if not advanced:
+                return
             add_event(
                 int(run["id"]),
                 session_id,

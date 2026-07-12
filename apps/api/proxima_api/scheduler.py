@@ -108,14 +108,24 @@ def _scheduler_tick(app: FastAPI, now: datetime | None = None) -> list[int]:
     for s in scheds:
         if s["last_run_minute"] == minute_key or not wf.cron_matches(s["cron"], now):
             continue
+        # Atomically claim this minute for this schedule BEFORE any work. A second
+        # tick (or a second scheduler) that already claimed it gets rowcount 0 and
+        # skips — no double-spawn. Replaces the old read-snapshot-then-set-later
+        # window that was safe only under a single scheduler task.
+        with app.state.db_lock:
+            claimed = db.execute(
+                "UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND IFNULL(last_run_minute, '') != ?",
+                (minute_key, s["id"], minute_key),
+            ).rowcount > 0
+        if not claimed:
+            continue
         if s["overlap_policy"] == "skip":
             active = db.execute(
                 "SELECT 1 FROM jobs WHERE schedule_id = ? AND status IN ('queued','running','review') LIMIT 1", (s["id"],)
             ).fetchone()
             if active:
-                with app.state.db_lock:
-                    db.execute("UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP WHERE id = ?", (minute_key, s["id"]))
-                continue
+                continue  # minute already claimed above; just don't spawn
         try:
             jid = _spawn_scheduled_job(app, s, minute_key)
             if jid:
