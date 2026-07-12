@@ -182,6 +182,16 @@ def _add_prompt_collaborations(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)")
 
 
+def _drop_sessions_acp_session_id(conn: sqlite3.Connection) -> None:
+    # Dead single-value column. The authoritative store is the agent_sessions
+    # table (one ACP session PER home), so this legacy column is never read or
+    # written by live code — a stale value here would look authoritative to a
+    # future reader. Drop it. (SQLite >= 3.35 supports DROP COLUMN.)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "acp_session_id" in cols:
+        conn.execute("ALTER TABLE sessions DROP COLUMN acp_session_id")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -196,6 +206,7 @@ MIGRATIONS: list[Migration] = [
     (11, "add message_reviews table (Validate sidecar reviews)", _add_message_reviews_table),
     (12, "add message review apply/merge fields", _add_message_review_apply_fields),
     (13, "add prompt collaborations for multi-agent modes", _add_prompt_collaborations),
+    (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
 ]
 
 

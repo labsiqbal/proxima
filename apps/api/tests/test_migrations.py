@@ -139,3 +139,26 @@ def test_v10_drops_project_members(tmp_path: Path):
     applied = run_migrations(conn, str(tmp_path / "m.db"))
     assert 10 in applied
     assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_members'").fetchone() is None
+
+
+def test_migration_14_drops_dead_sessions_acp_session_id(tmp_path):
+    """The legacy sessions.acp_session_id column is dropped; agent_sessions is the
+    authoritative ACP-session store."""
+    import sqlite3
+    from proxima_api.db import connect, init_db
+    from proxima_api.migrations import run_migrations
+
+    # Simulate an old install that still has the dead column.
+    db_path = tmp_path / "old.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("ALTER TABLE sessions ADD COLUMN acp_session_id TEXT")
+
+    # No migrations are recorded yet after init_db, so this runs 1..14 fresh;
+    # migration 14 drops the column we just simulated an old install having.
+    run_migrations(conn, str(db_path))
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert "acp_session_id" not in cols
+    # agent_sessions (the real store) is untouched.
+    assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'").fetchone()

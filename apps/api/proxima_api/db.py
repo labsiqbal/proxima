@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   runner_id TEXT NOT NULL DEFAULT '__DEFAULT_RUNNER__',
   visibility TEXT NOT NULL DEFAULT 'private',
   mode TEXT NOT NULL DEFAULT 'chat',
-  acp_session_id TEXT,
   task_id INTEGER,
   job_id INTEGER,
   workflow_id INTEGER,
@@ -349,7 +348,6 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "sessions", "profile_id", "profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL")
     _add_column(conn, "sessions", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
     _add_column(conn, "sessions", "mode", "mode TEXT NOT NULL DEFAULT 'chat'")
-    _add_column(conn, "sessions", "acp_session_id", "acp_session_id TEXT")
     _add_column(conn, "sessions", "task_id", "task_id INTEGER")
     _add_column(conn, "sessions", "job_id", "job_id INTEGER")
     _add_column(conn, "sessions", "workflow_id", "workflow_id INTEGER")
