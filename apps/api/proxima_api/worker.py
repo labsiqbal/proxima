@@ -481,16 +481,26 @@ class RunWorker:
                 return True
 
             if kind == "collab_brainstorm_child":
-                child_ids = [int(x) for x in json.loads(collab["child_run_ids"] or "[]")]
-                remaining = 0
-                if child_ids:
-                    child_id_filter = ",".join(str(int(child_id)) for child_id in child_ids)
-                    remaining = db.execute(
-                        "SELECT COUNT(*) AS c FROM runs WHERE instr(',' || ? || ',', ',' || id || ',') > 0 AND status IN ('queued','running')",
-                        (child_id_filter,),
-                    ).fetchone()["c"]
+                # Completeness comes from the live runs table, NOT from the
+                # child_run_ids JSON — the request thread may not have persisted
+                # that list yet when the first child finishes, and an empty list
+                # used to make this conclude "all done" and synthesize after one
+                # child. profile_ids is written when the collaboration row is
+                # created (before any child is queued), so it is the reliable
+                # expected child count: synthesize only once every expected child
+                # exists AND none is still in flight.
+                expected = len(json.loads(collab["profile_ids"] or "[]"))
+                created = db.execute(
+                    "SELECT COUNT(*) AS c FROM runs WHERE collaboration_id = ? AND kind = 'collab_brainstorm_child'",
+                    (collab_id,),
+                ).fetchone()["c"]
+                in_flight = db.execute(
+                    "SELECT COUNT(*) AS c FROM runs WHERE collaboration_id = ? AND kind = 'collab_brainstorm_child' AND status IN ('queued','running')",
+                    (collab_id,),
+                ).fetchone()["c"]
+                all_children_done = created >= max(expected, 1) and in_flight == 0
                 self._add_collaboration_progress(collab)
-                if remaining == 0 and not collab["synthesis_run_id"]:
+                if all_children_done and not collab["synthesis_run_id"]:
                     outputs = loads_list(collab["child_outputs"])
                     synth_profile = self._collaboration_profile(int(json.loads(collab["profile_ids"] or "[]")[0]))
                     synth_id = self._queue_collaboration_run(collab, synth_profile, build_brainstorm_synthesis_prompt(collab["prompt"], outputs), "collab_brainstorm_synthesis", "synthesis")
