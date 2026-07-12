@@ -39,6 +39,7 @@ from .routes import (
     files as routes_files,
     profiles as routes_profiles,
     projects as routes_projects,
+    reviews as routes_reviews,
     tasks as routes_tasks,
     update as routes_update,
     wiki as routes_wiki,
@@ -193,6 +194,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_admin.register(app, _route_deps)
     routes_update.register(app, _route_deps)
     routes_chat.register(app, _route_deps)
+    routes_reviews.register(app, _route_deps)
     routes_auth.register(app, _route_deps)
 
     # Config the SPA reads at bootstrap to build preview URLs. apps_domain is not
