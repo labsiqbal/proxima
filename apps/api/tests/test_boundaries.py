@@ -40,3 +40,12 @@ def test_feature_modules_do_not_mutate_core_tables():
 def test_feature_modules_do_not_import_core_internals():
     offenders = [name for name in FEATURE_MODULES if _CORE_IMPORT.search((PKG / name).read_text())]
     assert not offenders, f"feature module imports core internals (worker/routes): {offenders}"
+
+
+def test_chat_gate_does_not_hardcode_feature_require():
+    """The main-chat gate must decide feature access through the kinds registry
+    (_require_mode_feature), never open-code `require(feature_cfg, DESIGN_STUDIO)`.
+    A new gated session kind is added by registering it, not by editing chat.py."""
+    src = (PKG / "routes" / "chat.py").read_text()
+    bad = re.findall(r"features\.require\(\s*feature_cfg\s*,\s*features\.(?:DESIGN_STUDIO|VIDEO)\b", src)
+    assert not bad, f"chat gate hardcodes a feature require ({len(bad)}×) — route it through the kinds registry"

@@ -38,6 +38,15 @@ def main_chat_modes() -> tuple[str, ...]:
     return tuple(k.mode for k in _REGISTRY.values() if k.shown_in_main_chat)
 
 
+def feature_flag_for(mode: str | None) -> str | None:
+    """The PROXIMA_FEATURE_* gate a session of this mode requires, or None.
+
+    Lets the chat gate ask the registry ("does this session's kind need a feature
+    flag?") instead of hardcoding ``if mode == 'design': require(DESIGN_STUDIO)``.
+    """
+    return get(mode).feature_flag
+
+
 # --- built-in kinds ---------------------------------------------------------
 # 'chat' is the main-chat gate itself. 'design' is Design Studio's session type,
 # gated + excluded from the main list. New surfaces register alongside these.
