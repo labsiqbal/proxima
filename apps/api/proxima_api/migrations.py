@@ -240,6 +240,73 @@ def _add_messages_run_id_fk(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
+    """Rebuild `sessions` so task_id/job_id/workflow_id become real FKs (ON DELETE
+    SET NULL) instead of bare INTEGERs that dangle at a deleted task/job/workflow.
+    Dangling values that already exist are nulled first (that's the whole point —
+    they could dangle before), then the FK is enforced. Same safe rebuild order as
+    migration 15. Idempotent + guarded against minimal fixtures."""
+    if any(r[3] == "task_id" for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()):
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    full = {
+        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
+        "mode", "task_id", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
+        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+    }
+    if not full.issubset(cols):
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        # Null pre-existing dangling pointers so the new FK doesn't reject real data.
+        conn.execute("UPDATE sessions SET task_id = NULL WHERE task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = sessions.task_id)")
+        conn.execute("UPDATE sessions SET job_id = NULL WHERE job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = sessions.job_id)")
+        conn.execute("UPDATE sessions SET workflow_id = NULL WHERE workflow_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM workflows WHERE workflows.id = sessions.workflow_id)")
+        conn.execute(
+            f"""
+            CREATE TABLE _sessions_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+              owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+              runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}',
+              visibility TEXT NOT NULL DEFAULT 'private',
+              mode TEXT NOT NULL DEFAULT 'chat',
+              task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+              job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+              workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+              manual_title INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              produced_artifacts TEXT NOT NULL DEFAULT '[]',
+              goal_text TEXT,
+              goal_status TEXT,
+              goal_iteration INTEGER NOT NULL DEFAULT 0,
+              goal_max INTEGER NOT NULL DEFAULT 20
+            )
+            """
+        )
+        _scols = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+                  "task_id, job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+                  "goal_text, goal_status, goal_iteration, goal_max")
+        conn.execute(f"INSERT INTO _sessions_new({_scols}) SELECT {_scols} FROM sessions")
+        conn.execute("DROP TABLE sessions")
+        conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"sessions FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -256,6 +323,7 @@ MIGRATIONS: list[Migration] = [
     (13, "add prompt collaborations for multi-agent modes", _add_prompt_collaborations),
     (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
     (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
+    (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
 ]
 
 
