@@ -1102,9 +1102,6 @@ def register(app, deps):
         }
         tbs = {r["status"]: r["c"] for r in d.execute("SELECT status, COUNT(*) AS c FROM tasks GROUP BY status").fetchall()}
         tasks_by_status = {s: tbs.get(s, 0) for s in ("todo", "doing", "review", "done")}
-        rpd = {r["d"]: r["c"] for r in d.execute("SELECT date(created_at) AS d, COUNT(*) AS c FROM runs WHERE created_at >= date('now','-6 days') GROUP BY date(created_at)").fetchall()}
-        today = _dtm.now(_tz.utc).date()
-        runs_per_day = [{"date": (today - _td(days=i)).isoformat(), "count": rpd.get((today - _td(days=i)).isoformat(), 0)} for i in range(6, -1, -1)]
         recent = [dict(r) for r in d.execute(
             "SELECT s.id, s.title, s.task_id, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, t.title AS task_title, "
             "(SELECT r.status FROM runs r WHERE r.session_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_run_status "
@@ -1224,7 +1221,7 @@ def register(app, deps):
             include_video=features.enabled(app_cfg, features.VIDEO),
         )
         return {
-            "counts": counts, "tasksByStatus": tasks_by_status, "runsPerDay": runs_per_day,
+            "counts": counts, "tasksByStatus": tasks_by_status,
             "recent": recent, "activeSessions": active_sessions, "projects": projects,
             "workflows": workflows_out, "schedules": schedules_out, "reviewCount": review_count,
             "reviewJobs": review_jobs, "recentArtifacts": recent_artifacts, "systemHealth": system_health,

@@ -3,7 +3,6 @@ import { api } from './client'
 export type Dashboard = {
   counts: { projects: number; chats: number; tasks: number; activeRuns: number }
   tasksByStatus: { todo: number; doing: number; review: number; done: number }
-  runsPerDay: { date: string; count: number }[]
   recent: { id: number; title: string; task_id: number | null; workflow_id: number | null; updated_at: string; project_slug: string | null; task_title: string | null; goal_status?: string | null; last_run_status?: string | null; mode?: string | null }[]
   activeSessions: { id: number; title: string; task_id: number | null; workflow_id: number | null; updated_at: string; project_slug: string | null; task_title: string | null; last_active_at: string; mode?: string | null }[]
   projects: { slug: string; name: string; visibility: string; chats: number; tasks: number; last_activity: string | null }[]
