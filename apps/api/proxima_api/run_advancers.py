@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import workflows as wf
+from . import state
 from .auth import iso_now
 from .goal_loop import build_goal_prompt, parse_goal_status
 
@@ -99,9 +100,10 @@ class RunAdvancers:
                 steps[idx]["status"] = "failed"
                 steps[idx]["error"] = answer[:600]
                 steps[idx]["finished_at"] = iso_now()
-                db.execute(
-                    "UPDATE jobs SET status='failed', steps_state=?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (json.dumps(steps), job["id"]),
+                state.guarded_transition(
+                    db, "jobs", int(job["id"]), "failed", ("running",),
+                    set_extra="steps_state=?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
+                    set_params=(json.dumps(steps),),
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "failed", "step": idx, "reason": "blocked"})
                 return
@@ -123,9 +125,10 @@ class RunAdvancers:
             last = idx + 1 >= len(steps)
             gate = bool(steps[idx].get("review_required"))
             if last or gate:
-                db.execute(
-                    "UPDATE jobs SET status = 'review', steps_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (json.dumps(steps), job["id"]),
+                state.guarded_transition(
+                    db, "jobs", int(job["id"]), "review", ("running",),
+                    set_extra="steps_state = ?, updated_at = CURRENT_TIMESTAMP",
+                    set_params=(json.dumps(steps),),
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "review", "step": idx, "gate": gate})
                 return

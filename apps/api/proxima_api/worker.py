@@ -27,6 +27,7 @@ from .runner_specs import runner_spec
 from . import wiki_memory
 from . import app_settings
 from . import features
+from . import state
 from .artifacts import artifacts_for_output_links, scan_project_artifacts
 from .message_reviews import parse_review_output, review_payload
 from .prompt_collaborations import (
@@ -422,9 +423,13 @@ class RunWorker:
         final = format_final(collab["mode"], collab["prompt"], outputs, synthesis)
         self.outputs.save_assistant_message(parent_id, collab["session_id"], collab["project_id"], final, collab["mode"].title(), [], self.add_event)
         msg = db.execute("SELECT id FROM messages WHERE run_id = ? ORDER BY id DESC LIMIT 1", (parent_id,)).fetchone()
-        db.execute(
-            "UPDATE prompt_collaborations SET status = 'done', final_message_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (msg["id"] if msg else None, collab["id"]),
+        # Guarded: a concurrent cancel (chat.py cancel_run) may have set this
+        # collaboration terminal — don't overwrite it back to 'done'.
+        state.guarded_transition(
+            db, "prompt_collaborations", int(collab["id"]), "done",
+            state.non_terminal(state.COLLABORATION),
+            set_extra="final_message_id = ?, updated_at = CURRENT_TIMESTAMP",
+            set_params=(msg["id"] if msg else None,),
         )
         completed = db.execute(
             "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
@@ -529,7 +534,11 @@ class RunWorker:
         collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (row["collaboration_id"],)).fetchone()
         if not collab:
             return
-        db.execute("UPDATE prompt_collaborations SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (error, collab["id"]))
+        state.guarded_transition(
+            db, "prompt_collaborations", int(collab["id"]), "failed",
+            state.non_terminal(state.COLLABORATION),
+            set_extra="error = ?, updated_at = CURRENT_TIMESTAMP", set_params=(error,),
+        )
         parent_id = collab["parent_run_id"]
         failed_run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         failed_profile = self._collaboration_profile(int(failed_run["profile_id"] if failed_run else 0))
@@ -546,7 +555,10 @@ class RunWorker:
             self.add_event(sid, sibling["session_id"], sibling["project_id"], "run.cancelled", {"kind": "collaboration"})
             self._emit_collaboration_child_event("cancelled", sibling, "cancelled", collab=collab)
             self.cancel(sid)
-        db.execute("UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (error, run_id))
+        state.guarded_transition(
+            db, "runs", run_id, "failed", ("queued", "running"),
+            set_extra="error = ?, finished_at = CURRENT_TIMESTAMP", set_params=(error,),
+        )
         if failed_run:
             self._emit_collaboration_child_event("failed", failed_run, "failed", error=error, collab=collab, profile=failed_profile)
         if parent_id:
