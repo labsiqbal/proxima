@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-145 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+140 endpoints across 12 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -16,7 +16,6 @@
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
-- [`routes/tasks.py`](#routes-tasks-py) — 5 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
 - [`routes/work.py`](#routes-work-py) — 16 endpoints
@@ -181,17 +180,6 @@
 | POST | `/api/messages/{message_id}/reviews` | `create_message_review` |  |
 
 
-## routes/tasks.py
-
-| Method | Path | Handler | Description |
-| --- | --- | --- | --- |
-| GET | `/api/projects/{slug}/tasks` | `list_tasks` |  |
-| POST | `/api/projects/{slug}/tasks` | `create_task` |  |
-| DELETE | `/api/tasks/{task_id}` | `delete_task` |  |
-| GET | `/api/tasks/{task_id}` | `get_task` |  |
-| PATCH | `/api/tasks/{task_id}` | `update_task` |  |
-
-
 ## routes/update.py
 
 | Method | Path | Handler | Description |
@@ -247,4 +235,4 @@
 
 
 ---
-_Generated 2026-07-12 17:56 UTC._
+_Generated 2026-07-12 23:28 UTC._

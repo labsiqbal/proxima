@@ -307,6 +307,69 @@ def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _drop_tasks_feature(conn: sqlite3.Connection) -> None:
+    """Merge tasks into jobs: rebuild sessions WITHOUT the task_id column/FK, then
+    drop the tasks table. Same safe rebuild order + foreign_keys OFF as migration 16
+    (keeps the job_id/workflow_id FKs, recreates indexes, asserts fk_check clean).
+    Idempotent: skips once task_id is gone; guarded against minimal fixtures."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "task_id" not in cols:
+        conn.execute("DROP TABLE IF EXISTS tasks")
+        return
+    keep = {
+        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
+        "mode", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
+        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+    }
+    if not keep.issubset(cols):
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE _sessions_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+              owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+              runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}',
+              visibility TEXT NOT NULL DEFAULT 'private',
+              mode TEXT NOT NULL DEFAULT 'chat',
+              job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+              workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+              manual_title INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              produced_artifacts TEXT NOT NULL DEFAULT '[]',
+              goal_text TEXT,
+              goal_status TEXT,
+              goal_iteration INTEGER NOT NULL DEFAULT 0,
+              goal_max INTEGER NOT NULL DEFAULT 20
+            )
+            """
+        )
+        _c = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+              "job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+              "goal_text, goal_status, goal_iteration, goal_max")
+        conn.execute(f"INSERT INTO _sessions_new({_c}) SELECT {_c} FROM sessions")
+        conn.execute("DROP TABLE sessions")
+        conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        conn.execute("DROP TABLE IF EXISTS tasks")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"drop-tasks rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -324,6 +387,7 @@ MIGRATIONS: list[Migration] = [
     (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
     (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
     (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
+    (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
 ]
 
 

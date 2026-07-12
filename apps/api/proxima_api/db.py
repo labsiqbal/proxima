@@ -60,9 +60,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   runner_id TEXT NOT NULL DEFAULT '__DEFAULT_RUNNER__',
   visibility TEXT NOT NULL DEFAULT 'private',
   mode TEXT NOT NULL DEFAULT 'chat',
-  task_id INTEGER,
-  job_id INTEGER,
-  workflow_id INTEGER,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+  workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
   manual_title INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -160,19 +159,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS tasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'todo',
-  assignee TEXT,
-  created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id, status);
 -- Workflows = reusable recipes (definition). Steps live as a JSON array so a
 -- recipe is edited/snapshotted as one unit.
 CREATE TABLE IF NOT EXISTS workflows (
@@ -348,7 +334,6 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "sessions", "profile_id", "profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL")
     _add_column(conn, "sessions", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
     _add_column(conn, "sessions", "mode", "mode TEXT NOT NULL DEFAULT 'chat'")
-    _add_column(conn, "sessions", "task_id", "task_id INTEGER")
     _add_column(conn, "sessions", "job_id", "job_id INTEGER")
     _add_column(conn, "sessions", "workflow_id", "workflow_id INTEGER")
     _add_column(conn, "sessions", "manual_title", "manual_title INTEGER NOT NULL DEFAULT 0")
@@ -369,7 +354,6 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "message_reviews", "source_original_content", "source_original_content TEXT")
     _add_column(conn, "message_reviews", "applied_at", "applied_at TEXT")
     _cleanup_orphan_agent_sessions(conn)
-    _migrate_tasks_to_jobs(conn)
 
 
 def _cleanup_orphan_agent_sessions(conn: sqlite3.Connection) -> int:
@@ -386,56 +370,6 @@ def _cleanup_orphan_agent_sessions(conn: sqlite3.Connection) -> int:
         "WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.id = agent_sessions.session_id)"
     )
     return int(cur.rowcount or 0)
-
-
-# tasks -> jobs: in the unified model a kanban task IS a 1-step job. Migrate every
-# session-backed task to a job once (idempotent: a task whose session already has
-# job_id set is skipped). The legacy `tasks` table is left intact as a safety net.
-_TASK_STATUS_TO_JOB = {"todo": "queued", "doing": "running", "review": "review", "done": "done"}
-
-
-def _migrate_tasks_to_jobs(conn: sqlite3.Connection) -> int:
-    if "jobs" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}:
-        return 0
-    rows = conn.execute(
-        "SELECT t.* FROM tasks t JOIN sessions s ON s.id = t.session_id WHERE s.job_id IS NULL"
-    ).fetchall()
-    migrated = 0
-    for t in rows:
-        step = {
-            "id": "s0",
-            "name": t["title"] or "Task",
-            "instruction": t["description"] or "",
-            "expected_output": "",
-            "type": "other",
-            "rules": None,
-            "skill_ids": None,
-            "review_required": False,
-            "depends_on": None,
-            "status": "done" if t["status"] == "done" else "queued",
-            "run_id": None,
-            "output_summary": None,
-            "started_at": None,
-            "finished_at": None,
-            "error": None,
-        }
-        cur = conn.execute(
-            "INSERT INTO jobs(project_id, workflow_id, session_id, title, status, current_step_idx, steps_state, created_by, created_at) "
-            "VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                t["project_id"],
-                t["session_id"],
-                t["title"],
-                _TASK_STATUS_TO_JOB.get(t["status"], "queued"),
-                1 if t["status"] == "done" else 0,
-                json.dumps([step]),
-                t["created_by"],
-                t["created_at"],
-            ),
-        )
-        conn.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (cur.lastrowid, t["session_id"]))
-        migrated += 1
-    return migrated
 
 
 def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = None, hermes_home_factory: Any | None = None, source_hermes_home: str | None = None) -> None:

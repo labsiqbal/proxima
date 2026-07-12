@@ -195,31 +195,28 @@ def test_migration_15_adds_messages_run_id_fk_preserving_data(tmp_path):
     assert conn.execute("SELECT run_id FROM messages WHERE id=?", (mid,)).fetchone()["run_id"] is None
 
 
-def test_migration_16_adds_sessions_pointer_fks_nulling_dangling(tmp_path):
-    """sessions.task_id/job_id/workflow_id become real FKs (ON DELETE SET NULL);
-    pre-existing dangling values are nulled so enforcement can't reject real data."""
-    from proxima_api import migrations as M
+def test_sessions_pointer_fks_enforced_after_migration(tmp_path):
+    """After the full migration chain, sessions.job_id/workflow_id are real FKs
+    (ON DELETE SET NULL), task_id + the tasks table are gone, and integrity holds."""
     from proxima_api.db import connect, init_db
     from proxima_api.migrations import run_migrations
 
     db_path = tmp_path / "m.db"
     conn = connect(db_path)
     init_db(conn, [])
-    run_migrations(conn, str(db_path), migrations=[m for m in M.MIGRATIONS if m[0] <= 15])
+    run_migrations(conn, str(db_path))
+
+    fks = {(r[3], r[2]) for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()}
+    assert ("job_id", "jobs") in fks and ("workflow_id", "workflows") in fks
+    assert "task_id" not in {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name='tasks'").fetchone() is None
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    # FK behaves: deleting a workflow nulls a session's pointer instead of dangling it.
     conn.execute("INSERT INTO users(username, os_user) VALUES ('u','u')")
     uid = conn.execute("SELECT id FROM users").fetchone()["id"]
     wid = conn.execute("INSERT INTO workflows(name) VALUES ('w')").lastrowid
-    # a dangling job_id (99) + a valid workflow_id
-    conn.execute("INSERT INTO sessions(title, owner_user_id, job_id, workflow_id) VALUES ('s',?,99,?)", (uid, wid))
+    conn.execute("INSERT INTO sessions(title, owner_user_id, workflow_id) VALUES ('s',?,?)", (uid, wid))
     sid = conn.execute("SELECT id FROM sessions").fetchone()["id"]
-
-    run_migrations(conn, str(db_path))
-
-    assert any(r[3] == "task_id" for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall())
-    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    row = conn.execute("SELECT job_id, workflow_id FROM sessions WHERE id=?", (sid,)).fetchone()
-    assert row["job_id"] is None          # dangling nulled
-    assert row["workflow_id"] == wid      # valid kept
-    # FK behaves: deleting the workflow nulls the pointer.
     conn.execute("DELETE FROM workflows WHERE id=?", (wid,))
     assert conn.execute("SELECT workflow_id FROM sessions WHERE id=?", (sid,)).fetchone()["workflow_id"] is None
