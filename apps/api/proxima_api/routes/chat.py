@@ -110,14 +110,6 @@ def register(app, deps):
 
     @app.get("/api/sessions")
     def list_sessions(user: dict[str, Any] = Depends(current_user)):
-        # Self-heal: a task thread whose task no longer exists is an orphan (it
-        # would show in the sidebar with no way to delete it — the delete button
-        # targets the missing task). Drop these so they disappear automatically.
-        db().execute(
-            "DELETE FROM sessions WHERE owner_user_id = ? AND task_id IS NOT NULL "
-            "AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = sessions.task_id)",
-            (user["id"],),
-        )
         # Main chat shows only the kinds the registry marks shown_in_main_chat
         # (kind is authoritative, never inferred from the title). A new session
         # mode = register it in kinds.py; this query needs no edit.
@@ -125,17 +117,15 @@ def register(app, deps):
         mode_placeholders = ",".join("?" for _ in modes)
         rows = db().execute(
             f"""
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
             FROM sessions s
             LEFT JOIN projects p ON p.id = s.project_id
             LEFT JOIN profiles pr ON pr.id = s.profile_id
-            LEFT JOIN tasks t ON t.id = s.task_id
             WHERE s.owner_user_id = ?
               AND s.job_id IS NULL        -- workflow-job threads belong to Activity
               AND s.workflow_id IS NULL   -- workflow iterate/test chats are opened from Workflows
               AND IFNULL(s.mode, 'chat') IN ({mode_placeholders})
-              AND (s.task_id IS NOT NULL
-                   OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id))
+              AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id)
             ORDER BY s.updated_at DESC, s.id DESC
             """,
             (user["id"], *modes),
@@ -146,7 +136,7 @@ def register(app, deps):
     def search(q: str = "", user: dict[str, Any] = Depends(current_user)):
         term = q.strip()
         if len(term) < 2:
-            return {"projects": [], "chats": [], "tasks": [], "messages": []}
+            return {"projects": [], "chats": [], "messages": []}
         like = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         uid = user["id"]
         projects = [dict(r) for r in db().execute(
@@ -154,18 +144,13 @@ def register(app, deps):
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
             (uid, like, like)).fetchall()]
         chats = [dict(r) for r in db().execute(
-            "SELECT id, title, task_id FROM sessions WHERE owner_user_id = ? AND title LIKE ? ESCAPE '\\' "
+            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND title LIKE ? ESCAPE '\\' "
             "ORDER BY updated_at DESC LIMIT 10", (uid, like)).fetchall()]
-        tasks = [dict(r) for r in db().execute(
-            "SELECT t.id, t.title, t.status, p.slug AS project_slug FROM tasks t JOIN projects p ON p.id = t.project_id "
-            "WHERE p.owner_user_id = ? "
-            "AND (t.title LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\') ORDER BY t.updated_at DESC LIMIT 10",
-            (uid, like, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
-            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title, s.task_id "
+            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title "
             "FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.owner_user_id = ? "
             "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
-        return {"projects": projects, "chats": chats, "tasks": tasks, "messages": msgs}
+        return {"projects": projects, "chats": chats, "messages": msgs}
 
     @app.post("/api/sessions", status_code=201)
     def create_session(payload: SessionCreateRequest, user: dict[str, Any] = Depends(current_user)):
@@ -182,8 +167,8 @@ def register(app, deps):
         )
         row = db().execute(
             """
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
-            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id WHERE s.id=?
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
+            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?
             """,
             (cur.lastrowid,),
         ).fetchone()
@@ -216,8 +201,8 @@ def register(app, deps):
             )
         row = db().execute(
             """
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
-            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id WHERE s.id=?
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
+            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?
             """,
             (session_id,),
         ).fetchone()
@@ -398,8 +383,6 @@ def register(app, deps):
         run_id = int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": payload.prompt_mode})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
-        if session.get("task_id"):
-            db().execute("UPDATE tasks SET status = 'doing', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'done'", (session["task_id"],))
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 
     @app.post("/api/sessions/{session_id}/goal", status_code=202)
@@ -832,30 +815,26 @@ def register(app, deps):
         ).fetchone()["c"]
         counts = {
             "projects": d.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"],
-            "chats": d.execute("SELECT COUNT(*) AS c FROM sessions WHERE task_id IS NULL").fetchone()["c"],
-            "tasks": d.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"],
+            "chats": d.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"],
             "activeRuns": active_runs_count,
         }
-        tbs = {r["status"]: r["c"] for r in d.execute("SELECT status, COUNT(*) AS c FROM tasks GROUP BY status").fetchall()}
-        tasks_by_status = {s: tbs.get(s, 0) for s in ("todo", "doing", "review", "done")}
         recent = [dict(r) for r in d.execute(
-            "SELECT s.id, s.title, s.task_id, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, t.title AS task_title, "
+            "SELECT s.id, s.title, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, "
             "(SELECT r.status FROM runs r WHERE r.session_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_run_status "
-            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
             "ORDER BY s.updated_at DESC LIMIT 7").fetchall()]
         active_sessions = [dict(r) for r in d.execute(
-            f"SELECT s.id, s.title, s.task_id, s.workflow_id, s.updated_at, p.slug AS project_slug, t.title AS task_title, "
+            f"SELECT s.id, s.title, s.workflow_id, s.updated_at, p.slug AS project_slug, "
             "MAX(COALESCE(r.heartbeat_at, r.started_at, r.created_at)) AS last_active_at "
             "FROM runs r JOIN sessions s ON s.id = r.session_id "
-            "LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
             f"WHERE {active_run_clause('r')} "
             "GROUP BY s.id ORDER BY last_active_at DESC LIMIT 5",
             stale_params(stale_seconds),
         ).fetchall()]
         projects = [dict(r) for r in d.execute(
             "SELECT p.slug, p.name, p.path, p.visibility, "
-            "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id AND s.task_id IS NULL) AS chats, "
-            "(SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS tasks, "
+            "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS chats, "
             "(SELECT MAX(updated_at) FROM sessions s WHERE s.project_id = p.id) AS last_activity "
             "FROM projects p ORDER BY last_activity DESC").fetchall()]
         workflows_out = [
@@ -939,9 +918,9 @@ def register(app, deps):
         # approval.request that hasn't been resolved). Usually empty when auto-approve
         # is on, but surfaces cross-project on Home when it's off.
         pending_approvals = [dict(r) for r in d.execute(
-            "SELECT s.id, s.title, p.slug AS project_slug, t.title AS task_title "
+            "SELECT s.id, s.title, p.slug AS project_slug "
             "FROM runs r JOIN sessions s ON s.id = r.session_id "
-            "LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
             "WHERE r.status = 'running' "
             "AND (SELECT e.type FROM events e WHERE e.run_id = r.id ORDER BY e.seq DESC LIMIT 1) = 'approval.request' "
             "GROUP BY s.id ORDER BY r.id DESC LIMIT 5"
@@ -957,7 +936,7 @@ def register(app, deps):
             include_video=features.enabled(app_cfg, features.VIDEO),
         )
         return {
-            "counts": counts, "tasksByStatus": tasks_by_status,
+            "counts": counts,
             "recent": recent, "activeSessions": active_sessions, "projects": projects,
             "workflows": workflows_out, "schedules": schedules_out, "reviewCount": review_count,
             "reviewJobs": review_jobs, "recentArtifacts": recent_artifacts, "systemHealth": system_health,
@@ -1200,8 +1179,6 @@ def register(app, deps):
                         state.non_terminal(state.COLLABORATION),
                         set_extra="updated_at = CURRENT_TIMESTAMP",
                     )
-            # A cancelled task run must not strand its task in 'doing'.
-            db().execute("UPDATE tasks SET status = 'todo', updated_at = CURRENT_TIMESTAMP WHERE id = (SELECT task_id FROM sessions WHERE id = ?) AND status = 'doing'", (row["session_id"],))
         if changed:
             app.state.worker.add_event(run_id, row["session_id"], row["project_id"], "run.cancelled", {})
         notified: set[int] = set()

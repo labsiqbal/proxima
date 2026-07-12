@@ -41,7 +41,6 @@ from .routes import (
     profiles as routes_profiles,
     projects as routes_projects,
     reviews as routes_reviews,
-    tasks as routes_tasks,
     update as routes_update,
     wiki as routes_wiki,
     work as routes_work,
@@ -186,7 +185,6 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
 
-    routes_tasks.register(app, _route_deps)
     routes_work.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_projects.register(app, _route_deps)

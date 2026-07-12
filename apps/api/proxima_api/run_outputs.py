@@ -64,7 +64,5 @@ class RunOutputs:
                     db.execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(list(merged.values())), session_id))
                 except Exception:
                     logging.getLogger("proxima.worker").exception("session artifact track failed (non-fatal)")
-            trow = db.execute("SELECT task_id, job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
-            if trow and trow["task_id"]:
-                db.execute("UPDATE tasks SET status = 'review', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'done'", (trow["task_id"],))
+            trow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return trow

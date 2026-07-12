@@ -79,17 +79,6 @@ def test_project_create_invokes_helper_when_manage_os_acl(tmp_path: Path):
     assert "root" in res.text.lower()
 
 
-def test_deleting_project_removes_its_task_threads(tmp_path: Path):
-    # Project delete used to only SET NULL on sessions, orphaning every thread.
-    api = client(tmp_path)
-    h = auth_headers(api)
-    api.post("/api/projects", json={"slug": "gone", "name": "Gone"}, headers=h)
-    sid = api.post("/api/projects/gone/tasks", json={"title": "t"}, headers=h).json()["session_id"]
-    assert any(s["id"] == sid for s in api.get("/api/sessions", headers=h).json()["sessions"])
-    api.delete("/api/projects/gone", headers=h)
-    assert all(s["id"] != sid for s in api.get("/api/sessions", headers=h).json()["sessions"])
-
-
 def test_link_project_invalid_slug_returns_422_not_500(tmp_path):
     # A bad explicit slug (or an auto-derived one ending in '-') must yield a clean
     # 4xx, not a 500 from validate_slug's raw ValueError.

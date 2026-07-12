@@ -221,7 +221,6 @@ class RunWorker:
                 "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
                 (reason, run_id),
             )
-            self._revert_task(session_id)
         self._fail_job(session_id, reason)
 
     def _is_recoverable_agent_history_error(self, exc: Exception) -> bool:
@@ -230,16 +229,6 @@ class RunWorker:
             "property_name_above_max_length" in detail
             or "Invalid property name" in detail
             or ("input[" in detail and ".arguments" in detail and "too long" in detail)
-        )
-
-    def _revert_task(self, session_id: int) -> None:
-        """A failed/cancelled run must not strand its task in 'doing'. Revert it to
-        'todo' so the kanban reflects reality (the error stays in the thread).
-        Caller holds app.state.db_lock."""
-        self.app.state.worker_db.execute(
-            "UPDATE tasks SET status = 'todo', updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = (SELECT task_id FROM sessions WHERE id = ?) AND status = 'doing'",
-            (session_id,),
         )
 
     def reap_stale_runs(self, stale_seconds: int) -> None:
@@ -838,7 +827,7 @@ class RunWorker:
             # only). Done BEFORE run.completed so the sidebar shows the recap as soon
             # as the run leaves the active set. Best-effort; never fails the run.
             try:
-                is_task = bool(trow and (trow["task_id"] or trow["job_id"]))
+                is_task = bool(trow and trow["job_id"])
                 trow_title = db.execute("SELECT title, manual_title FROM sessions WHERE id = ?", (session_id,)).fetchone()
                 is_design = bool(trow_title and (trow_title["title"] or "").startswith("Design: "))
                 account = db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'", (session_id,)).fetchone()["c"]
@@ -931,7 +920,6 @@ class RunWorker:
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": "Hermes runner timed out"})
-                self._revert_task(session_id)
             self._fail_job(session_id, "Hermes runner timed out")
         except Exception as exc:
             detail = str(exc)[-2000:]
@@ -951,7 +939,6 @@ class RunWorker:
                 cur = db.execute("INSERT INTO messages(session_id, role, content) VALUES (?, 'error', ?)", (session_id, f"Run failed: {detail}"))
                 self.add_event(run_id, session_id, project_id, "message.complete", {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"})
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
-                self._revert_task(session_id)
             self._fail_job(session_id, detail)
         finally:
             if hb_task:

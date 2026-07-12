@@ -75,19 +75,6 @@ class PermissionResponse(BaseModel):
     option_id: str
 
 
-class TaskCreateRequest(BaseModel):
-    title: str = Field(min_length=1)
-    description: str = ""
-    assignee: str | None = None
-
-
-class TaskUpdateRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    status: str | None = Field(default=None, pattern="^(todo|doing|review|done)$")
-    assignee: str | None = None
-
-
 class WorkflowCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""

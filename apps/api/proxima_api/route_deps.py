@@ -261,8 +261,6 @@ def build_route_deps(
             "project_name": row.get("project_name"),
             "visibility": row["visibility"],
             "updated_at": row["updated_at"],
-            "task_id": row.get("task_id"),
-            "task_title": row.get("task_title"),
             "job_id": row.get("job_id"),
             "workflow_id": row.get("workflow_id"),
             "mode": row.get("mode") or "chat",
