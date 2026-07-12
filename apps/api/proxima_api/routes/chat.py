@@ -32,6 +32,7 @@ from .. import auth_health as auth_health_mod
 from .. import design_scenes
 from .. import features
 from .. import kinds
+from .. import state
 from .. import image_providers
 from .. import video_providers
 from .. import wiki_memory
@@ -1459,7 +1460,13 @@ def register(app, deps):
                         "UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE collaboration_id = ? AND id != ? AND (? IS NULL OR id != ?) AND status IN ('queued','running')",
                         (collab_row["id"], run_id, collab_row["parent_run_id"], collab_row["parent_run_id"]),
                     )
-                    db().execute("UPDATE prompt_collaborations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (collab_row["id"],))
+                    # Guarded (request-thread side of the worker race): only cancel a
+                    # still-live collaboration — never flip one the worker just finished.
+                    state.guarded_transition(
+                        db(), "prompt_collaborations", int(collab_row["id"]), "cancelled",
+                        state.non_terminal(state.COLLABORATION),
+                        set_extra="updated_at = CURRENT_TIMESTAMP",
+                    )
             # A cancelled task run must not strand its task in 'doing'.
             db().execute("UPDATE tasks SET status = 'todo', updated_at = CURRENT_TIMESTAMP WHERE id = (SELECT task_id FROM sessions WHERE id = ?) AND status = 'doing'", (row["session_id"],))
         if changed:
