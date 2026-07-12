@@ -33,9 +33,6 @@ export function Sidebar(props: {
   onDeleteSession: (id: number) => void
   onSelectProject: (project: Project) => void
   onSelectSession: (session: ChatSession) => void
-  onOpenTask: (taskId: number) => void
-  onDeleteTask: (taskId: number) => void
-  onRenameTask: (taskId: number, title: string) => void
   onOpenDesign: (session: ChatSession) => void
   onSelectView: (view: View) => void
   profiles: Profile[]
@@ -96,9 +93,7 @@ type GroupProps = {
   sessions: ChatSession[]; activeSession: ChatSession | null; onClose: () => void; currentView: View
   activeProject: Project | null
   onSelectSession: (s: ChatSession) => void; onRenameSession: (id: number, t: string) => void
-  onDeleteSession: (id: number) => void; onOpenTask: (taskId: number) => void
-  onDeleteTask: (taskId: number) => void
-  onRenameTask: (taskId: number, title: string) => void
+  onDeleteSession: (id: number) => void
   onOpenDesign: (s: ChatSession) => void
   features: AppFeatures
   seen: Record<number, string>
@@ -117,14 +112,12 @@ function SessionGroups(props: GroupProps) {
   // Scope chats/tasks to the active project so switching projects swaps the list.
   const slug = props.activeProject?.slug
   const inProject = (s: ChatSession) => !slug || s.project_slug === slug
-  const isDesign = (s: ChatSession) => !s.task_id && (s.mode === 'design' || (s.title || '').startsWith('Design: '))
-  const isSurfaceThread = (s: ChatSession) => !s.task_id && /^(Video:|Design System:|Internal:)/.test(s.title || '')
-  const chats = props.sessions.filter(s => !s.task_id && !s.job_id && !isDesign(s) && !isSurfaceThread(s) && inProject(s))
+  const isDesign = (s: ChatSession) => (s.mode === 'design' || (s.title || '').startsWith('Design: '))
+  const isSurfaceThread = (s: ChatSession) => /^(Video:|Design System:|Internal:)/.test(s.title || '')
+  const chats = props.sessions.filter(s => !s.job_id && !isDesign(s) && !isSurfaceThread(s) && inProject(s))
   const designSessions = props.sessions.filter(s => isDesign(s) && inProject(s))
-  const taskThreads = props.sessions.filter(s => s.task_id && inProject(s))
   const [openChats, toggleChats] = usePersistedToggle('proxima.sb.chats', true)
   const [openDesigns, toggleDesigns] = usePersistedToggle('proxima.sb.designs', false)
-  const [openTasks, toggleTasks] = usePersistedToggle('proxima.sb.tasks', false)
 
   return <>
     {chats.length > 0 && <section className="nav-group">
@@ -143,16 +136,6 @@ function SessionGroups(props: GroupProps) {
         <button className="row-main" onClick={() => { props.onOpenDesign(session); props.onClose() }}><span className={`status-dot ${props.busySessions?.includes(session.id) ? 'thinking' : ''}`} /><strong>{session.title.replace(/^Design:\s*/, '')}</strong></button>
         <span className="row-actions">
           <button className="row-action danger" title="Delete design chat" aria-label="Delete design chat" onClick={e => { e.stopPropagation(); void confirmDialog({ title: 'Delete design chat?', message: `Removes the AI chat for “${session.title.replace(/^Design:\s*/, '')}”. The design file stays.`, confirmLabel: 'Delete', danger: true }).then(ok => { if (ok) props.onDeleteSession(session.id) }) }}><IconTrash size={15} /></button>
-        </span>
-      </div>)}
-    </section>}
-    {taskThreads.length > 0 && <section className="nav-group">
-      <button className="group-toggle" onClick={toggleTasks}><span><span className={`chevron ${openTasks ? 'open' : ''}`}><IconChevronRight size={13} /></span>Tasks</span><span>{taskThreads.length}</span></button>
-      {openTasks && taskThreads.slice(0, 30).map(session => <div className="project-row session-row" key={session.id} title="Open task">
-        <button className="row-main" onClick={() => { props.onOpenTask(session.task_id as number); props.onClose() }}><span className={`status-dot ${props.busySessions?.includes(session.id) ? 'thinking' : (isUnread(session, props.seen) ? 'unread' : '')}`} /><strong>{session.task_title || session.title}</strong></button>
-        <span className="row-actions">
-          <button className="row-action" title="Rename task" aria-label="Rename task" onClick={e => { e.stopPropagation(); void promptDialog({ title: 'Rename task', label: 'Title', defaultValue: session.task_title || session.title, confirmLabel: 'Rename' }).then(t => { if (t) props.onRenameTask(session.task_id as number, t) }) }}><IconPencil size={15} /></button>
-          <button className="row-action danger" title="Delete task" aria-label="Delete task" onClick={e => { e.stopPropagation(); void confirmDialog({ title: 'Delete task?', message: `“${session.task_title || session.title}” and its thread will be removed.`, confirmLabel: 'Delete', danger: true }).then(ok => { if (ok) props.onDeleteTask(session.task_id as number) }) }}><IconTrash size={15} /></button>
         </span>
       </div>)}
     </section>}

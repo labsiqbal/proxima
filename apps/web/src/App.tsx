@@ -4,7 +4,6 @@ import { listProfiles } from './api/profiles'
 import { listProjects } from './api/projects'
 import { listSessions, renameSession, deleteSession } from './api/sessions'
 import { activeRuns } from './api/runs'
-import { deleteTask, updateTask } from './api/tasks'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isDisabledFeatureHash, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
@@ -22,7 +21,6 @@ const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m =>
 const ProjectsScreen = React.lazy(() => import('./screens/ProjectsScreen').then(m => ({ default: m.ProjectsScreen })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
-const TasksScreen = React.lazy(() => import('./screens/TasksScreen').then(m => ({ default: m.TasksScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
 const TerminalTabs = React.lazy(() => import('./components/terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
@@ -43,7 +41,6 @@ export function App() {
   const [view, setView] = React.useState<View>('home')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
-  const [pendingTask, setPendingTask] = React.useState<number | null>(null)
   const [pendingJob, setPendingJob] = React.useState<number | null>(null)
   const [pendingDraft, setPendingDraft] = React.useState<WorkflowDraft | null>(null)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
@@ -66,7 +63,6 @@ export function App() {
   const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
   const [videoCameFrom, setVideoCameFrom] = React.useState<View | null>(null)
   const clearPendingNavigation = React.useCallback(() => {
-    setPendingTask(null)
     setPendingJob(null)
     setPendingDraft(null)
     setPendingDesign(null)
@@ -143,10 +139,9 @@ export function App() {
     baselined.current = true
     setSeen(prev => { const n = { ...prev }; let ch = false; for (const s of sessions) if (!(s.id in n)) { n[s.id] = s.updated_at || ''; ch = true } if (ch) localStorage.setItem('proxima.seen', JSON.stringify(n)); return n })
   }, [sessions])
-  // The chat you're currently viewing is always considered seen. (Task threads
-  // are marked seen via onOpenTask, not by being the default activeSession.)
+  // The chat you're currently viewing is always considered seen.
   React.useEffect(() => {
-    if (!activeSession || activeSession.task_id || view !== 'chat') return
+    if (!activeSession || view !== 'chat') return
     const row = sessions.find(s => s.id === activeSession.id)
     if (row) markSeen(row.id, row.updated_at)
   }, [sessions, activeSession, view, markSeen])
@@ -266,7 +261,7 @@ export function App() {
     setActiveProject(p)
     if (!p) { setActiveSession(null); return }
     const recent = sessions
-      .filter(s => s.project_slug === p.slug && !s.task_id && sessionEnabled(s))
+      .filter(s => s.project_slug === p.slug && sessionEnabled(s))
       .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null
     setActiveSession(recent)
     setView('chat')
@@ -287,23 +282,6 @@ export function App() {
     await refreshAll(token)
   }
 
-  async function handleDeleteTask(taskId: number) {
-    const seq = ++appActionSeq.current
-    try {
-      await deleteTask(token, taskId)
-      if (!mountedRef.current || seq !== appActionSeq.current) return
-      await refreshAll(token)
-    } catch { /* ignore */ }
-  }
-
-  async function handleRenameTask(taskId: number, title: string) {
-    const seq = ++appActionSeq.current
-    try {
-      await updateTask(token, taskId, { title })
-      if (!mountedRef.current || seq !== appActionSeq.current) return
-      await refreshAll(token)
-    } catch { /* ignore */ }
-  }
 
   function openOutput(link: OutputLink, origin: ChatSession | null) {
     const targetSlug = link.project_slug || origin?.project_slug || activeProject?.slug || null
@@ -358,10 +336,7 @@ export function App() {
       onDeleteSession={id => void handleDeleteSession(id)}
       onSelectProject={selectProject}
       onSelectSession={session => { clearPendingNavigation(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
-      onOpenTask={taskId => { setPendingTask(taskId); setView('tasks'); const s = sessions.find(x => x.task_id === taskId); if (s) markSeen(s.id, s.updated_at) }}
       onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setPendingDesign({ id: session.id, title: session.title }); setView('design') }}
-      onDeleteTask={taskId => void handleDeleteTask(taskId)}
-      onRenameTask={(taskId, title) => void handleRenameTask(taskId, title)}
       seen={seen}
       busySessions={busySessions}
       onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }}
@@ -380,7 +355,6 @@ export function App() {
         onNewChat={() => void startNewSession()}
         onOpenChat={id => { const s = sessions.find(x => x.id === id); if (s) { setActiveSession(s); const sp = projects.find(p => p.slug === s.project_slug); if (sp) setActiveProject(sp); markSeen(s.id, s.updated_at) } setView('chat') }}
         onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id); setPendingDesign({ id: session.id, title: session.title }); setDesignCameFrom('home'); setView('design') }}
-        onOpenTask={taskId => { setPendingTask(taskId); setView('tasks'); const s = sessions.find(x => x.task_id === taskId); if (s) markSeen(s.id, s.updated_at) }}
         onOpenJob={jobId => { setPendingJob(jobId); setView('activity') }}
         onOpenArtifact={artifact => { const p = projects.find(x => x.slug === artifact.project_slug); if (p) setActiveProject(p); setPendingArtifact(artifact); setView('artifacts') }}
         onOpenProject={slug => { const p = projects.find(x => x.slug === slug); if (p) selectProject(p) }}
@@ -399,7 +373,6 @@ export function App() {
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onBackToChat={returnToChat ? backToOriginChat : undefined} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
-      {view === 'tasks' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><TasksScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} pendingTaskId={pendingTask} onPendingConsumed={() => setPendingTask(null)} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onOpenJob={jobId => { setPendingJob(jobId); setView('activity') }} onIterate={s => { setActiveSession(s); setView('chat') }} draft={pendingDraft} onDraftConsumed={() => setPendingDraft(null)} /></React.Suspense>}
       {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading activity..." />}><ActivityScreen token={token} activeProject={activeProject} pendingJobId={pendingJob} onPendingConsumed={() => setPendingJob(null)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('activity'); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></React.Suspense>}
       {/* Always mounted (hidden when inactive) so the PTY shells survive navigating

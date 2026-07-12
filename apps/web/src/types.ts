@@ -53,24 +53,9 @@ export type ChatSession = {
 	project_name?: string | null;
 	visibility: "private" | "project";
 	updated_at?: string;
-	task_id?: number | null;
-	task_title?: string | null;
 	job_id?: number | null;
 	workflow_id?: number | null;
 	mode?: "chat" | "design" | string;
-};
-export type TaskStatus = "todo" | "doing" | "review" | "done";
-export type Task = {
-	id: number;
-	project_slug: string | null;
-	session_id: number | null;
-	title: string;
-	description: string;
-	status: TaskStatus;
-	assignee: string | null;
-	created_by?: string | null;
-	created_at: string;
-	updated_at: string;
 };
 export type ActivityItem = { title: string; status: string; subagent: boolean };
 export type OutputLink = {
@@ -259,7 +244,6 @@ export type View =
 	| "projects"
 	| "wiki"
 	| "artifacts"
-	| "tasks"
 	| "workflows"
 	| "activity"
 	| "terminal"
