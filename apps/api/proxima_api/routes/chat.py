@@ -31,6 +31,7 @@ from .. import app_settings
 from .. import auth_health as auth_health_mod
 from .. import design_scenes
 from .. import features
+from .. import kinds
 from .. import image_providers
 from .. import video_providers
 from .. import wiki_memory
@@ -109,8 +110,13 @@ def register(app, deps):
             "AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = sessions.task_id)",
             (user["id"],),
         )
+        # Main chat shows only the kinds the registry marks shown_in_main_chat
+        # (kind is authoritative, never inferred from the title). A new session
+        # mode = register it in kinds.py; this query needs no edit.
+        modes = kinds.main_chat_modes()
+        mode_placeholders = ",".join("?" for _ in modes)
         rows = db().execute(
-            """
+            f"""
             SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
             FROM sessions s
             LEFT JOIN projects p ON p.id = s.project_id
@@ -119,12 +125,12 @@ def register(app, deps):
             WHERE s.owner_user_id = ?
               AND s.job_id IS NULL        -- workflow-job threads belong to Activity
               AND s.workflow_id IS NULL   -- workflow iterate/test chats are opened from Workflows
-              AND IFNULL(s.mode, 'chat') = 'chat'  -- main chat shows ONLY chat-kind sessions; design → Design Studio (kind is authoritative, never inferred from the title)
+              AND IFNULL(s.mode, 'chat') IN ({mode_placeholders})
               AND (s.task_id IS NOT NULL
                    OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id))
             ORDER BY s.updated_at DESC, s.id DESC
             """,
-            (user["id"],),
+            (user["id"], *modes),
         ).fetchall()
         return {"sessions": [session_payload(dict(row)) for row in rows]}
 
