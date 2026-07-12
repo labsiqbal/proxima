@@ -3,6 +3,11 @@
 What's built, why it exists, and how it works. A reference for understanding what
 this cockpit is actually capable of. (Derived from the code, not aspirational.)
 
+> **Where do I edit when I add/change a feature?** See the companion
+> [reference/feature-map.md](reference/feature-map.md) — a per-feature grid of
+> code locations (backend + frontend), tables/events touched, relations, and
+> status/flag. This doc explains *what & why*; that one maps *where*.
+
 > **Model:** single-user cockpit. One owner, no in-app accounts. The access gate is
 > the network (loopback / Cloudflare Access). The owner is auto-created on first
 > request; the frontend auto-logs-in via `POST /auth/auto` (no password). Per-user
