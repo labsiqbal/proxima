@@ -162,3 +162,34 @@ def test_migration_14_drops_dead_sessions_acp_session_id(tmp_path):
     assert "acp_session_id" not in cols
     # agent_sessions (the real store) is untouched.
     assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'").fetchone()
+
+
+def test_migration_15_adds_messages_run_id_fk_preserving_data(tmp_path):
+    """messages.run_id becomes a real FK (ON DELETE SET NULL) via table rebuild,
+    without losing rows or the inbound message_reviews reference."""
+    from proxima_api.db import connect, init_db
+    from proxima_api.migrations import run_migrations
+
+    db_path = tmp_path / "m.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("INSERT INTO users(username, os_user) VALUES ('u','u')")
+    uid = conn.execute("SELECT id FROM users").fetchone()["id"]
+    conn.execute("INSERT INTO sessions(title, owner_user_id) VALUES ('s', ?)", (uid,))
+    sid = conn.execute("SELECT id FROM sessions").fetchone()["id"]
+    conn.execute("INSERT INTO runs(session_id, user_id, prompt) VALUES (?,?,'p')", (sid, uid))
+    rid = conn.execute("SELECT id FROM runs").fetchone()["id"]
+    conn.execute("INSERT INTO messages(session_id, role, content, run_id) VALUES (?,'assistant','hi',?)", (sid, rid))
+    mid = conn.execute("SELECT id FROM messages").fetchone()["id"]
+    conn.execute("INSERT INTO message_reviews(source_message_id, session_id, mode) VALUES (?,?,'validate')", (mid, sid))
+
+    run_migrations(conn, str(db_path))
+
+    # FK exists, no integrity violations, rows + inbound reference preserved.
+    assert any(r[3] == "run_id" and r[6] == "SET NULL" for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall())
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert conn.execute("SELECT 1 FROM messages WHERE id=?", (mid,)).fetchone() is not None
+    assert conn.execute("SELECT 1 FROM message_reviews WHERE source_message_id=?", (mid,)).fetchone() is not None
+    # the FK behaves: deleting the run nulls the pointer instead of dangling it.
+    conn.execute("DELETE FROM runs WHERE id=?", (rid,))
+    assert conn.execute("SELECT run_id FROM messages WHERE id=?", (mid,)).fetchone()["run_id"] is None

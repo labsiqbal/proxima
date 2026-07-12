@@ -26,8 +26,10 @@ from typing import Callable
 
 from .runner_specs import FALLBACK_RUNNER
 
-# (version, human description, apply function)
-Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
+# (version, human description, apply function[, opts]).
+# opts is an optional 4th element, e.g. {"no_auto_tx": True} for a migration that
+# manages its own transaction (a table rebuild needing PRAGMA foreign_keys=OFF).
+Migration = tuple
 
 def _add_messages_author(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
@@ -192,6 +194,52 @@ def _drop_sessions_acp_session_id(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions DROP COLUMN acp_session_id")
 
 
+def _add_messages_run_id_fk(conn: sqlite3.Connection) -> None:
+    """Rebuild `messages` so run_id becomes a real FK -> runs(id) ON DELETE SET NULL
+    (it was a bare INTEGER that could dangle a deleted run). SQLite can't ALTER ADD
+    CONSTRAINT, so recreate + copy using the create-new/copy/drop-old/rename-new
+    order with foreign_keys OFF (outside a txn — this migration is no_auto_tx), which
+    preserves the inbound FKs from message_reviews / prompt_collaborations and never
+    fires a cascade. Idempotent: skips if run_id already has an FK."""
+    if any(r[3] == "run_id" for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall()):
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if not {"id", "session_id", "role", "content", "author", "run_id", "output_links", "created_at"}.issubset(cols):
+        return  # not the full production shape yet (e.g. a minimal test fixture)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _messages_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              author TEXT,
+              run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+              output_links TEXT NOT NULL DEFAULT '[]',
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO _messages_new(id, session_id, role, content, author, run_id, output_links, created_at) "
+            "SELECT id, session_id, role, content, author, run_id, output_links, created_at FROM messages"
+        )
+        conn.execute("DROP TABLE messages")
+        conn.execute("ALTER TABLE _messages_new RENAME TO messages")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"messages FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -207,6 +255,7 @@ MIGRATIONS: list[Migration] = [
     (12, "add message review apply/merge fields", _add_message_review_apply_fields),
     (13, "add prompt collaborations for multi-agent modes", _add_prompt_collaborations),
     (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
+    (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
 ]
 
 
@@ -258,17 +307,31 @@ def run_migrations(
         _backup(conn, db_path, cur, pending[-1][0])
 
     applied: list[int] = []
-    for version, description, apply in pending:
-        conn.execute("BEGIN")
-        try:
+    for entry in pending:
+        version, description, apply = entry[0], entry[1], entry[2]
+        opts = entry[3] if len(entry) > 3 else {}
+        if opts.get("no_auto_tx"):
+            # The migration manages its own transaction (e.g. a table rebuild that
+            # needs PRAGMA foreign_keys=OFF, which is a no-op inside a transaction).
+            # It runs in autocommit; we record the version after it returns. Such a
+            # migration MUST be idempotent so a crash before the version is recorded
+            # is safe to re-run.
             apply(conn)
             conn.execute(
                 "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
                 (version, description, iso_now()),
             )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+        else:
+            conn.execute("BEGIN")
+            try:
+                apply(conn)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
+                    (version, description, iso_now()),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         applied.append(version)
     return applied

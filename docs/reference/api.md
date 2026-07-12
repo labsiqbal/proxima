@@ -3,17 +3,19 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-145 endpoints across 11 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+145 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
 - [`routes/auth.py`](#routes-auth-py) — 5 endpoints
-- [`routes/chat.py`](#routes-chat-py) — 30 endpoints
-- [`routes/files.py`](#routes-files-py) — 57 endpoints
+- [`routes/chat.py`](#routes-chat-py) — 24 endpoints
+- [`routes/design.py`](#routes-design-py) — 3 endpoints
+- [`routes/files.py`](#routes-files-py) — 54 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
+- [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/tasks.py`](#routes-tasks-py) — 5 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
@@ -47,12 +49,6 @@
 | --- | --- | --- | --- |
 | POST | `/api/chat/send` | `chat_send` |  |
 | GET | `/api/dashboard` | `dashboard` | Aggregated real-data summary for the Home dashboard. |
-| POST | `/api/message-reviews/{review_id}/ask-original` | `ask_original_to_revise` |  |
-| POST | `/api/message-reviews/{review_id}/replace-answer` | `replace_answer_with_review` |  |
-| POST | `/api/message-reviews/{review_id}/restore-original` | `restore_original_answer` |  |
-| POST | `/api/message-reviews/{review_id}/use-revised` | `use_revised_review` |  |
-| GET | `/api/messages/{message_id}/reviews` | `list_message_reviews` |  |
-| POST | `/api/messages/{message_id}/reviews` | `create_message_review` |  |
 | GET | `/api/runs/active` | `active_runs` | Sessions with an in-flight run, so the sidebar can show a thinking |
 | DELETE | `/api/runs/{run_id}` | `delete_run` |  |
 | GET | `/api/runs/{run_id}` | `get_run` |  |
@@ -77,6 +73,15 @@
 | WS | `/api/ws/terminal` | `ws_terminal` | In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the |
 
 
+## routes/design.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| POST | `/api/projects/{slug}/design/image` | `design_image` | Generate (text→image) or edit (image+prompt→image) via the configured |
+| GET | `/api/projects/{slug}/design/image-models` | `design_image_models` | For the codex provider there's no static model list (login-based); for |
+| POST | `/api/projects/{slug}/designs/from-image` | `design_from_image` | Seed a new Design Studio scene containing an existing project image as a |
+
+
 ## routes/files.py
 
 | Method | Path | Handler | Description |
@@ -89,9 +94,6 @@
 | POST | `/api/projects/{slug}/app/stop` | `app_stop` |  |
 | GET | `/api/projects/{slug}/apps` | `detect_apps` | Scan the project for runnable apps so the user picks one instead of |
 | GET | `/api/projects/{slug}/artifacts` | `list_artifacts` | Typed artifacts recently produced in a project (design/app/page/doc/file) so |
-| POST | `/api/projects/{slug}/design/image` | `design_image` | Generate (text→image) or edit (image+prompt→image) via the configured |
-| GET | `/api/projects/{slug}/design/image-models` | `design_image_models` | For the codex provider there's no static model list (login-based); for |
-| POST | `/api/projects/{slug}/designs/from-image` | `design_from_image` | Seed a new Design Studio scene containing an existing project image as a |
 | GET | `/api/projects/{slug}/file` | `project_read_file` |  |
 | PUT | `/api/projects/{slug}/file` | `project_write_file` |  |
 | DELETE | `/api/projects/{slug}/fs` | `project_delete` |  |
@@ -167,6 +169,18 @@
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
 
 
+## routes/reviews.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| POST | `/api/message-reviews/{review_id}/ask-original` | `ask_original_to_revise` |  |
+| POST | `/api/message-reviews/{review_id}/replace-answer` | `replace_answer_with_review` |  |
+| POST | `/api/message-reviews/{review_id}/restore-original` | `restore_original_answer` |  |
+| POST | `/api/message-reviews/{review_id}/use-revised` | `use_revised_review` |  |
+| GET | `/api/messages/{message_id}/reviews` | `list_message_reviews` |  |
+| POST | `/api/messages/{message_id}/reviews` | `create_message_review` |  |
+
+
 ## routes/tasks.py
 
 | Method | Path | Handler | Description |
@@ -233,4 +247,4 @@
 
 
 ---
-_Generated 2026-07-12 16:59 UTC._
+_Generated 2026-07-12 17:52 UTC._
