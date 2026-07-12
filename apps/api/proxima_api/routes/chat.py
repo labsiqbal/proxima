@@ -1341,7 +1341,7 @@ def register(app, deps):
                 await out_task
 
     @app.websocket("/api/ws/sessions/{session_id}")
-    async def ws_events(websocket: WebSocket, session_id: int, token: str = ""):
+    async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):
         token = token or websocket.cookies.get("proxima_session", "")
         user = None
         token_hash = hash_token(token)
@@ -1356,7 +1356,9 @@ def register(app, deps):
         await websocket.accept()
         hub = app.state.hub
         ev = hub.subscribe(session_id)
-        last_id = 0
+        # Resume from the client's cursor (events.id) so a reconnect doesn't replay
+        # the whole session transcript. Mirrors the SSE sibling's after_id.
+        last_id = after_id
         try:
             while True:
                 ev.clear()
