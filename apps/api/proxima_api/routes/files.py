@@ -29,7 +29,7 @@ from .. import image_providers
 from .. import media_settings
 from .. import video_providers
 from .. import cf_hostnames
-from ..artifacts import scan_project_artifacts
+from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
     AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest,
 )
@@ -647,8 +647,7 @@ if (window.gsap) {{
                 except fsapi.FsError:
                     pass
                 _audit_fs(user, "artifact.delete", p["slug"], path)
-        kept = [a for a in artifacts if a.get("path") != path]
-        db().execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(kept), session_id))
+        update_produced_artifacts(db(), session_id, lambda current: [a for a in current if a.get("path") != path])
         for m in db().execute("SELECT id, output_links FROM messages WHERE session_id = ? AND output_links != '[]'", (session_id,)).fetchall():
             try:
                 links = json.loads(m["output_links"] or "[]")

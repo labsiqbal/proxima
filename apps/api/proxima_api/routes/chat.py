@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
+from ..artifacts import update_produced_artifacts
 from ..auth import hash_token
 from ..db import connect
 from ..terminal import TerminalSession
@@ -536,11 +537,11 @@ def register(app, deps):
         return row["slug"] if row else None
 
     def _merge_session_artifact(conn: sqlite3.Connection, session_id: int, artifact: dict[str, Any]) -> None:
-        row = conn.execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        current = json.loads((row["produced_artifacts"] if row else None) or "[]")
-        merged = {(a.get("type"), a.get("path")): a for a in current if isinstance(a, dict)}
-        merged[(artifact.get("type"), artifact.get("path"))] = artifact
-        conn.execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(list(merged.values())), session_id))
+        def _merge(current: list[Any]) -> list[Any]:
+            merged = {(a.get("type"), a.get("path")): a for a in current if isinstance(a, dict)}
+            merged[(artifact.get("type"), artifact.get("path"))] = artifact
+            return list(merged.values())
+        update_produced_artifacts(conn, session_id, _merge)
 
     def _resolve_chat_image_gen() -> dict[str, Any]:
         cfg = app_settings.get_json(db(), app_settings.IMAGE_GEN_KEY)
@@ -1128,10 +1129,7 @@ def register(app, deps):
         db().execute("DELETE FROM events WHERE run_id = ?", (run_id,))
         db().execute("DELETE FROM runs WHERE id = ?", (run_id,))
         if output_paths:
-            srow = db().execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (row["session_id"],)).fetchone()
-            artifacts = json.loads((srow["produced_artifacts"] if srow else None) or "[]")
-            kept = [a for a in artifacts if a.get("path") not in output_paths]
-            db().execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(kept), row["session_id"]))
+            update_produced_artifacts(db(), row["session_id"], lambda current: [a for a in current if a.get("path") not in output_paths])
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row["session_id"],))
         return {"ok": True, "run_id": run_id}
 

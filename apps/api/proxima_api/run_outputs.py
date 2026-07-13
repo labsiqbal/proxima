@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .artifacts import artifacts_for_output_links, scan_project_artifacts
+from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 
@@ -57,11 +57,12 @@ class RunOutputs:
             # the panggung Result scoped to the iteration's own output.
             if output_links:
                 try:
-                    srow = db.execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)).fetchone()
-                    merged = {(a["type"], a.get("path")): a for a in json.loads((srow["produced_artifacts"] if srow else None) or "[]")}
-                    for item in output_links:
-                        merged[(item["type"], item.get("path"))] = item
-                    db.execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(list(merged.values())), session_id))
+                    def _merge(current: list) -> list:
+                        merged = {(a.get("type"), a.get("path")): a for a in current if isinstance(a, dict)}
+                        for item in output_links:
+                            merged[(item["type"], item.get("path"))] = item
+                        return list(merged.values())
+                    update_produced_artifacts(db, session_id, _merge)
                 except Exception:
                     logging.getLogger("proxima.worker").exception("session artifact track failed (non-fatal)")
             trow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
