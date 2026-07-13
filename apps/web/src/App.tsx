@@ -1,7 +1,7 @@
 import React from 'react'
 import { resume, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
-import { listProjects } from './api/projects'
+import { listProjects, deleteProject } from './api/projects'
 import { listSessions, renameSession, deleteSession } from './api/sessions'
 import { activeRuns } from './api/runs'
 import { api } from './api/client'
@@ -338,9 +338,18 @@ export function App() {
   }
   const handleOnboardingDone = async (linked: Project | null) => {
     setOnboarding(false)
+    if (linked) {
+      // They picked a real folder, so drop the empty auto-provisioned starter —
+      // its DB row AND its scaffold dir (delete is jailed to the data dir, so the
+      // linked folder's real files are never touched). This is first-run, so the
+      // only project that existed before this link is that starter.
+      try {
+        const { projects: all } = await listProjects(token)
+        await Promise.all(all.filter(p => p.slug !== linked.slug).map(p => deleteProject(token, p.slug).catch(() => {})))
+      } catch { /* best-effort — leaves the removable starter in place on failure */ }
+    }
     await refreshAll(token)
-    // Make the folder they linked the active project (refreshAll defaults to the
-    // starter project); if they skipped, that default stays active.
+    // Make the linked folder the active project; if they skipped, the starter stays active.
     if (linked) { setActiveProject(linked); setView('home') }
   }
   const handleLogout = async () => {
