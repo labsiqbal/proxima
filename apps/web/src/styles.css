@@ -1751,6 +1751,12 @@ button:disabled {
 	width: 100%;
 	margin-top: 4px;
 }
+.auth-change-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-width: 320px;
+}
 
 @media (max-width: 1180px) {
 	.app-shell {

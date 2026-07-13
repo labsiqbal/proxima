@@ -52,3 +52,27 @@ def test_first_run_is_passwordless_then_gates_after_set(tmp_path):
     assert fresh.post("/auth/logout", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
     locked = TestClient(app)
     assert locked.get("/api/sessions", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
+
+
+def test_change_password(tmp_path):
+    app = _app(tmp_path)
+    c = TestClient(app)
+    c.post("/auth/set-password", json={"password": "original one here"})
+    tok = c.post("/auth/login", json={"password": "original one here"}).json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+
+    # wrong current password rejected
+    assert c.post("/auth/change-password", headers=h, json={"current_password": "nope nope nope", "new_password": "brand new secret"}).status_code == 401
+    # too-short new password rejected
+    assert c.post("/auth/change-password", headers=h, json={"current_password": "original one here", "new_password": "short"}).status_code == 400
+    # valid change -> new session token
+    r = c.post("/auth/change-password", headers=h, json={"current_password": "original one here", "new_password": "brand new secret"})
+    assert r.status_code == 200 and r.json()["token"]
+    new_tok = r.json()["token"]
+
+    # old token/session revoked; new one works
+    assert TestClient(app).get("/api/sessions", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
+    assert TestClient(app).get("/api/sessions", headers={"Authorization": f"Bearer {new_tok}"}).status_code == 200
+    # old password no longer logs in; new one does
+    assert TestClient(app).post("/auth/login", json={"password": "original one here"}).status_code == 401
+    assert TestClient(app).post("/auth/login", json={"password": "brand new secret"}).status_code == 200

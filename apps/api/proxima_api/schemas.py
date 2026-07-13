@@ -21,6 +21,11 @@ class PasswordRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class SharedProjectSpec(BaseModel):
     # Pattern enforced at the request layer so an invalid slug fails as 422 BEFORE
     # setup_bootstrap performs any DB writes (prevents a half-bootstrapped admin).

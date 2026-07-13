@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth import hash_password, hash_token, iso_now, verify_password
 from ..runners import runner_readiness
-from ..schemas import PasswordRequest
+from ..schemas import ChangePasswordRequest, PasswordRequest
 
 _SESSION_MAX_AGE = 10 * 365 * 24 * 3600  # persistent cookie (DB session itself never expires)
 
@@ -73,6 +73,26 @@ def register(app, deps):
             db().execute("UPDATE users SET password_hash = ?, password_set_at = ? WHERE id = ?", (digest, iso_now(), user["id"]))
             token = create_token(user["id"])
         return _session_response(request, user, token)
+
+    @app.post("/auth/change-password")
+    def change_password(request: Request, payload: ChangePasswordRequest, user: dict[str, Any] = Depends(current_user)):
+        """Change the password (from Settings): verify the current one, set the new,
+        and revoke every existing session — including other devices — then re-issue a
+        session for this client so you stay logged in here."""
+        owner = ensure_single_user_owner()
+        if not owner.get("password_hash"):
+            raise HTTPException(status_code=409, detail="no password set")
+        if not verify_password(payload.current_password, owner["password_hash"]):
+            raise HTTPException(status_code=401, detail="current password is incorrect")
+        try:
+            digest = hash_password(payload.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with app.state.db_lock:
+            db().execute("UPDATE users SET password_hash = ?, password_set_at = ? WHERE id = ?", (digest, iso_now(), owner["id"]))
+            db().execute("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL", (owner["id"],))
+            token = create_token(owner["id"])
+        return _session_response(request, owner, token)
 
     @app.post("/auth/login")
     def login_with_password(request: Request, payload: PasswordRequest):
