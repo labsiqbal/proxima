@@ -734,14 +734,7 @@ def register(app, deps):
                 profile_id=payload.profile_id,
                 model=payload.model,
             ), user)
-            # runPendingId marks the scene as awaiting exactly this run — Design
-            # Studio's recovery-on-open only auto-applies a finished run that the
-            # on-disk scene was still waiting for.
-            scene["runPendingId"] = design_run["run_id"]
-            d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
-            d.mkdir(parents=True, exist_ok=True)
-            (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-            artifact = {"type": "design", "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}", "project_slug": slug}
+            artifact = design_scenes.persist_draft(root, design_id, scene, slug, run_pending_id=design_run["run_id"])
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(session, payload, user, "image-studio", artifact, text)
         if kind == "video-studio":

@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import fsapi
+
 ARTBOARD_BG = "#0b1020"
 TEXT_FILL = "#f8fafc"
 MUTED_FILL = "#94a3b8"
@@ -90,6 +92,22 @@ def design_run_message(scene: dict[str, Any], brief: str) -> str:
         "Replace it with a real composition for this request — keep the artboard size "
         "unless the format clearly demands otherwise."
     )
+
+
+def persist_draft(root: Path, design_id: str, scene: dict[str, Any], project_slug: str, *, run_pending_id: int) -> dict[str, Any]:
+    """Write a seeded /image-studio draft to disk and return its chat artifact.
+
+    The scene must already carry its ``sessionId`` (the linked design session).
+    ``run_pending_id`` marks the scene as awaiting exactly this run — Design
+    Studio's recovery-on-open only auto-applies a finished run the on-disk scene
+    was still waiting for. Keeping the scene shape + on-disk layout here (not in
+    the chat gate) means create_run stays feature-blind about design internals.
+    """
+    scene["runPendingId"] = run_pending_id
+    d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
+    return {"type": "design", "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}", "project_slug": project_slug}
 
 
 def scene_for_image(image_rel_path: str, dims: tuple[int, int] | None, title: str | None = None) -> tuple[str, dict[str, Any]]:
