@@ -288,6 +288,18 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
     },
   }
   const img = useImg(layer.type === 'image' ? (resolveSrc ? resolveSrc(layer.src) : layer.src) : '')
+  // Keep the image's size + crop consistent in EVERY painted frame. react-konva can
+  // apply the new width/height a beat before the recomputed crop rect, so mid crop-drag
+  // the image draws stretched for a frame. useLayoutEffect runs synchronously after the
+  // commit but before paint, re-asserting both together so the stretched frame is never
+  // shown.
+  const imgNodeRef = React.useRef<Konva.Image | null>(null)
+  React.useLayoutEffect(() => {
+    const n = imgNodeRef.current
+    if (layer.type !== 'image' || !n || !img) return
+    ;(n as Konva.Node).setAttrs({ width: layer.width, height: layer.height, crop: imageCrop(img, layer) })
+    n.getLayer()?.batchDraw()
+  }, [img, layer])
   switch (layer.type) {
     case 'text': return <Group {...common} x={layer.x} y={layer.y} opacity={editing ? 0 : (layer.opacity ?? 1)}>
       {layer.glow && <Text {...textStyleOf(layer)} fill={layer.glowColor || layer.fill} opacity={layer.glowOpacity ?? 0.55} shadowColor={layer.glowColor || layer.fill} shadowBlur={layer.glowBlur ?? 18} shadowOpacity={layer.glowOpacity ?? 0.65} listening={false} />}
@@ -309,7 +321,7 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
         <Rect width={layer.width} height={layer.height} fill="rgba(148,163,184,0.14)" stroke="#94a3b8" strokeWidth={1.5} dash={[8, 6]} cornerRadius={cornerRadiusOf(layer)} />
         <Text width={layer.width} height={layer.height} align="center" verticalAlign="middle" text="✦ Generating image…" fontSize={Math.max(12, Math.min(26, layer.width / 14))} fill="#64748b" listening={false} />
       </Group>
-      return <KImage {...common} x={layer.x} y={layer.y} width={layer.width} height={layer.height} image={img} crop={imageCrop(img, layer)} cornerRadius={cornerRadiusOf(layer)} {...effectShadowOf(layer)} />
+      return <KImage {...common} ref={n => { imgNodeRef.current = n as Konva.Image | null; (onRef as (x: Konva.Node | null) => void)(n) }} x={layer.x} y={layer.y} width={layer.width} height={layer.height} image={img} crop={imageCrop(img, layer)} cornerRadius={cornerRadiusOf(layer)} {...effectShadowOf(layer)} />
     }
   }
 }
@@ -1992,18 +2004,11 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
                       const d = cropResizeRef.current
                       if (!d || d.id !== im.id) return
                       const next = resizeCropFrame(d, e.target.x() - d.px, e.target.y() - d.py)
+                      // The image node keeps size+crop consistent via a useLayoutEffect in
+                      // LayerNode (runs before paint), so a plain state update never shows a
+                      // stretched frame.
                       patchLayerLive(im.id, next as Partial<Layer>)
                       e.target.position({ x: d.px, y: d.py })
-                      // react-konva re-applies the image's crop (a fresh object every
-                      // render) with a frame's lag behind the new width/height, so it
-                      // draws stretched mid-drag. Re-assert size+crop together AFTER the
-                      // React commit paints (rAF) so the correct crop is the last write.
-                      const node = nodeRefs.current[im.id] as Konva.Image | undefined
-                      const hi = node && typeof node.image === 'function' ? (node.image() as HTMLImageElement | undefined) : undefined
-                      if (node && hi) requestAnimationFrame(() => {
-                        ;(node as Konva.Node).setAttrs({ ...next, crop: imageCrop(hi, { ...im, ...next }) })
-                        node.getLayer()?.batchDraw()
-                      })
                     }}
                     onDragEnd={e => { e.cancelBubble = true; cropResizeRef.current = null; e.target.position({ x: x - hs / 2, y: y - hs / 2 }) }}
                   />)}
@@ -2179,10 +2184,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <NumberAdjuster label="Zoom" value={im.cropZoom || 1} min={1} max={4} step={0.05} onChange={v => setImageCrop(im.id, { cropZoom: v })} />
               <div className="ds-row2"><NumberAdjuster label="X" value={Math.round(im.cropX ?? 50)} min={0} max={100} step={1} onChange={v => setImageCrop(im.id, { cropX: v })} /><NumberAdjuster label="Y" value={Math.round(im.cropY ?? 50)} min={0} max={100} step={1} onChange={v => setImageCrop(im.id, { cropY: v })} /></div>
               <button className="ghost-button" onClick={() => setImageCrop(im.id, { cropZoom: undefined, cropX: undefined, cropY: undefined })}>Reset crop</button>
-            </PropertySection>
-            <PropertySection title="Edit with AI">
-              <p className="ds-tip muted">Edit, add references, or compose several images into one — all in the Assets tab.</p>
-              <button className="ghost-button" disabled={/^(https?:|data:|blob:|gen:)/i.test(im.src)} onClick={() => { addRefImage(im.src); setLeftTab('assets') }}>Edit this image in Assets →</button>
             </PropertySection>
           </div> })()}
           <div className="ds-fields ds-optional-props">
