@@ -7,6 +7,7 @@ import { Dropdown } from '../components/ui/Dropdown'
 import { AppRunner } from '../components/files/AppRunner'
 import { BackButton } from '../components/ui/BackButton'
 import { MiniPreview } from '../components/design/MiniPreview'
+import { ArtifactViewer } from '../components/artifacts/ArtifactViewer'
 import type { Artboard } from '../components/design/scene'
 
 const FileEditor = React.lazy(() => import('../components/files/FileEditor').then(m => ({ default: m.FileEditor })))
@@ -53,6 +54,9 @@ const category = (a: Artifact): Filter => {
   return 'other'
 }
 const isVisualArtifact = (a: Artifact) => ['design', 'image', 'video'].includes(category(a))
+// Consumption types that open in the lightbox viewer (design → studio, app → runner
+// keep their own surfaces).
+const viewerEligible = (a: Artifact) => ['image', 'video', 'document', 'data'].includes(category(a))
 
 const icon = (a: Artifact) =>
   category(a) === 'design' ? '◆'
@@ -177,6 +181,9 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
   const [selected, setSelected] = React.useState<Artifact | null>(null)
   const [path, setPath] = React.useState<string | null>(null)
   const [runner, setRunner] = React.useState<Artifact | null>(null)
+  // The lightbox: a list to walk with ←/→ and the current position. Clicks in the
+  // list pass the full visible set; an artifact opened from chat passes just itself.
+  const [viewer, setViewer] = React.useState<{ items: Artifact[]; index: number } | null>(null)
   const [listHidden, setListHidden] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
   const loadSeq = React.useRef(0)
@@ -236,7 +243,7 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
 
   React.useEffect(() => { void load() }, [load])
   React.useEffect(() => {
-    setSelected(null); setPath(null); setRunner(null)
+    setSelected(null); setPath(null); setRunner(null); setViewer(null)
   }, [slug])
   React.useEffect(() => { setVisualPage(0) }, [filter, slug])
   React.useEffect(() => {
@@ -254,14 +261,17 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
       return
     }
     const a = asArtifact(pendingArtifact)
-    if (a.type === 'app') setRunner(a)
-    else { setSelected(a); setPath(a.type === 'design' ? `${a.path}/scene.json` : a.type === 'video' ? `${a.path}/index.html` : a.path); setRunner(null) }
+    if (a.type === 'app') { setRunner(a); setViewer(null) }
+    else if (viewerEligible(a)) { setSelected(a); setRunner(null); setPath(null); setViewer({ items: [a], index: 0 }) }
+    else { setSelected(a); setPath(a.type === 'design' ? `${a.path}/scene.json` : a.type === 'video' ? `${a.path}/index.html` : a.path); setRunner(null); setViewer(null) }
     onPendingArtifactConsumed?.()
   }, [pendingArtifact, slug, pickProject, onPendingArtifactConsumed])
 
   if (projects.length === 0) return <section className="placeholder-view"><div className="assistant-bubble compact"><h1>Artifacts</h1><p>No projects yet.</p></div></section>
 
   const filtered = artifacts.filter(a => filter === 'all' || category(a) === filter)
+  // The lightbox walks the currently-visible consumption artifacts (image/video/doc/data).
+  const viewerItems = filtered.filter(viewerEligible)
   const visualItems = (filter === 'all' ? artifacts : filtered).filter(isVisualArtifact)
   const listItems = filter === 'all' ? artifacts.filter(a => !isVisualArtifact(a)) : filtered.filter(a => !isVisualArtifact(a))
   const showVisual = filter === 'all' || filter === 'design' || filter === 'image' || filter === 'video'
@@ -278,8 +288,14 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
     setSelected(a)
     setPath(null)
     setRunner(null)
+    setViewer(null)
     if (a.type === 'design' && designStudioEnabled) {
       onOpenDesign?.(a.id || a.path.split('/').filter(Boolean).slice(-1)[0])
+    } else if (viewerEligible(a)) {
+      // Image / video / document / data → open the lightbox at this item, walking the
+      // currently-visible consumption artifacts.
+      const idx = viewerItems.findIndex(x => x.type === a.type && x.path === a.path)
+      setViewer({ items: viewerItems, index: idx >= 0 ? idx : 0 })
     } else if (a.type === 'design') {
       setPath(`${a.path.replace(/\/$/, '')}/scene.json`)
     } else if (a.type === 'video') {
@@ -330,5 +346,14 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
           : <div className="art-preview-empty"><p className="muted">Select an artifact to preview it here.</p></div>}
       </div>}
     </div>
+    {viewer && project && <ArtifactViewer
+      token={token}
+      slug={project.slug}
+      items={viewer.items}
+      index={viewer.index}
+      onIndex={i => setViewer(v => v ? { ...v, index: i } : v)}
+      onClose={() => setViewer(null)}
+      onEditSource={a => { setViewer(null); setSelected(a); setPath(a.path); setRunner(null) }}
+    />}
   </section>
 }
