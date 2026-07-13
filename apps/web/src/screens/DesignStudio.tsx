@@ -1,5 +1,5 @@
 import React from 'react'
-import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Transformer, Arrow } from 'react-konva'
+import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Circle, Transformer, Arrow } from 'react-konva'
 import type Konva from 'konva'
 import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
@@ -2043,6 +2043,28 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               {guides && guides.ai === ai && guides.lines.map((g, gi) => g.axis === 'x'
                 ? <Line key={gi} points={[g.pos, 0, g.pos, a.height]} stroke="#ec4899" strokeWidth={1 / view.scale} listening={false} />
                 : <Line key={gi} points={[0, g.pos, a.width, g.pos]} stroke="#ec4899" strokeWidth={1 / view.scale} listening={false} />)}
+              {/* Gradient direction guide: a draggable line from the Color(start) to the
+                  To(end) point, so you can see + set where the gradient runs. */}
+              {!cropMode && !edit && selectedIds.length === 1 && (() => {
+                const l = a.layers.find(x => x.id === selectedIds[0]) as (RectLayer | TextLayer | TriangleLayer) | undefined
+                if (!l || !['rect', 'text', 'triangle'].includes(l.type)) return null
+                const g = l as unknown as FillStyle
+                if (g.fillType !== 'linear-gradient' && g.fillType !== 'radial-gradient') return null
+                const lw = (l as RectLayer).width || 1
+                const lh = (l.type === 'text' ? ((l as TextLayer).height || (l as TextLayer).fontSize * ((l as TextLayer).lineHeight || 1.2)) : (l as RectLayer).height) || 1
+                const ang = (((g as { gradientAngle?: number }).gradientAngle ?? 0) - 90) * Math.PI / 180
+                const cx = lw / 2, cy = lh / 2, rr = Math.hypot(lw, lh) / 2
+                const gs = g as { gradientStartX?: number; gradientStartY?: number; gradientEndX?: number; gradientEndY?: number }
+                const sx = gs.gradientStartX ?? cx - Math.cos(ang) * rr, sy = gs.gradientStartY ?? cy - Math.sin(ang) * rr
+                const ex = gs.gradientEndX ?? cx + Math.cos(ang) * rr, ey = gs.gradientEndY ?? cy + Math.sin(ang) * rr
+                const ox = l.x, oy = l.y, hr = 7 / view.scale
+                const cursor = (on: boolean) => (e: Konva.KonvaEventObject<MouseEvent>) => { const st = e.target.getStage(); if (st) st.container().style.cursor = on ? 'move' : '' }
+                return <Group key={'grad' + l.id}>
+                  <Line points={[ox + sx, oy + sy, ox + ex, oy + ey]} stroke="#ffffff" strokeWidth={1.5 / view.scale} shadowColor="#000000" shadowBlur={2 / view.scale} shadowOpacity={0.6} listening={false} />
+                  <Circle x={ox + sx} y={oy + sy} radius={hr} fill={l.fill} stroke="#ffffff" strokeWidth={2 / view.scale} shadowColor="#000000" shadowBlur={3 / view.scale} shadowOpacity={0.5} draggable onMouseEnter={cursor(true)} onMouseLeave={cursor(false)} onDragStart={() => snapshot()} onDragMove={e => patchLayerLive(l.id, { gradientStartX: Math.round(e.target.x() - ox), gradientStartY: Math.round(e.target.y() - oy) } as Partial<Layer>)} />
+                  <Circle x={ox + ex} y={oy + ey} radius={hr} fill={l.fill2 || l.fill} stroke="#ffffff" strokeWidth={2 / view.scale} shadowColor="#000000" shadowBlur={3 / view.scale} shadowOpacity={0.5} draggable onMouseEnter={cursor(true)} onMouseLeave={cursor(false)} onDragStart={() => snapshot()} onDragMove={e => patchLayerLive(l.id, { gradientEndX: Math.round(e.target.x() - ox), gradientEndY: Math.round(e.target.y() - oy) } as Partial<Layer>)} />
+                </Group>
+              })()}
             </Group>)}
             <Transformer ref={trRef} rotateEnabled flipEnabled={false}
               keepRatio={selected?.type === 'line'} enabledAnchors={selected?.type === 'line' ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : undefined}
