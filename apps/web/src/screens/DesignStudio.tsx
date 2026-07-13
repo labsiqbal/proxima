@@ -1975,6 +1975,16 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
                       const d = cropResizeRef.current
                       if (!d || d.id !== im.id) return
                       const next = resizeCropFrame(d, e.target.x() - d.px, e.target.y() - d.py)
+                      // react-konva defers redrawing sibling nodes while a handle is being
+                      // dragged, so the image would draw at the new size with the OLD crop
+                      // rect (visibly skewed) until release. Push the size + recomputed crop
+                      // straight onto the Konva node and force a draw so it tracks live.
+                      const node = nodeRefs.current[im.id] as Konva.Image | undefined
+                      const hi = node && typeof node.image === 'function' ? (node.image() as HTMLImageElement | undefined) : undefined
+                      if (node && hi) {
+                        ;(node as Konva.Node).setAttrs({ ...next, crop: imageCrop(hi, { ...im, ...next }) })
+                        node.getLayer()?.batchDraw()
+                      }
                       patchLayerLive(im.id, next as Partial<Layer>)
                       e.target.position({ x: d.px, y: d.py })
                     }}
