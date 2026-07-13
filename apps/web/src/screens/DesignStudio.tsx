@@ -1,7 +1,7 @@
 import React from 'react'
 import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Transformer, Arrow } from 'react-konva'
 import type Konva from 'konva'
-import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
+import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
 import { createRun } from '../api/runs'
 import { useRunStream } from '../hooks/useRunStream'
@@ -66,7 +66,7 @@ const cornerRadiusOf = (l: { cornerRadius?: number; cornerRadiusTL?: number; cor
     ? [l.cornerRadiusTL ?? l.cornerRadius ?? 0, l.cornerRadiusTR ?? l.cornerRadius ?? 0, l.cornerRadiusBR ?? l.cornerRadius ?? 0, l.cornerRadiusBL ?? l.cornerRadius ?? 0]
     : (l.cornerRadius ?? 0)
 const fillOf = (l: FillStyle & { width?: number; height?: number }) => {
-  const stops = (l.gradientStops?.length ? [...l.gradientStops].sort((a, b) => a.offset - b.offset) : [{ offset: 0, color: l.fill }, { offset: 1, color: l.fill2 || l.fill }]).flatMap(s => [clamp(s.offset, 0, 1), s.color])
+  const stops = gradientStopList(l).flatMap(s => [clamp(s.offset, 0, 1), s.color])
   if (l.fillType === 'linear-gradient') {
     const w = l.width || 1, h = l.height || 1, a = ((l.gradientAngle ?? 0) - 90) * Math.PI / 180
     const cx = w / 2, cy = h / 2, r = Math.hypot(w, h) / 2
@@ -145,19 +145,23 @@ function EffectStackEditor({ effects = [], onChange }: { effects?: LayerEffect[]
   </div>
 }
 function GradientEditor({ fill, onChange, width, height }: { fill: FillStyle; onChange: (patch: Partial<FillStyle>) => void; width: number; height: number }) {
-  const stops = fill.gradientStops?.length ? fill.gradientStops : [{ id: uid('gs'), offset: 0, color: fill.fill }, { id: uid('gs'), offset: 1, color: fill.fill2 || fill.fill }]
-  const patchStop = (i: number, patch: Partial<{ offset: number; color: string }>) => onChange({ gradientStops: stops.map((s, ix) => ix === i ? { ...s, ...patch, offset: clamp(patch.offset ?? s.offset, 0, 1) } : s) })
+  // Color(fill)=start and To(fill2)=end are edited by the pickers above; these are the
+  // interior colour stops in between (clamped to 1..99% so they never fight the ends).
+  const stops = fill.gradientStops || []
+  const patchStop = (i: number, patch: Partial<{ offset: number; color: string }>) => onChange({ gradientStops: stops.map((s, ix) => ix === i ? { ...s, ...patch, offset: clamp(patch.offset ?? s.offset, 0.01, 0.99) } : s) })
   const addStop = () => onChange({ gradientStops: [...stops, { id: uid('gs'), offset: 0.5, color: fill.fill2 || fill.fill }].sort((a, b) => a.offset - b.offset) })
-  const removeStop = (i: number) => { if (stops.length > 2) onChange({ gradientStops: stops.filter((_, ix) => ix !== i) }) }
+  const removeStop = (i: number) => onChange({ gradientStops: stops.filter((_, ix) => ix !== i) })
   return <div className="ds-gradient-editor">
     <div className="ds-row2"><NumberAdjuster label="Start X" value={fill.gradientStartX ?? 0} min={-width} max={width * 2} step={1} onChange={v => onChange({ gradientStartX: v })} /><NumberAdjuster label="Start Y" value={fill.gradientStartY ?? 0} min={-height} max={height * 2} step={1} onChange={v => onChange({ gradientStartY: v })} /></div>
     <div className="ds-row2"><NumberAdjuster label="End X" value={fill.gradientEndX ?? width} min={-width} max={width * 2} step={1} onChange={v => onChange({ gradientEndX: v })} /><NumberAdjuster label="End Y" value={fill.gradientEndY ?? height} min={-height} max={height * 2} step={1} onChange={v => onChange({ gradientEndY: v })} /></div>
+    <p className="ds-tip muted">Color &amp; To set the start/end. Add colours in between:</p>
     <div className="ds-gradient-stops">
       {stops.map((s, i) => <div className="ds-gradient-stop" key={s.id || i}>
         <ColorInput value={s.color} onChange={v => patchStop(i, { color: v })} />
-        <NumberAdjuster label={`${Math.round(s.offset * 100)}%`} value={Math.round(s.offset * 100)} min={0} max={100} step={1} onChange={v => patchStop(i, { offset: v / 100 })} />
-        <button className="ghost-button sm danger" disabled={stops.length <= 2} onClick={() => removeStop(i)}>Delete</button>
+        <NumberAdjuster label={`${Math.round(s.offset * 100)}%`} value={Math.round(s.offset * 100)} min={1} max={99} step={1} onChange={v => patchStop(i, { offset: v / 100 })} />
+        <button className="ghost-button sm danger" onClick={() => removeStop(i)}>Delete</button>
       </div>)}
+      {!stops.length && <p className="ds-tip muted">No mid stops — just Color → To.</p>}
     </div>
     <button className="ghost-button sm" onClick={addStop}>Add color stop</button>
   </div>
@@ -1725,7 +1729,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const exportHtml = async () => {
     const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c))
     const cssFill = (l: FillStyle) => {
-      const stops = l.gradientStops?.length ? [...l.gradientStops].sort((a, b) => a.offset - b.offset).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ') : `${l.fill}, ${l.fill2 || l.fill}`
+      const stops = gradientStopList(l).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ')
       return l.fillType === 'linear-gradient' ? `linear-gradient(${l.gradientAngle ?? 90}deg, ${stops})` : l.fillType === 'radial-gradient' ? `radial-gradient(circle, ${stops})` : l.fill
     }
     const cssRadius = (l: { cornerRadius?: number; cornerRadiusTL?: number; cornerRadiusTR?: number; cornerRadiusBR?: number; cornerRadiusBL?: number }) =>

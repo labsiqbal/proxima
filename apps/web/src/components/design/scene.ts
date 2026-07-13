@@ -7,6 +7,14 @@ type Base = { id: string; x: number; y: number; rotation?: number; opacity?: num
 export type LayerEffect = { id?: string; type: 'drop-shadow' | 'inner-shadow' | 'glow' | 'layer-blur' | 'background-blur'; color?: string; opacity?: number; blur?: number; spread?: number; offsetX?: number; offsetY?: number }
 type WithEffects = { effects?: LayerEffect[] }
 export type GradientStop = { id?: string; offset: number; color: string }
+
+// The gradient's rendered colour stops: Color(fill) is always the 0% stop and To(fill2)
+// the 100% stop, with gradientStops as the interior colours in between. This keeps both
+// endpoint pickers meaningful — previously any stop silently overrode Color/To entirely.
+export function gradientStopList(l: { fill: string; fill2?: string; gradientStops?: GradientStop[] }): { offset: number; color: string }[] {
+  const interior = (l.gradientStops || []).filter(s => s.offset > 0.001 && s.offset < 0.999)
+  return [{ offset: 0, color: l.fill }, ...interior, { offset: 1, color: l.fill2 || l.fill }].sort((a, b) => a.offset - b.offset)
+}
 export type FillStyle = { fill: string; fillType?: 'solid' | 'linear-gradient' | 'radial-gradient'; fill2?: string; gradientAngle?: number; gradientStartX?: number; gradientStartY?: number; gradientEndX?: number; gradientEndY?: number; gradientStops?: GradientStop[]; fillOpacity?: number; blendMode?: string }
 type Styled = FillStyle & { stroke?: string; strokeWidth?: number; strokeOpacity?: number; strokeDash?: number; strokeCap?: 'butt' | 'round' | 'square'; strokeJoin?: 'miter' | 'round' | 'bevel'; strokePosition?: 'center' | 'inside' | 'outside'; shadow?: boolean }
 
