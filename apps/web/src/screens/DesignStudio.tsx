@@ -1511,7 +1511,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const editSrc = ed && ed.type === 'image' && !/^(https?:|data:|blob:)/.test(ed.src) ? ed.src : undefined
       // Sources: the edited layer's image first (if any), then the ref tray. Dedup.
       const images = [...new Set([editSrc, ...refImages].filter(Boolean) as string[])]
-      const contextualPrompt = buildImageContextPrompt(prompt, { editId })
+      // Label the inputs so the prompt can address them by name (e.g. "@image1 is the
+      // product, put it on @image2's background"). Sent in the same order as `images`.
+      const mapNote = images.length > 1
+        ? `You are given ${images.length} attached images, referred to in order as ${images.map((_, i) => `@image${i + 1}`).join(', ')}. When the prompt names an image (e.g. @image1), act on that specific attached image.\n\n`
+        : ''
+      const contextualPrompt = mapNote + buildImageContextPrompt(prompt, { editId })
       const frame = ed as unknown as { width?: number; height?: number } | null
       const abFrame = scene.artboards[focusAb] || scene.artboards[0]
       const size = sizeForFrame(frame?.width ?? (wantsBackgroundImage(prompt) ? abFrame?.width : undefined), frame?.height ?? (wantsBackgroundImage(prompt) ? abFrame?.height : undefined))
@@ -1874,11 +1879,13 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             <div className="ds-gen">
               <textarea rows={2} placeholder={refImages.length > 1 ? 'Describe how to combine these images…' : refImages.length ? 'Describe what to make from this image…' : 'Generate an image with AI… e.g. dark coffee splash, top-down'} value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
               {refImages.length > 0 && <div className="ds-ref-tray">
-                {refImages.map(p => <span key={p} className="ds-ref-chip" title={p}>
+                {refImages.map((p, i) => <span key={p} className="ds-ref-chip" title={p}>
                   <img src={resolveSrc(p)} alt="" />
+                  <span className="ds-ref-tag">@image{i + 1}</span>
                   <button type="button" aria-label="Remove input image" onClick={() => removeRefImage(p)}>×</button>
                 </span>)}
               </div>}
+              {refImages.length > 1 && <p className="ds-tip muted">Refer to them in the prompt by name, e.g. “put @image1 on @image2’s background”.</p>}
               <button className="primary-button" disabled={imgBusy || !imgPrompt.trim()} onClick={() => void genImage(imgPrompt)}>{imgBusy ? 'Generating…' : refImages.length > 1 ? `Compose ${refImages.length} images` : refImages.length ? 'Edit with AI' : 'Generate image'}</button>
               {refImages.length > 0 && !imageEditReady
                 ? <p className="ds-tip muted">The selected provider is text-to-image only — switch to an edit-capable one in Settings → Image generation to use input images.</p>
