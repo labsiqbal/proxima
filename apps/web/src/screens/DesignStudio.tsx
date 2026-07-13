@@ -520,6 +520,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const marqueeBoxRef = React.useRef<{ ai: number; x: number; y: number; w: number; h: number } | null>(null)
   const dragStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const [view, setView] = React.useState({ x: 0, y: 0, scale: 1 })
+  // Canvas eyedropper: active when a ColorInput asked to pick from the canvas (used
+  // where the native browser EyeDropper isn't available). Next canvas click samples.
+  const [eyedrop, setEyedrop] = React.useState<{ apply: (hex: string) => void } | null>(null)
   const panMode = spacePan || middlePan || (isMobile && mobileTool === 'pan')
   const wrapRef = React.useRef<HTMLDivElement>(null)
   const stageRef = React.useRef<Konva.Stage>(null)
@@ -719,6 +722,24 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
   }, [imgBusy, imgStartedAt])
+  // A ColorInput without the native EyeDropper asks us to sample from the canvas.
+  React.useEffect(() => {
+    const onReq = (e: Event) => { const d = (e as CustomEvent).detail; if (d && typeof d.apply === 'function') setEyedrop({ apply: d.apply }) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEyedrop(null) }
+    window.addEventListener('proxima:eyedropper', onReq)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('proxima:eyedropper', onReq); window.removeEventListener('keydown', onKey) }
+  }, [])
+  const sampleStageColor = React.useCallback((): string | null => {
+    const st = stageRef.current; if (!st) return null
+    const p = st.getPointerPosition(); if (!p) return null
+    try {
+      const c = st.toCanvas({ pixelRatio: 1 }) as HTMLCanvasElement
+      const ctx = c.getContext('2d'); if (!ctx) return null
+      const d = ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data
+      return '#' + [d[0], d[1], d[2]].map(x => x.toString(16).padStart(2, '0')).join('')
+    } catch { return null }
+  }, [])
   React.useEffect(() => {
     if (cropMode && selectedIds[0] !== cropMode.id) setCropMode(null)
   }, [cropMode, selectedIds])
@@ -1938,7 +1959,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             </div>)}</>}</div>}
         </div>
       </aside>
-      <div className="ds-canvas-wrap figma" ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
+      <div className={`ds-canvas-wrap figma ${eyedrop ? 'ds-eyedropping' : ''}`} ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
+        {eyedrop && <div className="ds-eyedrop-hint">🎨 Click anywhere on the canvas to pick a colour · Esc to cancel</div>}
         <Stage ref={stageRef} width={box.w} height={box.h} x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} onWheel={onWheel} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           draggable={panMode}
           onMouseMove={updateMarquee}
@@ -1947,6 +1969,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           onDragMove={e => { if (e.target === stageRef.current) setView(v => ({ ...v, x: e.target.x(), y: e.target.y() })) }}
           onDragEnd={e => { if (e.target === stageRef.current) setView(v => ({ ...v, x: e.target.x(), y: e.target.y() })) }}
           onMouseDown={e => {
+            if (eyedrop) { e.cancelBubble = true; e.evt.preventDefault(); const hex = sampleStageColor(); if (hex) eyedrop.apply(hex); setEyedrop(null); return }
             if (e.evt.button === 1) { e.evt.preventDefault(); setMiddlePan(true); stageRef.current?.draggable(true); return }
             if (e.target === e.target.getStage() && !panMode) setSelectedId(null)
           }}>

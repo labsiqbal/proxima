@@ -7605,6 +7605,24 @@ div.result-media {
 	cursor: pointer;
 }
 .ds-color-eyedrop:hover { color: var(--ui-text); border-color: var(--ui-stroke); }
+.ds-canvas-wrap.ds-eyedropping,
+.ds-canvas-wrap.ds-eyedropping * { cursor: crosshair !important; }
+.ds-eyedrop-hint {
+	position: absolute;
+	top: var(--space-3);
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 20;
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-full);
+	background: var(--ui-surface);
+	border: 1px solid var(--ui-stroke-secondary);
+	box-shadow: var(--shadow-md, 0 6px 20px rgba(0, 0, 0, 0.2));
+	font-size: var(--text-sm);
+	color: var(--ui-text);
+	pointer-events: none;
+	white-space: nowrap;
+}
 .ds-color-presets { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .ds-color-presets button { height: 20px; border-radius: 4px; border: 1px solid var(--ui-stroke-tertiary); cursor: pointer; padding: 0; }
 .ds-empty {

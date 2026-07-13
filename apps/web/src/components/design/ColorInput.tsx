@@ -107,15 +107,21 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (hex:
     setHex(t)
     if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(t)) { setHsv(rgbToHsv(...hexToRgb(t))); onChange(rgbToHex(...hexToRgb(t))) }
   }
-  // Eyedropper — sample any colour on screen (an image, another layer, anywhere).
-  // Uses the native browser EyeDropper API (Chromium); hidden where unsupported.
-  const hasEyeDropper = typeof window !== 'undefined' && 'EyeDropper' in window
+  // Eyedropper — sample a colour from anywhere. Prefer the native browser EyeDropper
+  // (Chromium, whole screen); where it's unavailable (e.g. a non-secure-context host),
+  // fall back to a canvas pick handled by whatever surface is listening (Design Studio
+  // samples its rendered canvas), dispatched as an event with an apply callback.
   const pickScreen = async () => {
-    try {
-      const ED = (window as unknown as { EyeDropper: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper
-      const r = await new ED().open()
-      if (r?.sRGBHex) commitHex(r.sRGBHex)
-    } catch { /* user cancelled the eyedropper */ }
+    if (typeof window !== 'undefined' && 'EyeDropper' in window) {
+      try {
+        const ED = (window as unknown as { EyeDropper: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper
+        const r = await new ED().open()
+        if (r?.sRGBHex) commitHex(r.sRGBHex)
+        return
+      } catch { return /* cancelled */ }
+    }
+    setOpen(false)
+    window.dispatchEvent(new CustomEvent('proxima:eyedropper', { detail: { apply: (hex: string) => commitHex(hex) } }))
   }
 
   return <>
@@ -135,9 +141,9 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (hex:
           </div>
           <div className="ds-color-row">
             <input className="ds-color-hex" value={hex} onChange={e => commitHex(e.target.value)} spellCheck={false} />
-            {hasEyeDropper && <button type="button" className="ds-color-eyedrop" title="Pick a colour from the screen" onClick={() => void pickScreen()}>
+            <button type="button" className="ds-color-eyedrop" title="Eyedropper — pick a colour from the screen / canvas" onClick={() => void pickScreen()}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 22 1-1h3l9-9" /><path d="M3 21v-3l9-9" /><path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z" /></svg>
-            </button>}
+            </button>
             <span className="ds-color-preview" style={{ background: hex }} />
           </div>
           <div className="ds-color-presets">
