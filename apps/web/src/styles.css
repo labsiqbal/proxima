@@ -10186,10 +10186,12 @@ div.result-media {
 	background: color-mix(in srgb, var(--cmd-ink) 7%, transparent);
 	margin-top: 16px;
 }
-.cmd-taskseg.todo {
+.cmd-taskseg.todo,
+.cmd-taskseg.queued {
 	background: #64748b;
 }
-.cmd-taskseg.doing {
+.cmd-taskseg.doing,
+.cmd-taskseg.running {
 	background: #38bdf8;
 }
 .cmd-taskseg.review {

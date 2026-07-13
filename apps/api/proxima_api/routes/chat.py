@@ -819,6 +819,8 @@ def register(app, deps):
             "chats": d.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"],
             "activeRuns": active_runs_count,
         }
+        jbs = {r["status"]: r["c"] for r in d.execute("SELECT status, COUNT(*) AS c FROM jobs WHERE archived_at IS NULL GROUP BY status").fetchall()}
+        jobs_by_status = {s: jbs.get(s, 0) for s in ("queued", "running", "review", "done")}
         recent = [dict(r) for r in d.execute(
             "SELECT s.id, s.title, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, "
             "(SELECT r.status FROM runs r WHERE r.session_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_run_status "
@@ -937,7 +939,7 @@ def register(app, deps):
             include_video=features.enabled(app_cfg, features.VIDEO),
         )
         return {
-            "counts": counts,
+            "counts": counts, "jobsByStatus": jobs_by_status,
             "recent": recent, "activeSessions": active_sessions, "projects": projects,
             "workflows": workflows_out, "schedules": schedules_out, "reviewCount": review_count,
             "reviewJobs": review_jobs, "recentArtifacts": recent_artifacts, "systemHealth": system_health,

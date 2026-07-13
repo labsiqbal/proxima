@@ -67,7 +67,7 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenProje
   if (error) return <section className="home-view home-command"><p className="error-text" style={{ padding: 24 }}>{error}</p></section>
   if (!data) return <section className="home-view home-command"><div className="cmd-bg" /><div className="cmd-skeleton" /></section>
 
-  const { counts, recent: allRecent, activeSessions: allActiveSessions = [], projects, workflows, schedules, reviewCount, reviewJobs = [], recentArtifacts = [], systemHealth, pendingApprovals: allPendingApprovals = [] } = data
+  const { counts, jobsByStatus = { queued: 0, running: 0, review: 0, done: 0 }, recent: allRecent, activeSessions: allActiveSessions = [], projects, workflows, schedules, reviewCount, reviewJobs = [], recentArtifacts = [], systemHealth, pendingApprovals: allPendingApprovals = [] } = data
   const recent = allRecent.filter(session => isFeatureSessionEnabled(session, features))
   const activeSessions = allActiveSessions.filter(session => isFeatureSessionEnabled(session, features))
   const pendingApprovals = allPendingApprovals.filter(session => isFeatureSessionEnabled(session, features))
@@ -152,6 +152,11 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenProje
           <button className="cmd-readout-btn" onClick={() => onSelectView('activity')}><span className="cmd-readout"><strong>{reviewCount}</strong><span>reviews</span></span></button>
           <button className="cmd-readout-btn" onClick={() => liveSession ? onOpenChat(liveSession.id) : onSelectView('activity')}><span className={`cmd-readout ${activeRunCount ? 'live' : ''}`}><strong>{activeRunCount}</strong><span>live agents</span></span></button>
         </div>
+        <div className="cmd-taskbar" title="Jobs by status" aria-label="Jobs by status">
+          {(['queued', 'running', 'review', 'done'] as const).map(s => jobsByStatus[s] > 0
+            ? <span key={s} className={`cmd-taskseg ${s}`} style={{ flex: jobsByStatus[s] }} title={`${jobsByStatus[s]} ${s}`} />
+            : null)}
+        </div>
         <div className="cmd-healthline">
           <span>{systemHealth?.runnersReady ?? 0}/{systemHealth?.runnersTotal ?? 0} runners ready</span>
           <span>{systemHealth?.failedRuns24h ?? 0} failed / 24h</span>
@@ -223,7 +228,7 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenProje
       {projects.length > 0 && <div className="cmd-panel cmd-projects">
         <div className="panel-label">Projects <button className="cmd-more" onClick={() => onSelectView('projects')}>all ▸</button></div>
         <div className="cmd-chips">{projects.slice(0, 8).map(p => <button key={p.slug} className="cmd-chip" onClick={() => onOpenProject(p.slug)}>
-          {cleanName(p.name)}<span className="cmd-chip-n">{p.chats + p.tasks}</span>
+          {cleanName(p.name)}<span className="cmd-chip-n">{p.chats}</span>
         </button>)}</div>
       </div>}
     </div>
