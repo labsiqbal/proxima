@@ -25,18 +25,17 @@ five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 ## Shipped (foundation)
 
-Single-user cockpit · full-power chat (live agent config) · in-browser terminal ·
-interactive approval/choice cards · projects + **link existing folders** · agent
-profiles as personas (per-profile instructions) · kanban tasks with steerable
-agent threads · files + live preview · wiki + graph · dark/light + design tokens ·
-daily encrypted backup.
+Single-user cockpit · full-power chat (live agent config) · **Home dashboard** ·
+multi-agent **brainstorm / debate** + **validate** sidecar · **workflows + jobs /
+activity with cron schedules** · in-browser terminal · interactive approval/choice
+cards · projects + **link existing folders** · agent profiles as personas
+(per-profile instructions) · files + live preview · wiki + graph · dark/light +
+design tokens · daily encrypted backup.
 
 ---
 
 ## Now — make daily use sharp (low/med effort, high DNA fit)
 
-- **Home dashboard** — landing view: active runs, recent chats/tasks, per-project
-  pulse. The cockpit needs a cockpit. *(Cockpit)*
 - **MCP management UI** — add/enable/configure MCP servers per profile/project
   from the app, no terminal round-trip. *(BYO-agent)*
 - **Skills / slash-command palette** — browse and invoke the skills your runner
@@ -50,15 +49,8 @@ daily encrypted backup.
 
 ## Next — the orchestration layer (the real differentiator)
 
-- **Multi-agent parallel runs** — fan one goal out to several profiles/subtasks
-  and watch them all in one view. This is what Cursor/Replit *can't* do.
-  *(Orchestration)*
 - **Agent pipelines / handoff** — chain personas (research → build → review),
   output of one feeds the next; defined visually. *(Orchestration)*
-- **Goal → tasks decomposition** — give a goal, an agent breaks it into kanban
-  cards, each assignable to a profile. *(Orchestration)*
-- **Scheduled / recurring agents** — cron inside the cockpit (daily report,
-  watch-and-summarize). Your agents working while you sleep. *(Orchestration)*
 - **Approval queue** — one place for every pending permission/question across all
   running agents. *(Orchestration + Cockpit)*
 - **Local model runner** — Ollama / vLLM via 9router as a first-class runner, for
