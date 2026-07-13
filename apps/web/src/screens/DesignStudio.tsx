@@ -1643,7 +1643,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       // Fire the run, then hand off to the event stream (onDesignEvent). No polling
       // loop: the reply arrives live and, crucially, survives navigating away — the
       // run keeps going server-side and reconnects on return (see hydrateChat).
-      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text), display_message: text, profile_id: profileId ?? null })
+      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text, assets), display_message: text, profile_id: profileId ?? null })
       // Snapshot what the agent saw (detects mid-run manual edits at apply time) and
       // mark the scene as awaiting this run (persisted → recovery-on-open is exact).
       sentSceneRef.current = { runId: r.run_id, body: JSON.stringify({ ...sc, runPendingId: undefined }) }
