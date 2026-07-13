@@ -29,6 +29,7 @@ const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(
 const RunnersScreen = React.lazy(() => import('./screens/RunnersScreen').then(m => ({ default: m.RunnersScreen })))
 const SettingsScreen = React.lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })))
 const VideoScreen = React.lazy(() => import('./screens/VideoScreen').then(m => ({ default: m.VideoScreen })))
+const WorkspaceOnboarding = React.lazy(() => import('./screens/WorkspaceOnboarding').then(m => ({ default: m.WorkspaceOnboarding })))
 
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
@@ -42,6 +43,9 @@ export function App() {
   const updates = useUpdateStatus(token)
   const [user, setUser] = React.useState<User | null>(null)
   const [authGate, setAuthGate] = React.useState<'setup' | 'login' | null>(null)
+  // First-run only: after the password is set, offer to point Proxima at a real
+  // code folder before landing in the app.
+  const [onboarding, setOnboarding] = React.useState(false)
   const [view, setView] = React.useState<View>('home')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
@@ -325,8 +329,19 @@ export function App() {
   const handleAuthed = (s: { token: string; user: User }) => {
     // Keep the token in memory for this session's bearer header; the cookie carries
     // it across reloads. Nothing goes to localStorage.
+    // authGate still holds its pre-auth value here — 'setup' means this is the very
+    // first run, so show the "pick a working folder" step before the app.
+    const firstRun = authGate === 'setup'
     setToken(s.token); setUser(s.user); setAuthGate(null)
+    if (firstRun) setOnboarding(true)
     void refreshAll(s.token)
+  }
+  const handleOnboardingDone = async (linked: Project | null) => {
+    setOnboarding(false)
+    await refreshAll(token)
+    // Make the folder they linked the active project (refreshAll defaults to the
+    // starter project); if they skipped, that default stays active.
+    if (linked) { setActiveProject(linked); setView('home') }
   }
   const handleLogout = async () => {
     try { await logout(token) } catch { /* best-effort; cookie is cleared server-side */ }
@@ -336,6 +351,7 @@ export function App() {
   if (booting) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Starting Proxima…</p></div>
   if (authGate) return <AuthGate mode={authGate} onAuthed={handleAuthed} />
   if (!token || !user) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>{error || 'Connecting…'}</p></div>
+  if (onboarding) return <React.Suspense fallback={<div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Loading…</p></div>}><WorkspaceOnboarding token={token} onDone={linked => void handleOnboardingDone(linked)} /></React.Suspense>
 
   return (
     <AppShell

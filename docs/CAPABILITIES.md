@@ -157,7 +157,10 @@ backing session/thread. (Unified under the jobs model.)
 **Why:** Scope agents to a folder — your real code, not a sandbox.
 **How:** `projects` table. Create a scaffolded project OR **link an existing folder**
 (`/api/projects/link`, jailed to configured link roots). Chat/terminal/files all
-operate on the project path.
+operate on the project path. On **first run**, right after setting a password, an
+onboarding step (`screens/WorkspaceOnboarding.tsx`, reusing the `FolderLinker`
+browser) offers to link a real code folder before landing in the app; skipping
+uses the starter project auto-provisioned under the data dir.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
