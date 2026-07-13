@@ -1705,6 +1705,52 @@ button:disabled {
 .login-card.wide {
 	width: min(520px, calc(100% - 28px));
 }
+/* First-run set-password / login gate */
+.auth-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	width: min(340px, calc(100% - 32px));
+	padding: 28px 26px 24px;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-lg);
+	background: var(--ui-surface);
+	box-shadow: var(--shadow-lg, 0 12px 40px rgba(0, 0, 0, 0.12));
+	text-align: center;
+}
+.auth-title {
+	margin: 4px 0 0;
+	font-size: var(--text-lg);
+}
+.auth-sub {
+	margin: 0 0 6px;
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-sm);
+}
+.auth-input {
+	width: 100%;
+	padding: 11px 13px;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface-sunken, var(--ui-surface));
+	color: var(--ui-text);
+	font-size: var(--text-md);
+}
+.auth-input:focus {
+	outline: 2px solid var(--ui-accent);
+	outline-offset: 1px;
+	border-color: transparent;
+}
+.auth-error {
+	margin: 0;
+	color: var(--ui-danger, #c0263e);
+	font-size: var(--text-sm);
+}
+.auth-submit {
+	width: 100%;
+	margin-top: 4px;
+}
 
 @media (max-width: 1180px) {
 	.app-shell {

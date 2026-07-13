@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -164,6 +164,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         db,
         depends=Depends,
         header=Header,
+        cookie=Cookie,
         http_exception=HTTPException,
         status_module=status,
     )

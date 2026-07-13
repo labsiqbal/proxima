@@ -378,7 +378,9 @@ def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = 
     from .auth import hash_password, iso_now
 
     for user in seed_users or []:
-        password_hash = user.get("password_hash") or hash_password(user.get("password") or "password123")
+        # Password-less by default (single-user owner is created without a password;
+        # they set one via the setup flow). Only seed a hash if one is explicitly given.
+        password_hash = user.get("password_hash") or (hash_password(user["password"]) if user.get("password") else None)
         conn.execute(
             """
             INSERT OR IGNORE INTO users(username, os_user, role, password_hash, password_set_at)

@@ -1,5 +1,5 @@
 import React from 'react'
-import { autoLogin, me } from './api/auth'
+import { me, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
 import { listProjects } from './api/projects'
 import { listSessions, renameSession, deleteSession } from './api/sessions'
@@ -9,6 +9,7 @@ import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isDisabledFeatureHash, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
 import type { AppFeatures, ChatSession, OutputLink, Profile, Project, Runner, User, View, WorkflowDraft } from './types'
 import { AppShell } from './components/shell/AppShell'
+import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
 import { ChatScreen } from './screens/ChatScreen'
 import { HomeScreen } from './screens/HomeScreen'
@@ -38,6 +39,7 @@ export function App() {
   const [token, setToken] = React.useState(localStorage.getItem('proxima-token') || '')
   const updates = useUpdateStatus(token)
   const [user, setUser] = React.useState<User | null>(null)
+  const [authGate, setAuthGate] = React.useState<'setup' | 'login' | null>(null)
   const [view, setView] = React.useState<View>('home')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
@@ -197,28 +199,26 @@ export function App() {
   React.useEffect(() => {
     async function boot() {
       const configPromise = getAppFeatures()
-      // Single-user cockpit: no login wall. Reuse a stored token if it's still
-      // valid, otherwise auto-authenticate as the owner via POST /auth/auto.
-      const fresh = async () => {
-        const auto = await autoLogin()
-        if (!mountedRef.current) return
-        localStorage.setItem('proxima-token', auto.token)
-        setToken(auto.token); setUser(auto.user)
-        await refreshAll(auto.token)
-      }
+      // Password gate: first run forces a password; after that, a valid stored
+      // session enters the app, otherwise show the login screen.
       try {
-        const stored = localStorage.getItem('proxima-token') || ''
-        if (stored) {
-          try {
-            const current = await me(stored)
-            if (!mountedRef.current) return
-            setUser(current)
-            await refreshAll(stored)
-          } catch {
-            await fresh()  // stale/expired token → re-auth
-          }
+        const status = await setupStatus()
+        if (!mountedRef.current) return
+        if (!status.password_set) {
+          setAuthGate('setup')
         } else {
-          await fresh()
+          const stored = localStorage.getItem('proxima-token') || ''
+          let ok = false
+          if (stored) {
+            try {
+              const current = await me(stored)
+              if (!mountedRef.current) return
+              setToken(stored); setUser(current)
+              await refreshAll(stored)
+              ok = true
+            } catch { /* stale/revoked session */ }
+          }
+          if (!ok && mountedRef.current) setAuthGate('login')
         }
       } catch (err) {
         if (mountedRef.current) setError(String(err))
@@ -321,7 +321,20 @@ export function App() {
     setView('chat')
   }
 
+  const handleAuthed = (s: { token: string; user: User }) => {
+    localStorage.setItem('proxima-token', s.token)
+    setToken(s.token); setUser(s.user); setAuthGate(null)
+    void refreshAll(s.token)
+  }
+  const handleLogout = async () => {
+    const t = localStorage.getItem('proxima-token') || token
+    try { if (t) await logout(t) } catch { /* best-effort revoke */ }
+    localStorage.removeItem('proxima-token')
+    setToken(''); setUser(null); setAuthGate('login')
+  }
+
   if (booting) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Starting Proxima…</p></div>
+  if (authGate) return <AuthGate mode={authGate} onAuthed={handleAuthed} />
   if (!token || !user) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>{error || 'Connecting…'}</p></div>
 
   return (
@@ -330,6 +343,7 @@ export function App() {
       activeProject={activeProject}
       activeSession={activeSession}
       currentView={view}
+      onLogout={() => void handleLogout()}
       features={features}
       onNewChat={() => void startNewSession()}
       onRenameSession={(id, title) => void handleRenameSession(id, title)}

@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { RightRail } from './RightRail'
 import { SearchModal } from './SearchModal'
-import { IconPanelRight, IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents } from './icons'
+import { IconPanelRight, IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -34,6 +34,7 @@ export function AppShell(props: {
   seen: Record<number, string>
   busySessions?: number[]
   onSelectView: (view: View) => void
+  onLogout: () => void
   profiles: Profile[]
   projects: Project[]
   sessions: ChatSession[]
@@ -110,6 +111,8 @@ export function AppShell(props: {
               <button className={`user-menu-item ${props.currentView === 'profiles' ? 'active' : ''}`} onClick={() => { props.onSelectView('profiles'); setMenuOpen(false) }}><IconAgents size={15} /> Agents</button>
               <div className="user-menu-sep" />
               <button className={`user-menu-item ${props.currentView === 'settings' ? 'active' : ''}`} onClick={() => { props.onSelectView('settings'); setMenuOpen(false) }}><IconGear size={15} /> Settings</button>
+              <div className="user-menu-sep" />
+              <button className="user-menu-item" onClick={() => { setMenuOpen(false); props.onLogout() }}><IconLogout size={15} /> Log out</button>
             </div>
           </>}
         </div>

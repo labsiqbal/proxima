@@ -6,11 +6,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..auth import hash_token
+from ..auth import hash_password, hash_token, iso_now, verify_password
 from ..runners import runner_readiness
+from ..schemas import PasswordRequest
+
+_SESSION_MAX_AGE = 10 * 365 * 24 * 3600  # persistent cookie (DB session itself never expires)
 
 logger = logging.getLogger("proxima.api")
 
@@ -31,34 +34,65 @@ def register(app, deps):
 
     @app.get("/api/setup/status")
     def setup_status() -> dict[str, Any]:
-        # Single-user cockpit: the frontend auto-logs-in via /auth/auto, so there is
-        # never a bootstrap wall. Runner list lets the UI show what's installed.
+        # Single-user cockpit. `password_set` tells the frontend whether to show the
+        # first-run "set a password" screen, the login screen, or (passwordless) the
+        # auto-login path. Runner list lets the UI show what's installed.
+        owner = ensure_single_user_owner()
         readiness = runner_readiness()
         return {
             "bootstrap_required": False,
             "single_user": True,
             "mode": "single",
+            "password_set": bool(owner.get("password_hash")),
             "hermes_profiles_root": cfg["hermes_profiles_root"],
             "runners": [{"id": r["id"], "displayName": r["displayName"], "installed": r["installed"]} for r in readiness.values()],
         }
 
-    @app.post("/auth/auto")
-    def auth_auto():
-        """Single-user cockpit auto-login: no credentials, returns the owner + a
-        token (for SSE/WS/preview URLs that can't send an auth header).
+    def _session_response(user: dict[str, Any], token: str) -> JSONResponse:
+        resp = JSONResponse({"token": token, "user": public_user(user)})
+        resp.set_cookie("proxima_session", token, path="/", httponly=True,
+                        samesite="lax", secure=True, max_age=_SESSION_MAX_AGE)
+        return resp
 
-        Also mints an HttpOnly session cookie (proxima_session) so SSE/WS can
-        authenticate without carrying the token in the URL (?token=) — the first
-        step of moving auth off URL/localStorage. Additive: the JSON token still
-        flows for the existing Bearer-header path."""
+    @app.post("/auth/set-password")
+    def set_password(payload: PasswordRequest):
+        """First-run: set the owner's password. Only allowed while none is set (later
+        changes go through Settings with the current password). Logs you in on success."""
         user = ensure_single_user_owner()
+        if user.get("password_hash"):
+            raise HTTPException(status_code=409, detail="password already set")
+        try:
+            digest = hash_password(payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with app.state.db_lock:
+            db().execute("UPDATE users SET password_hash = ?, password_set_at = ? WHERE id = ?", (digest, iso_now(), user["id"]))
+            token = create_token(user["id"])
+        return _session_response(user, token)
+
+    @app.post("/auth/login")
+    def login_with_password(payload: PasswordRequest):
+        """Verify the owner's password and start a session (no expiry until logout)."""
+        user = ensure_single_user_owner()
+        if not user.get("password_hash"):
+            raise HTTPException(status_code=409, detail="no password set")
+        if not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="incorrect password")
         with app.state.db_lock:
             token = create_token(user["id"])
-        resp = JSONResponse({"token": token, "user": public_user(user)})
-        ttl = int(cfg.get("auth_token_ttl_hours") or 24 * 14) * 3600
-        resp.set_cookie("proxima_session", token, path="/", httponly=True,
-                        samesite="lax", secure=True, max_age=ttl)
-        return resp
+        return _session_response(user, token)
+
+    @app.post("/auth/auto")
+    def auth_auto():
+        """Passwordless auto-login (network-only mode). Disabled once a password is
+        set — clients must then use /auth/login. Mints an HttpOnly session cookie so
+        SSE/WS don't need the token in the URL."""
+        user = ensure_single_user_owner()
+        if user.get("password_hash"):
+            raise HTTPException(status_code=401, detail="login required")
+        with app.state.db_lock:
+            token = create_token(user["id"])
+        return _session_response(user, token)
 
     @app.post("/auth/logout")
     def logout(user: dict[str, Any] = Depends(current_user), authorization: str | None = Header(default=None)):
