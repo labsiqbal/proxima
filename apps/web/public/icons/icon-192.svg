@@ -16,9 +16,9 @@
   </defs>
   <rect width="512" height="512" fill="#070a0f"/>
   <rect width="512" height="512" rx="112" fill="url(#bg192)"/>
-  <circle cx="386" cy="117" r="48" fill="#4f8cff" opacity="0.2" filter="url(#glow192)"/>
-  <path d="M93 286C109 165 199 89 315 91c42 1 79 14 108 38" fill="none" stroke="url(#orbit192)" stroke-width="11" stroke-linecap="round"/>
-  <path d="M163 389V139h106c73 0 120 39 120 102s-47 104-120 104h-51" fill="none" stroke="#f7faff" stroke-width="55" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M386 73l13 31 31 13-31 13-13 31-13-31-31-13 31-13 13-31z" fill="#8db5ff"/>
-  <circle cx="386" cy="117" r="8" fill="#fff"/>
+  <circle cx="404" cy="108" r="46" fill="#4f8cff" opacity="0.22" filter="url(#glow192)"/>
+  <path d="M120 360A144 144 0 0 1 376 100" fill="none" stroke="url(#orbit192)" stroke-width="12" stroke-linecap="round"/>
+  <path d="M256 120 L292 220 L392 256 L292 292 L256 392 L220 292 L120 256 L220 220 Z" fill="#f7faff"/>
+  <path d="M404 74l9 25 25 9-25 9-9 25-9-25-25-9 25-9 9-25z" fill="#8db5ff"/>
+  <circle cx="404" cy="108" r="7" fill="#fff"/>
 </svg>

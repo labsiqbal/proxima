@@ -102,7 +102,7 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenProje
     <div className="cmd-bg" aria-hidden="true" />
 
     <header className="cmd-head">
-      <div className="cmd-brand"><ProximaMark className="proxima-mark-command" /> PROXIMA <span className="cmd-brand-sub">· control</span></div>
+      <div className="cmd-brand"><ProximaMark className="proxima-mark-command" /><span className="proxima-word">PROXIMA</span><span className="cmd-brand-sub">· control</span></div>
       <div className="cmd-subhead">{greeting} · {dateStr}</div>
       <div className="cmd-headline">
         <span className="cmd-hello">{ownerName ? `${ownerName.toUpperCase()} //` : '//'}</span>

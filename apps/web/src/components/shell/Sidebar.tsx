@@ -47,7 +47,7 @@ export function Sidebar(props: {
   const [acctOpen, setAcctOpen] = React.useState(false)
   const [projOpen, setProjOpen] = React.useState(false)
   return <div className="sidebar-inner">
-    <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong>Proxima</strong></div><div className="sidebar-actions"><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div></div>
+    <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><div className="sidebar-actions"><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div></div>
     <section className="nav-group">{nav.filter(item => (item.id !== 'video' || props.features.video) && (item.id !== 'design' || props.features.designStudio)).map(item => {
       const Icon = item.icon
       const onClick = () => {

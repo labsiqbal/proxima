@@ -9825,6 +9825,21 @@ div.result-media {
 .cmd-brand-sub {
 	color: color-mix(in srgb, var(--ui-accent) 75%, #fff);
 }
+/* PROXIMA wordmark — mission-control nameplate: wide-tracked mono logotype,
+   heavier + brighter than the operator readouts so it reads as the brand. */
+.proxima-word {
+	font-family: var(--font-mono);
+	font-weight: 600;
+	letter-spacing: 0.3em;
+	text-transform: uppercase;
+	/* cancel the trailing letter-spacing so the gap after it stays even */
+	margin-right: -0.3em;
+	padding-right: 0.3em;
+}
+.cmd-brand .proxima-word {
+	color: var(--cmd-ink);
+	font-size: var(--text-sm);
+}
 .cmd-subhead {
 	margin-top: 10px;
 	font-family: var(--font-mono);
