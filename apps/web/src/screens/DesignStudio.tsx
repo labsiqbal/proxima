@@ -1033,7 +1033,11 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }, [stage, scene?.id, lastDesignKey])
   const restoredRef = React.useRef(false)
   React.useEffect(() => {
-    if (restoredRef.current || openSession || openDesignId || scene || !designFs || !lastDesignKey) return
+    // openedTargetRef is set once a deep-link (openSession/openDesignId) has been
+    // handled this mount — guard on it too, so when onOpened() clears the prop and
+    // this effect re-runs, restore can't race in and overwrite the just-opened design
+    // with the last one before openDesign() finishes loading its scene.
+    if (restoredRef.current || openSession || openDesignId || openedTargetRef.current || scene || !designFs || !lastDesignKey) return
     restoredRef.current = true
     let id: string | null = null
     try { id = localStorage.getItem(lastDesignKey) } catch { /* storage disabled */ }
