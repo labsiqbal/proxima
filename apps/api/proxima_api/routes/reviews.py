@@ -123,7 +123,7 @@ def register(app, deps):
             (
                 message_id,
                 source["session_id"],
-                payload.mode,
+                "validate",
                 source.get("source_runner"),
                 source.get("source_profile_id"),
                 reviewer["id"],

@@ -235,7 +235,6 @@ class GoalRequest(BaseModel):
 
 
 class MessageReviewCreateRequest(BaseModel):
-    mode: str = Field(default="validate", pattern="^(validate|brainstorm|debate|compare)$")
     reviewer_profile_id: int | None = None
 
 
