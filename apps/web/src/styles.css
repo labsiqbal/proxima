@@ -7591,6 +7591,20 @@ div.result-media {
 	font-size: var(--text-sm);
 }
 .ds-color-preview { width: 26px; height: 26px; border-radius: var(--radius-sm); border: 1px solid var(--ui-stroke-secondary); }
+.ds-color-eyedrop {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	flex: 0 0 auto;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface-sunken, var(--ui-surface));
+	color: var(--ui-text-secondary);
+	cursor: pointer;
+}
+.ds-color-eyedrop:hover { color: var(--ui-text); border-color: var(--ui-stroke); }
 .ds-color-presets { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .ds-color-presets button { height: 20px; border-radius: 4px; border: 1px solid var(--ui-stroke-tertiary); cursor: pointer; padding: 0; }
 .ds-empty {
