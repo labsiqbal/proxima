@@ -2096,6 +2096,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               anchorSize={isMobile ? 20 : 11} anchorCornerRadius={isMobile ? 10 : 6} anchorStrokeWidth={1.5}
               borderStroke="#3b82f6" borderStrokeWidth={1.5} anchorStroke="#3b82f6" anchorFill="#ffffff"
               anchorStyleFunc={a => { if (a.hasName('rotater')) { a.cornerRadius(a.width() / 2); a.fill('#3b82f6'); a.stroke('#ffffff'); a.strokeWidth(2) } }} />
+            {/* Eyedropper capture: a transparent top layer swallows the click (so it
+                samples a colour instead of selecting/moving the shape under it). */}
+            {eyedrop && <Rect x={-100000} y={-100000} width={300000} height={300000} fill="#000000" opacity={0} onMouseDown={e => { e.cancelBubble = true; const hex = sampleStageColor(); if (hex) eyedrop.apply(hex); setEyedrop(null) }} />}
           </KLayer>
         </Stage>
         {scene.artboards.map((a, ai) => <div key={'ablbl' + a.id} className="ds-ab-label"

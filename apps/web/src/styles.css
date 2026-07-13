@@ -7582,6 +7582,7 @@ div.result-media {
 .ds-color-row { display: flex; gap: var(--space-2); align-items: center; }
 .ds-color-hex {
 	flex: 1;
+	min-width: 0;
 	text-transform: uppercase;
 	padding: 5px 8px;
 	border: 1px solid var(--ui-stroke-secondary);
