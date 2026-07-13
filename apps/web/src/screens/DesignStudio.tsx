@@ -420,6 +420,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [savingVersion, setSavingVersion] = React.useState(false)
   const versionsSeq = React.useRef(0)
   const [leftTab, setLeftTab] = React.useState<'chat' | 'assets' | 'layers'>('chat')
+  // Desktop panel collapse (mobile uses bottom-sheet overlays instead). Persisted so
+  // the canvas stays as wide as you left it across sessions.
+  const [leftCollapsed, setLeftCollapsed] = React.useState<boolean>(() => { try { return localStorage.getItem('proxima.design.leftCollapsed') === '1' } catch { return false } })
+  const [rightCollapsed, setRightCollapsed] = React.useState<boolean>(() => { try { return localStorage.getItem('proxima.design.rightCollapsed') === '1' } catch { return false } })
+  React.useEffect(() => { try { localStorage.setItem('proxima.design.leftCollapsed', leftCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [leftCollapsed])
+  React.useEffect(() => { try { localStorage.setItem('proxima.design.rightCollapsed', rightCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [rightCollapsed])
   const [assets, setAssets] = React.useState<string[]>([])
   const [uploading, setUploading] = React.useState(false)
   const [imgPrompt, setImgPrompt] = React.useState('')
@@ -634,6 +640,35 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     } catch { setChat([]) }
   }, [token, restoreRun])
   React.useEffect(() => { hydrateChatRef.current = doHydrateChat }, [doHydrateChat])
+
+  // Watchdog against a hung "Designing…": the busy state only clears on a terminal
+  // stream event, so a dropped SSE/WS or a worker that died without emitting one would
+  // leave it spinning forever. While busy, poll the run's REAL status; once it's no
+  // longer running, reconcile — apply the reply if it finished, otherwise say it failed
+  // — and clear the busy state instead of hanging silently.
+  React.useEffect(() => {
+    const sid = scene?.sessionId
+    if (chatBusyRun == null || !sid) return
+    let on = true
+    const check = async () => {
+      try {
+        const r = await restoreRun(sid)
+        const runId = chatBusyRunRef.current
+        if (!on || runId == null || r.running) return
+        if (r.completed && r.lastRun != null) {
+          const m = await listMessages(token, sid)
+          const a = m.messages.filter(x => x.role === 'assistant' && x.run_id === r.lastRun)
+          if (a.length) applyReplyRef.current(r.lastRun, a[a.length - 1].content)
+        } else if (appliedRunRef.current !== runId) {
+          appliedRunRef.current = runId
+          setChat(c => [...c, { role: 'assistant', content: '⚠️ The design run stopped without finishing (it may have failed or the connection dropped). Try again.' }])
+        }
+        if (on) setChatBusyRun(null)
+      } catch { /* transient — retry next tick */ }
+    }
+    const t = window.setInterval(check, 20000)
+    return () => { on = false; window.clearInterval(t) }
+  }, [chatBusyRun, scene?.sessionId, token, restoreRun, setChatBusyRun, chatBusyRunRef])
 
   React.useEffect(() => {
     const seq = ++settingsSeq.current
@@ -982,6 +1017,27 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDesignId, designFs])
+
+  // Remember the last design open in this project, and reopen it when the studio is
+  // entered fresh (no deep-link). DesignStudio unmounts on every view change, so
+  // without this, leaving for another menu and coming back dropped you on the start
+  // screen with an empty chat — the design + its chat (which live on disk/in the DB)
+  // are still there, so we just reopen the last one and let hydrateChat restore it.
+  const lastDesignKey = project ? `proxima.design.last.${project.slug}` : null
+  React.useEffect(() => {
+    if (stage === 'studio' && scene?.id && lastDesignKey) {
+      try { localStorage.setItem(lastDesignKey, scene.id) } catch { /* storage disabled */ }
+    }
+  }, [stage, scene?.id, lastDesignKey])
+  const restoredRef = React.useRef(false)
+  React.useEffect(() => {
+    if (restoredRef.current || openSession || openDesignId || scene || !designFs || !lastDesignKey) return
+    restoredRef.current = true
+    let id: string | null = null
+    try { id = localStorage.getItem(lastDesignKey) } catch { /* storage disabled */ }
+    if (id) void openDesign(id)  // openDesign no-ops gracefully if the design was deleted
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSession, openDesignId, designFs, lastDesignKey])
   const removeDesign = async (id: string) => {
     if (!designFs) return
     try { const f = await designFs.read(`${id}/scene.json`); const s = JSON.parse(f.content); if (s.sessionId) await deleteSession(token, s.sessionId).catch(() => undefined) } catch { /* no session */ }
@@ -1761,10 +1817,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         </div>
       </div>
     </div>
-    <div className="ds-body">
+    <div className={`ds-body ${!isMobile && leftCollapsed ? 'left-collapsed' : ''} ${!isMobile && rightCollapsed ? 'right-collapsed' : ''}`}>
+      {!isMobile && leftCollapsed && <button className="ds-panel-reopen left" onClick={() => setLeftCollapsed(false)} title="Show panel">›</button>}
       <aside className={`ds-left ${isMobile && mSheet === 'panel' ? 'sheet-open' : ''}`}>
         <div className="ds-left-tabs">
           {(['chat', 'assets', 'layers'] as const).map(t => <button key={t} className={leftTab === t ? 'active' : ''} onClick={() => setLeftTab(t)}>{t === 'chat' ? 'Chat' : t === 'assets' ? 'Assets' : 'Layers'}</button>)}
+          {!isMobile && <button className="ds-panel-collapse" onClick={() => setLeftCollapsed(true)} title="Hide panel">‹</button>}
         </div>
         <div className="ds-left-body">
           {leftTab === 'chat' && <div className="ds-chat">
@@ -1964,6 +2022,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         </>}
       </div>
       <aside className={`ds-inspector ${isMobile && mSheet === 'inspector' ? 'sheet-open' : ''}`}>
+        {!isMobile && <button className="ds-panel-collapse right" onClick={() => setRightCollapsed(true)} title="Hide inspector">›</button>}
         {selectedIds.length > 1 ? <div className="ds-fields">
           <div className="ds-insp-head"><strong>{selectedIds.length} selected</strong><button className="ghost-button danger" onClick={removeSelected}>Delete</button></div>
           <div className="ds-btn-row"><button onClick={groupSelected}>Group</button><button onClick={ungroupSelected}>Ungroup</button></div>
@@ -2101,6 +2160,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           </div>
         </>}
       </aside>
+      {!isMobile && rightCollapsed && <button className="ds-panel-reopen right" onClick={() => setRightCollapsed(false)} title="Show inspector">‹</button>}
     </div>
     {edit && (() => {
       const tl = findLayer(edit.id) as TextLayer | null; if (!tl) return null; const sc = view.scale

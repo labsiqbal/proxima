@@ -7475,7 +7475,55 @@ div.result-media {
 	background: var(--ui-surface-translucent);
 	padding: var(--space-4);
 	overflow: auto;
+	position: relative;
 }
+/* Desktop panel collapse — hide the left (chat/assets/layers) or right (inspector)
+   panel so the canvas fills the width. Mobile uses bottom-sheets instead. */
+.ds-body.left-collapsed .ds-left { display: none; }
+.ds-body.right-collapsed .ds-inspector { display: none; }
+.ds-panel-collapse {
+	margin-left: auto;
+	border: none;
+	background: transparent;
+	color: var(--ui-text-tertiary);
+	cursor: pointer;
+	font-size: var(--text-md);
+	line-height: 1;
+	padding: 0 var(--space-2);
+	border-radius: var(--radius-sm);
+}
+.ds-panel-collapse:hover { color: var(--ui-text); background: var(--ui-surface-hover); }
+/* The inspector's collapse control sits as a thin strip in its inner padding gutter,
+   so it never overlaps the property rows. */
+.ds-panel-collapse.right {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 16px;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 2;
+}
+.ds-panel-reopen {
+	align-self: stretch;
+	flex: 0 0 auto;
+	width: 18px;
+	border: none;
+	border-right: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface-translucent);
+	color: var(--ui-text-tertiary);
+	cursor: pointer;
+	font-size: var(--text-sm);
+}
+.ds-panel-reopen.right {
+	border-right: none;
+	border-left: 1px solid var(--ui-stroke-secondary);
+}
+.ds-panel-reopen:hover { color: var(--ui-text); background: var(--ui-surface-hover); }
 .ds-empty {
 	display: grid;
 	place-items: center;
