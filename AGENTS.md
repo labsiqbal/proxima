@@ -44,7 +44,7 @@ If a change makes a doc wrong and you leave it, you've shipped a bug.
 - Do not hardcode real usernames, hostnames, machine names, or other personal identifiers into product code. Use examples/config templates only.
 - Keep runtime data outside the repo — it lives under `~/.local/share/proxima/` (db, workspace, hermes-profiles, backups) and `~/.config/proxima/proxima.env`.
 - Never store real secrets in this repo.
-- Proxima is **single-user**: one owner, no in-app accounts/roles/invites/membership/sharing. The access boundary is the network layer (loopback / Tailscale / Cloudflare Access) — anyone who reaches the API is the owner. Do not claim it is secure for untrusted tenants.
+- Proxima is **single-user**: one owner, no in-app accounts/roles/invites/membership/sharing. The primary access boundary is the network layer (loopback / Tailscale / Cloudflare Access). On top of that the owner sets a **password** on first run (`/auth/set-password`), and every request then needs a valid session (bearer token or the HttpOnly `proxima_session` cookie) — defense-in-depth, not multi-tenancy. Forgot-password recovery is local (`scripts/reset-password`). Do not claim it is secure for untrusted tenants.
 - A future multi-tenant "secure mode" (OS isolation, roles, per-project authorization) is out of scope for the current code path; don't document those as if they exist. See `docs/security-boundaries.md`.
 - Still treat prompt-injected runner content as untrusted: it must not read source, secrets, or unrelated paths even though there is one owner.
 - Keep source/runtime/config/profile files out of a runner's context by default; a prompt-injected agent run must not read them (single-user; see `docs/prompt-injection-hardening.md`).
