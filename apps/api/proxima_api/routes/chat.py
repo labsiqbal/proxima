@@ -219,30 +219,6 @@ def register(app, deps):
         db().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         return {"ok": True, "id": session_id}
 
-    def _run_activity(run_id: int) -> list[dict[str, Any]]:
-        """Compact tool/subagent activity for a finished run, from its persisted
-        events — so the agent's work (e.g. parallel subagents) stays visible after
-        the run instead of only during it. 'Task' tools are subagent spawns."""
-        rows = db().execute(
-            "SELECT type, payload FROM events WHERE run_id = ? AND type IN ('tool.start','tool.complete') ORDER BY seq",
-            (run_id,),
-        ).fetchall()
-        order: list[str] = []
-        items: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            p = json.loads(r["payload"] or "{}")
-            tid = str(p.get("id") or "")
-            if not tid:
-                continue
-            if r["type"] == "tool.start":
-                if tid not in items:
-                    order.append(tid)
-                title = str(p.get("title") or "tool")
-                items[tid] = {"title": title, "status": "running", "subagent": title.strip().lower() == "task"}
-            elif tid in items:
-                items[tid]["status"] = str(p.get("status") or "completed")
-        return [items[t] for t in order]
-
     @app.get("/api/sessions/{session_id}/messages")
     def list_messages(session_id: int, user: dict[str, Any] = Depends(current_user)):
         session_for_user(session_id, user)
