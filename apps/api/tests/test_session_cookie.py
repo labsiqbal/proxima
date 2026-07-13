@@ -57,6 +57,9 @@ def test_sse_rejects_without_any_token(tmp_path):
     token = c.post("/auth/auto").json()["token"]
     h = {"Authorization": f"Bearer {token}"}
     sid = c.post("/api/sessions", headers=h, json={"title": "x"}).json()["id"]
+    # TestClient persists the proxima_session cookie /auth/auto set — clear it, else the
+    # GET below auths via that cookie, starts the infinite stream, and hangs the client.
+    c.cookies.clear()
     # No cookie, no ?token= → 401 immediately (auth enforced before the generator).
     r = c.get(f"/api/sessions/{sid}/events/stream")
     assert r.status_code == 401
