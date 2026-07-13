@@ -748,11 +748,10 @@ if (window.gsap) {{
 
     _HOP = {"connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "host"}
 
-    @app.api_route("/api/appview/{token}/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def app_view(token: str, slug: str, path: str, request: Request):
-        # Proxy to the project's running app. Token in path so the iframe + its
-        # relative assets authenticate (same pattern as file preview).
-        user = user_from_token_query(token)
+    @app.api_route("/api/appview/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def app_view(slug: str, path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
+        # Proxy to the project's running app. Auth via the proxima_session cookie
+        # (same-origin) so the iframe + its relative assets authenticate — no URL token.
         _project_root(slug, user)  # access check
         port = app.state.app_manager.port(slug)
         if not port:
@@ -855,13 +854,11 @@ if (window.gsap) {{
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(str(target), filename=target.name)
 
-    @app.get("/api/preview/{token}/{slug}/{file_path:path}")
-    def project_preview(token: str, slug: str, file_path: str):
-        # Serve a project file inline for live preview (e.g. rendering a built
-        # site in an <iframe>). The token sits in the path — not a header — so the
-        # iframe AND its relative asset requests (styles.css, script.js) all carry
-        # it (same exposure as the SSE ?token= stream). Path-jailed to the project.
-        user = user_from_token_query(token)
+    @app.get("/api/preview/{slug}/{file_path:path}")
+    def project_preview(slug: str, file_path: str, user: dict[str, Any] = Depends(current_user)):
+        # Serve a project file inline for live preview (rendering a built site in an
+        # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
+        # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
         root = _project_root(slug, user)
         try:
             target = fsapi.resolve_in_project(root, file_path)

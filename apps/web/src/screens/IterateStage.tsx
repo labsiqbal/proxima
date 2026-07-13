@@ -55,7 +55,7 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [deletingArtifact, setDeletingArtifact] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const projFs = React.useMemo(() => projectSlug ? projectFs(token, projectSlug, '') : null, [token, projectSlug])
-  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(token, projectSlug, s) : s), [token, projectSlug])
+  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s) : s), [token, projectSlug])
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -199,7 +199,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
       if (mountedRef.current && seq === docSeq.current) setDoc({ title: a.title, content: f.content })
     } catch { /* ignore */ }
   }
-  const openFile = (a: Artifact) => { if (projectSlug) window.open(fileUrl(token, projectSlug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path), '_blank') }
+  const openFile = (a: Artifact) => { if (projectSlug) window.open(fileUrl(projectSlug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path), '_blank') }
   const openArtifact = (a: Artifact) => {
     if (a.type === 'doc') void openDoc(a)
     else if (a.type === 'design' && a.id && designStudioEnabled) onOpenDesign?.(a.id)

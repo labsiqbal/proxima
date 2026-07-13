@@ -428,7 +428,7 @@ function ResultCards({
 	const projectOf = (link: OutputLink) => link.project_slug || slug;
 	const mediaSrc = (link: OutputLink): string => {
 		const project = projectOf(link);
-		return token && project ? previewUrl(token, project, link.path) : "";
+		return token && project ? previewUrl(project, link.path) : "";
 	};
 	// Bridge a generated image into a fresh Design Studio scene (full-bleed layer).
 	const toDesignStudio = async (link: OutputLink) => {

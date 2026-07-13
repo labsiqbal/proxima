@@ -957,7 +957,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
-  const resolveSrc = (s: string) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(token, project.slug, s) : s))
+  const resolveSrc = (s: string) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(project.slug, s) : s))
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'

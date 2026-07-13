@@ -18,7 +18,7 @@ const RENDERED_MP4 = /\.mp4$/i
 const HTML = /\.html?$/i
 const MD = /\.(md|markdown)$/i
 const resolveArtifactSrc = (token: string, slug: string, src: string) =>
-  /^gen:/i.test(src) ? '' : (/^(https?:|data:|blob:)/.test(src) ? src : previewUrl(token, slug, src))
+  /^gen:/i.test(src) ? '' : (/^(https?:|data:|blob:)/.test(src) ? src : previewUrl(slug, src))
 
 type Filter = 'all' | 'design' | 'video' | 'image' | 'document' | 'app' | 'data' | 'other'
 const FILTERS: { key: Filter; label: string }[] = [
@@ -74,9 +74,9 @@ function ArtifactCard({ artifact, active, slug, token, designThumb, onOpen }: { 
       {cat === 'design' && designThumb?.art
         ? <MiniPreview art={designThumb.art} resolveSrc={s => resolveArtifactSrc(token, slug, s)} />
         : cat === 'image'
-          ? <img src={previewUrl(token, slug, artifact.path)} alt={title} loading="lazy" />
+          ? <img src={previewUrl(slug, artifact.path)} alt={title} loading="lazy" />
           : cat === 'video'
-            ? <span className="art-video-thumb"><video src={`${previewUrl(token, slug, artifact.path)}#t=0.1`} muted playsInline preload="metadata" /><i aria-hidden="true">▶</i></span>
+            ? <span className="art-video-thumb"><video src={`${previewUrl(slug, artifact.path)}#t=0.1`} muted playsInline preload="metadata" /><i aria-hidden="true">▶</i></span>
           : <span className="art-ic">{icon(artifact)}</span>}
     </span> : <span className="art-ic">{icon(artifact)}</span>}
     <span className="art-meta"><strong>{title}</strong><small>{artifact.path}{artifact.command ? ` · ${artifact.command}` : ''}</small></span>
@@ -151,7 +151,7 @@ function FileView({ token, slug, path, fs, onClose }: { token: string; slug: str
       <button className="ghost-button" onClick={onClose}>Close</button>
     </div>
     {HTML.test(path)
-      ? <iframe className="file-preview-frame" title={name} src={previewUrl(token, slug, path)} sandbox="allow-scripts allow-same-origin" />
+      ? <iframe className="file-preview-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts allow-same-origin" />
       : <div className="file-preview md-doc"><div className="md">{md != null ? <MessageContent content={md} /> : <p className="muted">Loading…</p>}</div></div>}
   </div>
 }

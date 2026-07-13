@@ -52,13 +52,13 @@ function MessageContentInner({ content, token, slug }: { content: string; token?
     // Inline images stored in the project (e.g. an attachment or generated chart).
     img: ({ src, alt }) => {
       const s = typeof src === 'string' ? src : ''
-      if (canResolve && isRel(s)) return <img className="md-img" src={fileUrl(token!, slug!, s)} alt={alt || ''} />
+      if (canResolve && isRel(s)) return <img className="md-img" src={fileUrl(slug!, s)} alt={alt || ''} />
       return <img className="md-img" src={s} alt={alt || ''} />
     },
     // Links to project files become download chips; external links stay normal.
     a: ({ href, children }) => {
       const h = typeof href === 'string' ? href : ''
-      if (canResolve && isRel(h)) return <a className="file-chip" href={fileUrl(token!, slug!, h)} download={fileName(h)} target="_blank" rel="noreferrer"><IconFile size={15} /><span>{fileName(h)}</span></a>
+      if (canResolve && isRel(h)) return <a className="file-chip" href={fileUrl(slug!, h)} download={fileName(h)} target="_blank" rel="noreferrer"><IconFile size={15} /><span>{fileName(h)}</span></a>
       return <a href={h} target="_blank" rel="noreferrer">{children}</a>
     }
   }

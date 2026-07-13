@@ -70,7 +70,7 @@ function VideoThumbnail({ token, slug, video }: { token: string; slug: string; v
   return <div className="video-thumb" ref={boxRef} style={{ width: `min(100%, ${Math.round(width / height * 178)}px)`, aspectRatio: `${width} / ${height}` }}>
     <iframe
       title={`${video.title} thumbnail`}
-      src={fileUrl(token, slug, `${video.path}/index.html`)}
+      src={fileUrl(slug, `${video.path}/index.html`)}
       sandbox="allow-scripts allow-same-origin"
       scrolling="no"
       style={{ width, height, transform: `scale(${scale})` }}
@@ -79,7 +79,7 @@ function VideoThumbnail({ token, slug, video }: { token: string; slug: string; v
 }
 
 function MobileVideoNotice({ token, slug, video, latestRender, onOpenArtifact }: { token: string; slug: string; video: VideoProject; latestRender: Artifact | null; onOpenArtifact?: (path: string) => void }) {
-  const src = latestRender ? fileUrl(token, slug, latestRender.path) : ''
+  const src = latestRender ? fileUrl(slug, latestRender.path) : ''
   return <div className="video-desktop-notice">
     <div>
       <strong>Video Studio is available on desktop.</strong>
