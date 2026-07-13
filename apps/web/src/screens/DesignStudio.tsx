@@ -678,9 +678,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const p = cfg.providers.find(x => x.id === cfg.provider)
       const kind = p?.kind || 'codex'
       setImageProviderKind(kind)
-      // Edits also work on a text-to-image provider when the backend can fall back
-      // to a connected xAI OAuth (see design_image fallback).
-      setImageEditReady(kind === 'http' || kind === 'oauth' || kind === 'higgsfield' || !!cfg.xaiOauthReady?.ready)
+      // The provider advertises whether it can edit/use reference images (codex now
+      // can, via the Codex OAuth Responses surface). A text-to-image-only provider
+      // still edits when the backend can fall back to a connected xAI OAuth.
+      setImageEditReady(!!p?.capabilities?.imageEdit || !!cfg.xaiOauthReady?.ready)
     }).catch(() => {
       if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false) }
     })
