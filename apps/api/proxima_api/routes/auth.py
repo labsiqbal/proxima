@@ -115,6 +115,17 @@ def register(app, deps):
     def me(user: dict[str, Any] = Depends(current_user_strict_token)):
         return public_user(user)
 
+    @app.post("/auth/resume")
+    def resume(request: Request, user: dict[str, Any] = Depends(current_user_strict_token)):
+        """Boot resume: authenticated by the HttpOnly cookie, echo the session token
+        back so the SPA has it in memory for its bearer header + WS/SSE guards
+        (JS can't read the HttpOnly cookie itself). No new session, nothing stored."""
+        token = request.cookies.get("proxima_session", "")
+        auth = request.headers.get("authorization")
+        if auth:
+            token = auth.removeprefix("Bearer ").strip() or token
+        return {"token": token, "user": public_user(user)}
+
     # NOTE: the advisory command-policy classifier + POST /api/policy/command/check
     # endpoint were removed. They never gated real agent/tool execution (the agent
     # runs its own shell inside the runner CLI, not through this API), so they gave a

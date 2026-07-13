@@ -1,5 +1,5 @@
 import React from 'react'
-import { me, setupStatus, logout } from './api/auth'
+import { resume, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
 import { listProjects } from './api/projects'
 import { listSessions, renameSession, deleteSession } from './api/sessions'
@@ -209,13 +209,14 @@ export function App() {
         if (!status.password_set) {
           setAuthGate('setup')
         } else {
-          // Auth persists in the HttpOnly cookie, not JS storage. Ask /api/me, which
-          // the cookie authenticates (no token needed); 401 → show the login screen.
+          // Auth persists in the HttpOnly cookie, not JS storage. resume() is
+          // authenticated by that cookie and echoes back the session token for the
+          // in-memory bearer header; 401 → show the login screen.
           try {
-            const current = await me('')
+            const s = await resume()
             if (!mountedRef.current) return
-            setUser(current)
-            await refreshAll('')
+            setToken(s.token); setUser(s.user)
+            await refreshAll(s.token)
           } catch {
             if (mountedRef.current) setAuthGate('login')
           }
