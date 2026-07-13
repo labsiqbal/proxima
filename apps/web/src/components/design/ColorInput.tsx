@@ -144,7 +144,6 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (hex:
             <button type="button" className="ds-color-eyedrop" title="Eyedropper — pick a colour from the screen / canvas" onClick={() => void pickScreen()}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 22 1-1h3l9-9" /><path d="M3 21v-3l9-9" /><path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z" /></svg>
             </button>
-            <span className="ds-color-preview" style={{ background: hex }} />
           </div>
           <div className="ds-color-presets">
             {PRESETS.map(p => <button key={p} type="button" style={{ background: p }} title={p} onClick={() => { setHsv(rgbToHsv(...hexToRgb(p))); setHex(p); onChange(p) }} />)}

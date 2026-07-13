@@ -7590,7 +7590,6 @@ div.result-media {
 	color: var(--ui-text);
 	font-size: var(--text-sm);
 }
-.ds-color-preview { width: 26px; height: 26px; border-radius: var(--radius-sm); border: 1px solid var(--ui-stroke-secondary); }
 .ds-color-eyedrop {
 	display: inline-flex;
 	align-items: center;
