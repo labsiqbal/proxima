@@ -11618,8 +11618,8 @@ div.result-media {
 .av-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .av-count { color: rgba(255, 255, 255, 0.6); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .av-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
-.av-actions .ghost-button { color: #fff; border-color: rgba(255, 255, 255, 0.25); text-decoration: none; }
-.av-actions .ghost-button:hover { background: rgba(255, 255, 255, 0.12); }
+.av-actions .ghost-button { color: #fff; background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.28); text-decoration: none; }
+.av-actions .ghost-button:hover { color: #fff; background: rgba(255, 255, 255, 0.24); }
 .av-stage {
 	min-height: 0;
 	display: grid;
