@@ -99,10 +99,17 @@ def register(app, deps):
         return _session_response(request, user, token)
 
     @app.post("/auth/logout")
-    def logout(user: dict[str, Any] = Depends(current_user), authorization: str | None = Header(default=None)):
-        if authorization:
-            db().execute("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?", (hash_token(authorization.removeprefix("Bearer ").strip()),))
-        return {"ok": True}
+    def logout(request: Request, user: dict[str, Any] = Depends(current_user), authorization: str | None = Header(default=None)):
+        # Revoke the current session by whichever it was presented as — bearer token
+        # OR the proxima_session cookie (the cookie is the persistent auth now) — and
+        # clear the cookie so a reload lands on the login screen.
+        token = authorization.removeprefix("Bearer ").strip() if authorization else ""
+        token = token or request.cookies.get("proxima_session", "")
+        if token:
+            db().execute("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?", (hash_token(token),))
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie("proxima_session", path="/")
+        return resp
 
     @app.get("/api/me")
     def me(user: dict[str, Any] = Depends(current_user_strict_token)):

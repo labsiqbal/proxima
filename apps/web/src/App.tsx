@@ -36,7 +36,9 @@ function ViewFallback({ label = 'Loading...' }: { label?: string }) {
 
 export function App() {
   const [booting, setBooting] = React.useState(true)
-  const [token, setToken] = React.useState(localStorage.getItem('proxima-token') || '')
+  // In-memory only. Persistent auth lives in the HttpOnly proxima_session cookie
+  // (which XSS can't read); nothing sensitive is kept in localStorage.
+  const [token, setToken] = React.useState('')
   const updates = useUpdateStatus(token)
   const [user, setUser] = React.useState<User | null>(null)
   const [authGate, setAuthGate] = React.useState<'setup' | 'login' | null>(null)
@@ -207,18 +209,16 @@ export function App() {
         if (!status.password_set) {
           setAuthGate('setup')
         } else {
-          const stored = localStorage.getItem('proxima-token') || ''
-          let ok = false
-          if (stored) {
-            try {
-              const current = await me(stored)
-              if (!mountedRef.current) return
-              setToken(stored); setUser(current)
-              await refreshAll(stored)
-              ok = true
-            } catch { /* stale/revoked session */ }
+          // Auth persists in the HttpOnly cookie, not JS storage. Ask /api/me, which
+          // the cookie authenticates (no token needed); 401 → show the login screen.
+          try {
+            const current = await me('')
+            if (!mountedRef.current) return
+            setUser(current)
+            await refreshAll('')
+          } catch {
+            if (mountedRef.current) setAuthGate('login')
           }
-          if (!ok && mountedRef.current) setAuthGate('login')
         }
       } catch (err) {
         if (mountedRef.current) setError(String(err))
@@ -322,14 +322,13 @@ export function App() {
   }
 
   const handleAuthed = (s: { token: string; user: User }) => {
-    localStorage.setItem('proxima-token', s.token)
+    // Keep the token in memory for this session's bearer header; the cookie carries
+    // it across reloads. Nothing goes to localStorage.
     setToken(s.token); setUser(s.user); setAuthGate(null)
     void refreshAll(s.token)
   }
   const handleLogout = async () => {
-    const t = localStorage.getItem('proxima-token') || token
-    try { if (t) await logout(t) } catch { /* best-effort revoke */ }
-    localStorage.removeItem('proxima-token')
+    try { await logout(token) } catch { /* best-effort; cookie is cleared server-side */ }
     setToken(''); setUser(null); setAuthGate('login')
   }
 
