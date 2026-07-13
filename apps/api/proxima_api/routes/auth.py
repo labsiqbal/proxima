@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..auth import hash_password, hash_token, iso_now, verify_password
@@ -48,14 +48,18 @@ def register(app, deps):
             "runners": [{"id": r["id"], "displayName": r["displayName"], "installed": r["installed"]} for r in readiness.values()],
         }
 
-    def _session_response(user: dict[str, Any], token: str) -> JSONResponse:
+    def _session_response(request: Request, user: dict[str, Any], token: str) -> JSONResponse:
+        # Secure only over https (incl. behind a tunnel via X-Forwarded-Proto) so the
+        # cookie is actually sent on plain-http localhost dev — otherwise SSE/WS,
+        # which rely on this cookie instead of a ?token= URL, wouldn't authenticate.
+        secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
         resp = JSONResponse({"token": token, "user": public_user(user)})
         resp.set_cookie("proxima_session", token, path="/", httponly=True,
-                        samesite="lax", secure=True, max_age=_SESSION_MAX_AGE)
+                        samesite="lax", secure=secure, max_age=_SESSION_MAX_AGE)
         return resp
 
     @app.post("/auth/set-password")
-    def set_password(payload: PasswordRequest):
+    def set_password(request: Request, payload: PasswordRequest):
         """First-run: set the owner's password. Only allowed while none is set (later
         changes go through Settings with the current password). Logs you in on success."""
         user = ensure_single_user_owner()
@@ -68,10 +72,10 @@ def register(app, deps):
         with app.state.db_lock:
             db().execute("UPDATE users SET password_hash = ?, password_set_at = ? WHERE id = ?", (digest, iso_now(), user["id"]))
             token = create_token(user["id"])
-        return _session_response(user, token)
+        return _session_response(request, user, token)
 
     @app.post("/auth/login")
-    def login_with_password(payload: PasswordRequest):
+    def login_with_password(request: Request, payload: PasswordRequest):
         """Verify the owner's password and start a session (no expiry until logout)."""
         user = ensure_single_user_owner()
         if not user.get("password_hash"):
@@ -80,10 +84,10 @@ def register(app, deps):
             raise HTTPException(status_code=401, detail="incorrect password")
         with app.state.db_lock:
             token = create_token(user["id"])
-        return _session_response(user, token)
+        return _session_response(request, user, token)
 
     @app.post("/auth/auto")
-    def auth_auto():
+    def auth_auto(request: Request):
         """Passwordless auto-login (network-only mode). Disabled once a password is
         set — clients must then use /auth/login. Mints an HttpOnly session cookie so
         SSE/WS don't need the token in the URL."""
@@ -92,7 +96,7 @@ def register(app, deps):
             raise HTTPException(status_code=401, detail="login required")
         with app.state.db_lock:
             token = create_token(user["id"])
-        return _session_response(user, token)
+        return _session_response(request, user, token)
 
     @app.post("/auth/logout")
     def logout(user: dict[str, Any] = Depends(current_user), authorization: str | None = Header(default=None)):

@@ -24,7 +24,9 @@ export function useEventStream(token: string, sessionId: number | null, onEvent:
       lastId.current = Math.max(lastId.current, parsed.id)
       handlerRef.current(parsed)
     }
-    const source = new EventSource(`/api/sessions/${sessionId}/events/stream?after_id=${lastId.current}&token=${encodeURIComponent(token)}`)
+    // Auth via the HttpOnly proxima_session cookie (same-origin), not a ?token= in
+    // the URL — so the token no longer leaks via history/referrer/proxy logs.
+    const source = new EventSource(`/api/sessions/${sessionId}/events/stream?after_id=${lastId.current}`, { withCredentials: true })
     source.onopen = () => { if (!closed) setConnected(true) }
     source.onerror = () => { if (!closed) setConnected(false) }
     source.onmessage = event => emit(event.data)
