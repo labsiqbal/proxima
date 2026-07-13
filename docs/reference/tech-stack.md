@@ -52,16 +52,16 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Build tool | **Vite** | dev on `127.0.0.1:5177`, `npm run build` → `dist/` |
 | State | **Zustand** | lightweight store |
 | Code editor | **CodeMirror 6** (`@uiw/react-codemirror` + language packs) | files, artifacts, wiki edit |
-| Design canvas | **Konva** / **react-konva** | dependency retained; Design Studio disabled by default |
+| Design canvas | **Konva** / **react-konva** | Design Studio (enabled; on by default in dev, off in the packaged install) |
 | Terminal UI | **xterm.js** (`@xterm/xterm` + fit addon) | in-browser terminal |
 | Wiki graph | **react-force-graph-2d** | linked-note graph |
 | Search | **minisearch** | client-side global search |
 | Markdown | **react-markdown** + **remark-gfm** | chat + wiki rendering |
-| Export | **jspdf**, **jszip** | retained Studio PNG/PDF/zip implementation |
+| Export | **jspdf**, **jszip** | Design Studio PNG/PDF/zip export |
 | Video studio | **@hyperframes/studio** | dependency retained; Video disabled by default |
 
 Frontend source layout: `src/screens` (top-level views), `src/components`
-(chat / design / files / shell / tasks / terminal / wiki / ui), `src/api` (typed
+(artifacts / brand / chat / design / files / projects / shell / terminal / wiki / ui), `src/api` (typed
 fetch wrappers to the backend), `src/hooks`, `src/lib`, `src/theme.ts` (6 themes).
 
 ## Runtime & operations

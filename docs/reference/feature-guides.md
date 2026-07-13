@@ -4,9 +4,11 @@
 > quality bar** baked into the runner preamble, so *any* runner (Claude / Codex / Hermes)
 > produces good output on the first try — even when the user gives minimal direction.
 
-> **Current release:** image generation remains active. Video and Design Studio are
-> disabled by default, so their guides are retained on disk but excluded from prompt
-> composition while their server-owned feature flags are false.
+> **Current release:** image generation is always active. **Design Studio is enabled**
+> (on by default in dev; off in the packaged install), so its guide is injected when the
+> flag is on. **Video** stays disabled by default, so the Video guide is retained on disk
+> but excluded from prompt composition while its flag is false. A guide is injected only
+> while its server-owned feature flag is true.
 
 This doc defines **how those guides are written** (the authoring standard) and **how they
 are wired** (the registry). It is the source of truth for adding or upgrading a guide.
@@ -170,7 +172,7 @@ Notice all five parts are present, it cites its reference, and the **default rec
 |----|---------|-------|-------|
 | `general` | How to operate (all sessions) | `GENERAL_GUIDE` | ✅ **wired 2026-07-05** — project awareness, toolkit/skills, output routing, evidence-first, ask-vs-act, reporting; profile instructions override. [feature-guides/general.md](feature-guides/general.md) |
 | `qform`  | Ask user questions      | `QFORM_GUIDE`  | ✅ solid (mechanical) |
-| `design` | Design Studio           | `DESIGN_GUIDE` | retained; disabled by default and not injected |
+| `design` | Design Studio           | `DESIGN_GUIDE` | injected when Design Studio is enabled (on by default in dev) |
 | `video`  | Video Studio            | `VIDEO_GUIDE`  | retained; disabled by default and not injected |
 | `app-ui` | Build & Preview app     | —              | ❌ missing — biggest gap (example above) |
 | `wiki`   | Wiki / memory           | inline         | ✅ ok |

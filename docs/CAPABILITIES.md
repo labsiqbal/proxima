@@ -8,10 +8,13 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 > code locations (backend + frontend), tables/events touched, relations, and
 > status/flag. This doc explains *what & why*; that one maps *where*.
 
-> **Model:** single-user cockpit. One owner, no in-app accounts. The access gate is
-> the network (loopback / Cloudflare Access). The owner is auto-created on first
-> request; the frontend auto-logs-in via `POST /auth/auto` (no password). Per-user
-> data lives outside the repo (`~/.local/share/proxima/`).
+> **Model:** single-user cockpit. One owner, no in-app accounts. The primary access
+> gate is the network (loopback / Tailscale / Cloudflare Access); on top of that the
+> owner sets a **password** on first run and every request then needs a valid session
+> (bearer token or the HttpOnly `proxima_session` cookie) — defense-in-depth, not
+> multi-tenancy (see §21). Until a password is set, `POST /auth/auto` grants a
+> passwordless session (network-only mode); once set, clients use `POST /auth/login`.
+> Per-user data lives outside the repo (`~/.local/share/proxima/`).
 
 ---
 
@@ -53,9 +56,8 @@ never blocks other chats. Streaming via SSE (`/events/stream`) + WebSocket.
 
 ### Per-prompt Brainstorm / Debate modes
 
-> **Status:** the `Brainstorm`/`Debate` chips are shown in the **main chat and task
-> chat**. The retained Studio composer also disables them, but Design Studio itself
-> is unavailable while `PROXIMA_FEATURE_DESIGN_STUDIO=0`.
+> **Status:** the `Brainstorm`/`Debate` chips are shown in the **main chat** only.
+> The Design/Video Studio composers disable them (studio chats are single-agent).
 
 **Why:** Run a prompt through multiple agents before the answer lands in the
 main chat, instead of validating a completed answer afterward.
@@ -145,14 +147,7 @@ auto-archive after 30 days. Old kanban tasks were migrated to 1-step jobs.
 (own 5-field cron matcher; overlap policy skip/allow). Failed step fails the job.
 **Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`.
 
-## 10. Tasks (kanban)
-
-**Why:** Steerable per-task agent threads on a board (todo/doing/review/done).
-**How:** `tasks` table; auto status doing→review, human marks Done. Each task has a
-backing session/thread. (Unified under the jobs model.)
-**Endpoints:** `GET/POST /api/projects/{slug}/tasks`, `PATCH/DELETE /api/tasks/{id}`.
-
-## 11. Projects (workspaces)
+## 10. Projects (workspaces)
 
 **Why:** Scope agents to a folder — your real code, not a sandbox.
 **How:** `projects` table. Create a scaffolded project OR **link an existing folder**
@@ -164,7 +159,7 @@ uses the starter project auto-provisioned under the data dir.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
-## 12. Files workspace
+## 11. Files workspace
 
 **Why:** Browse/edit the whole project tree with live preview.
 **How:** Tree + file read/write (CodeMirror), HTML/MD live preview, mkdir/rename/delete,
@@ -172,47 +167,73 @@ file upload, raw + token-scoped preview route (for images/SSE-safe URLs).
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/api/preview/{token}/{slug}/{path}`.
 
-## 13. Run & Preview app
+## 12. Run & Preview app
 
 **Why:** Launch a project's dev server and preview it in-app.
 **How:** `AppManager` runs one dev process per project; an authed reverse proxy serves
 it. Folder field picks what to run.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
-## 14. Image generation and retained media studios
+## 13. Design Studio & image generation
 
-**Active:** image generation remains available through `/image` (alias `/gambar`).
-It uses the image provider selected in Settings, saves output under
-`artifacts/media/images/`, and returns the artifact in the originating chat. Existing
-image and media files remain readable through the normal artifact/file surfaces.
+**Why:** AI drafts **editable, layered** designs (text stays real text; images/shapes
+are separate layers) that a human refines on a Konva canvas and exports — not flat,
+baked-in-pixel images. Full blueprint: [DESIGN-STUDIO.md](DESIGN-STUDIO.md).
 
-**Temporarily disabled by default:** Video and Design Studio remain in source but are
-server-gated with `PROXIMA_FEATURE_VIDEO=0` and
-`PROXIMA_FEATURE_DESIGN_STUDIO=0`. `GET /api/config` publishes the effective flags.
-When disabled, the frontend omits their navigation, deep links, commands, settings,
-provider health checks, artifact bridge actions, and agent guidance. Backend guards
-return HTTP 503 with the `feature_disabled` payload before message creation, database
-writes, provider calls, file writes, subprocesses, or collaboration dispatch.
+**Status:** Design Studio is a **first-class, enabled feature** — on by default in dev
+(`scripts/dev` sets `PROXIMA_FEATURE_DESIGN_STUDIO=1`) and off by default in the
+packaged install (set the flag to enable). **Video** is retained-but-off everywhere
+(`PROXIMA_FEATURE_VIDEO=0`). `GET /api/config` publishes the effective flags; a disabled
+feature is omitted from nav/deep-links/commands/settings/health-checks/agent-guidance,
+and its backend guards return HTTP 503 `feature_disabled` before any side effect
+(message creation, DB/file writes, provider calls, subprocesses, collaboration).
 
-The retained Studio implementation includes layered Konva scenes and exports; the
-retained Video implementation includes generation providers and project artifacts.
-Neither is an advertised or reachable capability in the default Proxima release.
-Image generation does not expose *Edit in Design Studio* or *Add to Video Studio*
-bridge actions while those features are disabled.
+**How:**
+- **Seed from chat:** `/design <brief>` (back-compat aliases `/image-studio`,
+  `/design-studio`) or the composer's ✨ Generate → **Design draft** opens a linked
+  design session that arrives already designed, not blank. (`routes/chat.py`
+  `_chat_media_kind`, `commands.py`, `features.py`, `Composer.tsx`.)
+- **Asset- & feature-aware agent, with vision:** `buildDesignPrompt`
+  (`components/design/scene.ts`) injects the project's asset library (agent can place
+  existing assets by exact path) and the full feature set, and attaches relevant images
+  so a vision-capable model can **see** them. Vision rides ACP image content blocks,
+  capability-gated: `acp.py` captures `promptCapabilities.image`; the run appends a
+  `⟦VISION:…⟧` marker that `run_prompting.extract_vision_images` reads; `worker.py`
+  passes the bytes to `proc.prompt(images=…)` only when the runner advertises image
+  support (else text-only). The agent replies with `<design-scene>` blocks the canvas
+  applies live.
+- **Multi-image edit / compose (Assets tab):** an input tray attaches several images
+  (`@image1`, `@image2`, … addressable by name in the prompt) to edit or compose into
+  one, gated on the image provider's `referenceImages` capability. AI image edit now
+  lives in the Assets tab (moved out of the right inspector). (`ImageGenRequest.images`,
+  `image_providers.generate` `extra_images`, `routes/design.py`.)
+- **Editing UX:** custom color picker (`ColorInput`) everywhere with an **eyedropper**
+  (native `EyeDropper` API + a canvas-sampling fallback for non-secure hosts), an
+  **on-canvas gradient direction guide** (draggable line), collapsible left/right
+  panels, restore-last-design on return, and crop preview.
 
-## 15. Wiki + memory (knowledge)
+**Image generation** (available independent of the flag): `/image` (alias `/gambar`)
+uses the Settings image provider, saves under `artifacts/media/images/`, and returns the
+artifact in the originating chat. The `codex` provider now supports image **edit +
+reference images** (was text-to-image only). Existing media stays readable as ordinary
+artifacts.
+**Endpoints:** `POST /api/projects/{slug}/design/image`,
+`POST /api/projects/{slug}/designs/from-image`,
+`GET /api/projects/{slug}/design/image-models`.
+
+## 14. Wiki + memory (knowledge)
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
 aggregation. Fed by Chat→Wiki (§5).
 **Endpoints:** `/api/projects/{slug}/wiki/all`, `/api/wiki/all`, `/tree`, `/file`, `/fs/*`.
 
-## 16. Terminal
+## 15. Terminal
 
 **Why:** A real shell in the cockpit, scoped to the project.
 **How:** `terminal.py` over `WS /api/ws/terminal`.
 
-## 17. Command palette (quick commands)
+## 16. Command palette (quick commands)
 
 **Why:** A catalog of quick slash-style commands runnable from chat.
 **How:** `commands.py` — `command_catalog()` lists them; `execute_command()` runs one.
@@ -224,9 +245,13 @@ aggregation. Fed by Chat→Wiki (§5).
 > guard. The real access boundary is network reachability (single-user). See
 > [security-boundaries.md](security-boundaries.md).
 
-## 18. Home dashboard + search
+## 17. Home dashboard + search
 
-**Why:** The cockpit's cockpit — pulse of runs/tasks/projects; jump anywhere.
+**Why:** The cockpit's cockpit — pulse of runs/jobs/projects; jump anywhere.
+**How:** `/api/dashboard` returns counts plus a `jobsByStatus` breakdown
+(queued/running/review/done) that Home renders as a jobs-by-status bar (the old
+per-task board is gone — Jobs/Activity replaced it), recent artifacts, pending
+approvals, and system/auth health.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
 **Connections card (auth health):** `/api/dashboard` includes `authHealth` — cached
 background checks (`auth_health.py`, 60s TTL, never on the request path) of the
@@ -236,19 +261,19 @@ for hermes/codex). Disabled Video/Studio providers are omitted. Home shows a com
 actionable fix detail on failures and a jump to Settings. Saving active provider
 settings calls `auth_health.invalidate()` so the card re-checks on the next 5s poll.
 
-## 19. Audit log
+## 18. Audit log
 
 **Why:** An activity trail of meaningful actions.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
 
-## 20. Reliability (cross-cutting)
+## 19. Reliability (cross-cutting)
 
 Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
 salvage, orphaned-run cleanup, run timeout (configurable `run_timeout_seconds`, default
 600s) + cancel-on-timeout, daily DB backup
 (`proxima-backup` timer with `VACUUM INTO`).
 
-## 21. Updates (version check + self-update)
+## 20. Updates (version check + self-update)
 
 **Why:** Every install should be one click away from the latest release without
 the owner babysitting `git pull`.
@@ -266,12 +291,29 @@ command instead.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply`.
 
+## 21. Access & auth (single-user password gate)
+
+**Why:** Defense-in-depth on top of the network boundary — a reachable API should still
+ask for a password. Not multi-tenancy; there is still exactly one owner.
+**How:** On first run the owner sets a password (`/auth/set-password`); after that every
+request needs a valid session, carried as a bearer token or the **HttpOnly
+`proxima_session` cookie** (`routes/auth.py`). The cookie is the persistent auth for the
+SPA, SSE stream, terminal/preview/appview WebSockets — a terminal WS now requires a
+valid session — so auth no longer rides `?token=`/`localStorage`. `/auth/auto` grants a
+passwordless session only until a password exists (network-only mode); once set, clients
+use `/auth/login`. `/auth/logout` clears the cookie; `/auth/change-password` rotates it.
+Local recovery is `scripts/reset-password`.
+**Endpoints:** `POST /auth/set-password`, `/auth/login`, `/auth/logout`,
+`/auth/change-password`, `/auth/auto`, `/auth/resume`.
+
 ---
 
 ## Removed (was multi-user, now single-user)
 
-In-app user accounts, roles (`environment_admin`/`member`), login/password wall,
+In-app user accounts, roles (`environment_admin`/`member`), the multi-user login wall,
 first-run team bootstrap, invite links, project membership/sharing, project
-visibility (private/shared), team name. Collaboration model is instead: **everyone
+visibility (private/shared), team name. (A single-user password gate remains as
+defense-in-depth — see §21 — but there are no accounts or roles behind it.)
+Collaboration model is instead: **everyone
 self-hosts their own instance + shares folders/repos.** The runtime model is one
 owner; legacy invite/member tables have been dropped.

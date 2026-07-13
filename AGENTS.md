@@ -16,6 +16,11 @@ This project keeps its truth in `docs/`. **Every agent follows this loop — doc
 - Changed a **dependency**? → update [`docs/reference/tech-stack.md`](docs/reference/tech-stack.md).
 - **Always (maintainer machines — these living logs are untracked, never commit them):** refresh `docs/STATUS.md` (feature status / current focus / next) and append a dated entry to `docs/wiki/log.md`. Record any bug + fix in `docs/bugfix-log.md`.
 
+**③ Before calling the work done / opening a PR — VERIFY, don't assume (this step is mandatory):**
+1. Run `apps/api/.venv/bin/python scripts/gen_docs.py`, then `git status docs/`. Any change means the generated docs drifted — they weren't committed with the code. Commit them.
+2. Re-read the doc(s) for every feature/flow you touched and confirm they still describe reality — a **removed** feature still listed, or a **disabled** feature marked live, is a shipped bug (both have happened; do not repeat).
+3. Never let docs lag across a long, multi-commit session and "catch up at the end" — each commit carries its own doc update. The end-of-work check is a safety net, not the plan.
+
 If a change makes a doc wrong and you leave it, you've shipped a bug.
 
 ## Source of truth

@@ -107,8 +107,10 @@ Notes:
 - `PROXIMA_CLAUDE_LIVE_HOME=1` makes the Claude Code runner use the live
   `~/.claude` home. This is powerful and broad; the current handoff says whether
   it is enabled.
-- Video and Design Studio are temporarily disabled by default. Image generation
-  remains available without Studio bridge actions.
+- The packaged install ships with both media Studios off (`=0`). **Design Studio is a
+  supported feature** — set `PROXIMA_FEATURE_DESIGN_STUDIO=1` to enable it (it is on by
+  default in the dev harness). **Video** is still deferred (leave
+  `PROXIMA_FEATURE_VIDEO=0`). Image generation is always available.
 
 Restart after backend/config changes:
 

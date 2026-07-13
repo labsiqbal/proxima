@@ -26,8 +26,11 @@ Client Protocol (ACP)**.
 Owner ── Profile ── Runner ── Project / Workspace
 ```
 
-+ **Owner** — the sole user. Auto-created on first request; the SPA signs in via
-  `POST /auth/auto` (no password). The access gate is the _network_, not a login.
++ **Owner** — the sole user. Auto-created on first request. The primary access gate is
+  the _network_; on top of it the owner sets a **password** on first run and every
+  request then carries a valid session (bearer token or the HttpOnly `proxima_session`
+  cookie). `POST /auth/auto` grants a passwordless session only until a password is set;
+  after that clients use `POST /auth/login`. Defense-in-depth, not multi-tenancy.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
   model, and system instructions ("soul").
 + **Runner** — the agent CLI a profile drives (Claude Code / Codex / Gemini / Hermes),
@@ -62,9 +65,12 @@ Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` / `video_providers.py`
-(media backend registries), `auth_health.py` (cached background auth/readiness
-checks for the Home banner), `logging_config.py` (query-token redaction across
-Uvicorn HTTP and WebSocket handlers), and `routes/` (the HTTP surface).
+(media backend registries), `state.py` (central guarded status state machines),
+`kinds.py` (session-kind registry driving the feature-blind chat gate),
+`auth_health.py` (cached background auth/readiness checks for the Home banner),
+`logging_config.py` (query-token redaction across Uvicorn HTTP and WebSocket handlers),
+and `routes/` (the HTTP surface, including the extracted `routes/design.py`,
+`routes/reviews.py`, and `chat_collaboration.py`).
 
 ## Runtime / repo split
 
@@ -82,18 +88,26 @@ code never mixes with per-install state:
 ## Server-owned feature gates
 
 ```text
-PROXIMA_FEATURE_VIDEO=0 ───────────────┐
-PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┼─> GET /api/config ─> frontend capability map
-                                       └─> route/run guards before side effects
+PROXIMA_FEATURE_VIDEO=0            (off everywhere) ─┐
+PROXIMA_FEATURE_DESIGN_STUDIO=1   (on by default in dev) ─┼─> GET /api/config ─> frontend capability map
+                                                    └─> route/run guards before side effects
 ```
 
-Video and Design Studio are retained in source but disabled by default. The backend
-is authoritative: disabled requests return HTTP 503 with the consistent
-`feature_disabled` payload before creating messages, writing the database or files,
-calling providers, spawning processes, or dispatching collaboration. The frontend
-uses the published flags to omit navigation, deep links, commands, settings,
-provider health checks, bridge actions, and agent guidance. Image generation remains
-enabled, and existing media files remain readable as ordinary artifacts.
+**Design Studio is an enabled feature** — on by default in dev (`scripts/dev` sets
+`PROXIMA_FEATURE_DESIGN_STUDIO=1`) and off by default in the packaged install. **Video**
+stays retained-but-off (`PROXIMA_FEATURE_VIDEO=0`). The backend is authoritative: a
+disabled request returns HTTP 503 with the consistent `feature_disabled` payload before
+creating messages, writing the database or files, calling providers, spawning processes,
+or dispatching collaboration. The frontend uses the published flags to omit navigation,
+deep links, commands, settings, provider health checks, bridge actions, and agent
+guidance. Image generation remains enabled, and existing media files remain readable as
+ordinary artifacts.
+
+The mode→flag mapping is not hardcoded in the gate: a **session-kind registry**
+(`kinds.py`) declares each `sessions.mode` (e.g. `design`) with whether it shows in the
+main chat list and which feature flag it needs, so the chat gate is **feature-blind** —
+it asks the registry rather than naming a feature. Adding a gated surface is a one-line
+registration.
 
 ## Media provider setup
 
@@ -119,8 +133,9 @@ source recovery.
 in a `session` (a chat thread) which accumulates `messages` and spawns `runs` (one
 agent turn each); a run emits ordered `events` that stream to the UI. Repeatable work
 is a `workflow` (recipe, steps as JSON); one execution is a `job` (frozen step
-snapshot + state); a `schedule` fires jobs on cron. `tasks` are a kanban surface
-unified onto the jobs model. `agent_sessions` maps a chat to its per-home ACP session.
+snapshot + state); a `schedule` fires jobs on cron. (The old kanban `tasks` table and
+`sessions.task_id` were removed — ad-hoc work is now just a 1-step job.) `agent_sessions`
+maps a chat to its per-home ACP session.
 Full column-level detail: [database.md](database.md).
 
 ## Key flows
@@ -149,6 +164,14 @@ run.completed → assistant message saved (linked via messages.run_id)
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a run timeout (configurable `run_timeout_seconds`, default
 600s) cancels stragglers.
+
+**Vision (capability-gated).** A run's prompt can now carry optional **image content
+blocks** to the model, not just text. A design run appends a `⟦VISION:relpath|…⟧` marker
+to its prompt; `run_prompting.extract_vision_images` strips the marker and loads those
+project files, and `worker.py` forwards the bytes to `proc.prompt(images=…)`.
+`AcpManager` captures each agent's `promptCapabilities.image` at initialize and sends the
+blocks as ACP image content **only when the runner advertises support** — otherwise the
+run falls back to text-only. (`acp.py`, `run_prompting.py`, `worker.py`.)
 
 ### 2. Per-prompt Brainstorm / Debate
 
@@ -305,6 +328,10 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
   threadpool, so each thread gets its own connection; writes serialize on SQLite's
   lock + `busy_timeout`.
 + **Bounded run worker** — `max_concurrent_runs` caps parallel agent runs.
++ **Guarded status transitions** — every run / job / collaboration / review status change
+  goes through a central state machine (`state.py`) that declares the legal moves and
+  issues a *guarded* conditional UPDATE, so a writer that lost a race (e.g. a concurrent
+  cancel) detects it instead of silently overwriting the row.
 + **Crash recovery** — on startup, runs left `running` by a previous shutdown are
   failed (their in-memory ACP state is gone); orphaned jobs are reaped.
 + **Backups** — versioned migrations `VACUUM INTO` a snapshot before applying; a
@@ -312,8 +339,10 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 
 ## Security boundary
 
-Proxima assumes **external** network access control. Anyone who reaches the API
-is treated as the owner; agents run with the OS privileges of the service user. There
-is no in-app authz beyond `/auth/auto`. Detail + threat model:
+Proxima assumes **external** network access control as the primary boundary. On top of
+it, the owner sets a **password** on first run and every request then needs a valid
+session (bearer token or the HttpOnly `proxima_session` cookie) — defense-in-depth, not
+multi-tenancy: still one owner, no in-app roles or per-tenant authorization. Agents run
+with the OS privileges of the service user. Detail + threat model:
 [security-boundaries.md](../security-boundaries.md) and
 [prompt-injection-hardening.md](../prompt-injection-hardening.md).
