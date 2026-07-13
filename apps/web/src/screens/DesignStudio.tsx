@@ -16,6 +16,7 @@ import { QuestionForm } from '../components/chat/QuestionForm'
 import { splitOnQuestionForms } from '../components/chat/questionForm'
 import { getImageGenSettings } from '../api/settings'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
+import { ColorInput } from '../components/design/ColorInput'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
 import type { Project, RunEvent } from '../types'
 
@@ -137,7 +138,7 @@ function EffectStackEditor({ effects = [], onChange }: { effects?: LayerEffect[]
     {!effects.length && <p className="ds-tip muted">No effects yet.</p>}
     {effects.map((fx, i) => <div className="ds-effect-card" key={fx.id || i}>
       <div className="ds-effect-head"><strong>{fx.type.replace('-', ' ')}</strong><span><button onClick={() => move(i, -1)}>↑</button><button onClick={() => move(i, 1)}>↓</button><button className="danger" onClick={() => onChange(effects.filter((_, ix) => ix !== i))}>Delete</button></span></div>
-      {!fx.type.includes('blur') && <div className="ds-row2"><label>Color<input type="color" value={fx.color || '#000000'} onChange={e => patch(i, { color: e.target.value })} /></label><NumberAdjuster label="Opacity" value={fx.opacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patch(i, { opacity: v })} /></div>}
+      {!fx.type.includes('blur') && <div className="ds-row2"><label>Color<ColorInput value={fx.color || '#000000'} onChange={v => patch(i, { color: v })} /></label><NumberAdjuster label="Opacity" value={fx.opacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patch(i, { opacity: v })} /></div>}
       <div className="ds-row2"><NumberAdjuster label="Blur" value={fx.blur ?? 12} min={0} max={200} step={1} onChange={v => patch(i, { blur: v })} /><NumberAdjuster label="Spread" value={fx.spread ?? 0} min={-80} max={120} step={1} onChange={v => patch(i, { spread: v })} /></div>
       {!fx.type.includes('blur') && <div className="ds-row2"><NumberAdjuster label="Offset X" value={fx.offsetX ?? 0} min={-160} max={160} step={1} onChange={v => patch(i, { offsetX: v })} /><NumberAdjuster label="Offset Y" value={fx.offsetY ?? 0} min={-160} max={160} step={1} onChange={v => patch(i, { offsetY: v })} /></div>}
     </div>)}
@@ -153,7 +154,7 @@ function GradientEditor({ fill, onChange, width, height }: { fill: FillStyle; on
     <div className="ds-row2"><NumberAdjuster label="End X" value={fill.gradientEndX ?? width} min={-width} max={width * 2} step={1} onChange={v => onChange({ gradientEndX: v })} /><NumberAdjuster label="End Y" value={fill.gradientEndY ?? height} min={-height} max={height * 2} step={1} onChange={v => onChange({ gradientEndY: v })} /></div>
     <div className="ds-gradient-stops">
       {stops.map((s, i) => <div className="ds-gradient-stop" key={s.id || i}>
-        <input type="color" value={s.color} onChange={e => patchStop(i, { color: e.target.value })} />
+        <ColorInput value={s.color} onChange={v => patchStop(i, { color: v })} />
         <NumberAdjuster label={`${Math.round(s.offset * 100)}%`} value={Math.round(s.offset * 100)} min={0} max={100} step={1} onChange={v => patchStop(i, { offset: v / 100 })} />
         <button className="ghost-button sm danger" disabled={stops.length <= 2} onClick={() => removeStop(i)}>Delete</button>
       </div>)}
@@ -2041,7 +2042,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           <label>Preset<DsSelect value={artboardPresetValue(ab.width, ab.height)} options={[{ value: 'custom', label: `Custom (${ab.width}x${ab.height})` }, ...ARTBOARD_PRESETS.map(p => ({ value: p.id, label: `${p.label} (${p.w}x${p.h})` }))]} onChange={v => applyArtboardPreset(v as ArtboardPresetId | 'custom')} /></label>
           <div className="ds-row2"><NumberAdjuster label="Width" value={ab.width} min={16} max={4096} step={1} onChange={v => patchArtboard({ width: v })} /><NumberAdjuster label="Height" value={ab.height} min={16} max={4096} step={1} onChange={v => patchArtboard({ height: v })} /></div>
           <label>Background<DsSelect value={ab.backgroundType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchArtboard({ backgroundType: v as Artboard['backgroundType'] })} /></label>
-          <div className="ds-row2"><label>Color<input type="color" value={ab.background} onChange={e => patchArtboard({ background: e.target.value })} /></label>{ab.backgroundType && ab.backgroundType !== 'solid' ? <label>To<input type="color" value={ab.background2 || ab.background} onChange={e => patchArtboard({ background2: e.target.value })} /></label> : null}</div>
+          <div className="ds-row2"><label>Color<ColorInput value={ab.background} onChange={v => patchArtboard({ background: v })} /></label>{ab.backgroundType && ab.backgroundType !== 'solid' ? <label>To<ColorInput value={ab.background2 || ab.background} onChange={v => patchArtboard({ background2: v })} /></label> : null}</div>
           {ab.backgroundType === 'linear-gradient' && <NumberAdjuster label="Angle" value={ab.backgroundAngle ?? 90} min={0} max={360} step={1} onChange={v => patchArtboard({ backgroundAngle: v })} />}
           {!!componentLibrary.length && <label>Insert component<DsSelect value="" placeholder="Choose component…" options={componentLibrary.map(c => ({ value: c.id, label: c.name }))} onChange={v => { if (v) insertComponent(v) }} /></label>}
           <p className="ds-tip muted">Click an element to edit it. Size & aspect ratio are fully editable.</p>
@@ -2074,7 +2075,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               </PropertySection>
               <PropertySection title="Fill" defaultOpen>
                 <label>Fill type<DsSelect value={t.fillType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchLayer(t.id, { fillType: v as TextLayer['fillType'] } as Partial<Layer>)} /></label>
-                <div className="ds-row2"><label>Color<input type="color" value={t.fill} onChange={e => patchLayer(t.id, { fill: e.target.value } as Partial<Layer>)} /></label>{t.fillType && t.fillType !== 'solid' ? <label>To<input type="color" value={t.fill2 || t.fill} onChange={e => patchLayer(t.id, { fill2: e.target.value } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
+                <div className="ds-row2"><label>Color<ColorInput value={t.fill} onChange={v => patchLayer(t.id, { fill: v } as Partial<Layer>)} /></label>{t.fillType && t.fillType !== 'solid' ? <label>To<ColorInput value={t.fill2 || t.fill} onChange={v => patchLayer(t.id, { fill2: v } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
                 {t.fillType && t.fillType !== 'solid' && <>
                   <div className="ds-row2"><NumberAdjuster label="Angle" value={t.gradientAngle ?? 90} min={0} max={360} step={1} onChange={v => patchLayer(t.id, { gradientAngle: v } as Partial<Layer>)} /><NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} /></div>
                   <GradientEditor fill={t} width={t.width} height={t.height || Math.round(t.fontSize * (t.lineHeight || 1.2))} onChange={patch => patchLayer(t.id, patch as Partial<Layer>)} />
@@ -2082,18 +2083,18 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               </PropertySection>
               <PropertySection title="Text stroke">
                 <label className="ds-check"><input type="checkbox" checked={!!t.textStroke} onChange={e => patchLayer(t.id, { textStroke: e.target.checked ? '#111827' : undefined, textStrokeWidth: e.target.checked ? (t.textStrokeWidth ?? 2) : 0 } as Partial<Layer>)} /> Show text stroke</label>
-                {t.textStroke && <div className="ds-row2"><label>Color<input type="color" value={t.textStroke} onChange={e => patchLayer(t.id, { textStroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={t.textStrokeWidth ?? 2} min={0} max={32} step={0.5} onChange={v => patchLayer(t.id, { textStrokeWidth: v } as Partial<Layer>)} /></div>}
+                {t.textStroke && <div className="ds-row2"><label>Color<ColorInput value={t.textStroke} onChange={v => patchLayer(t.id, { textStroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={t.textStrokeWidth ?? 2} min={0} max={32} step={0.5} onChange={v => patchLayer(t.id, { textStrokeWidth: v } as Partial<Layer>)} /></div>}
               </PropertySection>
               <PropertySection title="Quick effects">
               <label className="ds-check"><input type="checkbox" checked={!!t.shadow} onChange={e => patchLayer(t.id, { shadow: e.target.checked, shadowColor: t.shadowColor || '#000000', shadowBlur: t.shadowBlur ?? 12, shadowOffsetX: t.shadowOffsetX ?? 0, shadowOffsetY: t.shadowOffsetY ?? 8, shadowOpacity: t.shadowOpacity ?? 0.35 } as Partial<Layer>)} /> Shadow</label>
               {t.shadow && <>
-                <div className="ds-row2"><label>Shadow color<input type="color" value={t.shadowColor || '#000000'} onChange={e => patchLayer(t.id, { shadowColor: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Opacity" value={t.shadowOpacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { shadowOpacity: v } as Partial<Layer>)} /></div>
+                <div className="ds-row2"><label>Shadow color<ColorInput value={t.shadowColor || '#000000'} onChange={v => patchLayer(t.id, { shadowColor: v } as Partial<Layer>)} /></label><NumberAdjuster label="Opacity" value={t.shadowOpacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { shadowOpacity: v } as Partial<Layer>)} /></div>
                 <div className="ds-row2"><NumberAdjuster label="Blur" value={t.shadowBlur ?? 12} min={0} max={120} step={1} onChange={v => patchLayer(t.id, { shadowBlur: v } as Partial<Layer>)} /><NumberAdjuster label="Offset Y" value={t.shadowOffsetY ?? 8} min={-120} max={120} step={1} onChange={v => patchLayer(t.id, { shadowOffsetY: v } as Partial<Layer>)} /></div>
                 <NumberAdjuster label="Offset X" value={t.shadowOffsetX ?? 0} min={-120} max={120} step={1} onChange={v => patchLayer(t.id, { shadowOffsetX: v } as Partial<Layer>)} />
               </>}
               <label className="ds-check"><input type="checkbox" checked={!!t.glow} onChange={e => patchLayer(t.id, { glow: e.target.checked, glowColor: t.glowColor || t.fill, glowBlur: t.glowBlur ?? 18, glowOpacity: t.glowOpacity ?? 0.6 } as Partial<Layer>)} /> Glow</label>
               {t.glow && <>
-                <div className="ds-row2"><label>Glow color<input type="color" value={t.glowColor || t.fill} onChange={e => patchLayer(t.id, { glowColor: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Intensity" value={t.glowOpacity ?? 0.6} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { glowOpacity: v } as Partial<Layer>)} /></div>
+                <div className="ds-row2"><label>Glow color<ColorInput value={t.glowColor || t.fill} onChange={v => patchLayer(t.id, { glowColor: v } as Partial<Layer>)} /></label><NumberAdjuster label="Intensity" value={t.glowOpacity ?? 0.6} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { glowOpacity: v } as Partial<Layer>)} /></div>
                 <NumberAdjuster label="Glow size" value={t.glowBlur ?? 18} min={0} max={160} step={1} onChange={v => patchLayer(t.id, { glowBlur: v } as Partial<Layer>)} />
               </>}
               </PropertySection>
@@ -2102,7 +2103,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             <div className="ds-fields">
               <PropertySection title="Fill" defaultOpen>
                 <label>Type<DsSelect value={sh.fillType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchLayer(sh.id, { fillType: v as FillStyle['fillType'] } as Partial<Layer>)} /></label>
-                <div className="ds-row2"><label>Color<input type="color" value={sh.fill} onChange={e => patchLayer(sh.id, { fill: e.target.value } as Partial<Layer>)} /></label>{sh.fillType && sh.fillType !== 'solid' ? <label>To<input type="color" value={sh.fill2 || sh.fill} onChange={e => patchLayer(sh.id, { fill2: e.target.value } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
+                <div className="ds-row2"><label>Color<ColorInput value={sh.fill} onChange={v => patchLayer(sh.id, { fill: v } as Partial<Layer>)} /></label>{sh.fillType && sh.fillType !== 'solid' ? <label>To<ColorInput value={sh.fill2 || sh.fill} onChange={v => patchLayer(sh.id, { fill2: v } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
                 {sh.fillType && sh.fillType !== 'solid' && <>
                   <div className="ds-row2"><NumberAdjuster label="Angle" value={sh.gradientAngle ?? 90} min={0} max={360} step={1} onChange={v => patchLayer(sh.id, { gradientAngle: v } as Partial<Layer>)} /><NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} /></div>
                   <GradientEditor fill={sh} width={sh.width} height={sh.height} onChange={patch => patchLayer(sh.id, patch as Partial<Layer>)} />
@@ -2118,7 +2119,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <PropertySection title="Border">
                 <label className="ds-check"><input type="checkbox" checked={!!sh.stroke} onChange={e => patchLayer(sh.id, { stroke: e.target.checked ? '#111827' : undefined, strokeWidth: 3 } as Partial<Layer>)} /> Show border</label>
                 {sh.stroke && <>
-                  <div className="ds-row2"><label>Color<input type="color" value={sh.stroke} onChange={e => patchLayer(sh.id, { stroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={sh.strokeWidth ?? 3} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeWidth: v } as Partial<Layer>)} /></div>
+                  <div className="ds-row2"><label>Color<ColorInput value={sh.stroke} onChange={v => patchLayer(sh.id, { stroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={sh.strokeWidth ?? 3} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeWidth: v } as Partial<Layer>)} /></div>
                   <div className="ds-row2"><NumberAdjuster label="Opacity" value={sh.strokeOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { strokeOpacity: v } as Partial<Layer>)} /><NumberAdjuster label="Dash" value={sh.strokeDash ?? 0} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeDash: v || undefined } as Partial<Layer>)} /></div>
                   <div className="ds-row2"><label>Cap<DsSelect value={sh.strokeCap || 'round'} options={STROKE_CAP_OPTIONS} onChange={v => patchLayer(sh.id, { strokeCap: v as RectLayer['strokeCap'] } as Partial<Layer>)} /></label><label>Position<DsSelect value={sh.strokePosition || 'center'} options={[{ value: 'center', label: 'Center' }, { value: 'inside', label: 'Inside' }, { value: 'outside', label: 'Outside' }]} onChange={v => patchLayer(sh.id, { strokePosition: v as RectLayer['strokePosition'] } as Partial<Layer>)} /></label></div>
                 </>}
@@ -2129,7 +2130,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             </div>) })()}
           {selected.type === 'line' && <div className="ds-fields">
             <PropertySection title="Line" defaultOpen>
-              <div className="ds-row2"><label>Color<input type="color" value={(selected as { stroke: string }).stroke} onChange={e => patchLayer(selected.id, { stroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Thickness" value={(selected as { strokeWidth: number }).strokeWidth} min={0} max={120} step={1} onChange={v => patchLayer(selected.id, { strokeWidth: v } as Partial<Layer>)} /></div>
+              <div className="ds-row2"><label>Color<ColorInput value={(selected as { stroke: string }).stroke} onChange={v => patchLayer(selected.id, { stroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Thickness" value={(selected as { strokeWidth: number }).strokeWidth} min={0} max={120} step={1} onChange={v => patchLayer(selected.id, { strokeWidth: v } as Partial<Layer>)} /></div>
               <div className="ds-row2"><NumberAdjuster label="Opacity" value={(selected as LineLayer).strokeOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(selected.id, { strokeOpacity: v } as Partial<Layer>)} /><NumberAdjuster label="Dash" value={(selected as LineLayer).strokeDash ?? 0} min={0} max={80} step={1} onChange={v => patchLayer(selected.id, { strokeDash: v || undefined } as Partial<Layer>)} /></div>
               <label>Cap<DsSelect value={(selected as LineLayer).strokeCap || 'round'} options={STROKE_CAP_OPTIONS} onChange={v => patchLayer(selected.id, { strokeCap: v as LineLayer['strokeCap'] } as Partial<Layer>)} /></label>
               <div className="ds-row2"><label className="ds-check"><input type="checkbox" checked={!!(selected as LineLayer).startArrow} onChange={e => patchLayer(selected.id, { startArrow: e.target.checked } as Partial<Layer>)} /> Start arrow</label><label className="ds-check"><input type="checkbox" checked={!!(selected as LineLayer).endArrow} onChange={e => patchLayer(selected.id, { endArrow: e.target.checked } as Partial<Layer>)} /> End arrow</label></div>
