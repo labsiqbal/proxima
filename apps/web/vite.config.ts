@@ -51,7 +51,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8765',
+      // ws:true so the terminal WebSocket (/api/ws/terminal) upgrade is forwarded to
+      // the backend in dev. The string shorthand only proxies HTTP, which left the
+      // terminal stuck "connecting" behind the vite dev server.
+      '/api': { target: 'http://127.0.0.1:8765', ws: true },
       '/auth': 'http://127.0.0.1:8765',
       '/health': 'http://127.0.0.1:8765'
     }
