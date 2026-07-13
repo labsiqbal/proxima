@@ -7642,10 +7642,6 @@ div.result-media {
 	font-size: var(--text-sm);
 	font-family: inherit;
 }
-.ds-fields input[type="color"] {
-	padding: 2px;
-	height: 34px;
-}
 .ds-fields input[type="range"] {
 	width: 100%;
 	padding: 0;
@@ -7674,14 +7670,9 @@ div.result-media {
 }
 .ds-gradient-stop {
 	display: grid;
-	grid-template-columns: 34px minmax(0, 1fr) auto;
+	grid-template-columns: 46px minmax(0, 1fr) auto;
 	align-items: end;
 	gap: 8px;
-}
-.ds-gradient-stop input[type="color"] {
-	width: 34px;
-	height: 34px;
-	box-sizing: border-box;
 }
 .ds-effect-card {
 	display: grid;

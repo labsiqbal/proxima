@@ -1,5 +1,6 @@
 import { memo, useState, useCallback } from "react";
 import type { BlockParam } from "@hyperframes/core/registry";
+import { ColorInput } from "../../../../components/design/ColorInput";
 
 interface BlockParamsPanelProps {
   blockName: string;
@@ -84,12 +85,9 @@ function ParamControl({
 
       {param.type === "color" && (
         <div className="flex items-center gap-2">
-          <input
-            type="color"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
-          />
+          <div style={{ width: 30, flex: "0 0 auto" }}>
+            <ColorInput value={value} onChange={onChange} />
+          </div>
           <input
             type="text"
             value={value}
