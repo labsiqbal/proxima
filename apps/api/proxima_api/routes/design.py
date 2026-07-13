@@ -66,27 +66,34 @@ def register(app, deps):
         features.require(cfg, features.DESIGN_STUDIO)
         root = _project_root(slug, user)
         prov = media_settings.resolve_image_gen(db())
-        image_bytes: bytes | None = None
-        image_mime: str | None = None
-        if payload.image:
+        # Source/reference images — the multi-image list wins over the single `image`.
+        src_paths = payload.images if payload.images else ([payload.image] if payload.image else [])
+        sources: list[tuple[bytes, str]] = []
+        for rel in src_paths:
             try:
-                src = fsapi.resolve_in_project(root, payload.image)
+                src = fsapi.resolve_in_project(root, rel)
                 if not src.is_file():
-                    raise fsapi.FsError("source image does not exist")
-                image_bytes = src.read_bytes()
+                    raise fsapi.FsError(f"source image does not exist: {rel}")
+                sources.append((src.read_bytes(), mimetypes.guess_type(src.name)[0] or "application/octet-stream"))
             except fsapi.FsError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except OSError as exc:
                 raise HTTPException(status_code=400, detail=f"cannot read source image: {exc.strerror}") from exc
-            image_mime = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+        caps = image_providers.get_provider(prov.get("provider")).capabilities or {}
         # Edit/reference requests need an edit-capable provider. When the selected one
-        # is explicitly text-to-image only (codex), fall back to xAI OAuth if it's
-        # connected — otherwise explain instead of failing with a provider error.
-        if image_bytes is not None and (image_providers.get_provider(prov.get("provider")).capabilities or {}).get("imageEdit") is False:
+        # is text-to-image only, fall back to xAI OAuth (single image) if connected.
+        if sources and caps.get("imageEdit") is False:
             if image_providers.xai_oauth_ready().get("ready"):
                 prov = {**prov, "provider": "xai-oauth", "apiKey": None, "baseUrl": None, "model": None}
+                caps = image_providers.get_provider("xai-oauth").capabilities or {}
             else:
                 raise HTTPException(status_code=400, detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.")
+        # Only referenceImages-capable providers get multiple images; others use the first.
+        if len(sources) > 1 and not caps.get("referenceImages"):
+            sources = sources[:1]
+        image_bytes = sources[0][0] if sources else None
+        image_mime = sources[0][1] if sources else None
+        extra_images = sources[1:] or None
         target = fsapi.resolve_in_project(root, f"artifacts/design/_assets/gen-{int(time.time())}.png")
         target.parent.mkdir(parents=True, exist_ok=True)
         i = 1
@@ -103,6 +110,7 @@ def register(app, deps):
                 size=payload.size,
                 image_bytes=image_bytes,
                 image_mime=image_mime,
+                extra_images=extra_images,
                 base_url=prov.get("baseUrl"),
             )
         except image_providers.ImageProviderError as exc:

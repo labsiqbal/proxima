@@ -247,6 +247,10 @@ class ImageGenRequest(BaseModel):
     size: str = "1024x1024"
     model: str | None = None
     image: str | None = None  # relative project path of an existing asset, for edit/manipulate
+    # Multiple source/reference images (relative project paths) to edit/compose into
+    # one — providers that advertise referenceImages (e.g. codex) honour all of them;
+    # single-image providers use the first. Takes precedence over `image` when set.
+    images: list[str] | None = None
 
 
 class WikiDraftRequest(BaseModel):
