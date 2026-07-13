@@ -118,7 +118,13 @@ class AcpProcess:
             # Bound the handshake: a spawned-but-silent agent must not hang here
             # forever. On ANY failure tear down the subprocess + reader tasks —
             # we aren't tracked by the manager yet, so nothing else would reap them.
-            await asyncio.wait_for(self._request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}), timeout=60)
+            init_res = await asyncio.wait_for(self._request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}), timeout=60)
+            # Does this agent accept image content blocks in session/prompt? Only send
+            # them if it advertises the capability, else fall back to text-only.
+            try:
+                self._image_capable = bool((((init_res or {}).get("agentCapabilities") or {}).get("promptCapabilities") or {}).get("image"))
+            except Exception:
+                self._image_capable = False
         except BaseException:
             await self.stop()
             raise
@@ -267,13 +273,20 @@ class AcpProcess:
     async def load_session(self, session_id: str, cwd: str) -> None:
         await self._request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []})
 
-    async def prompt(self, session_id: str, text: str, on_update: UpdateHandler, on_permission=None, timeout: float = 600) -> str:
+    async def prompt(self, session_id: str, text: str, on_update: UpdateHandler, on_permission=None, timeout: float = 600, images: list[tuple[bytes, str]] | None = None) -> str:
         self._handlers[session_id] = on_update
         if on_permission:
             self._permission_handlers[session_id] = on_permission
         try:
+            content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+            # Attach images as ACP image content blocks, but only when the agent said it
+            # accepts them (capability from initialize) — otherwise a runner could choke.
+            if images and getattr(self, "_image_capable", False):
+                import base64 as _b64
+                for raw, mime in images:
+                    content.append({"type": "image", "mimeType": mime or "image/png", "data": _b64.b64encode(raw).decode()})
             res = await asyncio.wait_for(
-                self._request("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]}),
+                self._request("session/prompt", {"sessionId": session_id, "prompt": content}),
                 timeout=timeout,
             )
             return res.get("stopReason", "end_turn")

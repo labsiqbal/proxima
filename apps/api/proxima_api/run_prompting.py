@@ -3,11 +3,46 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Any
 
+from . import fsapi
 from . import wiki_memory
+
+logger = logging.getLogger("proxima.run_prompting")
+
+# A design run appends ⟦VISION:relpath|relpath⟧ to its prompt so the worker can read
+# those project files and send them to the model as image content blocks (vision).
+_VISION_MARKER = re.compile(r"\n*⟦VISION:([^⟧]*)⟧\s*$")
+_VISION_MAX_BYTES = 8_000_000
+_VISION_MAX_COUNT = 10
+
+
+def extract_vision_images(text: str, project_root: str) -> tuple[str, list[tuple[bytes, str]]]:
+    """Pull the ⟦VISION:...⟧ marker off a prompt, returning the cleaned text and the
+    referenced images as (bytes, mime). Paths are jailed to the project root; anything
+    missing/oversized is skipped so vision is best-effort and never breaks the run."""
+    m = _VISION_MARKER.search(text or "")
+    if not m:
+        return text, []
+    clean = text[: m.start()].rstrip()
+    images: list[tuple[bytes, str]] = []
+    for rel in m.group(1).split("|"):
+        rel = rel.strip()
+        if not rel or len(images) >= _VISION_MAX_COUNT:
+            continue
+        try:
+            p = fsapi.resolve_in_project(Path(project_root), rel)
+            if p.is_file():
+                data = p.read_bytes()
+                if 0 < len(data) <= _VISION_MAX_BYTES:
+                    images.append((data, mimetypes.guess_type(p.name)[0] or "image/png"))
+        except Exception:
+            logger.debug("vision image skipped: %s", rel, exc_info=True)
+    return clean, images
 from . import workflows as wf
 from . import features
 from .capabilities import apply_capabilities, parse_selection

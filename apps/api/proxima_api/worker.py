@@ -44,7 +44,7 @@ from .prompt_collaborations import (
 from .run_reaper import RunReaper
 from .run_summaries import RunSummaries
 from .run_advancers import RunAdvancers
-from .run_prompting import RunPrompting
+from .run_prompting import RunPrompting, extract_vision_images
 from .run_outputs import RunOutputs
 from .run_drafts import RunDrafts
 
@@ -763,9 +763,10 @@ class RunWorker:
                 session_mode,
                 fresh_session,
             )
+            prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
             run_start_ts = time.time()
             try:
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout)
+                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
             except Exception as exc:
                 if not self._is_recoverable_agent_history_error(exc):
                     raise
@@ -792,8 +793,9 @@ class RunWorker:
                     session_mode,
                     True,
                 )
+                prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
                 chunks.clear()
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout)
+                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
 
             status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
             if status_row and status_row["status"] == "cancelled":

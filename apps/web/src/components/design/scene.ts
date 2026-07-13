@@ -217,7 +217,7 @@ export function parseDesignScene(text: string): Scene | null {
 export const stripDesignScene = (s: string): string => s.replace(/<design-scene[^>]*>[\s\S]*?<\/design-scene>/gi, '').replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/g, '').trim()
 
 // Build the prompt sent to the agent to generate/iterate a scene.
-export function buildDesignPrompt(scene: Scene, selected: { id: string; type: string; label: string } | null, instruction: string, assets: string[] = []): string {
+export function buildDesignPrompt(scene: Scene, selected: { id: string; type: string; label: string } | null, instruction: string, assets: string[] = [], visionPaths: string[] = []): string {
   const lines = [
     '⟦MODE: DESIGN⟧ You are editing a design in Proxima Design Studio; your output is the updated scene.json. A design is a JSON scene: artboards (absolute-positioned) with layers. Each artboard has {id,width,height,background(hex),layers[]} and optionally a gradient backdrop via backgroundType("solid"|"linear-gradient"|"radial-gradient"),background2(hex),backgroundAngle(deg),backgroundStops[{offset:0..1,color}] (multi-stop) — use a gradient background when it suits the direction.',
     'Layer types (all support rotation in degrees + opacity 0..1, locked, groupId/groupName, optional autoLayout metadata, and effects[] stack): text {x,y,width,height,text,fontSize,fontFamily,fontStyle("bold"|"normal"),textDecoration,textTransform("none"|"uppercase"|"lowercase"|"capitalize"),listStyle("none"|"bullet"|"number"),fill(hex),fillType("solid"|"linear-gradient"|"radial-gradient"),fill2,gradientAngle,gradientStartX,gradientStartY,gradientEndX,gradientEndY,gradientStops[{offset:0..1,color}],fillOpacity,align,verticalAlign,lineHeight,letterSpacing,textStroke,textStrokeWidth,textStrokeOpacity,shadow,shadowColor,shadowBlur,shadowOffsetX,shadowOffsetY,shadowOpacity,glow,glowColor,glowBlur,glowOpacity,effects}; rect {x,y,width,height,fill,fillType("solid"|"linear-gradient"|"radial-gradient"),fill2,gradientAngle,gradientStartX,gradientStartY,gradientEndX,gradientEndY,gradientStops,fillOpacity,cornerRadius,cornerRadiusTL,cornerRadiusTR,cornerRadiusBR,cornerRadiusBL,stroke,strokeWidth,strokeOpacity,strokeDash,strokeCap,strokeJoin,strokePosition,shadow(bool),effects}; ellipse/triangle support the same fill/stroke/effects; star adds points(integer, e.g. 5 or 6); path adds d(an SVG path string, e.g. an organic blob "M..Z") plus the same fill/stroke/effects; line {x,y,x2,y2,stroke,strokeWidth,strokeOpacity,strokeDash,strokeCap,startArrow,endArrow,effects}; image {x,y,width,height,src,cornerRadius,cropZoom(1..4 zoom-in crop),cropX(0..100),cropY(0..100),effects}. autoLayout fields on grouped layers: autoLayout true, layoutDirection "horizontal"|"vertical", layoutGap, layoutPadding, layoutAlign "start"|"center"|"end". effects entries are {type:"drop-shadow"|"inner-shadow"|"glow"|"layer-blur"|"background-blur",color,opacity,blur,spread,offsetX,offsetY}.',
@@ -240,9 +240,13 @@ export function buildDesignPrompt(scene: Scene, selected: { id: string; type: st
     '```',
   ]
   if (selected) lines.push('', `The user has SELECTED this element — apply changes to it unless told otherwise: ${selected.type} "${selected.label}" (id: ${selected.id}).`)
+  if (visionPaths.length) lines.push('', `Attached images you can SEE — look at them to compose accurately (match colours, framing, and content): ${visionPaths.map(p => p.split('/').pop()).join(', ')}.`)
   lines.push('', `User request: ${instruction}`, '',
     'Return a one-sentence summary, then the COMPLETE updated scene (keep the same "id") as:',
     '<design-scene>{ ...full scene json... }</design-scene>')
+  // Marker consumed by the worker: it reads these project files and attaches them as
+  // image content blocks (vision), then strips this line before the model sees it.
+  if (visionPaths.length) lines.push(`⟦VISION:${visionPaths.join('|')}⟧`)
   return lines.join('\n')
 }
 

@@ -134,7 +134,7 @@ def test_generate_title_handles_whitespace_only_runner_output(tmp_path):
         async def new_session(self, cwd):
             return "title-session"
 
-        async def prompt(self, sid, text, on_update, timeout=30):
+        async def prompt(self, sid, text, on_update, timeout=30, images=None):
             on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "   \n\t  "}})
             return "end_turn"
 

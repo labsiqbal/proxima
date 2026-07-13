@@ -1643,7 +1643,14 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       // Fire the run, then hand off to the event stream (onDesignEvent). No polling
       // loop: the reply arrives live and, crucially, survives navigating away — the
       // run keeps going server-side and reconnects on return (see hydrateChat).
-      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text, assets), display_message: text, profile_id: profileId ?? null })
+      // Vision: let the agent SEE the image assets that are relevant — those already
+      // placed in the scene, plus any the user names — so it composes from the real
+      // pixels, not just filenames. Capped to bound token cost.
+      const placed = sc.artboards.flatMap(a => a.layers.filter(l => l.type === 'image').map(l => (l as ImageLayer).src)).filter(s => !/^(gen:|https?:|data:|blob:)/i.test(s))
+      const lowerText = text.toLowerCase()
+      const mentioned = assets.filter(a => { const n = (a.split('/').pop() || '').toLowerCase(); return n && lowerText.includes(n) })
+      const visionPaths = [...new Set([...placed, ...mentioned])].slice(0, 8)
+      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text, assets, visionPaths), display_message: text, profile_id: profileId ?? null })
       // Snapshot what the agent saw (detects mid-run manual edits at apply time) and
       // mark the scene as awaiting this run (persisted → recovery-on-open is exact).
       sentSceneRef.current = { runId: r.run_id, body: JSON.stringify({ ...sc, runPendingId: undefined }) }
