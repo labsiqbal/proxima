@@ -495,7 +495,7 @@ def register(app, deps):
         low = text.lower()
         command = low.split(maxsplit=1)[0] if low else ""
         arg = text[len(command):].strip()
-        if command in {"/image-studio", "/design-studio"}:
+        if command in {"/design", "/image-studio", "/design-studio"}:
             return "image-studio", arg or "Create a Design Studio draft."
         if command in {"/image", "/gambar"}:
             return "image", arg or "Generate an image."

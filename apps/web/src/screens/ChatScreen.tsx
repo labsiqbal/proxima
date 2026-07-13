@@ -352,7 +352,7 @@ export function ChatScreen(props: {
 			// generation provider (create_run interception), so they must reach it.
 				const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
 					|| (props.features.video && /^\/(video-studio|video)\b/i.test(trimmed))
-					|| (props.features.designStudio && /^\/(image-studio|design-studio)\b/i.test(trimmed));
+					|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
 				if (name === "/new" || name === "/reset") {

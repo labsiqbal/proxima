@@ -21,7 +21,8 @@ _DISPLAY_NAMES = {
 _COMMAND_FEATURES = {
     "/video": VIDEO,
     "/video-studio": VIDEO,
-    "/image-studio": DESIGN_STUDIO,
+    "/design": DESIGN_STUDIO,
+    "/image-studio": DESIGN_STUDIO,  # back-compat aliases for /design
     "/design-studio": DESIGN_STUDIO,
 }
 

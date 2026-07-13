@@ -2,7 +2,7 @@
 
 Design Studio normally creates scenes in the browser and auto-saves them to
 `artifacts/design/<id>/scene.json`; these helpers let the backend seed a valid
-scene the studio can open — for the `/image-studio` chat command and the
+scene the studio can open — for the `/design` chat command and the
 "edit this image in Design Studio" bridge. Field names mirror
 `apps/web/src/components/design/scene.ts` (Scene → Artboard → Layer).
 """
@@ -58,7 +58,7 @@ def image_dims(path: Path) -> tuple[int, int] | None:
 
 
 def scene_shell(prompt: str) -> tuple[str, dict[str, Any]]:
-    """A brief-seeded blank scene for /image-studio. Returns (design_id, scene)."""
+    """A brief-seeded blank scene for /design. Returns (design_id, scene)."""
     title = design_title(prompt)
     design_id = f"{slugify(title, 'design')}-{int(time.time())}"
     scene = {
@@ -82,7 +82,7 @@ def scene_shell(prompt: str) -> tuple[str, dict[str, Any]]:
 
 
 def design_run_message(scene: dict[str, Any], brief: str) -> str:
-    """The first design-session run for an /image-studio draft. The design-session
+    """The first design-session run for an /design draft. The design-session
     guardrail (reply as <design-scene>) and the DESIGN_GUIDE quality bar are injected
     by run_prompting/build_run_preamble — this only carries the scene + the ask."""
     return (
@@ -95,7 +95,7 @@ def design_run_message(scene: dict[str, Any], brief: str) -> str:
 
 
 def persist_draft(root: Path, design_id: str, scene: dict[str, Any], project_slug: str, *, run_pending_id: int) -> dict[str, Any]:
-    """Write a seeded /image-studio draft to disk and return its chat artifact.
+    """Write a seeded /design draft to disk and return its chat artifact.
 
     The scene must already carry its ``sessionId`` (the linked design session).
     ``run_pending_id`` marks the scene as awaiting exactly this run — Design

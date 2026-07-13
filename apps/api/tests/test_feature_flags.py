@@ -67,9 +67,9 @@ def test_disabled_commands_are_omitted_and_rejected(tmp_path):
     commands = {item["name"] for group in catalog["groups"] for item in group["commands"]}
 
     assert "/image" in commands
-    assert commands.isdisjoint({"/video", "/video-studio", "/image-studio"})
+    assert commands.isdisjoint({"/video", "/video-studio", "/design"})
     _assert_disabled(
-        client.post("/api/commands/execute", headers=headers, json={"command": "/design-studio draft"}),
+        client.post("/api/commands/execute", headers=headers, json={"command": "/design draft"}),
         features.DESIGN_STUDIO,
     )
     _assert_disabled(
@@ -81,7 +81,7 @@ def test_disabled_commands_are_omitted_and_rejected(tmp_path):
 @pytest.mark.parametrize("prompt_mode", ["brainstorm", "debate"])
 @pytest.mark.parametrize(
     ("message", "feature"),
-    [("/video launch reel", features.VIDEO), ("/image-studio launch card", features.DESIGN_STUDIO)],
+    [("/video launch reel", features.VIDEO), ("/design launch card", features.DESIGN_STUDIO)],
 )
 def test_disabled_prompt_modes_cannot_bypass_guards_or_write_rows(tmp_path, monkeypatch, prompt_mode, message, feature):
     app, client, headers, _root = _client_with_project(tmp_path)
