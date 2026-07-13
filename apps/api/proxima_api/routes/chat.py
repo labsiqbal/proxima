@@ -982,17 +982,18 @@ def register(app, deps):
     @app.websocket("/api/ws/terminal")
     async def ws_terminal(websocket: WebSocket, token: str = "", project: str = ""):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
-        proxima_session cookie; single-user mode falls back to the owner. cwd = project
-        path or workspace."""
+        proxima_session cookie — a valid session is always required. cwd = project path
+        or workspace."""
+        # Require a valid session (cookie or ?token=) — same stance as ws_events + the
+        # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
+        # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
+        # could have opened the terminal without the password once that flag was set.)
         token = token or websocket.cookies.get("proxima_session", "")
         user = None
-        if token:
-            with app.state.db_lock:
-                row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (hash_token(token),)).fetchone()
-            if row:
-                user = dict(row)
-        if not user and cfg.get("single_user"):
-            user = ensure_single_user_owner()
+        with app.state.db_lock:
+            row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (hash_token(token),)).fetchone()
+        if row:
+            user = dict(row)
         if not user:
             await websocket.close(code=4401)
             return
