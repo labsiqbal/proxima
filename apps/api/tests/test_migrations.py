@@ -139,3 +139,84 @@ def test_v10_drops_project_members(tmp_path: Path):
     applied = run_migrations(conn, str(tmp_path / "m.db"))
     assert 10 in applied
     assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_members'").fetchone() is None
+
+
+def test_migration_14_drops_dead_sessions_acp_session_id(tmp_path):
+    """The legacy sessions.acp_session_id column is dropped; agent_sessions is the
+    authoritative ACP-session store."""
+    import sqlite3
+    from proxima_api.db import connect, init_db
+    from proxima_api.migrations import run_migrations
+
+    # Simulate an old install that still has the dead column.
+    db_path = tmp_path / "old.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("ALTER TABLE sessions ADD COLUMN acp_session_id TEXT")
+
+    # No migrations are recorded yet after init_db, so this runs 1..14 fresh;
+    # migration 14 drops the column we just simulated an old install having.
+    run_migrations(conn, str(db_path))
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert "acp_session_id" not in cols
+    # agent_sessions (the real store) is untouched.
+    assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'").fetchone()
+
+
+def test_migration_15_adds_messages_run_id_fk_preserving_data(tmp_path):
+    """messages.run_id becomes a real FK (ON DELETE SET NULL) via table rebuild,
+    without losing rows or the inbound message_reviews reference."""
+    from proxima_api.db import connect, init_db
+    from proxima_api.migrations import run_migrations
+
+    db_path = tmp_path / "m.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("INSERT INTO users(username, os_user) VALUES ('u','u')")
+    uid = conn.execute("SELECT id FROM users").fetchone()["id"]
+    conn.execute("INSERT INTO sessions(title, owner_user_id) VALUES ('s', ?)", (uid,))
+    sid = conn.execute("SELECT id FROM sessions").fetchone()["id"]
+    conn.execute("INSERT INTO runs(session_id, user_id, prompt) VALUES (?,?,'p')", (sid, uid))
+    rid = conn.execute("SELECT id FROM runs").fetchone()["id"]
+    conn.execute("INSERT INTO messages(session_id, role, content, run_id) VALUES (?,'assistant','hi',?)", (sid, rid))
+    mid = conn.execute("SELECT id FROM messages").fetchone()["id"]
+    conn.execute("INSERT INTO message_reviews(source_message_id, session_id, mode) VALUES (?,?,'validate')", (mid, sid))
+
+    run_migrations(conn, str(db_path))
+
+    # FK exists, no integrity violations, rows + inbound reference preserved.
+    assert any(r[3] == "run_id" and r[6] == "SET NULL" for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall())
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert conn.execute("SELECT 1 FROM messages WHERE id=?", (mid,)).fetchone() is not None
+    assert conn.execute("SELECT 1 FROM message_reviews WHERE source_message_id=?", (mid,)).fetchone() is not None
+    # the FK behaves: deleting the run nulls the pointer instead of dangling it.
+    conn.execute("DELETE FROM runs WHERE id=?", (rid,))
+    assert conn.execute("SELECT run_id FROM messages WHERE id=?", (mid,)).fetchone()["run_id"] is None
+
+
+def test_sessions_pointer_fks_enforced_after_migration(tmp_path):
+    """After the full migration chain, sessions.job_id/workflow_id are real FKs
+    (ON DELETE SET NULL), task_id + the tasks table are gone, and integrity holds."""
+    from proxima_api.db import connect, init_db
+    from proxima_api.migrations import run_migrations
+
+    db_path = tmp_path / "m.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    run_migrations(conn, str(db_path))
+
+    fks = {(r[3], r[2]) for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()}
+    assert ("job_id", "jobs") in fks and ("workflow_id", "workflows") in fks
+    assert "task_id" not in {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name='tasks'").fetchone() is None
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    # FK behaves: deleting a workflow nulls a session's pointer instead of dangling it.
+    conn.execute("INSERT INTO users(username, os_user) VALUES ('u','u')")
+    uid = conn.execute("SELECT id FROM users").fetchone()["id"]
+    wid = conn.execute("INSERT INTO workflows(name) VALUES ('w')").lastrowid
+    conn.execute("INSERT INTO sessions(title, owner_user_id, workflow_id) VALUES ('s',?,?)", (uid, wid))
+    sid = conn.execute("SELECT id FROM sessions").fetchone()["id"]
+    conn.execute("DELETE FROM workflows WHERE id=?", (wid,))
+    assert conn.execute("SELECT workflow_id FROM sessions WHERE id=?", (sid,)).fetchone()["workflow_id"] is None

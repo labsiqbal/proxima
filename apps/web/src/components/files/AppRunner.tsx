@@ -146,11 +146,11 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     return () => timers.forEach(clearTimeout)
   }, [subdomainUrl])
   const directUrl = status.running && status.port ? `${location.protocol}//${location.hostname}:${status.port}/` : ''
-  const baseUrl = subdomainUrl || directUrl || appViewUrl(token, slug)
+  const baseUrl = subdomainUrl || directUrl || appViewUrl(slug)
   // Cache-bust per (re)load so switching apps on the same port doesn't show a
   // cached page; static servers don't send no-cache headers.
   const previewUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}_proxima=${reloadKey}`
-  const openUrl = subdomainUrl || directUrl || appViewUrl(token, slug)
+  const openUrl = subdomainUrl || directUrl || appViewUrl(slug)
   const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
 
   return <div className="app-runner-dock">

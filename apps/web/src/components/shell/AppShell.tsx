@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { RightRail } from './RightRail'
 import { SearchModal } from './SearchModal'
-import { IconPanelRight, IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents } from './icons'
+import { IconPanelRight, IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -29,14 +29,12 @@ export function AppShell(props: {
   onDeleteSession: (id: number) => void
   onSelectProject: (project: Project) => void
   onSelectSession: (session: ChatSession) => void
-  onOpenTask: (taskId: number) => void
   onOpenDesign: (session: ChatSession) => void
-  onDeleteTask: (taskId: number) => void
-  onRenameTask: (taskId: number, title: string) => void
   onOpenFile: (slug: string, path: string) => void
   seen: Record<number, string>
   busySessions?: number[]
   onSelectView: (view: View) => void
+  onLogout: () => void
   profiles: Profile[]
   projects: Project[]
   sessions: ChatSession[]
@@ -113,6 +111,8 @@ export function AppShell(props: {
               <button className={`user-menu-item ${props.currentView === 'profiles' ? 'active' : ''}`} onClick={() => { props.onSelectView('profiles'); setMenuOpen(false) }}><IconAgents size={15} /> Agents</button>
               <div className="user-menu-sep" />
               <button className={`user-menu-item ${props.currentView === 'settings' ? 'active' : ''}`} onClick={() => { props.onSelectView('settings'); setMenuOpen(false) }}><IconGear size={15} /> Settings</button>
+              <div className="user-menu-sep" />
+              <button className="user-menu-item" onClick={() => { setMenuOpen(false); props.onLogout() }}><IconLogout size={15} /> Log out</button>
             </div>
           </>}
         </div>
@@ -129,7 +129,7 @@ export function AppShell(props: {
       <div className="resize-handle resize-right" style={{ right: 'var(--right-w)' }} onMouseDown={startResize('right')} role="separator" aria-label="Resize files panel" />
       {railOpen && <button aria-label="Close files" className="drawer-scrim rail-scrim" onClick={() => setRailOpen(false)} />}
       {props.currentView !== 'design' && !iterating && <RightRail token={props.token} activeProfile={props.activeProfile} activeProject={props.activeProject} activeSession={props.activeSession} projects={props.projects} onOpenFile={props.onOpenFile} />}
-      {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenTask={props.onOpenTask} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
+      {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
     </div>
   )
 }

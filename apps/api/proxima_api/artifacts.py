@@ -7,10 +7,12 @@ heavy dirs, absorbs files inside a produced app dir, and caps the result.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _ARTIFACT_EXCLUDE = {"node_modules", ".git", ".next", "dist", "build", "out", "__pycache__", ".cache", ".turbo", ".venv", "venv", "wiki"}
 _ARTIFACT_SKIP_NAMES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".impeccable.md", "CONTRIBUTING.md", "LICENSE.md"}
@@ -120,3 +122,40 @@ def artifacts_for_output_links(artifacts: list[dict[str, Any]], project_slug: st
             link["project_slug"] = project_slug
         out.append(link)
     return out
+
+
+def update_produced_artifacts(
+    conn: sqlite3.Connection,
+    session_id: int,
+    mutate: Callable[[list[Any]], list[Any]],
+    *,
+    attempts: int = 12,
+) -> None:
+    """Compare-and-swap ``sessions.produced_artifacts`` (a JSON list).
+
+    ``mutate(current) -> new`` transforms the current list (append/merge/prune).
+    The write only lands if the value is unchanged since we read it
+    (``WHERE produced_artifacts = <old>``); if a concurrent writer changed it
+    under us the UPDATE matches no row and we re-read + re-apply ``mutate`` and
+    retry. This is optimistic concurrency scoped to one field: no new column, no
+    lock — the compare-and-swap is the guard, atomic under SQLite's single-writer
+    rule — so two writers on different connections can't silently lose an artifact
+    (the lost-update the audit flagged: worker finishing a run while the UI deletes
+    an artifact). ``mutate`` must be safe to re-run (merge/filter both are).
+    """
+    for _ in range(attempts):
+        row = conn.execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            return
+        old = row["produced_artifacts"] or "[]"
+        new = json.dumps(mutate(json.loads(old)))
+        if new == old:
+            return
+        if conn.execute(
+            "UPDATE sessions SET produced_artifacts = ? WHERE id = ? AND produced_artifacts = ?",
+            (new, session_id, old),
+        ).rowcount:
+            return
+    logging.getLogger("proxima.artifacts").warning(
+        "produced_artifacts CAS gave up after %d attempts (session %s) — high contention", attempts, session_id
+    )

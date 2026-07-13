@@ -24,8 +24,5 @@ export const videoImportFile = (token: string, slug: string, id: string, path: s
 export const startVideoStudio = (token: string, slug: string, id: string) =>
   api<{ ok: boolean; port: number; path: string }>(`/api/projects/${encodeURIComponent(slug)}/videos/${encodeURIComponent(id)}/studio/start`, token, { method: 'POST' })
 
-export const videoStudioUrl = (token: string, slug: string, id: string) =>
-  `/api/video-studio/${encodeURIComponent(token)}/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`
-
 export const renderVideo = (token: string, slug: string, id: string, settings: { quality?: string; fps?: number; format?: 'mp4' | 'webm' } = {}) =>
   api<{ ok: boolean; path: string; log?: string }>(`/api/projects/${encodeURIComponent(slug)}/videos/${encodeURIComponent(id)}/render`, token, { method: 'POST', body: JSON.stringify(settings) })

@@ -11,7 +11,6 @@ export const createMessageReview = (
 	token: string,
 	messageId: number,
 	body: {
-		mode?: "validate" | "brainstorm" | "debate" | "compare";
 		reviewer_profile_id?: number | null;
 	} = {},
 ) =>

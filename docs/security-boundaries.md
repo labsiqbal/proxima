@@ -16,6 +16,17 @@ Runner boundary: selected runner subprocess, selected profile home, project cwd
 Anyone who can reach the Proxima API should be treated as the owner. Do not
 expose it directly to the public internet.
 
+## Password gate (defense-in-depth)
+
+On first run the owner sets a password (`POST /auth/set-password`). Once set,
+every request must carry a valid session — a bearer token or the HttpOnly
+`proxima_session` cookie issued by `POST /auth/login` — and passwordless
+auto-login (`/auth/auto`) is refused. Sessions do not expire until logout
+(`POST /auth/logout`). This is a second layer *on top of* the network boundary,
+not multi-user authorization: there is still exactly one owner. If the password
+is lost, recover locally with `scripts/reset-password` (clears the hash + revokes
+sessions; you have machine/DB access, which is the recovery path).
+
 ## Server Operators
 
 Anyone with physical access, SSH, AnyDesk, sudo, or direct filesystem access can

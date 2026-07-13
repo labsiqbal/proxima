@@ -1,4 +1,5 @@
 import React from 'react'
+import { gradientStopList } from './scene'
 import type { Artboard, FillStyle, ImageLayer, Layer, LayerEffect, TextLayer } from './scene'
 
 export const cssTextShadow = (t: TextLayer, scale = 1): string => {
@@ -8,7 +9,7 @@ export const cssTextShadow = (t: TextLayer, scale = 1): string => {
   return parts.join(', ')
 }
 const cssFill = (l: FillStyle) => {
-  const stops = l.gradientStops?.length ? [...l.gradientStops].sort((a, b) => a.offset - b.offset).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ') : `${l.fill}, ${l.fill2 || l.fill}`
+  const stops = gradientStopList(l).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ')
   if (l.fillType === 'linear-gradient') return `linear-gradient(${l.gradientAngle ?? 90}deg, ${stops})`
   if (l.fillType === 'radial-gradient') return `radial-gradient(circle, ${stops})`
   return l.fill

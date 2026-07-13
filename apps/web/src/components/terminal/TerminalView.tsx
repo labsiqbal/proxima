@@ -65,8 +65,9 @@ export function TerminalView({ token, projectSlug }: { token: string; projectSlu
     try { fit.fit() } catch { /* host not measured yet */ }
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    // Auth via the HttpOnly proxima_session cookie sent on the WS handshake, not a
+    // ?token= in the URL.
     const qs = new URLSearchParams()
-    if (token) qs.set('token', token)
     if (projectSlug) qs.set('project', projectSlug)
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/terminal?${qs.toString()}`)
     ws.binaryType = 'arraybuffer'

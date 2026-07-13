@@ -26,8 +26,10 @@ from typing import Callable
 
 from .runner_specs import FALLBACK_RUNNER
 
-# (version, human description, apply function)
-Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
+# (version, human description, apply function[, opts]).
+# opts is an optional 4th element, e.g. {"no_auto_tx": True} for a migration that
+# manages its own transaction (a table rebuild needing PRAGMA foreign_keys=OFF).
+Migration = tuple
 
 def _add_messages_author(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
@@ -182,6 +184,192 @@ def _add_prompt_collaborations(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)")
 
 
+def _drop_sessions_acp_session_id(conn: sqlite3.Connection) -> None:
+    # Dead single-value column. The authoritative store is the agent_sessions
+    # table (one ACP session PER home), so this legacy column is never read or
+    # written by live code — a stale value here would look authoritative to a
+    # future reader. Drop it. (SQLite >= 3.35 supports DROP COLUMN.)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "acp_session_id" in cols:
+        conn.execute("ALTER TABLE sessions DROP COLUMN acp_session_id")
+
+
+def _add_messages_run_id_fk(conn: sqlite3.Connection) -> None:
+    """Rebuild `messages` so run_id becomes a real FK -> runs(id) ON DELETE SET NULL
+    (it was a bare INTEGER that could dangle a deleted run). SQLite can't ALTER ADD
+    CONSTRAINT, so recreate + copy using the create-new/copy/drop-old/rename-new
+    order with foreign_keys OFF (outside a txn — this migration is no_auto_tx), which
+    preserves the inbound FKs from message_reviews / prompt_collaborations and never
+    fires a cascade. Idempotent: skips if run_id already has an FK."""
+    if any(r[3] == "run_id" for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall()):
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if not {"id", "session_id", "role", "content", "author", "run_id", "output_links", "created_at"}.issubset(cols):
+        return  # not the full production shape yet (e.g. a minimal test fixture)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _messages_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              author TEXT,
+              run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+              output_links TEXT NOT NULL DEFAULT '[]',
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO _messages_new(id, session_id, role, content, author, run_id, output_links, created_at) "
+            "SELECT id, session_id, role, content, author, run_id, output_links, created_at FROM messages"
+        )
+        conn.execute("DROP TABLE messages")
+        conn.execute("ALTER TABLE _messages_new RENAME TO messages")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"messages FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
+    """Rebuild `sessions` so task_id/job_id/workflow_id become real FKs (ON DELETE
+    SET NULL) instead of bare INTEGERs that dangle at a deleted task/job/workflow.
+    Dangling values that already exist are nulled first (that's the whole point —
+    they could dangle before), then the FK is enforced. Same safe rebuild order as
+    migration 15. Idempotent + guarded against minimal fixtures."""
+    if any(r[3] == "task_id" for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()):
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    full = {
+        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
+        "mode", "task_id", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
+        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+    }
+    if not full.issubset(cols):
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        # Null pre-existing dangling pointers so the new FK doesn't reject real data.
+        conn.execute("UPDATE sessions SET task_id = NULL WHERE task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = sessions.task_id)")
+        conn.execute("UPDATE sessions SET job_id = NULL WHERE job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = sessions.job_id)")
+        conn.execute("UPDATE sessions SET workflow_id = NULL WHERE workflow_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM workflows WHERE workflows.id = sessions.workflow_id)")
+        conn.execute(
+            f"""
+            CREATE TABLE _sessions_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+              owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+              runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}',
+              visibility TEXT NOT NULL DEFAULT 'private',
+              mode TEXT NOT NULL DEFAULT 'chat',
+              task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+              job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+              workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+              manual_title INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              produced_artifacts TEXT NOT NULL DEFAULT '[]',
+              goal_text TEXT,
+              goal_status TEXT,
+              goal_iteration INTEGER NOT NULL DEFAULT 0,
+              goal_max INTEGER NOT NULL DEFAULT 20
+            )
+            """
+        )
+        _scols = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+                  "task_id, job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+                  "goal_text, goal_status, goal_iteration, goal_max")
+        conn.execute(f"INSERT INTO _sessions_new({_scols}) SELECT {_scols} FROM sessions")
+        conn.execute("DROP TABLE sessions")
+        conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"sessions FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _drop_tasks_feature(conn: sqlite3.Connection) -> None:
+    """Merge tasks into jobs: rebuild sessions WITHOUT the task_id column/FK, then
+    drop the tasks table. Same safe rebuild order + foreign_keys OFF as migration 16
+    (keeps the job_id/workflow_id FKs, recreates indexes, asserts fk_check clean).
+    Idempotent: skips once task_id is gone; guarded against minimal fixtures."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "task_id" not in cols:
+        conn.execute("DROP TABLE IF EXISTS tasks")
+        return
+    keep = {
+        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
+        "mode", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
+        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+    }
+    if not keep.issubset(cols):
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE _sessions_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+              owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+              runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}',
+              visibility TEXT NOT NULL DEFAULT 'private',
+              mode TEXT NOT NULL DEFAULT 'chat',
+              job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+              workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+              manual_title INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              produced_artifacts TEXT NOT NULL DEFAULT '[]',
+              goal_text TEXT,
+              goal_status TEXT,
+              goal_iteration INTEGER NOT NULL DEFAULT 0,
+              goal_max INTEGER NOT NULL DEFAULT 20
+            )
+            """
+        )
+        _c = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+              "job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+              "goal_text, goal_status, goal_iteration, goal_max")
+        conn.execute(f"INSERT INTO _sessions_new({_c}) SELECT {_c} FROM sessions")
+        conn.execute("DROP TABLE sessions")
+        conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        conn.execute("DROP TABLE IF EXISTS tasks")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"drop-tasks rebuild introduced violations: {[tuple(v) for v in violations]}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -196,6 +384,10 @@ MIGRATIONS: list[Migration] = [
     (11, "add message_reviews table (Validate sidecar reviews)", _add_message_reviews_table),
     (12, "add message review apply/merge fields", _add_message_review_apply_fields),
     (13, "add prompt collaborations for multi-agent modes", _add_prompt_collaborations),
+    (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
+    (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
+    (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
+    (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
 ]
 
 
@@ -247,17 +439,31 @@ def run_migrations(
         _backup(conn, db_path, cur, pending[-1][0])
 
     applied: list[int] = []
-    for version, description, apply in pending:
-        conn.execute("BEGIN")
-        try:
+    for entry in pending:
+        version, description, apply = entry[0], entry[1], entry[2]
+        opts = entry[3] if len(entry) > 3 else {}
+        if opts.get("no_auto_tx"):
+            # The migration manages its own transaction (e.g. a table rebuild that
+            # needs PRAGMA foreign_keys=OFF, which is a no-op inside a transaction).
+            # It runs in autocommit; we record the version after it returns. Such a
+            # migration MUST be idempotent so a crash before the version is recorded
+            # is safe to re-run.
             apply(conn)
             conn.execute(
                 "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
                 (version, description, iso_now()),
             )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+        else:
+            conn.execute("BEGIN")
+            try:
+                apply(conn)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
+                    (version, description, iso_now()),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         applied.append(version)
     return applied

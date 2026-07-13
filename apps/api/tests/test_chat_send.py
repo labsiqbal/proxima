@@ -504,7 +504,8 @@ def test_workflow_iterate_instant_result_completes_without_worker(tmp_path):
     )
     assert rejected.status_code == 400
 
-    app.state.db.execute("UPDATE sessions SET workflow_id = 123 WHERE id = ?", (session_id,))
+    _wf_id = app.state.db.execute("INSERT INTO workflows(name) VALUES ('wf')").lastrowid
+    app.state.db.execute("UPDATE sessions SET workflow_id = ? WHERE id = ?", (_wf_id, session_id))
     res = client.post(
         f"/api/sessions/{session_id}/runs",
         headers=headers,
@@ -534,7 +535,8 @@ def test_delete_completed_run_removes_result_messages_and_events(tmp_path):
     token = client.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
     session_id = client.post("/api/sessions", headers=headers, json={"title": "iterate"}).json()["id"]
-    app.state.db.execute("UPDATE sessions SET workflow_id = 123 WHERE id = ?", (session_id,))
+    _wf_id = app.state.db.execute("INSERT INTO workflows(name) VALUES ('wf')").lastrowid
+    app.state.db.execute("UPDATE sessions SET workflow_id = ? WHERE id = ?", (_wf_id, session_id))
     body = client.post(
         f"/api/sessions/{session_id}/runs",
         headers=headers,
@@ -564,7 +566,8 @@ def test_delete_session_artifact_scrubs_stale_message_and_event_links(tmp_path):
     headers = {"Authorization": f"Bearer {token}"}
     client.post("/api/projects", headers=headers, json={"slug": "alpha", "name": "Alpha"})
     session_id = client.post("/api/sessions", headers=headers, json={"title": "iterate", "project_slug": "alpha"}).json()["id"]
-    app.state.db.execute("UPDATE sessions SET workflow_id = 123 WHERE id = ?", (session_id,))
+    _wf_id = app.state.db.execute("INSERT INTO workflows(name) VALUES ('wf')").lastrowid
+    app.state.db.execute("UPDATE sessions SET workflow_id = ? WHERE id = ?", (_wf_id, session_id))
     run_id = client.post(
         f"/api/sessions/{session_id}/runs",
         headers=headers,

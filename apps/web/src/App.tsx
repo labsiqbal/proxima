@@ -1,15 +1,15 @@
 import React from 'react'
-import { autoLogin, me } from './api/auth'
+import { resume, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
-import { listProjects } from './api/projects'
+import { listProjects, deleteProject } from './api/projects'
 import { listSessions, renameSession, deleteSession } from './api/sessions'
 import { activeRuns } from './api/runs'
-import { deleteTask, updateTask } from './api/tasks'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isDisabledFeatureHash, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
 import type { AppFeatures, ChatSession, OutputLink, Profile, Project, Runner, User, View, WorkflowDraft } from './types'
 import { AppShell } from './components/shell/AppShell'
+import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
 import { ChatScreen } from './screens/ChatScreen'
 import { HomeScreen } from './screens/HomeScreen'
@@ -22,7 +22,6 @@ const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m =>
 const ProjectsScreen = React.lazy(() => import('./screens/ProjectsScreen').then(m => ({ default: m.ProjectsScreen })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
-const TasksScreen = React.lazy(() => import('./screens/TasksScreen').then(m => ({ default: m.TasksScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
 const TerminalTabs = React.lazy(() => import('./components/terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
@@ -30,6 +29,7 @@ const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(
 const RunnersScreen = React.lazy(() => import('./screens/RunnersScreen').then(m => ({ default: m.RunnersScreen })))
 const SettingsScreen = React.lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })))
 const VideoScreen = React.lazy(() => import('./screens/VideoScreen').then(m => ({ default: m.VideoScreen })))
+const WorkspaceOnboarding = React.lazy(() => import('./screens/WorkspaceOnboarding').then(m => ({ default: m.WorkspaceOnboarding })))
 
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
@@ -37,13 +37,18 @@ function ViewFallback({ label = 'Loading...' }: { label?: string }) {
 
 export function App() {
   const [booting, setBooting] = React.useState(true)
-  const [token, setToken] = React.useState(localStorage.getItem('proxima-token') || '')
+  // In-memory only. Persistent auth lives in the HttpOnly proxima_session cookie
+  // (which XSS can't read); nothing sensitive is kept in localStorage.
+  const [token, setToken] = React.useState('')
   const updates = useUpdateStatus(token)
   const [user, setUser] = React.useState<User | null>(null)
+  const [authGate, setAuthGate] = React.useState<'setup' | 'login' | null>(null)
+  // First-run only: after the password is set, offer to point Proxima at a real
+  // code folder before landing in the app.
+  const [onboarding, setOnboarding] = React.useState(false)
   const [view, setView] = React.useState<View>('home')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
-  const [pendingTask, setPendingTask] = React.useState<number | null>(null)
   const [pendingJob, setPendingJob] = React.useState<number | null>(null)
   const [pendingDraft, setPendingDraft] = React.useState<WorkflowDraft | null>(null)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
@@ -66,7 +71,6 @@ export function App() {
   const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
   const [videoCameFrom, setVideoCameFrom] = React.useState<View | null>(null)
   const clearPendingNavigation = React.useCallback(() => {
-    setPendingTask(null)
     setPendingJob(null)
     setPendingDraft(null)
     setPendingDesign(null)
@@ -143,10 +147,9 @@ export function App() {
     baselined.current = true
     setSeen(prev => { const n = { ...prev }; let ch = false; for (const s of sessions) if (!(s.id in n)) { n[s.id] = s.updated_at || ''; ch = true } if (ch) localStorage.setItem('proxima.seen', JSON.stringify(n)); return n })
   }, [sessions])
-  // The chat you're currently viewing is always considered seen. (Task threads
-  // are marked seen via onOpenTask, not by being the default activeSession.)
+  // The chat you're currently viewing is always considered seen.
   React.useEffect(() => {
-    if (!activeSession || activeSession.task_id || view !== 'chat') return
+    if (!activeSession || view !== 'chat') return
     const row = sessions.find(s => s.id === activeSession.id)
     if (row) markSeen(row.id, row.updated_at)
   }, [sessions, activeSession, view, markSeen])
@@ -202,28 +205,25 @@ export function App() {
   React.useEffect(() => {
     async function boot() {
       const configPromise = getAppFeatures()
-      // Single-user cockpit: no login wall. Reuse a stored token if it's still
-      // valid, otherwise auto-authenticate as the owner via POST /auth/auto.
-      const fresh = async () => {
-        const auto = await autoLogin()
-        if (!mountedRef.current) return
-        localStorage.setItem('proxima-token', auto.token)
-        setToken(auto.token); setUser(auto.user)
-        await refreshAll(auto.token)
-      }
+      // Password gate: first run forces a password; after that, a valid stored
+      // session enters the app, otherwise show the login screen.
       try {
-        const stored = localStorage.getItem('proxima-token') || ''
-        if (stored) {
-          try {
-            const current = await me(stored)
-            if (!mountedRef.current) return
-            setUser(current)
-            await refreshAll(stored)
-          } catch {
-            await fresh()  // stale/expired token → re-auth
-          }
+        const status = await setupStatus()
+        if (!mountedRef.current) return
+        if (!status.password_set) {
+          setAuthGate('setup')
         } else {
-          await fresh()
+          // Auth persists in the HttpOnly cookie, not JS storage. resume() is
+          // authenticated by that cookie and echoes back the session token for the
+          // in-memory bearer header; 401 → show the login screen.
+          try {
+            const s = await resume()
+            if (!mountedRef.current) return
+            setToken(s.token); setUser(s.user)
+            await refreshAll(s.token)
+          } catch {
+            if (mountedRef.current) setAuthGate('login')
+          }
         }
       } catch (err) {
         if (mountedRef.current) setError(String(err))
@@ -266,7 +266,7 @@ export function App() {
     setActiveProject(p)
     if (!p) { setActiveSession(null); return }
     const recent = sessions
-      .filter(s => s.project_slug === p.slug && !s.task_id && sessionEnabled(s))
+      .filter(s => s.project_slug === p.slug && sessionEnabled(s))
       .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null
     setActiveSession(recent)
     setView('chat')
@@ -287,23 +287,6 @@ export function App() {
     await refreshAll(token)
   }
 
-  async function handleDeleteTask(taskId: number) {
-    const seq = ++appActionSeq.current
-    try {
-      await deleteTask(token, taskId)
-      if (!mountedRef.current || seq !== appActionSeq.current) return
-      await refreshAll(token)
-    } catch { /* ignore */ }
-  }
-
-  async function handleRenameTask(taskId: number, title: string) {
-    const seq = ++appActionSeq.current
-    try {
-      await updateTask(token, taskId, { title })
-      if (!mountedRef.current || seq !== appActionSeq.current) return
-      await refreshAll(token)
-    } catch { /* ignore */ }
-  }
 
   function openOutput(link: OutputLink, origin: ChatSession | null) {
     const targetSlug = link.project_slug || origin?.project_slug || activeProject?.slug || null
@@ -343,8 +326,41 @@ export function App() {
     setView('chat')
   }
 
+  const handleAuthed = (s: { token: string; user: User }) => {
+    // Keep the token in memory for this session's bearer header; the cookie carries
+    // it across reloads. Nothing goes to localStorage.
+    // authGate still holds its pre-auth value here — 'setup' means this is the very
+    // first run, so show the "pick a working folder" step before the app.
+    const firstRun = authGate === 'setup'
+    setToken(s.token); setUser(s.user); setAuthGate(null)
+    if (firstRun) setOnboarding(true)
+    void refreshAll(s.token)
+  }
+  const handleOnboardingDone = async (linked: Project | null) => {
+    setOnboarding(false)
+    if (linked) {
+      // They picked a real folder, so drop the empty auto-provisioned starter —
+      // its DB row AND its scaffold dir (delete is jailed to the data dir, so the
+      // linked folder's real files are never touched). This is first-run, so the
+      // only project that existed before this link is that starter.
+      try {
+        const { projects: all } = await listProjects(token)
+        await Promise.all(all.filter(p => p.slug !== linked.slug).map(p => deleteProject(token, p.slug).catch(() => {})))
+      } catch { /* best-effort — leaves the removable starter in place on failure */ }
+    }
+    await refreshAll(token)
+    // Make the linked folder the active project; if they skipped, the starter stays active.
+    if (linked) { setActiveProject(linked); setView('home') }
+  }
+  const handleLogout = async () => {
+    try { await logout(token) } catch { /* best-effort; cookie is cleared server-side */ }
+    setToken(''); setUser(null); setAuthGate('login')
+  }
+
   if (booting) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Starting Proxima…</p></div>
+  if (authGate) return <AuthGate mode={authGate} onAuthed={handleAuthed} />
   if (!token || !user) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>{error || 'Connecting…'}</p></div>
+  if (onboarding) return <React.Suspense fallback={<div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Loading…</p></div>}><WorkspaceOnboarding token={token} onDone={linked => void handleOnboardingDone(linked)} /></React.Suspense>
 
   return (
     <AppShell
@@ -352,16 +368,14 @@ export function App() {
       activeProject={activeProject}
       activeSession={activeSession}
       currentView={view}
+      onLogout={() => void handleLogout()}
       features={features}
       onNewChat={() => void startNewSession()}
       onRenameSession={(id, title) => void handleRenameSession(id, title)}
       onDeleteSession={id => void handleDeleteSession(id)}
       onSelectProject={selectProject}
       onSelectSession={session => { clearPendingNavigation(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
-      onOpenTask={taskId => { setPendingTask(taskId); setView('tasks'); const s = sessions.find(x => x.task_id === taskId); if (s) markSeen(s.id, s.updated_at) }}
       onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setPendingDesign({ id: session.id, title: session.title }); setView('design') }}
-      onDeleteTask={taskId => void handleDeleteTask(taskId)}
-      onRenameTask={(taskId, title) => void handleRenameTask(taskId, title)}
       seen={seen}
       busySessions={busySessions}
       onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }}
@@ -380,7 +394,6 @@ export function App() {
         onNewChat={() => void startNewSession()}
         onOpenChat={id => { const s = sessions.find(x => x.id === id); if (s) { setActiveSession(s); const sp = projects.find(p => p.slug === s.project_slug); if (sp) setActiveProject(sp); markSeen(s.id, s.updated_at) } setView('chat') }}
         onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id); setPendingDesign({ id: session.id, title: session.title }); setDesignCameFrom('home'); setView('design') }}
-        onOpenTask={taskId => { setPendingTask(taskId); setView('tasks'); const s = sessions.find(x => x.task_id === taskId); if (s) markSeen(s.id, s.updated_at) }}
         onOpenJob={jobId => { setPendingJob(jobId); setView('activity') }}
         onOpenArtifact={artifact => { const p = projects.find(x => x.slug === artifact.project_slug); if (p) setActiveProject(p); setPendingArtifact(artifact); setView('artifacts') }}
         onOpenProject={slug => { const p = projects.find(x => x.slug === slug); if (p) selectProject(p) }}
@@ -399,7 +412,6 @@ export function App() {
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onBackToChat={returnToChat ? backToOriginChat : undefined} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
-      {view === 'tasks' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><TasksScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} pendingTaskId={pendingTask} onPendingConsumed={() => setPendingTask(null)} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onOpenJob={jobId => { setPendingJob(jobId); setView('activity') }} onIterate={s => { setActiveSession(s); setView('chat') }} draft={pendingDraft} onDraftConsumed={() => setPendingDraft(null)} /></React.Suspense>}
       {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading activity..." />}><ActivityScreen token={token} activeProject={activeProject} pendingJobId={pendingJob} onPendingConsumed={() => setPendingJob(null)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('activity'); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></React.Suspense>}
       {/* Always mounted (hidden when inactive) so the PTY shells survive navigating
@@ -409,7 +421,7 @@ export function App() {
       {features.video && view === 'video' && <React.Suspense fallback={<ViewFallback label="Loading Video Studio..." />}><VideoScreen token={token} project={activeProject} profileId={activeProfile?.id ?? null} openVideoId={pendingVideoId} onOpened={() => setPendingVideoId(null)} onExit={videoCameFrom === 'chat' && returnToChat ? backToOriginChat : videoCameFrom ? () => { const v = videoCameFrom; setVideoCameFrom(null); setView(v) } : undefined} onOpenArtifact={path => { if (!activeProject) return; setPendingArtifact({ type: 'video-file', title: path.split('/').pop() || 'Rendered video', path, project_slug: activeProject.slug }); setView('artifacts') }} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading runners..." />}><RunnersScreen runners={runners} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} runners={runners} features={features} onRefresh={refreshAll} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} runners={runners} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />

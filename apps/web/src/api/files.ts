@@ -14,9 +14,10 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
   return new Error(`${fallback} (${res.status}${res.statusText ? ` ${res.statusText}` : ''})${detail ? `: ${detail}` : ''}`)
 }
 
-// Token-authenticated raw-file URL usable directly as <img>/<video> src.
-export const previewUrl = (token: string, slug: string, path: string) =>
-  `/api/preview/${q(token)}/${q(slug)}/${path.split('/').map(q).join('/')}`
+// Raw-file URL usable directly as <img>/<video> src. Auth via the proxima_session
+// cookie (sent same-origin) — no token in the URL.
+export const previewUrl = (slug: string, path: string) =>
+  `/api/preview/${q(slug)}/${path.split('/').map(q).join('/')}`
 
 // Seed a new Design Studio scene containing an existing project image (full-bleed).
 export const designFromImage = (token: string, slug: string, path: string, title?: string) =>
@@ -46,14 +47,14 @@ export async function uploadFile(token: string, slug: string, file: File, dir?: 
 }
 
 // Generate (text→image) or edit (image+prompt→image) a design asset via 9router.
-export const genDesignImage = (token: string, slug: string, body: { prompt: string; size?: string; model?: string; image?: string }, signal?: AbortSignal) =>
+export const genDesignImage = (token: string, slug: string, body: { prompt: string; size?: string; model?: string; image?: string; images?: string[] }, signal?: AbortSignal) =>
   api<{ path: string; name: string }>(`/api/projects/${slug}/design/image`, token, { method: 'POST', body: JSON.stringify(body), signal })
 export const designImageModels = (token: string, slug: string) =>
   api<{ models: string[]; configured: boolean }>(`/api/projects/${slug}/design/image-models`, token)
 
-// URL for inline preview/download of a project file (token in path for <img>/<a>).
-export const fileUrl = (token: string, slug: string, path: string) =>
-  `/api/preview/${encodeURIComponent(token)}/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`
+// URL for inline preview/download of a project file (<img>/<a>); cookie-authed.
+export const fileUrl = (slug: string, path: string) =>
+  `/api/preview/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`
 
 // Run & preview a project app (managed dev server).
 export type AppStatus = { running: boolean; ready?: boolean; port?: number; command?: string; log?: string[]; exited?: boolean }
@@ -63,8 +64,8 @@ export const appStop = (token: string, slug: string) =>
   api<{ ok: boolean }>(`/api/projects/${slug}/app/stop`, token, { method: 'POST' })
 export const appStatus = (token: string, slug: string) =>
   api<AppStatus>(`/api/projects/${slug}/app/status`, token)
-export const appViewUrl = (token: string, slug: string) =>
-  `/api/appview/${encodeURIComponent(token)}/${encodeURIComponent(slug)}/`
+export const appViewUrl = (slug: string) =>
+  `/api/appview/${encodeURIComponent(slug)}/`
 // Deployment config the SPA needs early — apps_domain enables per-app remote
 // preview subdomains (<slug>.<apps_domain>); null ⇒ local-only preview.
 export const getPublicConfig = (token: string) =>

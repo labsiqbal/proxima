@@ -99,22 +99,6 @@ def test_session_rename_and_delete(tmp_path):
     assert client.get(f"/api/sessions/{sid}/messages", headers=headers).status_code == 404
 
 
-def test_orphan_task_session_is_self_healed(tmp_path):
-    from fastapi.testclient import TestClient
-    from proxima_api.main import create_app
-    app = create_app({"database_path": str(tmp_path / "h.db"), "workspace_root": str(tmp_path / "ws"), "projectctl_path": "/usr/bin/true", "start_worker": False})
-    c = TestClient(app)
-    tok = c.post("/auth/auto").json()["token"]
-    h = {"Authorization": f"Bearer {tok}"}
-    slug = c.get("/api/projects", headers=h).json()["projects"][0]["slug"]
-    task = c.post(f"/api/projects/{slug}/tasks", headers=h, json={"title": "t"}).json()
-    sid = task["session_id"]
-    # simulate a stale orphan: task gone but its session lingers (pre-fix state)
-    app.state.db.execute("DELETE FROM tasks WHERE id = ?", (task["id"],))
-    # the list call self-heals: the orphan session is gone
-    assert all(s["id"] != sid for s in c.get("/api/sessions", headers=h).json()["sessions"])
-
-
 def test_events_resume_cursor_is_id_not_per_run_seq(tmp_path):
     # Each run restarts seq at 1, so seq is not a session-level cursor. The events
     # list/stream must resume by events.id (session-monotonic). Regression for the
@@ -150,7 +134,7 @@ def test_generate_title_handles_whitespace_only_runner_output(tmp_path):
         async def new_session(self, cwd):
             return "title-session"
 
-        async def prompt(self, sid, text, on_update, timeout=30):
+        async def prompt(self, sid, text, on_update, timeout=30, images=None):
             on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "   \n\t  "}})
             return "end_turn"
 

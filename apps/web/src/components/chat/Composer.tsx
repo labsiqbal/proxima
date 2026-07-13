@@ -95,9 +95,9 @@ export function Composer({
 
 	// Prefix the draft with the media command; whatever the user types next is the
 	// generation prompt. Swaps an existing media-command prefix instead of stacking.
-	const pickGenerate = (command: "/image" | "/video") => {
+	const pickGenerate = (command: "/image" | "/video" | "/design") => {
 		setGenOpen(false);
-		setDraft((d) => `${command} ${d.replace(/^\/(image|gambar|video-studio|video)\b\s*/i, "")}`);
+		setDraft((d) => `${command} ${d.replace(/^\/(image|gambar|video-studio|video|design|image-studio|design-studio)\b\s*/i, "")}`);
 		taRef.current?.focus();
 	};
 	const [commands, setCommands] = React.useState<CatalogCommand[]>([]);
@@ -356,7 +356,7 @@ export function Composer({
 						disabled={disabled || submitting}
 						aria-haspopup="menu"
 						aria-expanded={genOpen}
-							title={features.video ? "Generate media with the selected provider (/image, /video)" : "Generate an image with the selected provider (/image)"}
+							title="Generate media with the selected provider (/image, /video) or draft a design (/design)"
 						onClick={() => setGenOpen((o) => !o)}
 					>
 						<IconSparkle size={15} />
@@ -365,9 +365,13 @@ export function Composer({
 					{genOpen && (
 						<div className="composer-gen-menu" role="menu">
 							<button type="button" role="menuitem" onClick={() => pickGenerate("/image")}>
-								<IconDesign size={15} /> Image
+								<IconSparkle size={15} /> Image
 								<span className="composer-gen-hint">/image</span>
 							</button>
+								{features.designStudio && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
+									<IconDesign size={15} /> Design draft
+									<span className="composer-gen-hint">/design</span>
+								</button>}
 								{features.video && <button type="button" role="menuitem" onClick={() => pickGenerate("/video")}>
 									<IconVideo size={15} /> Video
 									<span className="composer-gen-hint">/video</span>

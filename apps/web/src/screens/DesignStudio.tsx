@@ -1,7 +1,7 @@
 import React from 'react'
-import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Transformer, Arrow } from 'react-konva'
+import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Circle, Transformer, Arrow } from 'react-konva'
 import type Konva from 'konva'
-import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
+import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
 import { createRun } from '../api/runs'
 import { useRunStream } from '../hooks/useRunStream'
@@ -16,6 +16,7 @@ import { QuestionForm } from '../components/chat/QuestionForm'
 import { splitOnQuestionForms } from '../components/chat/questionForm'
 import { getImageGenSettings } from '../api/settings'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
+import { ColorInput } from '../components/design/ColorInput'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
 import type { Project, RunEvent } from '../types'
 
@@ -65,7 +66,7 @@ const cornerRadiusOf = (l: { cornerRadius?: number; cornerRadiusTL?: number; cor
     ? [l.cornerRadiusTL ?? l.cornerRadius ?? 0, l.cornerRadiusTR ?? l.cornerRadius ?? 0, l.cornerRadiusBR ?? l.cornerRadius ?? 0, l.cornerRadiusBL ?? l.cornerRadius ?? 0]
     : (l.cornerRadius ?? 0)
 const fillOf = (l: FillStyle & { width?: number; height?: number }) => {
-  const stops = (l.gradientStops?.length ? [...l.gradientStops].sort((a, b) => a.offset - b.offset) : [{ offset: 0, color: l.fill }, { offset: 1, color: l.fill2 || l.fill }]).flatMap(s => [clamp(s.offset, 0, 1), s.color])
+  const stops = gradientStopList(l).flatMap(s => [clamp(s.offset, 0, 1), s.color])
   if (l.fillType === 'linear-gradient') {
     const w = l.width || 1, h = l.height || 1, a = ((l.gradientAngle ?? 0) - 90) * Math.PI / 180
     const cx = w / 2, cy = h / 2, r = Math.hypot(w, h) / 2
@@ -137,26 +138,30 @@ function EffectStackEditor({ effects = [], onChange }: { effects?: LayerEffect[]
     {!effects.length && <p className="ds-tip muted">No effects yet.</p>}
     {effects.map((fx, i) => <div className="ds-effect-card" key={fx.id || i}>
       <div className="ds-effect-head"><strong>{fx.type.replace('-', ' ')}</strong><span><button onClick={() => move(i, -1)}>↑</button><button onClick={() => move(i, 1)}>↓</button><button className="danger" onClick={() => onChange(effects.filter((_, ix) => ix !== i))}>Delete</button></span></div>
-      {!fx.type.includes('blur') && <div className="ds-row2"><label>Color<input type="color" value={fx.color || '#000000'} onChange={e => patch(i, { color: e.target.value })} /></label><NumberAdjuster label="Opacity" value={fx.opacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patch(i, { opacity: v })} /></div>}
+      {!fx.type.includes('blur') && <div className="ds-row2"><label>Color<ColorInput value={fx.color || '#000000'} onChange={v => patch(i, { color: v })} /></label><NumberAdjuster label="Opacity" value={fx.opacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patch(i, { opacity: v })} /></div>}
       <div className="ds-row2"><NumberAdjuster label="Blur" value={fx.blur ?? 12} min={0} max={200} step={1} onChange={v => patch(i, { blur: v })} /><NumberAdjuster label="Spread" value={fx.spread ?? 0} min={-80} max={120} step={1} onChange={v => patch(i, { spread: v })} /></div>
       {!fx.type.includes('blur') && <div className="ds-row2"><NumberAdjuster label="Offset X" value={fx.offsetX ?? 0} min={-160} max={160} step={1} onChange={v => patch(i, { offsetX: v })} /><NumberAdjuster label="Offset Y" value={fx.offsetY ?? 0} min={-160} max={160} step={1} onChange={v => patch(i, { offsetY: v })} /></div>}
     </div>)}
   </div>
 }
 function GradientEditor({ fill, onChange, width, height }: { fill: FillStyle; onChange: (patch: Partial<FillStyle>) => void; width: number; height: number }) {
-  const stops = fill.gradientStops?.length ? fill.gradientStops : [{ id: uid('gs'), offset: 0, color: fill.fill }, { id: uid('gs'), offset: 1, color: fill.fill2 || fill.fill }]
-  const patchStop = (i: number, patch: Partial<{ offset: number; color: string }>) => onChange({ gradientStops: stops.map((s, ix) => ix === i ? { ...s, ...patch, offset: clamp(patch.offset ?? s.offset, 0, 1) } : s) })
+  // Color(fill)=start and To(fill2)=end are edited by the pickers above; these are the
+  // interior colour stops in between (clamped to 1..99% so they never fight the ends).
+  const stops = fill.gradientStops || []
+  const patchStop = (i: number, patch: Partial<{ offset: number; color: string }>) => onChange({ gradientStops: stops.map((s, ix) => ix === i ? { ...s, ...patch, offset: clamp(patch.offset ?? s.offset, 0.01, 0.99) } : s) })
   const addStop = () => onChange({ gradientStops: [...stops, { id: uid('gs'), offset: 0.5, color: fill.fill2 || fill.fill }].sort((a, b) => a.offset - b.offset) })
-  const removeStop = (i: number) => { if (stops.length > 2) onChange({ gradientStops: stops.filter((_, ix) => ix !== i) }) }
+  const removeStop = (i: number) => onChange({ gradientStops: stops.filter((_, ix) => ix !== i) })
   return <div className="ds-gradient-editor">
     <div className="ds-row2"><NumberAdjuster label="Start X" value={fill.gradientStartX ?? 0} min={-width} max={width * 2} step={1} onChange={v => onChange({ gradientStartX: v })} /><NumberAdjuster label="Start Y" value={fill.gradientStartY ?? 0} min={-height} max={height * 2} step={1} onChange={v => onChange({ gradientStartY: v })} /></div>
     <div className="ds-row2"><NumberAdjuster label="End X" value={fill.gradientEndX ?? width} min={-width} max={width * 2} step={1} onChange={v => onChange({ gradientEndX: v })} /><NumberAdjuster label="End Y" value={fill.gradientEndY ?? height} min={-height} max={height * 2} step={1} onChange={v => onChange({ gradientEndY: v })} /></div>
+    <p className="ds-tip muted">Color &amp; To set the start/end. Add colours in between:</p>
     <div className="ds-gradient-stops">
       {stops.map((s, i) => <div className="ds-gradient-stop" key={s.id || i}>
-        <input type="color" value={s.color} onChange={e => patchStop(i, { color: e.target.value })} />
-        <NumberAdjuster label={`${Math.round(s.offset * 100)}%`} value={Math.round(s.offset * 100)} min={0} max={100} step={1} onChange={v => patchStop(i, { offset: v / 100 })} />
-        <button className="ghost-button sm danger" disabled={stops.length <= 2} onClick={() => removeStop(i)}>Delete</button>
+        <ColorInput value={s.color} onChange={v => patchStop(i, { color: v })} />
+        <NumberAdjuster label={`${Math.round(s.offset * 100)}%`} value={Math.round(s.offset * 100)} min={1} max={99} step={1} onChange={v => patchStop(i, { offset: v / 100 })} />
+        <button className="ghost-button sm danger" onClick={() => removeStop(i)}>Delete</button>
       </div>)}
+      {!stops.length && <p className="ds-tip muted">No mid stops — just Color → To.</p>}
     </div>
     <button className="ghost-button sm" onClick={addStop}>Add color stop</button>
   </div>
@@ -287,6 +292,18 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
     },
   }
   const img = useImg(layer.type === 'image' ? (resolveSrc ? resolveSrc(layer.src) : layer.src) : '')
+  // Keep the image's size + crop consistent in EVERY painted frame. react-konva can
+  // apply the new width/height a beat before the recomputed crop rect, so mid crop-drag
+  // the image draws stretched for a frame. useLayoutEffect runs synchronously after the
+  // commit but before paint, re-asserting both together so the stretched frame is never
+  // shown.
+  const imgNodeRef = React.useRef<Konva.Image | null>(null)
+  React.useLayoutEffect(() => {
+    const n = imgNodeRef.current
+    if (layer.type !== 'image' || !n || !img) return
+    ;(n as Konva.Node).setAttrs({ width: layer.width, height: layer.height, crop: imageCrop(img, layer) })
+    n.getLayer()?.batchDraw()
+  }, [img, layer])
   switch (layer.type) {
     case 'text': return <Group {...common} x={layer.x} y={layer.y} opacity={editing ? 0 : (layer.opacity ?? 1)}>
       {layer.glow && <Text {...textStyleOf(layer)} fill={layer.glowColor || layer.fill} opacity={layer.glowOpacity ?? 0.55} shadowColor={layer.glowColor || layer.fill} shadowBlur={layer.glowBlur ?? 18} shadowOpacity={layer.glowOpacity ?? 0.65} listening={false} />}
@@ -308,7 +325,7 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
         <Rect width={layer.width} height={layer.height} fill="rgba(148,163,184,0.14)" stroke="#94a3b8" strokeWidth={1.5} dash={[8, 6]} cornerRadius={cornerRadiusOf(layer)} />
         <Text width={layer.width} height={layer.height} align="center" verticalAlign="middle" text="✦ Generating image…" fontSize={Math.max(12, Math.min(26, layer.width / 14))} fill="#64748b" listening={false} />
       </Group>
-      return <KImage {...common} x={layer.x} y={layer.y} width={layer.width} height={layer.height} image={img} crop={imageCrop(img, layer)} cornerRadius={cornerRadiusOf(layer)} {...effectShadowOf(layer)} />
+      return <KImage {...common} ref={n => { imgNodeRef.current = n as Konva.Image | null; (onRef as (x: Konva.Node | null) => void)(n) }} x={layer.x} y={layer.y} width={layer.width} height={layer.height} image={img} crop={imageCrop(img, layer)} cornerRadius={cornerRadiusOf(layer)} {...effectShadowOf(layer)} />
     }
   }
 }
@@ -420,17 +437,29 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [savingVersion, setSavingVersion] = React.useState(false)
   const versionsSeq = React.useRef(0)
   const [leftTab, setLeftTab] = React.useState<'chat' | 'assets' | 'layers'>('chat')
+  // Desktop panel collapse (mobile uses bottom-sheet overlays instead). Persisted so
+  // the canvas stays as wide as you left it across sessions.
+  const [leftCollapsed, setLeftCollapsed] = React.useState<boolean>(() => { try { return localStorage.getItem('proxima.design.leftCollapsed') === '1' } catch { return false } })
+  const [rightCollapsed, setRightCollapsed] = React.useState<boolean>(() => { try { return localStorage.getItem('proxima.design.rightCollapsed') === '1' } catch { return false } })
+  React.useEffect(() => { try { localStorage.setItem('proxima.design.leftCollapsed', leftCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [leftCollapsed])
+  React.useEffect(() => { try { localStorage.setItem('proxima.design.rightCollapsed', rightCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [rightCollapsed])
   const [assets, setAssets] = React.useState<string[]>([])
   const [uploading, setUploading] = React.useState(false)
   const [imgPrompt, setImgPrompt] = React.useState('')
-  // Asset picked as the reference for the next AI generation (image+prompt → image).
-  const [refImage, setRefImage] = React.useState<string | null>(null)
+  // Reference/source images for the next AI generation (image+prompt → image, or
+  // compose several into one). Providers without referenceImages keep just the first.
+  const [refImages, setRefImages] = React.useState<string[]>([])
   const [imgBusy, setImgBusy] = React.useState(false)
   const [imgBusyKind, setImgBusyKind] = React.useState<'generate' | 'edit' | 'resolve' | null>(null)
   const [imgStartedAt, setImgStartedAt] = React.useState<number | null>(null)
   const [imgElapsed, setImgElapsed] = React.useState(0)
   const [imageProviderKind, setImageProviderKind] = React.useState<'auto' | 'codex' | 'oauth' | 'higgsfield' | 'http'>('codex')
   const [imageEditReady, setImageEditReady] = React.useState(false)
+  // Provider can compose MULTIPLE reference images (Settings → Image generation);
+  // when false the ref tray is capped at one.
+  const [imageMultiReady, setImageMultiReady] = React.useState(false)
+  const addRefImage = React.useCallback((path: string) => setRefImages(prev => prev.includes(path) ? prev : (imageMultiReady ? [...prev, path] : [path])), [imageMultiReady])
+  const removeRefImage = React.useCallback((path: string) => setRefImages(prev => prev.filter(p => p !== path)), [])
   const [designs, setDesigns] = React.useState<{ id: string; title: string; type: string; w: number; h: number; artboards: number; sessionId?: number; art?: Artboard }[]>([])
   const [projectComponents, setProjectComponents] = React.useState<ProjectComponent[]>([])
   const designFs = React.useMemo(() => project ? projectFs(token, project.slug, 'artifacts/design') : null, [token, project?.slug])
@@ -491,6 +520,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const marqueeBoxRef = React.useRef<{ ai: number; x: number; y: number; w: number; h: number } | null>(null)
   const dragStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const [view, setView] = React.useState({ x: 0, y: 0, scale: 1 })
+  // Canvas eyedropper: active when a ColorInput asked to pick from the canvas (used
+  // where the native browser EyeDropper isn't available). Next canvas click samples.
+  const [eyedrop, setEyedrop] = React.useState<{ apply: (hex: string) => void } | null>(null)
   const panMode = spacePan || middlePan || (isMobile && mobileTool === 'pan')
   const wrapRef = React.useRef<HTMLDivElement>(null)
   const stageRef = React.useRef<Konva.Stage>(null)
@@ -635,6 +667,35 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }, [token, restoreRun])
   React.useEffect(() => { hydrateChatRef.current = doHydrateChat }, [doHydrateChat])
 
+  // Watchdog against a hung "Designing…": the busy state only clears on a terminal
+  // stream event, so a dropped SSE/WS or a worker that died without emitting one would
+  // leave it spinning forever. While busy, poll the run's REAL status; once it's no
+  // longer running, reconcile — apply the reply if it finished, otherwise say it failed
+  // — and clear the busy state instead of hanging silently.
+  React.useEffect(() => {
+    const sid = scene?.sessionId
+    if (chatBusyRun == null || !sid) return
+    let on = true
+    const check = async () => {
+      try {
+        const r = await restoreRun(sid)
+        const runId = chatBusyRunRef.current
+        if (!on || runId == null || r.running) return
+        if (r.completed && r.lastRun != null) {
+          const m = await listMessages(token, sid)
+          const a = m.messages.filter(x => x.role === 'assistant' && x.run_id === r.lastRun)
+          if (a.length) applyReplyRef.current(r.lastRun, a[a.length - 1].content)
+        } else if (appliedRunRef.current !== runId) {
+          appliedRunRef.current = runId
+          setChat(c => [...c, { role: 'assistant', content: '⚠️ The design run stopped without finishing (it may have failed or the connection dropped). Try again.' }])
+        }
+        if (on) setChatBusyRun(null)
+      } catch { /* transient — retry next tick */ }
+    }
+    const t = window.setInterval(check, 20000)
+    return () => { on = false; window.clearInterval(t) }
+  }, [chatBusyRun, scene?.sessionId, token, restoreRun, setChatBusyRun, chatBusyRunRef])
+
   React.useEffect(() => {
     const seq = ++settingsSeq.current
     getImageGenSettings(token).then(cfg => {
@@ -642,11 +703,14 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const p = cfg.providers.find(x => x.id === cfg.provider)
       const kind = p?.kind || 'codex'
       setImageProviderKind(kind)
-      // Edits also work on a text-to-image provider when the backend can fall back
-      // to a connected xAI OAuth (see design_image fallback).
-      setImageEditReady(kind === 'http' || kind === 'oauth' || kind === 'higgsfield' || !!cfg.xaiOauthReady?.ready)
+      // The provider advertises whether it can edit/use reference images (codex now
+      // can, via the Codex OAuth Responses surface). A text-to-image-only provider
+      // still edits when the backend can fall back to a connected xAI OAuth.
+      setImageEditReady(!!p?.capabilities?.imageEdit || !!cfg.xaiOauthReady?.ready)
+      // Multiple-reference composition follows the selected model's capability.
+      setImageMultiReady(!!p?.capabilities?.referenceImages)
     }).catch(() => {
-      if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false) }
+      if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false); setImageMultiReady(false) }
     })
     return () => { if (seq === settingsSeq.current) settingsSeq.current += 1 }
   }, [token])
@@ -658,6 +722,24 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
   }, [imgBusy, imgStartedAt])
+  // A ColorInput without the native EyeDropper asks us to sample from the canvas.
+  React.useEffect(() => {
+    const onReq = (e: Event) => { const d = (e as CustomEvent).detail; if (d && typeof d.apply === 'function') setEyedrop({ apply: d.apply }) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEyedrop(null) }
+    window.addEventListener('proxima:eyedropper', onReq)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('proxima:eyedropper', onReq); window.removeEventListener('keydown', onKey) }
+  }, [])
+  const sampleStageColor = React.useCallback((): string | null => {
+    const st = stageRef.current; if (!st) return null
+    const p = st.getPointerPosition(); if (!p) return null
+    try {
+      const c = st.toCanvas({ pixelRatio: 1 }) as HTMLCanvasElement
+      const ctx = c.getContext('2d'); if (!ctx) return null
+      const d = ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data
+      return '#' + [d[0], d[1], d[2]].map(x => x.toString(16).padStart(2, '0')).join('')
+    } catch { return null }
+  }, [])
   React.useEffect(() => {
     if (cropMode && selectedIds[0] !== cropMode.id) setCropMode(null)
   }, [cropMode, selectedIds])
@@ -673,7 +755,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     setImgStartedAt(null)
     setImgElapsed(0)
   }
-  const genDesignImageWithTimeout = async (body: { prompt: string; size?: string; model?: string; image?: string }) => {
+  const genDesignImageWithTimeout = async (body: { prompt: string; size?: string; model?: string; image?: string; images?: string[] }) => {
     if (!project) throw new Error('No project selected')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), IMAGE_GEN_CLIENT_TIMEOUT_MS)
@@ -957,7 +1039,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
-  const resolveSrc = (s: string) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(token, project.slug, s) : s))
+  const resolveSrc = (s: string) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(project.slug, s) : s))
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'
@@ -982,6 +1064,31 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDesignId, designFs])
+
+  // Remember the last design open in this project, and reopen it when the studio is
+  // entered fresh (no deep-link). DesignStudio unmounts on every view change, so
+  // without this, leaving for another menu and coming back dropped you on the start
+  // screen with an empty chat — the design + its chat (which live on disk/in the DB)
+  // are still there, so we just reopen the last one and let hydrateChat restore it.
+  const lastDesignKey = project ? `proxima.design.last.${project.slug}` : null
+  React.useEffect(() => {
+    if (stage === 'studio' && scene?.id && lastDesignKey) {
+      try { localStorage.setItem(lastDesignKey, scene.id) } catch { /* storage disabled */ }
+    }
+  }, [stage, scene?.id, lastDesignKey])
+  const restoredRef = React.useRef(false)
+  React.useEffect(() => {
+    // openedTargetRef is set once a deep-link (openSession/openDesignId) has been
+    // handled this mount — guard on it too, so when onOpened() clears the prop and
+    // this effect re-runs, restore can't race in and overwrite the just-opened design
+    // with the last one before openDesign() finishes loading its scene.
+    if (restoredRef.current || openSession || openDesignId || openedTargetRef.current || scene || !designFs || !lastDesignKey) return
+    restoredRef.current = true
+    let id: string | null = null
+    try { id = localStorage.getItem(lastDesignKey) } catch { /* storage disabled */ }
+    if (id) void openDesign(id)  // openDesign no-ops gracefully if the design was deleted
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSession, openDesignId, designFs, lastDesignKey])
   const removeDesign = async (id: string) => {
     if (!designFs) return
     try { const f = await designFs.read(`${id}/scene.json`); const s = JSON.parse(f.content); if (s.sessionId) await deleteSession(token, s.sessionId).catch(() => undefined) } catch { /* no session */ }
@@ -1426,18 +1533,25 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     startImgBusy(editId ? 'edit' : 'generate')
     try {
       const ed = editId ? findLayer(editId) : null
-      const imagePath = ed && ed.type === 'image' && !/^(https?:|data:|blob:)/.test(ed.src) ? ed.src : (!editId && refImage ? refImage : undefined)
-      const contextualPrompt = buildImageContextPrompt(prompt, { editId })
+      const editSrc = ed && ed.type === 'image' && !/^(https?:|data:|blob:)/.test(ed.src) ? ed.src : undefined
+      // Sources: the edited layer's image first (if any), then the ref tray. Dedup.
+      const images = [...new Set([editSrc, ...refImages].filter(Boolean) as string[])]
+      // Label the inputs so the prompt can address them by name (e.g. "@image1 is the
+      // product, put it on @image2's background"). Sent in the same order as `images`.
+      const mapNote = images.length > 1
+        ? `You are given ${images.length} attached images, referred to in order as ${images.map((_, i) => `@image${i + 1}`).join(', ')}. When the prompt names an image (e.g. @image1), act on that specific attached image.\n\n`
+        : ''
+      const contextualPrompt = mapNote + buildImageContextPrompt(prompt, { editId })
       const frame = ed as unknown as { width?: number; height?: number } | null
       const abFrame = scene.artboards[focusAb] || scene.artboards[0]
       const size = sizeForFrame(frame?.width ?? (wantsBackgroundImage(prompt) ? abFrame?.width : undefined), frame?.height ?? (wantsBackgroundImage(prompt) ? abFrame?.height : undefined))
-      const r = await genDesignImageWithTimeout({ prompt: contextualPrompt, image: imagePath, size })
+      const r = await genDesignImageWithTimeout({ prompt: contextualPrompt, images: images.length ? images : undefined, size })
       if (!mountedRef.current || seq !== actionSeq.current) return
       loadAssets()
       if (editId && ed && ed.type === 'image') patchLayer(editId, { src: r.path } as Partial<Layer>)
       else if (wantsBackgroundImage(prompt)) addBackgroundImage(r.path)
       else await addImage(r.path)
-      setImgPrompt(''); setRefImage(null)
+      setImgPrompt(''); setRefImages([])
     } catch (err) {
       if (mountedRef.current && seq === actionSeq.current) setChat(c => [...c, { role: 'assistant', content: 'Image error: ' + String(err) }])
     } finally {
@@ -1554,7 +1668,14 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       // Fire the run, then hand off to the event stream (onDesignEvent). No polling
       // loop: the reply arrives live and, crucially, survives navigating away — the
       // run keeps going server-side and reconnects on return (see hydrateChat).
-      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text), display_message: text, profile_id: profileId ?? null })
+      // Vision: let the agent SEE the image assets that are relevant — those already
+      // placed in the scene, plus any the user names — so it composes from the real
+      // pixels, not just filenames. Capped to bound token cost.
+      const placed = sc.artboards.flatMap(a => a.layers.filter(l => l.type === 'image').map(l => (l as ImageLayer).src)).filter(s => !/^(gen:|https?:|data:|blob:)/i.test(s))
+      const lowerText = text.toLowerCase()
+      const mentioned = assets.filter(a => { const n = (a.split('/').pop() || '').toLowerCase(); return n && lowerText.includes(n) })
+      const visionPaths = [...new Set([...placed, ...mentioned])].slice(0, 8)
+      const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text, assets, visionPaths), display_message: text, profile_id: profileId ?? null })
       // Snapshot what the agent saw (detects mid-run manual edits at apply time) and
       // mark the scene as awaiting this run (persisted → recovery-on-open is exact).
       sentSceneRef.current = { runId: r.run_id, body: JSON.stringify({ ...sc, runPendingId: undefined }) }
@@ -1629,7 +1750,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const exportHtml = async () => {
     const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c))
     const cssFill = (l: FillStyle) => {
-      const stops = l.gradientStops?.length ? [...l.gradientStops].sort((a, b) => a.offset - b.offset).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ') : `${l.fill}, ${l.fill2 || l.fill}`
+      const stops = gradientStopList(l).map(s => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ')
       return l.fillType === 'linear-gradient' ? `linear-gradient(${l.gradientAngle ?? 90}deg, ${stops})` : l.fillType === 'radial-gradient' ? `radial-gradient(circle, ${stops})` : l.fill
     }
     const cssRadius = (l: { cornerRadius?: number; cornerRadiusTL?: number; cornerRadiusTR?: number; cornerRadiusBR?: number; cornerRadiusBL?: number }) =>
@@ -1761,10 +1882,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         </div>
       </div>
     </div>
-    <div className="ds-body">
+    <div className={`ds-body ${!isMobile && leftCollapsed ? 'left-collapsed' : ''} ${!isMobile && rightCollapsed ? 'right-collapsed' : ''}`}>
+      {!isMobile && leftCollapsed && <button className="ds-panel-reopen left" onClick={() => setLeftCollapsed(false)} title="Show panel">›</button>}
       <aside className={`ds-left ${isMobile && mSheet === 'panel' ? 'sheet-open' : ''}`}>
         <div className="ds-left-tabs">
           {(['chat', 'assets', 'layers'] as const).map(t => <button key={t} className={leftTab === t ? 'active' : ''} onClick={() => setLeftTab(t)}>{t === 'chat' ? 'Chat' : t === 'assets' ? 'Assets' : 'Layers'}</button>)}
+          {!isMobile && <button className="ds-panel-collapse" onClick={() => setLeftCollapsed(true)} title="Hide panel">‹</button>}
         </div>
         <div className="ds-left-body">
           {leftTab === 'chat' && <div className="ds-chat">
@@ -1786,19 +1909,28 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           </div>}
           {leftTab === 'assets' && <div className="ds-assets">
             <div className="ds-gen">
-              <textarea rows={2} placeholder={refImage ? 'Describe what to make from the reference image…' : 'Generate an image with AI… e.g. dark coffee splash, top-down'} value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
-              {refImage && <span className="ds-ref-chip" title={refImage}>
-                <img src={resolveSrc(refImage)} alt="" /> Ref: {refImage.split('/').pop()}
-                <button type="button" aria-label="Clear reference" onClick={() => setRefImage(null)}>×</button>
-              </span>}
-              <button className="primary-button" disabled={imgBusy || !imgPrompt.trim()} onClick={() => void genImage(imgPrompt)}>{imgBusy ? 'Generating…' : refImage ? 'Generate from reference' : 'Generate image'}</button>
+              <textarea rows={2} placeholder={refImages.length > 1 ? 'Describe how to combine these images…' : refImages.length ? 'Describe what to make from this image…' : 'Generate an image with AI… e.g. dark coffee splash, top-down'} value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
+              {refImages.length > 0 && <div className="ds-ref-tray">
+                {refImages.map((p, i) => <span key={p} className="ds-ref-chip" title={p}>
+                  <img src={resolveSrc(p)} alt="" />
+                  <span className="ds-ref-tag">@image{i + 1}</span>
+                  <button type="button" aria-label="Remove input image" onClick={() => removeRefImage(p)}>×</button>
+                </span>)}
+              </div>}
+              {refImages.length > 1 && <p className="ds-tip muted">Refer to them in the prompt by name, e.g. “put @image1 on @image2’s background”.</p>}
+              <button className="primary-button" disabled={imgBusy || !imgPrompt.trim()} onClick={() => void genImage(imgPrompt)}>{imgBusy ? 'Generating…' : refImages.length > 1 ? `Compose ${refImages.length} images` : refImages.length ? 'Edit with AI' : 'Generate image'}</button>
+              {refImages.length > 0 && !imageEditReady
+                ? <p className="ds-tip muted">The selected provider is text-to-image only — switch to an edit-capable one in Settings → Image generation to use input images.</p>
+                : refImages.length > 0 && !imageMultiReady
+                  ? <p className="ds-tip muted">This model uses a single input image. Pick a reference-capable model in Settings → Image generation to compose several.</p>
+                  : null}
               {imageLoading}
             </div>
             <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={e => { doUpload(e.target.files); e.target.value = '' }} />
             <button className="ghost-button ds-upload" onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload media'}</button>
-            {assets.length ? <div className="ds-asset-grid">{assets.map(a => <div key={a} className={`ds-asset-card ${refImage === a ? 'is-ref' : ''}`}>
+            {assets.length ? <div className="ds-asset-grid">{assets.map(a => <div key={a} className={`ds-asset-card ${refImages.includes(a) ? 'is-ref' : ''}`}>
               <button className="ds-asset" onClick={() => void addImage(a)} title="Add to canvas"><img src={resolveSrc(a)} alt="" /></button>
-              <button className="ds-asset-ref" type="button" aria-label="Use as AI reference" title="Use as reference for the next AI generation" onClick={e => { e.stopPropagation(); setRefImage(cur => cur === a ? null : a) }}>✦</button>
+              <button className="ds-asset-ref" type="button" aria-label="Use as AI input" title={refImages.includes(a) ? 'Remove from AI inputs' : 'Use as input for the next AI generation'} onClick={e => { e.stopPropagation(); refImages.includes(a) ? removeRefImage(a) : addRefImage(a) }}>✦</button>
               <button className="ds-asset-delete" type="button" aria-label="Delete asset" title="Delete asset" onClick={e => { e.stopPropagation(); void deleteAsset(a) }}>×</button>
             </div>)}</div>
               : <p className="muted ds-tip">No media yet. Upload images (or generate them in chat with /image) to reuse across designs.</p>}
@@ -1827,7 +1959,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             </div>)}</>}</div>}
         </div>
       </aside>
-      <div className="ds-canvas-wrap figma" ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
+      <div className={`ds-canvas-wrap figma ${eyedrop ? 'ds-eyedropping' : ''}`} ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
+        {eyedrop && <div className="ds-eyedrop-hint">🎨 Click anywhere on the canvas to pick a colour · Esc to cancel</div>}
         <Stage ref={stageRef} width={box.w} height={box.h} x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} onWheel={onWheel} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           draggable={panMode}
           onMouseMove={updateMarquee}
@@ -1836,6 +1969,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           onDragMove={e => { if (e.target === stageRef.current) setView(v => ({ ...v, x: e.target.x(), y: e.target.y() })) }}
           onDragEnd={e => { if (e.target === stageRef.current) setView(v => ({ ...v, x: e.target.x(), y: e.target.y() })) }}
           onMouseDown={e => {
+            if (eyedrop) { e.cancelBubble = true; e.evt.preventDefault(); const hex = sampleStageColor(); if (hex) eyedrop.apply(hex); setEyedrop(null); return }
             if (e.evt.button === 1) { e.evt.preventDefault(); setMiddlePan(true); stageRef.current?.draggable(true); return }
             if (e.target === e.target.getStage() && !panMode) setSelectedId(null)
           }}>
@@ -1911,6 +2045,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
                       const d = cropResizeRef.current
                       if (!d || d.id !== im.id) return
                       const next = resizeCropFrame(d, e.target.x() - d.px, e.target.y() - d.py)
+                      // The image node keeps size+crop consistent via a useLayoutEffect in
+                      // LayerNode (runs before paint), so a plain state update never shows a
+                      // stretched frame.
                       patchLayerLive(im.id, next as Partial<Layer>)
                       e.target.position({ x: d.px, y: d.py })
                     }}
@@ -1929,6 +2066,28 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               {guides && guides.ai === ai && guides.lines.map((g, gi) => g.axis === 'x'
                 ? <Line key={gi} points={[g.pos, 0, g.pos, a.height]} stroke="#ec4899" strokeWidth={1 / view.scale} listening={false} />
                 : <Line key={gi} points={[0, g.pos, a.width, g.pos]} stroke="#ec4899" strokeWidth={1 / view.scale} listening={false} />)}
+              {/* Gradient direction guide: a draggable line from the Color(start) to the
+                  To(end) point, so you can see + set where the gradient runs. */}
+              {!cropMode && !edit && selectedIds.length === 1 && (() => {
+                const l = a.layers.find(x => x.id === selectedIds[0]) as (RectLayer | TextLayer | TriangleLayer) | undefined
+                if (!l || !['rect', 'text', 'triangle'].includes(l.type)) return null
+                const g = l as unknown as FillStyle
+                if (g.fillType !== 'linear-gradient' && g.fillType !== 'radial-gradient') return null
+                const lw = (l as RectLayer).width || 1
+                const lh = (l.type === 'text' ? ((l as TextLayer).height || (l as TextLayer).fontSize * ((l as TextLayer).lineHeight || 1.2)) : (l as RectLayer).height) || 1
+                const ang = (((g as { gradientAngle?: number }).gradientAngle ?? 0) - 90) * Math.PI / 180
+                const cx = lw / 2, cy = lh / 2, rr = Math.hypot(lw, lh) / 2
+                const gs = g as { gradientStartX?: number; gradientStartY?: number; gradientEndX?: number; gradientEndY?: number }
+                const sx = gs.gradientStartX ?? cx - Math.cos(ang) * rr, sy = gs.gradientStartY ?? cy - Math.sin(ang) * rr
+                const ex = gs.gradientEndX ?? cx + Math.cos(ang) * rr, ey = gs.gradientEndY ?? cy + Math.sin(ang) * rr
+                const ox = l.x, oy = l.y, hr = 7 / view.scale
+                const cursor = (on: boolean) => (e: Konva.KonvaEventObject<MouseEvent>) => { const st = e.target.getStage(); if (st) st.container().style.cursor = on ? 'move' : '' }
+                return <Group key={'grad' + l.id}>
+                  <Line points={[ox + sx, oy + sy, ox + ex, oy + ey]} stroke="#ffffff" strokeWidth={1.5 / view.scale} shadowColor="#000000" shadowBlur={2 / view.scale} shadowOpacity={0.6} listening={false} />
+                  <Circle x={ox + sx} y={oy + sy} radius={hr} fill={l.fill} stroke="#ffffff" strokeWidth={2 / view.scale} shadowColor="#000000" shadowBlur={3 / view.scale} shadowOpacity={0.5} draggable onMouseEnter={cursor(true)} onMouseLeave={cursor(false)} onDragStart={() => snapshot()} onDragMove={e => patchLayerLive(l.id, { gradientStartX: Math.round(e.target.x() - ox), gradientStartY: Math.round(e.target.y() - oy) } as Partial<Layer>)} />
+                  <Circle x={ox + ex} y={oy + ey} radius={hr} fill={l.fill2 || l.fill} stroke="#ffffff" strokeWidth={2 / view.scale} shadowColor="#000000" shadowBlur={3 / view.scale} shadowOpacity={0.5} draggable onMouseEnter={cursor(true)} onMouseLeave={cursor(false)} onDragStart={() => snapshot()} onDragMove={e => patchLayerLive(l.id, { gradientEndX: Math.round(e.target.x() - ox), gradientEndY: Math.round(e.target.y() - oy) } as Partial<Layer>)} />
+                </Group>
+              })()}
             </Group>)}
             <Transformer ref={trRef} rotateEnabled flipEnabled={false}
               keepRatio={selected?.type === 'line'} enabledAnchors={selected?.type === 'line' ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : undefined}
@@ -1937,6 +2096,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               anchorSize={isMobile ? 20 : 11} anchorCornerRadius={isMobile ? 10 : 6} anchorStrokeWidth={1.5}
               borderStroke="#3b82f6" borderStrokeWidth={1.5} anchorStroke="#3b82f6" anchorFill="#ffffff"
               anchorStyleFunc={a => { if (a.hasName('rotater')) { a.cornerRadius(a.width() / 2); a.fill('#3b82f6'); a.stroke('#ffffff'); a.strokeWidth(2) } }} />
+            {/* Eyedropper capture: a transparent top layer swallows the click (so it
+                samples a colour instead of selecting/moving the shape under it). */}
+            {eyedrop && <Rect x={-100000} y={-100000} width={300000} height={300000} fill="#000000" opacity={0} onMouseDown={e => { e.cancelBubble = true; const hex = sampleStageColor(); if (hex) eyedrop.apply(hex); setEyedrop(null) }} />}
           </KLayer>
         </Stage>
         {scene.artboards.map((a, ai) => <div key={'ablbl' + a.id} className="ds-ab-label"
@@ -1964,6 +2126,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         </>}
       </div>
       <aside className={`ds-inspector ${isMobile && mSheet === 'inspector' ? 'sheet-open' : ''}`}>
+        {!isMobile && <button className="ds-panel-collapse right" onClick={() => setRightCollapsed(true)} title="Hide inspector">›</button>}
         {selectedIds.length > 1 ? <div className="ds-fields">
           <div className="ds-insp-head"><strong>{selectedIds.length} selected</strong><button className="ghost-button danger" onClick={removeSelected}>Delete</button></div>
           <div className="ds-btn-row"><button onClick={groupSelected}>Group</button><button onClick={ungroupSelected}>Ungroup</button></div>
@@ -1982,7 +2145,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           <label>Preset<DsSelect value={artboardPresetValue(ab.width, ab.height)} options={[{ value: 'custom', label: `Custom (${ab.width}x${ab.height})` }, ...ARTBOARD_PRESETS.map(p => ({ value: p.id, label: `${p.label} (${p.w}x${p.h})` }))]} onChange={v => applyArtboardPreset(v as ArtboardPresetId | 'custom')} /></label>
           <div className="ds-row2"><NumberAdjuster label="Width" value={ab.width} min={16} max={4096} step={1} onChange={v => patchArtboard({ width: v })} /><NumberAdjuster label="Height" value={ab.height} min={16} max={4096} step={1} onChange={v => patchArtboard({ height: v })} /></div>
           <label>Background<DsSelect value={ab.backgroundType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchArtboard({ backgroundType: v as Artboard['backgroundType'] })} /></label>
-          <div className="ds-row2"><label>Color<input type="color" value={ab.background} onChange={e => patchArtboard({ background: e.target.value })} /></label>{ab.backgroundType && ab.backgroundType !== 'solid' ? <label>To<input type="color" value={ab.background2 || ab.background} onChange={e => patchArtboard({ background2: e.target.value })} /></label> : null}</div>
+          <div className="ds-row2"><label>Color<ColorInput value={ab.background} onChange={v => patchArtboard({ background: v })} /></label>{ab.backgroundType && ab.backgroundType !== 'solid' ? <label>To<ColorInput value={ab.background2 || ab.background} onChange={v => patchArtboard({ background2: v })} /></label> : null}</div>
           {ab.backgroundType === 'linear-gradient' && <NumberAdjuster label="Angle" value={ab.backgroundAngle ?? 90} min={0} max={360} step={1} onChange={v => patchArtboard({ backgroundAngle: v })} />}
           {!!componentLibrary.length && <label>Insert component<DsSelect value="" placeholder="Choose component…" options={componentLibrary.map(c => ({ value: c.id, label: c.name }))} onChange={v => { if (v) insertComponent(v) }} /></label>}
           <p className="ds-tip muted">Click an element to edit it. Size & aspect ratio are fully editable.</p>
@@ -2015,7 +2178,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               </PropertySection>
               <PropertySection title="Fill" defaultOpen>
                 <label>Fill type<DsSelect value={t.fillType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchLayer(t.id, { fillType: v as TextLayer['fillType'] } as Partial<Layer>)} /></label>
-                <div className="ds-row2"><label>Color<input type="color" value={t.fill} onChange={e => patchLayer(t.id, { fill: e.target.value } as Partial<Layer>)} /></label>{t.fillType && t.fillType !== 'solid' ? <label>To<input type="color" value={t.fill2 || t.fill} onChange={e => patchLayer(t.id, { fill2: e.target.value } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
+                <div className="ds-row2"><label>Color<ColorInput value={t.fill} onChange={v => patchLayer(t.id, { fill: v } as Partial<Layer>)} /></label>{t.fillType && t.fillType !== 'solid' ? <label>To<ColorInput value={t.fill2 || t.fill} onChange={v => patchLayer(t.id, { fill2: v } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
                 {t.fillType && t.fillType !== 'solid' && <>
                   <div className="ds-row2"><NumberAdjuster label="Angle" value={t.gradientAngle ?? 90} min={0} max={360} step={1} onChange={v => patchLayer(t.id, { gradientAngle: v } as Partial<Layer>)} /><NumberAdjuster label="Fill opacity" value={t.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { fillOpacity: v } as Partial<Layer>)} /></div>
                   <GradientEditor fill={t} width={t.width} height={t.height || Math.round(t.fontSize * (t.lineHeight || 1.2))} onChange={patch => patchLayer(t.id, patch as Partial<Layer>)} />
@@ -2023,18 +2186,18 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               </PropertySection>
               <PropertySection title="Text stroke">
                 <label className="ds-check"><input type="checkbox" checked={!!t.textStroke} onChange={e => patchLayer(t.id, { textStroke: e.target.checked ? '#111827' : undefined, textStrokeWidth: e.target.checked ? (t.textStrokeWidth ?? 2) : 0 } as Partial<Layer>)} /> Show text stroke</label>
-                {t.textStroke && <div className="ds-row2"><label>Color<input type="color" value={t.textStroke} onChange={e => patchLayer(t.id, { textStroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={t.textStrokeWidth ?? 2} min={0} max={32} step={0.5} onChange={v => patchLayer(t.id, { textStrokeWidth: v } as Partial<Layer>)} /></div>}
+                {t.textStroke && <div className="ds-row2"><label>Color<ColorInput value={t.textStroke} onChange={v => patchLayer(t.id, { textStroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={t.textStrokeWidth ?? 2} min={0} max={32} step={0.5} onChange={v => patchLayer(t.id, { textStrokeWidth: v } as Partial<Layer>)} /></div>}
               </PropertySection>
               <PropertySection title="Quick effects">
               <label className="ds-check"><input type="checkbox" checked={!!t.shadow} onChange={e => patchLayer(t.id, { shadow: e.target.checked, shadowColor: t.shadowColor || '#000000', shadowBlur: t.shadowBlur ?? 12, shadowOffsetX: t.shadowOffsetX ?? 0, shadowOffsetY: t.shadowOffsetY ?? 8, shadowOpacity: t.shadowOpacity ?? 0.35 } as Partial<Layer>)} /> Shadow</label>
               {t.shadow && <>
-                <div className="ds-row2"><label>Shadow color<input type="color" value={t.shadowColor || '#000000'} onChange={e => patchLayer(t.id, { shadowColor: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Opacity" value={t.shadowOpacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { shadowOpacity: v } as Partial<Layer>)} /></div>
+                <div className="ds-row2"><label>Shadow color<ColorInput value={t.shadowColor || '#000000'} onChange={v => patchLayer(t.id, { shadowColor: v } as Partial<Layer>)} /></label><NumberAdjuster label="Opacity" value={t.shadowOpacity ?? 0.35} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { shadowOpacity: v } as Partial<Layer>)} /></div>
                 <div className="ds-row2"><NumberAdjuster label="Blur" value={t.shadowBlur ?? 12} min={0} max={120} step={1} onChange={v => patchLayer(t.id, { shadowBlur: v } as Partial<Layer>)} /><NumberAdjuster label="Offset Y" value={t.shadowOffsetY ?? 8} min={-120} max={120} step={1} onChange={v => patchLayer(t.id, { shadowOffsetY: v } as Partial<Layer>)} /></div>
                 <NumberAdjuster label="Offset X" value={t.shadowOffsetX ?? 0} min={-120} max={120} step={1} onChange={v => patchLayer(t.id, { shadowOffsetX: v } as Partial<Layer>)} />
               </>}
               <label className="ds-check"><input type="checkbox" checked={!!t.glow} onChange={e => patchLayer(t.id, { glow: e.target.checked, glowColor: t.glowColor || t.fill, glowBlur: t.glowBlur ?? 18, glowOpacity: t.glowOpacity ?? 0.6 } as Partial<Layer>)} /> Glow</label>
               {t.glow && <>
-                <div className="ds-row2"><label>Glow color<input type="color" value={t.glowColor || t.fill} onChange={e => patchLayer(t.id, { glowColor: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Intensity" value={t.glowOpacity ?? 0.6} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { glowOpacity: v } as Partial<Layer>)} /></div>
+                <div className="ds-row2"><label>Glow color<ColorInput value={t.glowColor || t.fill} onChange={v => patchLayer(t.id, { glowColor: v } as Partial<Layer>)} /></label><NumberAdjuster label="Intensity" value={t.glowOpacity ?? 0.6} min={0} max={1} step={0.01} onChange={v => patchLayer(t.id, { glowOpacity: v } as Partial<Layer>)} /></div>
                 <NumberAdjuster label="Glow size" value={t.glowBlur ?? 18} min={0} max={160} step={1} onChange={v => patchLayer(t.id, { glowBlur: v } as Partial<Layer>)} />
               </>}
               </PropertySection>
@@ -2043,7 +2206,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             <div className="ds-fields">
               <PropertySection title="Fill" defaultOpen>
                 <label>Type<DsSelect value={sh.fillType || 'solid'} options={FILL_TYPE_OPTIONS} onChange={v => patchLayer(sh.id, { fillType: v as FillStyle['fillType'] } as Partial<Layer>)} /></label>
-                <div className="ds-row2"><label>Color<input type="color" value={sh.fill} onChange={e => patchLayer(sh.id, { fill: e.target.value } as Partial<Layer>)} /></label>{sh.fillType && sh.fillType !== 'solid' ? <label>To<input type="color" value={sh.fill2 || sh.fill} onChange={e => patchLayer(sh.id, { fill2: e.target.value } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
+                <div className="ds-row2"><label>Color<ColorInput value={sh.fill} onChange={v => patchLayer(sh.id, { fill: v } as Partial<Layer>)} /></label>{sh.fillType && sh.fillType !== 'solid' ? <label>To<ColorInput value={sh.fill2 || sh.fill} onChange={v => patchLayer(sh.id, { fill2: v } as Partial<Layer>)} /></label> : <NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} />}</div>
                 {sh.fillType && sh.fillType !== 'solid' && <>
                   <div className="ds-row2"><NumberAdjuster label="Angle" value={sh.gradientAngle ?? 90} min={0} max={360} step={1} onChange={v => patchLayer(sh.id, { gradientAngle: v } as Partial<Layer>)} /><NumberAdjuster label="Fill opacity" value={sh.fillOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { fillOpacity: v } as Partial<Layer>)} /></div>
                   <GradientEditor fill={sh} width={sh.width} height={sh.height} onChange={patch => patchLayer(sh.id, patch as Partial<Layer>)} />
@@ -2059,7 +2222,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <PropertySection title="Border">
                 <label className="ds-check"><input type="checkbox" checked={!!sh.stroke} onChange={e => patchLayer(sh.id, { stroke: e.target.checked ? '#111827' : undefined, strokeWidth: 3 } as Partial<Layer>)} /> Show border</label>
                 {sh.stroke && <>
-                  <div className="ds-row2"><label>Color<input type="color" value={sh.stroke} onChange={e => patchLayer(sh.id, { stroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={sh.strokeWidth ?? 3} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeWidth: v } as Partial<Layer>)} /></div>
+                  <div className="ds-row2"><label>Color<ColorInput value={sh.stroke} onChange={v => patchLayer(sh.id, { stroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Width" value={sh.strokeWidth ?? 3} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeWidth: v } as Partial<Layer>)} /></div>
                   <div className="ds-row2"><NumberAdjuster label="Opacity" value={sh.strokeOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(sh.id, { strokeOpacity: v } as Partial<Layer>)} /><NumberAdjuster label="Dash" value={sh.strokeDash ?? 0} min={0} max={80} step={1} onChange={v => patchLayer(sh.id, { strokeDash: v || undefined } as Partial<Layer>)} /></div>
                   <div className="ds-row2"><label>Cap<DsSelect value={sh.strokeCap || 'round'} options={STROKE_CAP_OPTIONS} onChange={v => patchLayer(sh.id, { strokeCap: v as RectLayer['strokeCap'] } as Partial<Layer>)} /></label><label>Position<DsSelect value={sh.strokePosition || 'center'} options={[{ value: 'center', label: 'Center' }, { value: 'inside', label: 'Inside' }, { value: 'outside', label: 'Outside' }]} onChange={v => patchLayer(sh.id, { strokePosition: v as RectLayer['strokePosition'] } as Partial<Layer>)} /></label></div>
                 </>}
@@ -2070,7 +2233,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             </div>) })()}
           {selected.type === 'line' && <div className="ds-fields">
             <PropertySection title="Line" defaultOpen>
-              <div className="ds-row2"><label>Color<input type="color" value={(selected as { stroke: string }).stroke} onChange={e => patchLayer(selected.id, { stroke: e.target.value } as Partial<Layer>)} /></label><NumberAdjuster label="Thickness" value={(selected as { strokeWidth: number }).strokeWidth} min={0} max={120} step={1} onChange={v => patchLayer(selected.id, { strokeWidth: v } as Partial<Layer>)} /></div>
+              <div className="ds-row2"><label>Color<ColorInput value={(selected as { stroke: string }).stroke} onChange={v => patchLayer(selected.id, { stroke: v } as Partial<Layer>)} /></label><NumberAdjuster label="Thickness" value={(selected as { strokeWidth: number }).strokeWidth} min={0} max={120} step={1} onChange={v => patchLayer(selected.id, { strokeWidth: v } as Partial<Layer>)} /></div>
               <div className="ds-row2"><NumberAdjuster label="Opacity" value={(selected as LineLayer).strokeOpacity ?? 1} min={0} max={1} step={0.01} onChange={v => patchLayer(selected.id, { strokeOpacity: v } as Partial<Layer>)} /><NumberAdjuster label="Dash" value={(selected as LineLayer).strokeDash ?? 0} min={0} max={80} step={1} onChange={v => patchLayer(selected.id, { strokeDash: v || undefined } as Partial<Layer>)} /></div>
               <label>Cap<DsSelect value={(selected as LineLayer).strokeCap || 'round'} options={STROKE_CAP_OPTIONS} onChange={v => patchLayer(selected.id, { strokeCap: v as LineLayer['strokeCap'] } as Partial<Layer>)} /></label>
               <div className="ds-row2"><label className="ds-check"><input type="checkbox" checked={!!(selected as LineLayer).startArrow} onChange={e => patchLayer(selected.id, { startArrow: e.target.checked } as Partial<Layer>)} /> Start arrow</label><label className="ds-check"><input type="checkbox" checked={!!(selected as LineLayer).endArrow} onChange={e => patchLayer(selected.id, { endArrow: e.target.checked } as Partial<Layer>)} /> End arrow</label></div>
@@ -2088,11 +2251,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <div className="ds-row2"><NumberAdjuster label="X" value={Math.round(im.cropX ?? 50)} min={0} max={100} step={1} onChange={v => setImageCrop(im.id, { cropX: v })} /><NumberAdjuster label="Y" value={Math.round(im.cropY ?? 50)} min={0} max={100} step={1} onChange={v => setImageCrop(im.id, { cropY: v })} /></div>
               <button className="ghost-button" onClick={() => setImageCrop(im.id, { cropZoom: undefined, cropX: undefined, cropY: undefined })}>Reset crop</button>
             </PropertySection>
-            <PropertySection title="Edit with AI">
-              <textarea rows={2} placeholder="e.g. make it blue, add snow, remove background" value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
-              <button className="primary-button" disabled={!imageEditReady || imgBusy || !imgPrompt.trim()} title={imageEditReady ? undefined : 'The selected image provider is text-to-image only — connect xAI OAuth or switch the provider in Settings → Image generation to edit images.'} onClick={() => void genImage(imgPrompt, selected.id)}>{imgBusy ? 'Editing…' : 'Edit with AI'}</button>
-              {!imageEditReady && <p className="ds-tip muted">{imageProviderKind === 'codex' ? 'Current provider is Codex, which supports text-to-image only. Use xAI, Higgsfield, or an OpenAI-compatible provider in Settings for true image edits.' : 'Use an edit-capable image provider in Settings to enable image edits.'}</p>}
-            </PropertySection>
           </div> })()}
           <div className="ds-fields ds-optional-props">
             <PropertySection title="Advanced effects">
@@ -2101,6 +2259,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           </div>
         </>}
       </aside>
+      {!isMobile && rightCollapsed && <button className="ds-panel-reopen right" onClick={() => setRightCollapsed(false)} title="Show inspector">‹</button>}
     </div>
     {edit && (() => {
       const tl = findLayer(edit.id) as TextLayer | null; if (!tl) return null; const sc = view.scale

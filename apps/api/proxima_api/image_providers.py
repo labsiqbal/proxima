@@ -60,8 +60,8 @@ PROVIDERS: dict[str, ImageProvider] = {
         display_name="Codex / ChatGPT auth",
         requires_key=False,
         kind="codex",
-        note="Uses your `codex login` token directly — no API key needed. Text-to-image only.",
-        capabilities={"textToImage": True, "imageEdit": False, "referenceImages": False},
+        note="Uses your `codex login` token directly — no API key needed. Supports text-to-image and, when you attach a source/reference image, image edits.",
+        capabilities={"textToImage": True, "imageEdit": True, "referenceImages": True},
     ),
     "xai-oauth": ImageProvider(
         id="xai-oauth",
@@ -193,6 +193,7 @@ def generate(
     size: str | None = None,
     image_bytes: bytes | None = None,
     image_mime: str | None = None,
+    extra_images: list[tuple[bytes, str | None]] | None = None,
     base_url: str | None = None,
     timeout: float = 300.0,
 ) -> bytes:
@@ -222,7 +223,7 @@ def generate(
             except ImageProviderError as codex_exc:
                 raise ImageProviderError(f"Higgsfield was not available ({exc}); Codex fallback also failed: {codex_exc}") from codex_exc
     if provider.kind == "codex":
-        return _gen_codex(prompt=prompt, size=size, image_bytes=image_bytes, timeout=timeout)
+        return _gen_codex(prompt=prompt, size=size, image_bytes=image_bytes, image_mime=image_mime, extra_images=extra_images, timeout=timeout)
     if provider.kind == "oauth" and provider.id == "xai-oauth":
         token = _read_hermes_oauth_token("xai-oauth")
         if not token:
@@ -354,15 +355,35 @@ def _codex_size(size: str | None) -> str:
     return "1024x1024"
 
 
-def _codex_payload(prompt: str, size: str | None) -> dict[str, Any]:
+def _codex_payload(prompt: str, size: str | None, image_data_urls: list[str] | None = None) -> dict[str, Any]:
+    # Reference/source images ride along as input_image content parts on the user
+    # message. The image_generation tool reads them from the conversation context and
+    # edits/combines them, rather than generating from the prompt alone. Multiple
+    # images → compose them into one.
+    urls = image_data_urls or []
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    for url in urls:
+        content.append({"type": "input_image", "image_url": url})
+    if len(urls) > 1:
+        instructions = (
+            "Use the image_generation tool to combine and compose the attached images "
+            "according to the user's prompt, returning exactly one image."
+        )
+    elif urls:
+        instructions = (
+            "Use the image_generation tool to edit or transform the attached image "
+            "according to the user's prompt, returning exactly one image."
+        )
+    else:
+        instructions = "Use the image_generation tool to generate exactly one image for the user's prompt."
     return {
         "model": _CODEX_CHAT_MODEL,
         "store": False,
-        "instructions": "Use the image_generation tool to generate exactly one image for the user's prompt.",
+        "instructions": instructions,
         "input": [{
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": prompt}],
+            "content": content,
         }],
         "tools": [{
             "type": "image_generation",
@@ -439,9 +460,16 @@ def _extract_image_b64(value: Any) -> str | None:
     return found
 
 
-def _gen_codex(*, prompt: str, size: str | None, image_bytes: bytes | None, timeout: float) -> bytes:
+def _gen_codex(*, prompt: str, size: str | None, image_bytes: bytes | None, timeout: float, image_mime: str | None = None, extra_images: list[tuple[bytes, str | None]] | None = None) -> bytes:
+    # Source/reference images are passed to the image_generation tool as input_image
+    # content parts (base64 data URLs). The ChatGPT-OAuth surface may reject image
+    # input for image_generation; if so the >=400 branch below surfaces the server's
+    # message so it fails loudly, not silently.
+    image_data_urls: list[str] = []
     if image_bytes is not None:
-        raise ImageProviderError("Codex/ChatGPT auth image generation supports text-to-image only. Use an OpenAI-compatible provider for image edits.")
+        image_data_urls.append(f"data:{image_mime or 'image/png'};base64,{base64.b64encode(image_bytes).decode()}")
+    for raw, mime in (extra_images or []):
+        image_data_urls.append(f"data:{mime or 'image/png'};base64,{base64.b64encode(raw).decode()}")
     token = _read_codex_access_token()
     if not token:
         ready = codex_ready()
@@ -453,10 +481,11 @@ def _gen_codex(*, prompt: str, size: str | None, image_bytes: bytes | None, time
     try:
         with httpx.Client(timeout=timeout_cfg, headers=_codex_headers(token)) as cx:
             deadline = time.monotonic() + timeout
-            with cx.stream("POST", f"{_CODEX_BASE_URL}/responses", json=_codex_payload(prompt, size)) as response:
+            with cx.stream("POST", f"{_CODEX_BASE_URL}/responses", json=_codex_payload(prompt, size, image_data_urls)) as response:
                 if response.status_code >= 400:
                     body = response.read().decode("utf-8", errors="replace")[:500]
-                    raise ImageProviderError(f"Codex image request failed ({response.status_code}): {body}")
+                    hint = " (the ChatGPT/Codex auth surface may not accept reference images for image_generation)" if image_data_urls else ""
+                    raise ImageProviderError(f"Codex image request failed ({response.status_code}){hint}: {body}")
                 for event in _iter_sse_json(response):
                     if time.monotonic() >= deadline:
                         raise ImageProviderError(f"Codex image generation timed out after {int(timeout)}s.")

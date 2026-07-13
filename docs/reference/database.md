@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 18 tables. Applied migration version: **13**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`profiles`](#profiles), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`tasks`](#tasks), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`profiles`](#profiles), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -132,7 +132,7 @@ SQLite (WAL mode). 18 tables. Applied migration version: **13**. This is the exa
 | `role` | TEXT | NO |  |  |
 | `content` | TEXT | NO |  |  |
 | `author` | TEXT | yes |  |  |
-| `run_id` | INTEGER | yes |  |  |
+| `run_id` | INTEGER | yes |  | → `runs.id` (ON DELETE SET NULL) |
 | `output_links` | TEXT | NO | `'[]'` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -261,10 +261,8 @@ SQLite (WAL mode). 18 tables. Applied migration version: **13**. This is the exa
 | `runner_id` | TEXT | NO | `'claude-code'` |  |
 | `visibility` | TEXT | NO | `'private'` |  |
 | `mode` | TEXT | NO | `'chat'` |  |
-| `acp_session_id` | TEXT | yes |  |  |
-| `task_id` | INTEGER | yes |  |  |
-| `job_id` | INTEGER | yes |  |  |
-| `workflow_id` | INTEGER | yes |  |  |
+| `job_id` | INTEGER | yes |  | → `jobs.id` (ON DELETE SET NULL) |
+| `workflow_id` | INTEGER | yes |  | → `workflows.id` (ON DELETE SET NULL) |
 | `manual_title` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -275,24 +273,6 @@ SQLite (WAL mode). 18 tables. Applied migration version: **13**. This is the exa
 | `goal_max` | INTEGER | NO | `20` |  |
 
 **Indexes:** `idx_sessions_project` — (project_id, updated_at); `idx_sessions_owner` — (owner_user_id, updated_at)
-
-
-### tasks
-
-| Column | Type | Null | Default | Key / FK |
-| --- | --- | --- | --- | --- |
-| `id` | INTEGER | yes |  | PK |
-| `project_id` | INTEGER | NO |  | → `projects.id` (ON DELETE CASCADE) |
-| `session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
-| `title` | TEXT | NO |  |  |
-| `description` | TEXT | NO | `''` |  |
-| `status` | TEXT | NO | `'todo'` |  |
-| `assignee` | TEXT | yes |  |  |
-| `created_by` | INTEGER | yes |  | → `users.id` |
-| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
-| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
-
-**Indexes:** `idx_tasks_project` — (project_id, status)
 
 
 ### users
@@ -328,4 +308,4 @@ SQLite (WAL mode). 18 tables. Applied migration version: **13**. This is the exa
 
 
 ---
-_Generated 2026-07-11 08:39 UTC._
+_Generated 2026-07-12 23:28 UTC._

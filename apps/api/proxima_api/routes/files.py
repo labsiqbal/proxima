@@ -23,15 +23,15 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from .. import fsapi
 from .. import app_settings
 from .. import auth_health
-from .. import design_scenes
 from .. import features
 from .. import higgsfield
 from .. import image_providers
+from .. import media_settings
 from .. import video_providers
 from .. import cf_hostnames
-from ..artifacts import scan_project_artifacts
+from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
-    AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest, ImageGenRequest,
+    AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest,
 )
 
 
@@ -165,102 +165,6 @@ def register(app, deps):
             except Exception:
                 pass
         return url, key
-
-    @app.post("/api/projects/{slug}/designs/from-image")
-    def design_from_image(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        """Seed a new Design Studio scene containing an existing project image as a
-        full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
-        features.require(feature_cfg, features.DESIGN_STUDIO)
-        payload = payload or {}
-        root = _project_root(slug, user)
-        rel = str(payload.get("path") or "").strip()
-        if not rel:
-            raise HTTPException(status_code=400, detail="path is required")
-        try:
-            source = fsapi.resolve_in_project(root, rel)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not source.is_file():
-            raise HTTPException(status_code=404, detail=f"file not found: {rel}")
-        design_id, scene = design_scenes.scene_for_image(rel, design_scenes.image_dims(source), payload.get("title"))
-        d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-        _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
-        return {"ok": True, "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}"}
-
-    @app.post("/api/projects/{slug}/design/image")
-    async def design_image(slug: str, payload: ImageGenRequest, user: dict[str, Any] = Depends(current_user)):
-        """Generate (text→image) or edit (image+prompt→image) via the configured
-        provider (Settings); save the result into the project's shared design
-        asset library and return its path."""
-        features.require(feature_cfg, features.DESIGN_STUDIO)
-        root = _project_root(slug, user)
-        prov = _resolve_image_gen()
-        image_bytes: bytes | None = None
-        image_mime: str | None = None
-        if payload.image:
-            try:
-                src = fsapi.resolve_in_project(root, payload.image)
-                if not src.is_file():
-                    raise fsapi.FsError("source image does not exist")
-                image_bytes = src.read_bytes()
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"cannot read source image: {exc.strerror}") from exc
-            image_mime = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
-        # Edit/reference requests need an edit-capable provider. When the selected one
-        # is explicitly text-to-image only (codex), fall back to xAI OAuth if it's
-        # connected — otherwise explain instead of failing with a provider error.
-        if image_bytes is not None and (image_providers.get_provider(prov.get("provider")).capabilities or {}).get("imageEdit") is False:
-            if image_providers.xai_oauth_ready().get("ready"):
-                prov = {**prov, "provider": "xai-oauth", "apiKey": None, "baseUrl": None, "model": None}
-            else:
-                raise HTTPException(status_code=400, detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.")
-        target = fsapi.resolve_in_project(root, f"artifacts/design/_assets/gen-{int(time.time())}.png")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        i = 1
-        while target.exists():
-            target = target.parent / f"gen-{int(time.time())}-{i}.png"; i += 1
-        model = payload.model or prov.get("model")
-        if not model and prov.get("provider") in {"auto", "higgsfield"}:
-            model = _resolve_higgsfield_settings().get("imageModel")
-        try:
-            raw = image_providers.generate(
-                prov["provider"], prov.get("apiKey"),
-                prompt=payload.prompt,
-                model=model,
-                size=payload.size,
-                image_bytes=image_bytes,
-                image_mime=image_mime,
-                base_url=prov.get("baseUrl"),
-            )
-        except image_providers.ImageProviderError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not raw:
-            raise HTTPException(status_code=502, detail="provider returned no image data")
-        # Every provider returns bytes — persist them here (the out_path shortcut was
-        # dead: generate() never wrote files itself).
-        target.write_bytes(raw)
-        rel = f"artifacts/design/_assets/{target.name}"
-        _audit_fs(user, "design.image", slug, rel)
-        return {"path": rel, "name": target.name}
-
-    @app.get("/api/projects/{slug}/design/image-models")
-    def design_image_models(slug: str, user: dict[str, Any] = Depends(current_user)):
-        """For the codex provider there's no static model list (login-based); for
-        an openai-compatible endpoint we report configured + the saved model."""
-        features.require(feature_cfg, features.DESIGN_STUDIO)
-        prov = _resolve_image_gen()
-        spec = image_providers.get_provider(prov["provider"])
-        if spec.kind == "codex":
-            return {"models": [], "configured": True, "kind": "codex"}
-        if spec.kind == "auto":
-            return {"models": [], "configured": True, "kind": "auto", "model": prov.get("model")}
-        if spec.kind == "higgsfield":
-            return {"models": [], "configured": bool(higgsfield.status().get("ready")), "kind": "higgsfield", "model": prov.get("model")}
-        return {"models": [], "configured": bool(prov.get("apiKey")), "kind": "http", "model": prov.get("model")}
 
     # ── HyperFrames video projects ───────────────────────────────────────
 
@@ -482,24 +386,10 @@ if (window.gsap) {{
     # ── Image-generation provider settings ────────────────────────────────
 
     def _resolve_image_gen() -> dict[str, Any]:
-        """Active provider config from Settings. Defaults to codex (no key) when
-        nothing is saved yet."""
-        cfg = app_settings.get_json(db(), app_settings.IMAGE_GEN_KEY)
-        if cfg and isinstance(cfg, dict) and cfg.get("provider") in image_providers.IMAGE_PROVIDER_IDS:
-            return cfg
-        return {"provider": image_providers.DEFAULT_PROVIDER, "apiKey": None, "baseUrl": None, "model": None}
+        return media_settings.resolve_image_gen(db())
 
     def _resolve_higgsfield_settings() -> dict[str, Any]:
-        cfg = app_settings.get_json(db(), app_settings.HIGGSFIELD_KEY)
-        if not isinstance(cfg, dict):
-            cfg = {}
-        return {
-            "imagePolicy": cfg.get("imagePolicy") or "zero-credit-only",
-            "imageModel": cfg.get("imageModel") or higgsfield.DEFAULT_IMAGE_MODEL,
-            "videoPolicy": cfg.get("videoPolicy") or "confirm-credits",
-            "videoModel": cfg.get("videoModel") or higgsfield.DEFAULT_VIDEO_MODEL,
-            "maxVideoCredits": cfg.get("maxVideoCredits") if isinstance(cfg.get("maxVideoCredits"), (int, float)) else 50,
-        }
+        return media_settings.resolve_higgsfield_settings(db())
 
     def _public_higgsfield_settings(settings: dict[str, Any]) -> dict[str, Any]:
         if features.enabled(feature_cfg, features.VIDEO):
@@ -757,8 +647,7 @@ if (window.gsap) {{
                 except fsapi.FsError:
                     pass
                 _audit_fs(user, "artifact.delete", p["slug"], path)
-        kept = [a for a in artifacts if a.get("path") != path]
-        db().execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(kept), session_id))
+        update_produced_artifacts(db(), session_id, lambda current: [a for a in current if a.get("path") != path])
         for m in db().execute("SELECT id, output_links FROM messages WHERE session_id = ? AND output_links != '[]'", (session_id,)).fetchall():
             try:
                 links = json.loads(m["output_links"] or "[]")
@@ -859,11 +748,10 @@ if (window.gsap) {{
 
     _HOP = {"connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "host"}
 
-    @app.api_route("/api/appview/{token}/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def app_view(token: str, slug: str, path: str, request: Request):
-        # Proxy to the project's running app. Token in path so the iframe + its
-        # relative assets authenticate (same pattern as file preview).
-        user = user_from_token_query(token)
+    @app.api_route("/api/appview/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def app_view(slug: str, path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
+        # Proxy to the project's running app. Auth via the proxima_session cookie
+        # (same-origin) so the iframe + its relative assets authenticate — no URL token.
         _project_root(slug, user)  # access check
         port = app.state.app_manager.port(slug)
         if not port:
@@ -966,13 +854,11 @@ if (window.gsap) {{
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(str(target), filename=target.name)
 
-    @app.get("/api/preview/{token}/{slug}/{file_path:path}")
-    def project_preview(token: str, slug: str, file_path: str):
-        # Serve a project file inline for live preview (e.g. rendering a built
-        # site in an <iframe>). The token sits in the path — not a header — so the
-        # iframe AND its relative asset requests (styles.css, script.js) all carry
-        # it (same exposure as the SSE ?token= stream). Path-jailed to the project.
-        user = user_from_token_query(token)
+    @app.get("/api/preview/{slug}/{file_path:path}")
+    def project_preview(slug: str, file_path: str, user: dict[str, Any] = Depends(current_user)):
+        # Serve a project file inline for live preview (rendering a built site in an
+        # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
+        # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
         root = _project_root(slug, user)
         try:
             target = fsapi.resolve_in_project(root, file_path)

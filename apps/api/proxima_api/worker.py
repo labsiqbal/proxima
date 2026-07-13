@@ -27,6 +27,7 @@ from .runner_specs import runner_spec
 from . import wiki_memory
 from . import app_settings
 from . import features
+from . import state
 from .artifacts import artifacts_for_output_links, scan_project_artifacts
 from .message_reviews import parse_review_output, review_payload
 from .prompt_collaborations import (
@@ -43,7 +44,7 @@ from .prompt_collaborations import (
 from .run_reaper import RunReaper
 from .run_summaries import RunSummaries
 from .run_advancers import RunAdvancers
-from .run_prompting import RunPrompting
+from .run_prompting import RunPrompting, extract_vision_images
 from .run_outputs import RunOutputs
 from .run_drafts import RunDrafts
 
@@ -220,7 +221,6 @@ class RunWorker:
                 "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
                 (reason, run_id),
             )
-            self._revert_task(session_id)
         self._fail_job(session_id, reason)
 
     def _is_recoverable_agent_history_error(self, exc: Exception) -> bool:
@@ -229,16 +229,6 @@ class RunWorker:
             "property_name_above_max_length" in detail
             or "Invalid property name" in detail
             or ("input[" in detail and ".arguments" in detail and "too long" in detail)
-        )
-
-    def _revert_task(self, session_id: int) -> None:
-        """A failed/cancelled run must not strand its task in 'doing'. Revert it to
-        'todo' so the kanban reflects reality (the error stays in the thread).
-        Caller holds app.state.db_lock."""
-        self.app.state.worker_db.execute(
-            "UPDATE tasks SET status = 'todo', updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = (SELECT task_id FROM sessions WHERE id = ?) AND status = 'doing'",
-            (session_id,),
         )
 
     def reap_stale_runs(self, stale_seconds: int) -> None:
@@ -422,9 +412,13 @@ class RunWorker:
         final = format_final(collab["mode"], collab["prompt"], outputs, synthesis)
         self.outputs.save_assistant_message(parent_id, collab["session_id"], collab["project_id"], final, collab["mode"].title(), [], self.add_event)
         msg = db.execute("SELECT id FROM messages WHERE run_id = ? ORDER BY id DESC LIMIT 1", (parent_id,)).fetchone()
-        db.execute(
-            "UPDATE prompt_collaborations SET status = 'done', final_message_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (msg["id"] if msg else None, collab["id"]),
+        # Guarded: a concurrent cancel (chat.py cancel_run) may have set this
+        # collaboration terminal — don't overwrite it back to 'done'.
+        state.guarded_transition(
+            db, "prompt_collaborations", int(collab["id"]), "done",
+            state.non_terminal(state.COLLABORATION),
+            set_extra="final_message_id = ?, updated_at = CURRENT_TIMESTAMP",
+            set_params=(msg["id"] if msg else None,),
         )
         completed = db.execute(
             "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
@@ -476,16 +470,26 @@ class RunWorker:
                 return True
 
             if kind == "collab_brainstorm_child":
-                child_ids = [int(x) for x in json.loads(collab["child_run_ids"] or "[]")]
-                remaining = 0
-                if child_ids:
-                    child_id_filter = ",".join(str(int(child_id)) for child_id in child_ids)
-                    remaining = db.execute(
-                        "SELECT COUNT(*) AS c FROM runs WHERE instr(',' || ? || ',', ',' || id || ',') > 0 AND status IN ('queued','running')",
-                        (child_id_filter,),
-                    ).fetchone()["c"]
+                # Completeness comes from the live runs table, NOT from the
+                # child_run_ids JSON — the request thread may not have persisted
+                # that list yet when the first child finishes, and an empty list
+                # used to make this conclude "all done" and synthesize after one
+                # child. profile_ids is written when the collaboration row is
+                # created (before any child is queued), so it is the reliable
+                # expected child count: synthesize only once every expected child
+                # exists AND none is still in flight.
+                expected = len(json.loads(collab["profile_ids"] or "[]"))
+                created = db.execute(
+                    "SELECT COUNT(*) AS c FROM runs WHERE collaboration_id = ? AND kind = 'collab_brainstorm_child'",
+                    (collab_id,),
+                ).fetchone()["c"]
+                in_flight = db.execute(
+                    "SELECT COUNT(*) AS c FROM runs WHERE collaboration_id = ? AND kind = 'collab_brainstorm_child' AND status IN ('queued','running')",
+                    (collab_id,),
+                ).fetchone()["c"]
+                all_children_done = created >= max(expected, 1) and in_flight == 0
                 self._add_collaboration_progress(collab)
-                if remaining == 0 and not collab["synthesis_run_id"]:
+                if all_children_done and not collab["synthesis_run_id"]:
                     outputs = loads_list(collab["child_outputs"])
                     synth_profile = self._collaboration_profile(int(json.loads(collab["profile_ids"] or "[]")[0]))
                     synth_id = self._queue_collaboration_run(collab, synth_profile, build_brainstorm_synthesis_prompt(collab["prompt"], outputs), "collab_brainstorm_synthesis", "synthesis")
@@ -529,7 +533,11 @@ class RunWorker:
         collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (row["collaboration_id"],)).fetchone()
         if not collab:
             return
-        db.execute("UPDATE prompt_collaborations SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (error, collab["id"]))
+        state.guarded_transition(
+            db, "prompt_collaborations", int(collab["id"]), "failed",
+            state.non_terminal(state.COLLABORATION),
+            set_extra="error = ?, updated_at = CURRENT_TIMESTAMP", set_params=(error,),
+        )
         parent_id = collab["parent_run_id"]
         failed_run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         failed_profile = self._collaboration_profile(int(failed_run["profile_id"] if failed_run else 0))
@@ -546,7 +554,10 @@ class RunWorker:
             self.add_event(sid, sibling["session_id"], sibling["project_id"], "run.cancelled", {"kind": "collaboration"})
             self._emit_collaboration_child_event("cancelled", sibling, "cancelled", collab=collab)
             self.cancel(sid)
-        db.execute("UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (error, run_id))
+        state.guarded_transition(
+            db, "runs", run_id, "failed", ("queued", "running"),
+            set_extra="error = ?, finished_at = CURRENT_TIMESTAMP", set_params=(error,),
+        )
         if failed_run:
             self._emit_collaboration_child_event("failed", failed_run, "failed", error=error, collab=collab, profile=failed_profile)
         if parent_id:
@@ -752,9 +763,10 @@ class RunWorker:
                 session_mode,
                 fresh_session,
             )
+            prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
             run_start_ts = time.time()
             try:
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout)
+                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
             except Exception as exc:
                 if not self._is_recoverable_agent_history_error(exc):
                     raise
@@ -781,8 +793,9 @@ class RunWorker:
                     session_mode,
                     True,
                 )
+                prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
                 chunks.clear()
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout)
+                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
 
             status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
             if status_row and status_row["status"] == "cancelled":
@@ -816,7 +829,7 @@ class RunWorker:
             # only). Done BEFORE run.completed so the sidebar shows the recap as soon
             # as the run leaves the active set. Best-effort; never fails the run.
             try:
-                is_task = bool(trow and (trow["task_id"] or trow["job_id"]))
+                is_task = bool(trow and trow["job_id"])
                 trow_title = db.execute("SELECT title, manual_title FROM sessions WHERE id = ?", (session_id,)).fetchone()
                 is_design = bool(trow_title and (trow_title["title"] or "").startswith("Design: "))
                 account = db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'", (session_id,)).fetchone()["c"]
@@ -909,7 +922,6 @@ class RunWorker:
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": "Hermes runner timed out"})
-                self._revert_task(session_id)
             self._fail_job(session_id, "Hermes runner timed out")
         except Exception as exc:
             detail = str(exc)[-2000:]
@@ -929,7 +941,6 @@ class RunWorker:
                 cur = db.execute("INSERT INTO messages(session_id, role, content) VALUES (?, 'error', ?)", (session_id, f"Run failed: {detail}"))
                 self.add_event(run_id, session_id, project_id, "message.complete", {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"})
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
-                self._revert_task(session_id)
             self._fail_job(session_id, detail)
         finally:
             if hb_task:

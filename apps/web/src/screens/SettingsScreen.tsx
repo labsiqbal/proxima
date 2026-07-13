@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 import { listAudit, type AuditEntry } from '../api/audit'
 import { getDebugLogs, reapOrphanedJobs, type DebugLogs } from '../api/debug'
 import { cancelRun } from '../api/runs'
+import { changePassword } from '../api/auth'
+import { ApiError } from '../api/client'
 import {
   getCollaborationSettings,
   getImageGenSettings,
@@ -467,7 +469,39 @@ function RemoteAccessGuide() {
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, runners, features, onRefresh, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; runners: Runner[]; features: AppFeatures; onRefresh: () => Promise<void>; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenChange: (t: string) => void }) {
+  const [cur, setCur] = React.useState('')
+  const [next, setNext] = React.useState('')
+  const [confirm, setConfirm] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setMsg(null)
+    if (next.length < 8) { setMsg({ ok: false, text: 'New password must be at least 8 characters.' }); return }
+    if (next !== confirm) { setMsg({ ok: false, text: 'New passwords don’t match.' }); return }
+    setBusy(true)
+    try {
+      const s = await changePassword(token, cur, next)
+      onTokenChange(s.token)  // old session was revoked; adopt the fresh one
+      setCur(''); setNext(''); setConfirm('')
+      setMsg({ ok: true, text: 'Password changed. Other devices were signed out.' })
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof ApiError && err.status === 401 ? 'Current password is incorrect.' : 'Could not change the password.' })
+    } finally { setBusy(false) }
+  }
+  return <div className="panel"><div className="panel-head"><h3>Password</h3><span>security</span></div>
+    <form className="settings-rows auth-change-form" onSubmit={submit}>
+      <input className="auth-input" type="password" placeholder="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
+      <input className="auth-input" type="password" placeholder="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
+      <input className="auth-input" type="password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
+      {msg && <p className={msg.ok ? 'muted' : 'auth-error'}>{msg.text}</p>}
+      <button className="primary-button" type="submit" disabled={busy || !cur || !next}>{busy ? 'Changing…' : 'Change password'}</button>
+    </form>
+  </div>
+}
+
+export function SettingsScreen({ token, user, profiles, projects, runners, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; runners: Runner[]; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
@@ -519,7 +553,7 @@ export function SettingsScreen({ token, user, profiles, projects, runners, featu
   const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><PermissionsPanel token={token} /></>
 
   const content = activeSection === 'account'
-    ? <>{accountPanel}{appearancePanel}{notificationsPanel}</>
+    ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : activeSection === 'agents'
       ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'media'

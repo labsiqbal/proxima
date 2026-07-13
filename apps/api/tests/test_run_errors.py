@@ -18,7 +18,7 @@ class FakeAcpProcess:
     async def new_session(self, cwd):
         return "acp-test-1"
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600):
+    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
         if self.behavior == "fail":
             raise Exception("boom from runner")
         if self.behavior == "timeout":
@@ -60,7 +60,7 @@ class RecoverableHistoryProcess(FakeAcpProcess):
     async def new_session(self, cwd):
         return "acp-recovered"
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600):
+    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
         if self.first:
             raise Exception("[property_name_above_max_length] Invalid property name in 'input[48].arguments': '{{d...(' is too long")
         on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "recovered ok"}})
@@ -82,7 +82,7 @@ class CancelBeforeFailProcess(FakeAcpProcess):
         super().__init__("fail")
         self.app = app
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600):
+    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
         with self.app.state.db_lock:
             row = self.app.state.worker_db.execute(
                 "SELECT id FROM runs WHERE status = 'running' ORDER BY id DESC LIMIT 1"

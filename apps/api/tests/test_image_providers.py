@@ -199,12 +199,46 @@ def test_codex_generate_streams_image_from_codex_responses(monkeypatch, tmp_path
     assert captured["json"]["tools"][0]["quality"] == "low"
 
 
-def test_codex_generate_rejects_image_edit(monkeypatch, tmp_path):
+def test_codex_generate_passes_reference_image_as_input_image(monkeypatch, tmp_path):
+    png = b"\x89PNG\r\nEDITED"
+    b64 = base64.b64encode(png).decode()
+    payload = base64.urlsafe_b64encode(
+        b'{"exp":4102444800,"https://api.openai.com/auth":{"chatgpt_account_id":"acct_123"}}'
+    ).decode().rstrip("=")
     auth = tmp_path / "auth.json"
-    auth.write_text('{"tokens":{"access_token":"not-a-jwt"}}')
+    auth.write_text('{"tokens":{"access_token":"h.' + payload + '.s"}}')
     monkeypatch.setattr(image_providers, "_CODEX_AUTH_PATH", auth)
-    with pytest.raises(image_providers.ImageProviderError, match="text-to-image only"):
-        image_providers.generate("codex", None, prompt="edit", image_bytes=b"src")
+
+    captured = {}
+
+    class FakeStream:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def iter_lines(self):
+            event = json_bytes({"type": "image_generation_call", "result": b64})
+            yield b"event: response.output_item.done"
+            yield b"data: " + event
+            yield b""
+
+    class FakeClient:
+        def __init__(self, timeout=None, headers=None):
+            pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, method, url, json=None):
+            captured["json"] = json
+            return FakeStream()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    out = image_providers.generate(
+        "codex", None, prompt="make it blue", image_bytes=b"SRC", image_mime="image/webp"
+    )
+    assert out == png
+    content = captured["json"]["input"][0]["content"]
+    img_parts = [c for c in content if c.get("type") == "input_image"]
+    assert len(img_parts) == 1
+    assert img_parts[0]["image_url"].startswith("data:image/webp;base64,")
 
 
 def test_test_connection_network_error_never_raises(monkeypatch):

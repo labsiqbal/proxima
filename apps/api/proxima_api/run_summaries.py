@@ -82,9 +82,4 @@ class RunSummaries:
             return
         urow = db.execute("SELECT username FROM users WHERE id = ?", (run["user_id"],)).fetchone()
         author = urow["username"] if urow else "agent"
-        trow = db.execute(
-            "SELECT t.title FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id WHERE s.id = ?",
-            (run["session_id"],),
-        ).fetchone()
-        task_title = trow["title"] if trow and trow["title"] else None
-        wiki_memory.append_log_entry(root, datetime.now(), author, summary, task_title)
+        wiki_memory.append_log_entry(root, datetime.now(), author, summary, None)

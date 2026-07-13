@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,10 +36,11 @@ from .routes import (
     admin as routes_admin,
     auth as routes_auth,
     chat as routes_chat,
+    design as routes_design,
     files as routes_files,
     profiles as routes_profiles,
     projects as routes_projects,
-    tasks as routes_tasks,
+    reviews as routes_reviews,
     update as routes_update,
     wiki as routes_wiki,
     work as routes_work,
@@ -163,6 +164,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         db,
         depends=Depends,
         header=Header,
+        cookie=Cookie,
         http_exception=HTTPException,
         status_module=status,
     )
@@ -184,15 +186,16 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
 
-    routes_tasks.register(app, _route_deps)
     routes_work.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)
+    routes_design.register(app, _route_deps)
     routes_wiki.register(app, _route_deps)
     routes_admin.register(app, _route_deps)
     routes_update.register(app, _route_deps)
     routes_chat.register(app, _route_deps)
+    routes_reviews.register(app, _route_deps)
     routes_auth.register(app, _route_deps)
 
     # Config the SPA reads at bootstrap to build preview URLs. apps_domain is not

@@ -15,7 +15,7 @@ from typing import Any
 
 import json as _json
 
-from .auth import expiry, hash_token, iso_now, new_token
+from .auth import expiry, hash_password, hash_token, iso_now, new_token, verify_password
 from .capabilities import apply_capabilities, parse_selection
 from .profile_seed import seed_agent_home
 from .provisioning import provision_user_workspace
@@ -46,6 +46,7 @@ def build_route_deps(
     *,
     depends: FastApiCallable,
     header: FastApiCallable,
+    cookie: FastApiCallable,
     http_exception: Any,
     status_module: Any,
 ) -> dict[str, Any]:
@@ -72,27 +73,50 @@ def build_route_deps(
             logger.exception("single-user owner provisioning failed (non-fatal)")
         return user
 
-    def current_user(authorization: str | None = header(default=None)) -> dict[str, Any]:
-        # Single-user cockpit: there is exactly one owner, always. The access gate is
-        # the network (loopback / Cloudflare Access), not in-app accounts. A bearer
-        # token may be present (minted by /auth/auto for SSE/WS URLs) but identity is
-        # always the owner.
-        return ensure_single_user_owner()
-
-    def current_user_strict_token(authorization: str | None = header(default=None)) -> dict[str, Any]:
-        # Same single-user identity, but validate any presented token so frontend
-        # boot can detect stale localStorage and mint a fresh SSE/preview token.
-        if authorization:
-            token = authorization.removeprefix("Bearer ").strip()
+    def current_user(
+        authorization: str | None = header(default=None),
+        proxima_session: str | None = cookie(default=None),
+    ) -> dict[str, Any]:
+        # Single-user cockpit, one owner. Defense-in-depth over the network boundary:
+        # if the owner has set a password, every request must carry a valid session
+        # (bearer token or the HttpOnly proxima_session cookie). Before a password is
+        # set (first run / passwordless mode) the app is open so setup can happen.
+        owner = ensure_single_user_owner()
+        if not owner.get("password_hash"):
+            return owner
+        token = authorization.removeprefix("Bearer ").strip() if authorization else None
+        token = token or proxima_session
+        if token:
             row = db().execute(
                 "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
                 "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
                 (hash_token(token), iso_now()),
             ).fetchone()
-            if not row:
-                raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
-            return dict(row)
-        return ensure_single_user_owner()
+            if row:
+                return dict(row)
+        raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required")
+
+    def current_user_strict_token(
+        authorization: str | None = header(default=None),
+        proxima_session: str | None = cookie(default=None),
+    ) -> dict[str, Any]:
+        # Validate any presented token (so frontend boot detects a stale session) and
+        # enforce the password gate: a set password means no token = not logged in.
+        owner = ensure_single_user_owner()
+        token = authorization.removeprefix("Bearer ").strip() if authorization else None
+        token = token or proxima_session
+        if token:
+            row = db().execute(
+                "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
+                "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
+                (hash_token(token), iso_now()),
+            ).fetchone()
+            if row:
+                return dict(row)
+            raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
+        if owner.get("password_hash"):
+            raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required")
+        return owner
 
     def admin_user(user: dict[str, Any] = depends(current_user)) -> dict[str, Any]:
         # Single-user: the sole owner is always the admin.
@@ -261,8 +285,6 @@ def build_route_deps(
             "project_name": row.get("project_name"),
             "visibility": row["visibility"],
             "updated_at": row["updated_at"],
-            "task_id": row.get("task_id"),
-            "task_title": row.get("task_title"),
             "job_id": row.get("job_id"),
             "workflow_id": row.get("workflow_id"),
             "mode": row.get("mode") or "chat",

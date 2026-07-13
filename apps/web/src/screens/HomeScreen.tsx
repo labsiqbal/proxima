@@ -27,13 +27,13 @@ const nextLabel = (iso: string | null, enabled: boolean): string => {
 }
 
 
-export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask, onOpenProject, onOpenDesign, onOpenJob, onOpenArtifact, onNewChat, onSelectView }: {
+export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenProject, onOpenDesign, onOpenJob, onOpenArtifact, onNewChat, onSelectView }: {
   token: string; ownerName?: string; features: AppFeatures
-  onOpenChat: (id: number) => void; onOpenTask: (taskId: number) => void
+  onOpenChat: (id: number) => void
   onOpenDesign: (session: { id: number; title: string; project_slug: string | null }) => void
   onOpenJob: (jobId: number) => void; onOpenArtifact: (artifact: { type: string; title: string; path: string; project_slug: string }) => void
   onNewChat: () => void
-  onOpenProject: (slug: string) => void; onSelectView: (v: 'projects' | 'tasks' | 'workflows' | 'activity' | 'artifacts' | 'settings') => void
+  onOpenProject: (slug: string) => void; onSelectView: (v: 'projects' | 'workflows' | 'activity' | 'artifacts' | 'settings') => void
 }) {
   const [data, setData] = React.useState<Dashboard | null>(null)
   const [error, setError] = React.useState('')
@@ -67,7 +67,7 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
   if (error) return <section className="home-view home-command"><p className="error-text" style={{ padding: 24 }}>{error}</p></section>
   if (!data) return <section className="home-view home-command"><div className="cmd-bg" /><div className="cmd-skeleton" /></section>
 
-  const { counts, tasksByStatus, recent: allRecent, activeSessions: allActiveSessions = [], projects, workflows, schedules, reviewCount, reviewJobs = [], recentArtifacts = [], systemHealth, pendingApprovals: allPendingApprovals = [] } = data
+  const { counts, jobsByStatus = { queued: 0, running: 0, review: 0, done: 0 }, recent: allRecent, activeSessions: allActiveSessions = [], projects, workflows, schedules, reviewCount, reviewJobs = [], recentArtifacts = [], systemHealth, pendingApprovals: allPendingApprovals = [] } = data
   const recent = allRecent.filter(session => isFeatureSessionEnabled(session, features))
   const activeSessions = allActiveSessions.filter(session => isFeatureSessionEnabled(session, features))
   const pendingApprovals = allPendingApprovals.filter(session => isFeatureSessionEnabled(session, features))
@@ -76,7 +76,6 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
   const liveSession = activeSessions[0] || null
   const lastWork = recent[0] || null
   const lastProject = projects[0] || null
-  const totalTasks = Math.max(1, Object.values(tasksByStatus).reduce((a, b) => a + b, 0))
   const healthTone = !systemHealth ? 'ok' : systemHealth.staleRuns > 0 || systemHealth.failedRuns24h > 0 ? 'warn' : systemHealth.runnersReady === 0 ? 'fail' : 'ok'
   const activeIds = new Set(activeSessions.map(s => s.id))
   const approvalIds = new Set(pendingApprovals.map(s => s.id))
@@ -103,12 +102,12 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
     <div className="cmd-bg" aria-hidden="true" />
 
     <header className="cmd-head">
-      <div className="cmd-brand"><ProximaMark className="proxima-mark-command" /> PROXIMA <span className="cmd-brand-sub">· control</span></div>
+      <div className="cmd-brand"><ProximaMark className="proxima-mark-command" /><span className="proxima-word">PROXIMA</span><span className="cmd-brand-sub">· control</span></div>
       <div className="cmd-subhead">{greeting} · {dateStr}</div>
       <div className="cmd-headline">
         <span className="cmd-hello">{ownerName ? `${ownerName.toUpperCase()} //` : '//'}</span>
         {pendingApprovals.length > 0
-          ? <button className="cmd-flag" onClick={() => onOpenChat(pendingApprovals[0].id)} title={pendingApprovals[0].task_title || pendingApprovals[0].title}>{pendingApprovals.length} NEED{pendingApprovals.length > 1 ? '' : 'S'} APPROVAL <span className="cmd-arrow">▸</span></button>
+          ? <button className="cmd-flag" onClick={() => onOpenChat(pendingApprovals[0].id)} title={pendingApprovals[0].title}>{pendingApprovals.length} NEED{pendingApprovals.length > 1 ? '' : 'S'} APPROVAL <span className="cmd-arrow">▸</span></button>
           : reviewCount > 0
           ? <button className="cmd-flag" onClick={() => onSelectView('activity')}>{reviewCount} JOBS AWAIT REVIEW <span className="cmd-arrow">▸</span></button>
           : activeRunCount > 0
@@ -138,10 +137,10 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
           : <ul className="cmd-rows cmd-loglist">{recent.slice(0, 7).map((r, i) => <li key={r.id} className="stagger-item" style={{ ['--i' as string]: i } as React.CSSProperties}>
               <button onClick={() => (r.mode === 'design')
                 ? onOpenDesign({ id: r.id, title: r.title, project_slug: r.project_slug })
-                : r.task_id && !r.workflow_id ? onOpenTask(r.task_id) : onOpenChat(r.id)}>
+                : onOpenChat(r.id)}>
                 {(() => { const st = statusOf(r); return <span className={`cmd-row-t ${st.cls}`} title={st.title}>{st.dot ? <span className="cmd-livedot" /> : <span className="cmd-st-dot" />}{st.label}</span> })()}
-                <span className="cmd-row-main"><span className="cmd-row-title">{r.task_title || r.title}</span></span>
-                <span className="cmd-row-sub">{r.project_slug || '—'}{r.mode === 'design' ? ' · design' : r.workflow_id ? ' · workflow' : r.task_id ? ' · task' : ''}</span>
+                <span className="cmd-row-main"><span className="cmd-row-title">{r.title}</span></span>
+                <span className="cmd-row-sub">{r.project_slug || '—'}{r.mode === 'design' ? ' · design' : r.workflow_id ? ' · workflow' : ''}</span>
               </button></li>)}</ul>}
       </div>
 
@@ -153,8 +152,10 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
           <button className="cmd-readout-btn" onClick={() => onSelectView('activity')}><span className="cmd-readout"><strong>{reviewCount}</strong><span>reviews</span></span></button>
           <button className="cmd-readout-btn" onClick={() => liveSession ? onOpenChat(liveSession.id) : onSelectView('activity')}><span className={`cmd-readout ${activeRunCount ? 'live' : ''}`}><strong>{activeRunCount}</strong><span>live agents</span></span></button>
         </div>
-        <div className="cmd-taskbar" aria-label="Task status">
-          {(['todo', 'doing', 'review', 'done'] as const).map(k => <span key={k} className={`cmd-taskseg ${k}`} style={{ width: `${Math.max(4, (tasksByStatus[k] / totalTasks) * 100)}%` }} title={`${k}: ${tasksByStatus[k]}`} />)}
+        <div className="cmd-taskbar" title="Jobs by status" aria-label="Jobs by status">
+          {(['queued', 'running', 'review', 'done'] as const).map(s => jobsByStatus[s] > 0
+            ? <span key={s} className={`cmd-taskseg ${s}`} style={{ flex: jobsByStatus[s] }} title={`${jobsByStatus[s]} ${s}`} />
+            : null)}
         </div>
         <div className="cmd-healthline">
           <span>{systemHealth?.runnersReady ?? 0}/{systemHealth?.runnersTotal ?? 0} runners ready</span>
@@ -227,7 +228,7 @@ export function HomeScreen({ token, ownerName, features, onOpenChat, onOpenTask,
       {projects.length > 0 && <div className="cmd-panel cmd-projects">
         <div className="panel-label">Projects <button className="cmd-more" onClick={() => onSelectView('projects')}>all ▸</button></div>
         <div className="cmd-chips">{projects.slice(0, 8).map(p => <button key={p.slug} className="cmd-chip" onClick={() => onOpenProject(p.slug)}>
-          {cleanName(p.name)}<span className="cmd-chip-n">{p.chats + p.tasks}</span>
+          {cleanName(p.name)}<span className="cmd-chip-n">{p.chats}</span>
         </button>)}</div>
       </div>}
     </div>

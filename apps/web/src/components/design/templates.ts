@@ -4,7 +4,7 @@ import { uid, blobPath } from './scene'
 // Templates are SKELETONS — they set the surface, canvas size, and artboard count
 // as a starting point. Nothing is locked: size/aspect/everything stays editable on
 // the canvas, and the AI fills content into the skeleton from the user's brief.
-export type Surface = 'graphic' | 'deck' | 'mobile' | 'video' | 'web'
+export type Surface = 'graphic' | 'deck' | 'mobile' | 'web'
 
 export type Template = {
   id: string; surface: Surface; name: string; hint: string
@@ -15,7 +15,6 @@ export const SURFACES: { key: Surface; label: string }[] = [
   { key: 'graphic', label: 'Graphic' },
   { key: 'deck', label: 'Slide deck' },
   { key: 'mobile', label: 'Mobile app' },
-  { key: 'video', label: 'Video' },
   { key: 'web', label: 'Website' },
 ]
 
@@ -33,7 +32,6 @@ export const TEMPLATES: Template[] = [
   { id: 'pdf-square', surface: 'deck', name: 'PDF square', hint: '1:1 · 3 pages', width: 1080, height: 1080, artboards: 3, background: '#ffffff' },
   { id: 'pdf-tall-report', surface: 'deck', name: 'PDF tall report', hint: 'Tall report · 3 pages', width: 1080, height: 1440, artboards: 3, background: '#ffffff' },
   { id: 'mobile-ios', surface: 'mobile', name: 'iPhone screen', hint: '390×844', width: 390, height: 844, artboards: 1, background: '#ffffff' },
-  { id: 'reel', surface: 'video', name: 'Reel / Short', hint: '9:16 video', width: 1080, height: 1920, artboards: 1, background: '#ffffff' },
   { id: 'web-landing', surface: 'web', name: 'Landing page', hint: 'Responsive (HTML)', width: 1440, height: 1024, artboards: 1, background: '#ffffff' },
 ]
 
@@ -199,13 +197,6 @@ function starter(t: Template, i: number): { bg: string; layers: Layer[] } {
       T(48, 196, 280, 'Your card title', 28, { fontFamily: 'Poppins', fontStyle: 'bold', fill: '#0F172A' }),
       T(48, 244, 300, 'Supporting copy for this card goes on two short lines.', 18, { fill: '#64748B', lineHeight: 1.4 }),
       ...pill(24, 740, 342, 64, '#2563EB', 'Continue', '#FFFFFF'),
-    ] }
-    case 'reel': return { bg: '#18181B', layers: [
-      E(390, 760, 300, 300, '#FFFFFF', { opacity: 0.06 }),
-      T(64, 150, 950, 'WATCH TILL THE END', 30, { ...EB, fill: '#F59E0B' }),
-      T(80, 700, 920, 'The hook that stops the scroll', 100, { ...HEAD, fill: '#FFFFFF', align: 'center' }),
-      T(80, 1120, 920, 'Subtitle line for context', 44, { fill: '#A1A1AA', align: 'center' }),
-      ...pill(290, 1700, 500, 110, '#F59E0B', 'Follow for more', '#18181B'),
     ] }
     case 'web-landing': return { bg: '#FFFFFF', layers: [
       T(80, 60, 200, 'Acme', 32, { fontFamily: 'Poppins', fontStyle: 'bold', fill: '#0F172A' }),

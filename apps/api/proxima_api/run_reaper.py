@@ -19,22 +19,37 @@ class RunReaper:
         self.app = app
         self._fail_interrupted = fail_interrupted
 
+    def _actively_running(self) -> set[int]:
+        """Run ids THIS worker is still executing (a live asyncio task). A stale
+        heartbeat on one of these means the loop is busy/slow, NOT that the run
+        died — reaping it would kill a live run mid-flight. Only runs with no live
+        task (orphaned by a crash/restart) are genuine reap targets."""
+        worker = getattr(self.app.state, "worker", None)
+        if worker is None:
+            return set()
+        return {rid for rid, task in list(worker.run_tasks.items()) if not task.done()}
+
     def reap_stale_runs(self, stale_seconds: int) -> None:
         """Mark runs whose worker stopped checking in (crash without a clean
-        restart, wedged event loop) as failed — the watchdog for hangs."""
+        restart) as failed — the watchdog for hangs. Skips runs this worker is
+        still actively executing so a busy event loop can't false-positive them."""
         db = self.app.state.worker_db
+        alive = self._actively_running()
         with self.app.state.db_lock:
             stale = db.execute(
                 f"SELECT id, session_id, project_id FROM runs WHERE status = 'running' "
                 f"AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', '-{int(stale_seconds)} seconds'))"
             ).fetchall()
-            rows = [dict(r) for r in stale]
+            rows = [dict(r) for r in stale if r["id"] not in alive]
         for r in rows:
             self._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Run stalled (no heartbeat)")
 
     def reap_stale_run_blockers(self, stale_seconds: int) -> int:
-        """Fail stale running runs that are blocking a queued turn in the same session."""
+        """Fail stale running runs that are blocking a queued turn in the same session.
+        Skips runs this worker is still executing (alive but slow) — the queue waits
+        rather than killing a live run."""
         db = self.app.state.worker_db
+        alive = self._actively_running()
         with self.app.state.db_lock:
             stale = db.execute(
                 f"""
@@ -48,7 +63,7 @@ class RunReaper:
                   )
                 """
             ).fetchall()
-            rows = [dict(r) for r in stale]
+            rows = [dict(r) for r in stale if r["id"] not in alive]
         for r in rows:
             self._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Run stalled (no heartbeat)")
         return len(rows)

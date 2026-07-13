@@ -109,8 +109,8 @@ def register(app, deps):
         the workflow where you dry-test + refine the recipe, then 'Save to workflow'."""
         wfrow = _workflow_or_404(workflow_id, user)
         existing = db().execute(
-            "SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title "
-            "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id "
+            "SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name "
+            "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id "
             "WHERE s.workflow_id = ? AND s.owner_user_id = ? ORDER BY s.id DESC LIMIT 1",
             (workflow_id, user["id"]),
         ).fetchone()
@@ -123,8 +123,8 @@ def register(app, deps):
             (f"⚙ {wfrow['name']}", project_id, user["id"], profile["id"], profile["runner_id"], "project" if project_id else "private", workflow_id),
         )
         row = db().execute(
-            "SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title "
-            "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id WHERE s.id=?",
+            "SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name "
+            "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?",
             (cur.lastrowid,),
         ).fetchone()
         return session_payload(dict(row))

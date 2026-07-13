@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
+from ..artifacts import update_produced_artifacts
 from ..auth import hash_token
 from ..db import connect
 from ..terminal import TerminalSession
@@ -31,18 +32,20 @@ from .. import app_settings
 from .. import auth_health as auth_health_mod
 from .. import design_scenes
 from .. import features
+from .. import kinds
+from .. import state
 from .. import image_providers
 from .. import video_providers
 from .. import wiki_memory
 from .. import workflows as wf
-from ..message_reviews import build_source_merge_prompt, build_validate_prompt, review_payload
-from ..prompt_collaborations import build_brainstorm_child_prompt, build_debate_stance_prompt, collaboration_card_payload
+from ..prompt_collaborations import collaboration_card_payload
+from ..chat_collaboration import make_start_collaboration
 from ..run_state import active_run_clause, stale_params
 from ..runners import detect_runners
 from ..goal_loop import GOAL_INSTRUCTIONS, build_goal_prompt
 from ..schemas import (
-    ChatSendRequest, GoalRequest, MessageCreateRequest, MessageReviewAskOriginalRequest,
-    MessageReviewCreateRequest, PermissionResponse, PromoteWorkflowRequest, RunCreateRequest,
+    ChatSendRequest, GoalRequest, MessageCreateRequest,
+    PermissionResponse, PromoteWorkflowRequest, RunCreateRequest,
     SessionCreateRequest, SessionUpdateRequest, WikiCommitRequest, WikiDraftRequest,
 )
 
@@ -95,36 +98,38 @@ def register(app, deps):
     user_from_token_query = deps["user_from_token_query"]
     ensure_single_user_owner = deps["ensure_single_user_owner"]
 
+    def _require_mode_feature(mode: str | None) -> None:
+        # Feature-blind gate: the registry owns the mode -> feature-flag mapping,
+        # so the chat gate never names "design"/DESIGN_STUDIO itself. A new gated
+        # session kind is added by registering it in kinds.py.
+        flag = kinds.feature_flag_for(mode)
+        if flag:
+            features.require(feature_cfg, flag)
+
     def _require_session_features(session: dict[str, Any]) -> None:
-        if session.get("mode") == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
+        _require_mode_feature(session.get("mode"))
 
     @app.get("/api/sessions")
     def list_sessions(user: dict[str, Any] = Depends(current_user)):
-        # Self-heal: a task thread whose task no longer exists is an orphan (it
-        # would show in the sidebar with no way to delete it — the delete button
-        # targets the missing task). Drop these so they disappear automatically.
-        db().execute(
-            "DELETE FROM sessions WHERE owner_user_id = ? AND task_id IS NOT NULL "
-            "AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = sessions.task_id)",
-            (user["id"],),
-        )
+        # Main chat shows only the kinds the registry marks shown_in_main_chat
+        # (kind is authoritative, never inferred from the title). A new session
+        # mode = register it in kinds.py; this query needs no edit.
+        modes = kinds.main_chat_modes()
+        mode_placeholders = ",".join("?" for _ in modes)
         rows = db().execute(
-            """
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
+            f"""
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
             FROM sessions s
             LEFT JOIN projects p ON p.id = s.project_id
             LEFT JOIN profiles pr ON pr.id = s.profile_id
-            LEFT JOIN tasks t ON t.id = s.task_id
             WHERE s.owner_user_id = ?
               AND s.job_id IS NULL        -- workflow-job threads belong to Activity
               AND s.workflow_id IS NULL   -- workflow iterate/test chats are opened from Workflows
-              AND IFNULL(s.mode, 'chat') = 'chat'  -- main chat shows ONLY chat-kind sessions; design → Design Studio (kind is authoritative, never inferred from the title)
-              AND (s.task_id IS NOT NULL
-                   OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id))
+              AND IFNULL(s.mode, 'chat') IN ({mode_placeholders})
+              AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id)
             ORDER BY s.updated_at DESC, s.id DESC
             """,
-            (user["id"],),
+            (user["id"], *modes),
         ).fetchall()
         return {"sessions": [session_payload(dict(row)) for row in rows]}
 
@@ -132,7 +137,7 @@ def register(app, deps):
     def search(q: str = "", user: dict[str, Any] = Depends(current_user)):
         term = q.strip()
         if len(term) < 2:
-            return {"projects": [], "chats": [], "tasks": [], "messages": []}
+            return {"projects": [], "chats": [], "messages": []}
         like = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         uid = user["id"]
         projects = [dict(r) for r in db().execute(
@@ -140,23 +145,17 @@ def register(app, deps):
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
             (uid, like, like)).fetchall()]
         chats = [dict(r) for r in db().execute(
-            "SELECT id, title, task_id FROM sessions WHERE owner_user_id = ? AND title LIKE ? ESCAPE '\\' "
+            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND title LIKE ? ESCAPE '\\' "
             "ORDER BY updated_at DESC LIMIT 10", (uid, like)).fetchall()]
-        tasks = [dict(r) for r in db().execute(
-            "SELECT t.id, t.title, t.status, p.slug AS project_slug FROM tasks t JOIN projects p ON p.id = t.project_id "
-            "WHERE p.owner_user_id = ? "
-            "AND (t.title LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\') ORDER BY t.updated_at DESC LIMIT 10",
-            (uid, like, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
-            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title, s.task_id "
+            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title "
             "FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.owner_user_id = ? "
             "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
-        return {"projects": projects, "chats": chats, "tasks": tasks, "messages": msgs}
+        return {"projects": projects, "chats": chats, "messages": msgs}
 
     @app.post("/api/sessions", status_code=201)
     def create_session(payload: SessionCreateRequest, user: dict[str, Any] = Depends(current_user)):
-        if payload.mode == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
+        _require_mode_feature(payload.mode)
         profile = profile_for_user(payload.profile_id, user)
         project_id = None
         if payload.project_slug:
@@ -169,8 +168,8 @@ def register(app, deps):
         )
         row = db().execute(
             """
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
-            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id WHERE s.id=?
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
+            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?
             """,
             (cur.lastrowid,),
         ).fetchone()
@@ -203,8 +202,8 @@ def register(app, deps):
             )
         row = db().execute(
             """
-            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name, t.title AS task_title
-            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id LEFT JOIN tasks t ON t.id=s.task_id WHERE s.id=?
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
+            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?
             """,
             (session_id,),
         ).fetchone()
@@ -219,30 +218,6 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="this thread belongs to a job; delete the job instead")
         db().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         return {"ok": True, "id": session_id}
-
-    def _run_activity(run_id: int) -> list[dict[str, Any]]:
-        """Compact tool/subagent activity for a finished run, from its persisted
-        events — so the agent's work (e.g. parallel subagents) stays visible after
-        the run instead of only during it. 'Task' tools are subagent spawns."""
-        rows = db().execute(
-            "SELECT type, payload FROM events WHERE run_id = ? AND type IN ('tool.start','tool.complete') ORDER BY seq",
-            (run_id,),
-        ).fetchall()
-        order: list[str] = []
-        items: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            p = json.loads(r["payload"] or "{}")
-            tid = str(p.get("id") or "")
-            if not tid:
-                continue
-            if r["type"] == "tool.start":
-                if tid not in items:
-                    order.append(tid)
-                title = str(p.get("title") or "tool")
-                items[tid] = {"title": title, "status": "running", "subagent": title.strip().lower() == "task"}
-            elif tid in items:
-                items[tid]["status"] = str(p.get("status") or "completed")
-        return [items[t] for t in order]
 
     @app.get("/api/sessions/{session_id}/messages")
     def list_messages(session_id: int, user: dict[str, Any] = Depends(current_user)):
@@ -320,277 +295,7 @@ def register(app, deps):
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
         return {"id": cur.lastrowid, "role": payload.role, "content": payload.content}
 
-    def _source_message_for_user(message_id: int, user: dict[str, Any]) -> dict[str, Any]:
-        row = db().execute(
-            """
-            SELECT m.*, s.owner_user_id, s.project_id, s.title AS session_title, s.mode AS session_mode,
-                   COALESCE(r.runner_id, s.runner_id) AS source_runner,
-                   COALESCE(r.profile_id, s.profile_id) AS source_profile_id,
-                   COALESCE(pr.name, m.author) AS source_author
-            FROM messages m
-            JOIN sessions s ON s.id = m.session_id
-            LEFT JOIN runs r ON r.id = m.run_id
-            LEFT JOIN profiles pr ON pr.id = COALESCE(r.profile_id, s.profile_id)
-            WHERE m.id = ?
-            """,
-            (message_id,),
-        ).fetchone()
-        if not row or row["owner_user_id"] != user["id"]:
-            raise HTTPException(status_code=404, detail="message not found")
-        if row["role"] != "assistant":
-            raise HTTPException(status_code=400, detail="only assistant messages can be validated")
-        return dict(row)
-
-    def _review_for_user(review_id: int, user: dict[str, Any]) -> dict[str, Any]:
-        row = db().execute(
-            """
-            SELECT mr.*, m.content AS source_content, m.author AS source_author, s.owner_user_id,
-                   s.mode AS session_mode,
-                   s.project_id, s.title AS session_title, COALESCE(r.profile_id, s.profile_id) AS source_profile_id,
-                   COALESCE(r.runner_id, s.runner_id) AS source_runner
-            FROM message_reviews mr
-            JOIN messages m ON m.id = mr.source_message_id
-            JOIN sessions s ON s.id = mr.session_id
-            LEFT JOIN runs r ON r.id = m.run_id
-            WHERE mr.id = ?
-            """,
-            (review_id,),
-        ).fetchone()
-        if not row or row["owner_user_id"] != user["id"]:
-            raise HTTPException(status_code=404, detail="review not found")
-        return dict(row)
-
-    def _pick_reviewer_profile(source_runner: str | None, requested_id: int | None, user: dict[str, Any]) -> dict[str, Any]:
-        if requested_id is not None:
-            profile = profile_for_user(requested_id, user)
-            if profile["runner_id"] == source_runner:
-                raise HTTPException(status_code=400, detail="reviewer must use a different runner than the source")
-            return dict(profile)
-        first = "codex" if source_runner == "claude-code" else "claude-code"
-        second = "claude-code" if first == "codex" else "codex"
-        row = db().execute(
-            """
-            SELECT * FROM profiles
-            WHERE user_id = ? AND runner_id != ?
-            ORDER BY CASE WHEN runner_id = ? THEN 0 WHEN runner_id = ? THEN 1 ELSE 2 END,
-                     is_default DESC, id ASC
-            LIMIT 1
-            """,
-            (user["id"], source_runner or "", first, second),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=400, detail="No reviewer profile with a different runner is available.")
-        return dict(row)
-
-    def _collaboration_profiles(payload: RunCreateRequest, active_profile: dict[str, Any], user: dict[str, Any], limit: int) -> list[dict[str, Any]]:
-        selected: list[dict[str, Any]] = []
-        seen: set[int] = set()
-
-        def add(profile: dict[str, Any]) -> None:
-            pid = int(profile["id"])
-            if pid not in seen and len(selected) < limit:
-                seen.add(pid)
-                selected.append(dict(profile))
-
-        add(active_profile)
-        for pid in payload.participant_profile_ids or []:
-            add(profile_for_user(pid, user))
-        if len(selected) < limit:
-            rows = db().execute(
-                """
-                SELECT * FROM profiles
-                WHERE user_id = ?
-                ORDER BY CASE WHEN runner_id = ? THEN 1 ELSE 0 END, is_default DESC, id ASC
-                """,
-                (user["id"], active_profile["runner_id"]),
-            ).fetchall()
-            for row in rows:
-                add(dict(row))
-        return selected or [dict(active_profile)]
-
-    def _queue_collaboration_child(collab: dict[str, Any], session: dict[str, Any], user: dict[str, Any], profile: dict[str, Any], prompt: str, kind: str, role: str) -> int:
-        cur = db().execute(
-            """
-            INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind, collaboration_id, collaboration_role)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
-            """,
-            (session["id"], session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"], kind, collab["id"], role),
-        )
-        run_id = int(cur.lastrowid)
-        app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": kind, "collaboration_id": collab["id"], "role": role})
-        app.state.worker.add_event(run_id, session["id"], session["project_id"], "collaboration.child.queued", collaboration_card_payload(collab, run_id, profile, role, "queued"))
-        return run_id
-
-    def _start_prompt_collaboration(session: dict[str, Any], payload: RunCreateRequest, user: dict[str, Any], active_profile: dict[str, Any], display_message: str) -> dict[str, Any]:
-        mode = payload.prompt_mode
-        settings = app_settings.get_collaboration_settings(db())
-        limit = settings["brainstorm_agents"] if mode == "brainstorm" else 2
-        profiles = _collaboration_profiles(payload, active_profile, user, limit)
-        parent = db().execute(
-            """
-            INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind, collaboration_role, started_at, heartbeat_at)
-            VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 'parent', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """,
-            (session["id"], session["project_id"], user["id"], active_profile["id"], active_profile["runner_id"], payload.message, payload.model or active_profile["default_model"], active_profile["hermes_home"], f"collab_{mode}"),
-        )
-        parent_run_id = int(parent.lastrowid)
-        cur = db().execute(
-            """
-            INSERT INTO prompt_collaborations(session_id, project_id, user_id, parent_run_id, mode, status, prompt, profile_ids)
-            VALUES (?, ?, ?, ?, ?, 'running', ?, ?)
-            """,
-            (session["id"], session["project_id"], user["id"], parent_run_id, mode, payload.message, json.dumps([p["id"] for p in profiles])),
-        )
-        collab_id = int(cur.lastrowid)
-        collab = dict(db().execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone())
-        db().execute("UPDATE runs SET collaboration_id = ? WHERE id = ?", (collab_id, parent_run_id))
-        app.state.worker.add_event(parent_run_id, session["id"], session["project_id"], "run.queued", {"runner": active_profile["runner_id"], "kind": f"collab_{mode}", "prompt_mode": mode, "label": display_message})
-        app.state.worker.add_event(parent_run_id, session["id"], session["project_id"], "run.started", {"runner": active_profile["runner_id"], "kind": f"collab_{mode}"})
-        # No "Starting…" delta: the cards announce the run, and the parent
-        # bubble must stay byte-identical to the final message (header +
-        # synthesis only) so the stream→saved handoff doesn't snap.
-        child_ids: list[int] = []
-        if mode == "brainstorm":
-            for i, participant in enumerate(profiles):
-                child_ids.append(_queue_collaboration_child(collab, session, user, participant, build_brainstorm_child_prompt(payload.message, participant, i), "collab_brainstorm_child", f"idea:{i + 1}"))
-        else:
-            first = profiles[0]
-            child_ids.append(_queue_collaboration_child(collab, session, user, first, build_debate_stance_prompt(payload.message, first, "Opening stance"), "collab_debate_stance", "stance"))
-        db().execute("UPDATE prompt_collaborations SET child_run_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (json.dumps(child_ids), collab_id))
-        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
-        return {"run_id": parent_run_id, "session_id": session["id"], "status": "running"}
-
-    @app.get("/api/messages/{message_id}/reviews")
-    def list_message_reviews(message_id: int, user: dict[str, Any] = Depends(current_user)):
-        _source_message_for_user(message_id, user)
-        rows = db().execute(
-            "SELECT * FROM message_reviews WHERE source_message_id = ? ORDER BY id ASC",
-            (message_id,),
-        ).fetchall()
-        return {"reviews": [review_payload(r) for r in rows]}
-
-    @app.post("/api/messages/{message_id}/reviews", status_code=202)
-    def create_message_review(message_id: int, payload: MessageReviewCreateRequest, user: dict[str, Any] = Depends(current_user)):
-        source = _source_message_for_user(message_id, user)
-        if source.get("session_mode") == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
-        reviewer = _pick_reviewer_profile(source.get("source_runner"), payload.reviewer_profile_id, user)
-        reviewer_profiles = [{"id": reviewer["id"], "name": reviewer["name"], "runner_id": reviewer["runner_id"]}]
-        prompt = build_validate_prompt(
-            source_content=source["content"],
-            source_author=source.get("source_author"),
-            source_runner=source.get("source_runner"),
-            session_title=source.get("session_title") or "Untitled session",
-            has_unanswered_qform="<question-form" in (source.get("content") or ""),
-        )
-        cur = db().execute(
-            """
-            INSERT INTO message_reviews(source_message_id, session_id, mode, status, source_runner,
-                                        source_profile_id, reviewer_profile_id, reviewer_profiles)
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)
-            """,
-            (
-                message_id,
-                source["session_id"],
-                payload.mode,
-                source.get("source_runner"),
-                source.get("source_profile_id"),
-                reviewer["id"],
-                json.dumps(reviewer_profiles),
-            ),
-        )
-        review_id = int(cur.lastrowid)
-        run = db().execute(
-            """
-            INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'message_review')
-            """,
-            (
-                source["session_id"],
-                source["project_id"],
-                user["id"],
-                reviewer["id"],
-                reviewer["runner_id"],
-                prompt,
-                reviewer["default_model"],
-                reviewer["hermes_home"],
-            ),
-        )
-        run_id = int(run.lastrowid)
-        db().execute("UPDATE message_reviews SET run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id, review_id))
-        row = db().execute("SELECT * FROM message_reviews WHERE id = ?", (review_id,)).fetchone()
-        app.state.worker.add_event(run_id, source["session_id"], source["project_id"], "run.queued", {"runner": reviewer["runner_id"], "kind": "message_review", "review_id": review_id})
-        app.state.worker.add_event(run_id, source["session_id"], source["project_id"], "message_review.queued", {"review": review_payload(row)})
-        return {"review": review_payload(row)}
-
-    @app.post("/api/message-reviews/{review_id}/use-revised")
-    def use_revised_review(review_id: int, user: dict[str, Any] = Depends(current_user)):
-        review = _review_for_user(review_id, user)
-        if not review.get("revised_content"):
-            raise HTTPException(status_code=400, detail="review has no revised content yet")
-        return {"content": review["revised_content"]}
-
-    @app.post("/api/message-reviews/{review_id}/replace-answer")
-    def replace_answer_with_review(review_id: int, user: dict[str, Any] = Depends(current_user)):
-        review = _review_for_user(review_id, user)
-        if review.get("session_mode") == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
-        if review.get("status") != "done" or not review.get("revised_content"):
-            raise HTTPException(status_code=400, detail="review has no revised content yet")
-        original = review.get("source_original_content") or review.get("source_content") or ""
-        db().execute("UPDATE messages SET content = ? WHERE id = ?", (review["revised_content"], review["source_message_id"]))
-        db().execute(
-            "UPDATE message_reviews SET source_original_content = ?, applied_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (original, review_id),
-        )
-        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (review["session_id"],))
-        row = db().execute("SELECT * FROM message_reviews WHERE id = ?", (review_id,)).fetchone()
-        if review.get("run_id"):
-            app.state.worker.add_event(int(review["run_id"]), review["session_id"], review["project_id"], "message_review.applied", {"review": review_payload(row)})
-        return {"review": review_payload(row), "message": {"id": review["source_message_id"], "content": review["revised_content"]}}
-
-    @app.post("/api/message-reviews/{review_id}/restore-original")
-    def restore_original_answer(review_id: int, user: dict[str, Any] = Depends(current_user)):
-        review = _review_for_user(review_id, user)
-        if review.get("session_mode") == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
-        original = review.get("source_original_content")
-        if not original:
-            raise HTTPException(status_code=400, detail="review has no stored original content")
-        db().execute("UPDATE messages SET content = ? WHERE id = ?", (original, review["source_message_id"]))
-        db().execute("UPDATE message_reviews SET applied_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (review_id,))
-        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (review["session_id"],))
-        row = db().execute("SELECT * FROM message_reviews WHERE id = ?", (review_id,)).fetchone()
-        if review.get("run_id"):
-            app.state.worker.add_event(int(review["run_id"]), review["session_id"], review["project_id"], "message_review.restored", {"review": review_payload(row)})
-        return {"review": review_payload(row), "message": {"id": review["source_message_id"], "content": original}}
-
-    @app.post("/api/message-reviews/{review_id}/ask-original", status_code=202)
-    def ask_original_to_revise(review_id: int, payload: MessageReviewAskOriginalRequest, user: dict[str, Any] = Depends(current_user)):
-        review = _review_for_user(review_id, user)
-        if review.get("session_mode") == "design":
-            features.require(feature_cfg, features.DESIGN_STUDIO)
-        profile = profile_for_user(review.get("source_profile_id"), user)
-        prompt = build_source_merge_prompt(
-            source_content=review.get("source_original_content") or review.get("source_content") or "",
-            validation_feedback=review.get("raw_transcript") or "",
-            reviewer_revision=review.get("revised_content"),
-            note=payload.note,
-        )
-        cur = db().execute(
-            """
-            INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'message_review_merge')
-            """,
-            (review["session_id"], review["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
-        )
-        run_id = int(cur.lastrowid)
-        db().execute("UPDATE message_reviews SET status = 'queued', run_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id, review_id))
-        row = db().execute("SELECT * FROM message_reviews WHERE id = ?", (review_id,)).fetchone()
-        app.state.worker.add_event(run_id, review["session_id"], review["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": "message_review_merge", "review_id": review_id})
-        app.state.worker.add_event(run_id, review["session_id"], review["project_id"], "message_review.queued", {"review": review_payload(row)})
-        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (review["session_id"],))
-        return {"run_id": run_id, "session_id": review["session_id"], "status": "queued", "review": review_payload(row)}
+    _start_prompt_collaboration = make_start_collaboration(app, db, profile_for_user)
 
     @app.post("/api/sessions/{session_id}/runs", status_code=202)
     def create_run(session_id: int, payload: RunCreateRequest, user: dict[str, Any] = Depends(current_user)):
@@ -655,8 +360,6 @@ def register(app, deps):
         run_id = int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": payload.prompt_mode})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
-        if session.get("task_id"):
-            db().execute("UPDATE tasks SET status = 'doing', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'done'", (session["task_id"],))
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 
     @app.post("/api/sessions/{session_id}/goal", status_code=202)
@@ -792,7 +495,7 @@ def register(app, deps):
         low = text.lower()
         command = low.split(maxsplit=1)[0] if low else ""
         arg = text[len(command):].strip()
-        if command in {"/image-studio", "/design-studio"}:
+        if command in {"/design", "/image-studio", "/design-studio"}:
             return "image-studio", arg or "Create a Design Studio draft."
         if command in {"/image", "/gambar"}:
             return "image", arg or "Generate an image."
@@ -810,11 +513,11 @@ def register(app, deps):
         return row["slug"] if row else None
 
     def _merge_session_artifact(conn: sqlite3.Connection, session_id: int, artifact: dict[str, Any]) -> None:
-        row = conn.execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        current = json.loads((row["produced_artifacts"] if row else None) or "[]")
-        merged = {(a.get("type"), a.get("path")): a for a in current if isinstance(a, dict)}
-        merged[(artifact.get("type"), artifact.get("path"))] = artifact
-        conn.execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(list(merged.values())), session_id))
+        def _merge(current: list[Any]) -> list[Any]:
+            merged = {(a.get("type"), a.get("path")): a for a in current if isinstance(a, dict)}
+            merged[(artifact.get("type"), artifact.get("path"))] = artifact
+            return list(merged.values())
+        update_produced_artifacts(conn, session_id, _merge)
 
     def _resolve_chat_image_gen() -> dict[str, Any]:
         cfg = app_settings.get_json(db(), app_settings.IMAGE_GEN_KEY)
@@ -1007,14 +710,7 @@ def register(app, deps):
                 profile_id=payload.profile_id,
                 model=payload.model,
             ), user)
-            # runPendingId marks the scene as awaiting exactly this run — Design
-            # Studio's recovery-on-open only auto-applies a finished run that the
-            # on-disk scene was still waiting for.
-            scene["runPendingId"] = design_run["run_id"]
-            d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
-            d.mkdir(parents=True, exist_ok=True)
-            (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-            artifact = {"type": "design", "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}", "project_slug": slug}
+            artifact = design_scenes.persist_draft(root, design_id, scene, slug, run_pending_id=design_run["run_id"])
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(session, payload, user, "image-studio", artifact, text)
         if kind == "video-studio":
@@ -1089,33 +785,28 @@ def register(app, deps):
         ).fetchone()["c"]
         counts = {
             "projects": d.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"],
-            "chats": d.execute("SELECT COUNT(*) AS c FROM sessions WHERE task_id IS NULL").fetchone()["c"],
-            "tasks": d.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"],
+            "chats": d.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"],
             "activeRuns": active_runs_count,
         }
-        tbs = {r["status"]: r["c"] for r in d.execute("SELECT status, COUNT(*) AS c FROM tasks GROUP BY status").fetchall()}
-        tasks_by_status = {s: tbs.get(s, 0) for s in ("todo", "doing", "review", "done")}
-        rpd = {r["d"]: r["c"] for r in d.execute("SELECT date(created_at) AS d, COUNT(*) AS c FROM runs WHERE created_at >= date('now','-6 days') GROUP BY date(created_at)").fetchall()}
-        today = _dtm.now(_tz.utc).date()
-        runs_per_day = [{"date": (today - _td(days=i)).isoformat(), "count": rpd.get((today - _td(days=i)).isoformat(), 0)} for i in range(6, -1, -1)]
+        jbs = {r["status"]: r["c"] for r in d.execute("SELECT status, COUNT(*) AS c FROM jobs WHERE archived_at IS NULL GROUP BY status").fetchall()}
+        jobs_by_status = {s: jbs.get(s, 0) for s in ("queued", "running", "review", "done")}
         recent = [dict(r) for r in d.execute(
-            "SELECT s.id, s.title, s.task_id, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, t.title AS task_title, "
+            "SELECT s.id, s.title, s.workflow_id, s.updated_at, s.goal_status, s.mode, p.slug AS project_slug, "
             "(SELECT r.status FROM runs r WHERE r.session_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_run_status "
-            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
             "ORDER BY s.updated_at DESC LIMIT 7").fetchall()]
         active_sessions = [dict(r) for r in d.execute(
-            f"SELECT s.id, s.title, s.task_id, s.workflow_id, s.updated_at, p.slug AS project_slug, t.title AS task_title, "
+            f"SELECT s.id, s.title, s.workflow_id, s.updated_at, p.slug AS project_slug, "
             "MAX(COALESCE(r.heartbeat_at, r.started_at, r.created_at)) AS last_active_at "
             "FROM runs r JOIN sessions s ON s.id = r.session_id "
-            "LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
             f"WHERE {active_run_clause('r')} "
             "GROUP BY s.id ORDER BY last_active_at DESC LIMIT 5",
             stale_params(stale_seconds),
         ).fetchall()]
         projects = [dict(r) for r in d.execute(
             "SELECT p.slug, p.name, p.path, p.visibility, "
-            "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id AND s.task_id IS NULL) AS chats, "
-            "(SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS tasks, "
+            "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS chats, "
             "(SELECT MAX(updated_at) FROM sessions s WHERE s.project_id = p.id) AS last_activity "
             "FROM projects p ORDER BY last_activity DESC").fetchall()]
         workflows_out = [
@@ -1199,9 +890,9 @@ def register(app, deps):
         # approval.request that hasn't been resolved). Usually empty when auto-approve
         # is on, but surfaces cross-project on Home when it's off.
         pending_approvals = [dict(r) for r in d.execute(
-            "SELECT s.id, s.title, p.slug AS project_slug, t.title AS task_title "
+            "SELECT s.id, s.title, p.slug AS project_slug "
             "FROM runs r JOIN sessions s ON s.id = r.session_id "
-            "LEFT JOIN projects p ON p.id = s.project_id LEFT JOIN tasks t ON t.id = s.task_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
             "WHERE r.status = 'running' "
             "AND (SELECT e.type FROM events e WHERE e.run_id = r.id ORDER BY e.seq DESC LIMIT 1) = 'approval.request' "
             "GROUP BY s.id ORDER BY r.id DESC LIMIT 5"
@@ -1217,7 +908,7 @@ def register(app, deps):
             include_video=features.enabled(app_cfg, features.VIDEO),
         )
         return {
-            "counts": counts, "tasksByStatus": tasks_by_status, "runsPerDay": runs_per_day,
+            "counts": counts, "jobsByStatus": jobs_by_status,
             "recent": recent, "activeSessions": active_sessions, "projects": projects,
             "workflows": workflows_out, "schedules": schedules_out, "reviewCount": review_count,
             "reviewJobs": review_jobs, "recentArtifacts": recent_artifacts, "systemHealth": system_health,
@@ -1267,17 +958,18 @@ def register(app, deps):
     @app.websocket("/api/ws/terminal")
     async def ws_terminal(websocket: WebSocket, token: str = "", project: str = ""):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
-        proxima_session cookie; single-user mode falls back to the owner. cwd = project
-        path or workspace."""
+        proxima_session cookie — a valid session is always required. cwd = project path
+        or workspace."""
+        # Require a valid session (cookie or ?token=) — same stance as ws_events + the
+        # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
+        # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
+        # could have opened the terminal without the password once that flag was set.)
         token = token or websocket.cookies.get("proxima_session", "")
         user = None
-        if token:
-            with app.state.db_lock:
-                row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (hash_token(token),)).fetchone()
-            if row:
-                user = dict(row)
-        if not user and cfg.get("single_user"):
-            user = ensure_single_user_owner()
+        with app.state.db_lock:
+            row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (hash_token(token),)).fetchone()
+        if row:
+            user = dict(row)
         if not user:
             await websocket.close(code=4401)
             return
@@ -1341,7 +1033,7 @@ def register(app, deps):
                 await out_task
 
     @app.websocket("/api/ws/sessions/{session_id}")
-    async def ws_events(websocket: WebSocket, session_id: int, token: str = ""):
+    async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):
         token = token or websocket.cookies.get("proxima_session", "")
         user = None
         token_hash = hash_token(token)
@@ -1356,7 +1048,9 @@ def register(app, deps):
         await websocket.accept()
         hub = app.state.hub
         ev = hub.subscribe(session_id)
-        last_id = 0
+        # Resume from the client's cursor (events.id) so a reconnect doesn't replay
+        # the whole session transcript. Mirrors the SSE sibling's after_id.
+        last_id = after_id
         try:
             while True:
                 ev.clear()
@@ -1407,10 +1101,7 @@ def register(app, deps):
         db().execute("DELETE FROM events WHERE run_id = ?", (run_id,))
         db().execute("DELETE FROM runs WHERE id = ?", (run_id,))
         if output_paths:
-            srow = db().execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (row["session_id"],)).fetchone()
-            artifacts = json.loads((srow["produced_artifacts"] if srow else None) or "[]")
-            kept = [a for a in artifacts if a.get("path") not in output_paths]
-            db().execute("UPDATE sessions SET produced_artifacts = ? WHERE id = ?", (json.dumps(kept), row["session_id"]))
+            update_produced_artifacts(db(), row["session_id"], lambda current: [a for a in current if a.get("path") not in output_paths])
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row["session_id"],))
         return {"ok": True, "run_id": run_id}
 
@@ -1451,9 +1142,13 @@ def register(app, deps):
                         "UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE collaboration_id = ? AND id != ? AND (? IS NULL OR id != ?) AND status IN ('queued','running')",
                         (collab_row["id"], run_id, collab_row["parent_run_id"], collab_row["parent_run_id"]),
                     )
-                    db().execute("UPDATE prompt_collaborations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (collab_row["id"],))
-            # A cancelled task run must not strand its task in 'doing'.
-            db().execute("UPDATE tasks SET status = 'todo', updated_at = CURRENT_TIMESTAMP WHERE id = (SELECT task_id FROM sessions WHERE id = ?) AND status = 'doing'", (row["session_id"],))
+                    # Guarded (request-thread side of the worker race): only cancel a
+                    # still-live collaboration — never flip one the worker just finished.
+                    state.guarded_transition(
+                        db(), "prompt_collaborations", int(collab_row["id"]), "cancelled",
+                        state.non_terminal(state.COLLABORATION),
+                        set_extra="updated_at = CURRENT_TIMESTAMP",
+                    )
         if changed:
             app.state.worker.add_event(run_id, row["session_id"], row["project_id"], "run.cancelled", {})
         notified: set[int] = set()

@@ -130,7 +130,6 @@ export function MessageReviewSidecar({
 		setNotice("");
 		try {
 			const body = await createMessageReview(token, messageId, {
-				mode: "validate",
 				reviewer_profile_id: reviewerProfileId,
 			});
 			if (!mountedRef.current || seq !== seqRef.current) return;

@@ -130,6 +130,14 @@ export const IconClose = ({ size }: IconProps) => (
 	</Svg>
 );
 
+export const IconLogout = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+		<path d="M16 17l5-5-5-5" />
+		<path d="M21 12H9" />
+	</Svg>
+);
+
 export const IconPencil = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M4 20l4-1L19 8a1.9 1.9 0 0 0-2.7-2.7L5 16.5 4 20z" />

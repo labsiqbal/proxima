@@ -26,7 +26,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
     CommandDefinition("/runner", "Show or switch active runner", "Runner", "proxima"),
     CommandDefinition("/goal", "Autonomous goal loop — agent works across turns until done", "Session", "proxima"),
     CommandDefinition("/image", "Generate an image with the selected image provider (Settings → Image generation)", "Media", "proxima"),
-    CommandDefinition("/image-studio", "Create a Design Studio draft from a brief", "Media", "proxima", feature=features.DESIGN_STUDIO),
+    CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima", feature=features.DESIGN_STUDIO),
     CommandDefinition("/video", "Generate a video with the selected video provider (Settings → Video generation)", "Media", "proxima", feature=features.VIDEO),
     CommandDefinition("/video-studio", "Create a Video Studio draft from a brief", "Media", "proxima", feature=features.VIDEO),
     CommandDefinition("/model", "Open/select model via UI", "Runner", "ui-owned", "/model is managed by Proxima model picker, not raw chat."),
@@ -38,7 +38,8 @@ ALIASES = {
     "/reset": "/new",
     "/runners": "/runner",
     "/gambar": "/image",
-    "/design-studio": "/image-studio",
+    "/image-studio": "/design",
+    "/design-studio": "/design",
 }
 
 

@@ -334,9 +334,9 @@ def test_video_import_file_rejects_missing_video_and_non_media(tmp_path):
     assert c.post(f"/api/projects/demo/videos/{vid}/import-file", headers=headers, json={"path": "notes.txt"}).status_code == 400
 
 
-def test_design_image_edit_falls_back_to_xai_when_codex_selected(tmp_path, monkeypatch):
-    """Selected provider is text-to-image only (codex) + an edit request → fall back
-    to xAI OAuth when connected; clear 400 when nothing edit-capable is available."""
+def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
+    """Codex now supports reference images, so an edit request with codex selected goes
+    straight to codex — no xAI fallback — and plain text→image is codex too."""
     from proxima_api import image_providers
 
     c = client(tmp_path)
@@ -353,17 +353,14 @@ def test_design_image_edit_falls_back_to_xai_when_codex_selected(tmp_path, monke
         return b"png-bytes"
 
     monkeypatch.setattr(image_providers, "generate", fake_generate)
+    # Even with an xAI OAuth available, codex handles the edit itself now (imageEdit=True),
+    # so the fallback never triggers.
     monkeypatch.setattr(image_providers, "xai_oauth_ready", lambda: {"ready": True, "detail": "ok"})
     res = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "variation", "image": "artifacts/media/images/ref.png"})
     assert res.status_code == 200, res.text
-    assert calls == ["xai-oauth"]  # fell back from default codex for the edit
+    assert calls == ["codex"]  # codex edits directly, no fallback
 
-    monkeypatch.setattr(image_providers, "xai_oauth_ready", lambda: {"ready": False, "detail": "no token"})
-    res2 = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "variation", "image": "artifacts/media/images/ref.png"})
-    assert res2.status_code == 400
-    assert "text-to-image only" in res2.json()["detail"]
-
-    # plain text→image is untouched by the fallback
+    # plain text→image is codex too
     calls.clear()
     res3 = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "fresh image"})
     assert res3.status_code == 200 and calls == ["codex"]

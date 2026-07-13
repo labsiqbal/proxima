@@ -50,6 +50,18 @@ def test_ws_events_auths_via_cookie_without_token_query(tmp_path):
             pass
 
 
+def test_terminal_ws_requires_session_even_passwordless(tmp_path):
+    """No owner-fallback bypass: the terminal WS rejects without a valid session — even
+    in passwordless mode — mirroring ws_events + SSE. Guards the closed cfg[single_user]
+    hole that could have opened a shell without the password."""
+    c = TestClient(_app(tmp_path))
+    c.post("/auth/auto")   # a passwordless owner now exists
+    c.cookies.clear()      # no cookie, no ?token=
+    with pytest.raises(Exception):
+        with c.websocket_connect("/api/ws/terminal"):
+            pass
+
+
 def test_sse_rejects_without_any_token(tmp_path):
     """Fast 401 path (no infinite stream): no cookie, no ?token= → 401 immediately,
     proving auth is enforced before the generator starts."""
@@ -57,6 +69,9 @@ def test_sse_rejects_without_any_token(tmp_path):
     token = c.post("/auth/auto").json()["token"]
     h = {"Authorization": f"Bearer {token}"}
     sid = c.post("/api/sessions", headers=h, json={"title": "x"}).json()["id"]
+    # TestClient persists the proxima_session cookie /auth/auto set — clear it, else the
+    # GET below auths via that cookie, starts the infinite stream, and hangs the client.
+    c.cookies.clear()
     # No cookie, no ?token= → 401 immediately (auth enforced before the generator).
     r = c.get(f"/api/sessions/{sid}/events/stream")
     assert r.status_code == 401

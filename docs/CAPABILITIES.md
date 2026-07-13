@@ -3,6 +3,11 @@
 What's built, why it exists, and how it works. A reference for understanding what
 this cockpit is actually capable of. (Derived from the code, not aspirational.)
 
+> **Where do I edit when I add/change a feature?** See the companion
+> [reference/feature-map.md](reference/feature-map.md) — a per-feature grid of
+> code locations (backend + frontend), tables/events touched, relations, and
+> status/flag. This doc explains *what & why*; that one maps *where*.
+
 > **Model:** single-user cockpit. One owner, no in-app accounts. The access gate is
 > the network (loopback / Cloudflare Access). The owner is auto-created on first
 > request; the frontend auto-logs-in via `POST /auth/auto` (no password). Per-user
@@ -152,7 +157,10 @@ backing session/thread. (Unified under the jobs model.)
 **Why:** Scope agents to a folder — your real code, not a sandbox.
 **How:** `projects` table. Create a scaffolded project OR **link an existing folder**
 (`/api/projects/link`, jailed to configured link roots). Chat/terminal/files all
-operate on the project path.
+operate on the project path. On **first run**, right after setting a password, an
+onboarding step (`screens/WorkspaceOnboarding.tsx`, reusing the `FolderLinker`
+browser) offers to link a real code folder before landing in the app; skipping
+uses the starter project auto-provisioned under the data dir.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

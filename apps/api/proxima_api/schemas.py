@@ -17,6 +17,15 @@ class LoginRequest(BaseModel):
     password: str = "password123"
 
 
+class PasswordRequest(BaseModel):
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class SharedProjectSpec(BaseModel):
     # Pattern enforced at the request layer so an invalid slug fails as 422 BEFORE
     # setup_bootstrap performs any DB writes (prevents a half-bootstrapped admin).
@@ -73,19 +82,6 @@ class AppStartRequest(BaseModel):
 class PermissionResponse(BaseModel):
     request_id: str
     option_id: str
-
-
-class TaskCreateRequest(BaseModel):
-    title: str = Field(min_length=1)
-    description: str = ""
-    assignee: str | None = None
-
-
-class TaskUpdateRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    status: str | None = Field(default=None, pattern="^(todo|doing|review|done)$")
-    assignee: str | None = None
 
 
 class WorkflowCreateRequest(BaseModel):
@@ -239,7 +235,6 @@ class GoalRequest(BaseModel):
 
 
 class MessageReviewCreateRequest(BaseModel):
-    mode: str = Field(default="validate", pattern="^(validate|brainstorm|debate|compare)$")
     reviewer_profile_id: int | None = None
 
 
@@ -252,6 +247,10 @@ class ImageGenRequest(BaseModel):
     size: str = "1024x1024"
     model: str | None = None
     image: str | None = None  # relative project path of an existing asset, for edit/manipulate
+    # Multiple source/reference images (relative project paths) to edit/compose into
+    # one — providers that advertise referenceImages (e.g. codex) honour all of them;
+    # single-image providers use the first. Takes precedence over `image` when set.
+    images: list[str] | None = None
 
 
 class WikiDraftRequest(BaseModel):

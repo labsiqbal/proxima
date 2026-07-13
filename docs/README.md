@@ -23,6 +23,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |
+| [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
 | [DESIGN-STUDIO.md](DESIGN-STUDIO.md) | Retained Design Studio blueprint (temporarily disabled) | by hand |
