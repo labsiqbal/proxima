@@ -430,14 +430,20 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [assets, setAssets] = React.useState<string[]>([])
   const [uploading, setUploading] = React.useState(false)
   const [imgPrompt, setImgPrompt] = React.useState('')
-  // Asset picked as the reference for the next AI generation (image+prompt → image).
-  const [refImage, setRefImage] = React.useState<string | null>(null)
+  // Reference/source images for the next AI generation (image+prompt → image, or
+  // compose several into one). Providers without referenceImages keep just the first.
+  const [refImages, setRefImages] = React.useState<string[]>([])
   const [imgBusy, setImgBusy] = React.useState(false)
   const [imgBusyKind, setImgBusyKind] = React.useState<'generate' | 'edit' | 'resolve' | null>(null)
   const [imgStartedAt, setImgStartedAt] = React.useState<number | null>(null)
   const [imgElapsed, setImgElapsed] = React.useState(0)
   const [imageProviderKind, setImageProviderKind] = React.useState<'auto' | 'codex' | 'oauth' | 'higgsfield' | 'http'>('codex')
   const [imageEditReady, setImageEditReady] = React.useState(false)
+  // Provider can compose MULTIPLE reference images (Settings → Image generation);
+  // when false the ref tray is capped at one.
+  const [imageMultiReady, setImageMultiReady] = React.useState(false)
+  const addRefImage = React.useCallback((path: string) => setRefImages(prev => prev.includes(path) ? prev : (imageMultiReady ? [...prev, path] : [path])), [imageMultiReady])
+  const removeRefImage = React.useCallback((path: string) => setRefImages(prev => prev.filter(p => p !== path)), [])
   const [designs, setDesigns] = React.useState<{ id: string; title: string; type: string; w: number; h: number; artboards: number; sessionId?: number; art?: Artboard }[]>([])
   const [projectComponents, setProjectComponents] = React.useState<ProjectComponent[]>([])
   const designFs = React.useMemo(() => project ? projectFs(token, project.slug, 'artifacts/design') : null, [token, project?.slug])
@@ -682,8 +688,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       // can, via the Codex OAuth Responses surface). A text-to-image-only provider
       // still edits when the backend can fall back to a connected xAI OAuth.
       setImageEditReady(!!p?.capabilities?.imageEdit || !!cfg.xaiOauthReady?.ready)
+      // Multiple-reference composition follows the selected model's capability.
+      setImageMultiReady(!!p?.capabilities?.referenceImages)
     }).catch(() => {
-      if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false) }
+      if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false); setImageMultiReady(false) }
     })
     return () => { if (seq === settingsSeq.current) settingsSeq.current += 1 }
   }, [token])
@@ -710,7 +718,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     setImgStartedAt(null)
     setImgElapsed(0)
   }
-  const genDesignImageWithTimeout = async (body: { prompt: string; size?: string; model?: string; image?: string }) => {
+  const genDesignImageWithTimeout = async (body: { prompt: string; size?: string; model?: string; image?: string; images?: string[] }) => {
     if (!project) throw new Error('No project selected')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), IMAGE_GEN_CLIENT_TIMEOUT_MS)
@@ -1488,18 +1496,20 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     startImgBusy(editId ? 'edit' : 'generate')
     try {
       const ed = editId ? findLayer(editId) : null
-      const imagePath = ed && ed.type === 'image' && !/^(https?:|data:|blob:)/.test(ed.src) ? ed.src : (!editId && refImage ? refImage : undefined)
+      const editSrc = ed && ed.type === 'image' && !/^(https?:|data:|blob:)/.test(ed.src) ? ed.src : undefined
+      // Sources: the edited layer's image first (if any), then the ref tray. Dedup.
+      const images = [...new Set([editSrc, ...refImages].filter(Boolean) as string[])]
       const contextualPrompt = buildImageContextPrompt(prompt, { editId })
       const frame = ed as unknown as { width?: number; height?: number } | null
       const abFrame = scene.artboards[focusAb] || scene.artboards[0]
       const size = sizeForFrame(frame?.width ?? (wantsBackgroundImage(prompt) ? abFrame?.width : undefined), frame?.height ?? (wantsBackgroundImage(prompt) ? abFrame?.height : undefined))
-      const r = await genDesignImageWithTimeout({ prompt: contextualPrompt, image: imagePath, size })
+      const r = await genDesignImageWithTimeout({ prompt: contextualPrompt, images: images.length ? images : undefined, size })
       if (!mountedRef.current || seq !== actionSeq.current) return
       loadAssets()
       if (editId && ed && ed.type === 'image') patchLayer(editId, { src: r.path } as Partial<Layer>)
       else if (wantsBackgroundImage(prompt)) addBackgroundImage(r.path)
       else await addImage(r.path)
-      setImgPrompt(''); setRefImage(null)
+      setImgPrompt(''); setRefImages([])
     } catch (err) {
       if (mountedRef.current && seq === actionSeq.current) setChat(c => [...c, { role: 'assistant', content: 'Image error: ' + String(err) }])
     } finally {
@@ -1850,19 +1860,26 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           </div>}
           {leftTab === 'assets' && <div className="ds-assets">
             <div className="ds-gen">
-              <textarea rows={2} placeholder={refImage ? 'Describe what to make from the reference image…' : 'Generate an image with AI… e.g. dark coffee splash, top-down'} value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
-              {refImage && <span className="ds-ref-chip" title={refImage}>
-                <img src={resolveSrc(refImage)} alt="" /> Ref: {refImage.split('/').pop()}
-                <button type="button" aria-label="Clear reference" onClick={() => setRefImage(null)}>×</button>
-              </span>}
-              <button className="primary-button" disabled={imgBusy || !imgPrompt.trim()} onClick={() => void genImage(imgPrompt)}>{imgBusy ? 'Generating…' : refImage ? 'Generate from reference' : 'Generate image'}</button>
+              <textarea rows={2} placeholder={refImages.length > 1 ? 'Describe how to combine these images…' : refImages.length ? 'Describe what to make from this image…' : 'Generate an image with AI… e.g. dark coffee splash, top-down'} value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
+              {refImages.length > 0 && <div className="ds-ref-tray">
+                {refImages.map(p => <span key={p} className="ds-ref-chip" title={p}>
+                  <img src={resolveSrc(p)} alt="" />
+                  <button type="button" aria-label="Remove input image" onClick={() => removeRefImage(p)}>×</button>
+                </span>)}
+              </div>}
+              <button className="primary-button" disabled={imgBusy || !imgPrompt.trim()} onClick={() => void genImage(imgPrompt)}>{imgBusy ? 'Generating…' : refImages.length > 1 ? `Compose ${refImages.length} images` : refImages.length ? 'Edit with AI' : 'Generate image'}</button>
+              {refImages.length > 0 && !imageEditReady
+                ? <p className="ds-tip muted">The selected provider is text-to-image only — switch to an edit-capable one in Settings → Image generation to use input images.</p>
+                : refImages.length > 0 && !imageMultiReady
+                  ? <p className="ds-tip muted">This model uses a single input image. Pick a reference-capable model in Settings → Image generation to compose several.</p>
+                  : null}
               {imageLoading}
             </div>
             <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={e => { doUpload(e.target.files); e.target.value = '' }} />
             <button className="ghost-button ds-upload" onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload media'}</button>
-            {assets.length ? <div className="ds-asset-grid">{assets.map(a => <div key={a} className={`ds-asset-card ${refImage === a ? 'is-ref' : ''}`}>
+            {assets.length ? <div className="ds-asset-grid">{assets.map(a => <div key={a} className={`ds-asset-card ${refImages.includes(a) ? 'is-ref' : ''}`}>
               <button className="ds-asset" onClick={() => void addImage(a)} title="Add to canvas"><img src={resolveSrc(a)} alt="" /></button>
-              <button className="ds-asset-ref" type="button" aria-label="Use as AI reference" title="Use as reference for the next AI generation" onClick={e => { e.stopPropagation(); setRefImage(cur => cur === a ? null : a) }}>✦</button>
+              <button className="ds-asset-ref" type="button" aria-label="Use as AI input" title={refImages.includes(a) ? 'Remove from AI inputs' : 'Use as input for the next AI generation'} onClick={e => { e.stopPropagation(); refImages.includes(a) ? removeRefImage(a) : addRefImage(a) }}>✦</button>
               <button className="ds-asset-delete" type="button" aria-label="Delete asset" title="Delete asset" onClick={e => { e.stopPropagation(); void deleteAsset(a) }}>×</button>
             </div>)}</div>
               : <p className="muted ds-tip">No media yet. Upload images (or generate them in chat with /image) to reuse across designs.</p>}
@@ -2164,9 +2181,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <button className="ghost-button" onClick={() => setImageCrop(im.id, { cropZoom: undefined, cropX: undefined, cropY: undefined })}>Reset crop</button>
             </PropertySection>
             <PropertySection title="Edit with AI">
-              <textarea rows={2} placeholder="e.g. make it blue, add snow, remove background" value={imgPrompt} onChange={e => setImgPrompt(e.target.value)} />
-              <button className="primary-button" disabled={!imageEditReady || imgBusy || !imgPrompt.trim()} title={imageEditReady ? undefined : 'The selected image provider is text-to-image only — connect xAI OAuth or switch the provider in Settings → Image generation to edit images.'} onClick={() => void genImage(imgPrompt, selected.id)}>{imgBusy ? 'Editing…' : 'Edit with AI'}</button>
-              {!imageEditReady && <p className="ds-tip muted">{imageProviderKind === 'codex' ? 'Current provider is Codex, which supports text-to-image only. Use xAI, Higgsfield, or an OpenAI-compatible provider in Settings for true image edits.' : 'Use an edit-capable image provider in Settings to enable image edits.'}</p>}
+              <p className="ds-tip muted">Edit, add references, or compose several images into one — all in the Assets tab.</p>
+              <button className="ghost-button" disabled={/^(https?:|data:|blob:|gen:)/i.test(im.src)} onClick={() => { addRefImage(im.src); setLeftTab('assets') }}>Edit this image in Assets →</button>
             </PropertySection>
           </div> })()}
           <div className="ds-fields ds-optional-props">

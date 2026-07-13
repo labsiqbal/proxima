@@ -47,7 +47,7 @@ export async function uploadFile(token: string, slug: string, file: File, dir?: 
 }
 
 // Generate (text→image) or edit (image+prompt→image) a design asset via 9router.
-export const genDesignImage = (token: string, slug: string, body: { prompt: string; size?: string; model?: string; image?: string }, signal?: AbortSignal) =>
+export const genDesignImage = (token: string, slug: string, body: { prompt: string; size?: string; model?: string; image?: string; images?: string[] }, signal?: AbortSignal) =>
   api<{ path: string; name: string }>(`/api/projects/${slug}/design/image`, token, { method: 'POST', body: JSON.stringify(body), signal })
 export const designImageModels = (token: string, slug: string) =>
   api<{ models: string[]; configured: boolean }>(`/api/projects/${slug}/design/image-models`, token)

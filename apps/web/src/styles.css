@@ -8419,6 +8419,23 @@ div.result-media {
 .ds-ref-chip button:hover {
 	color: var(--ui-danger);
 }
+/* Multi-image input tray (Assets AI box) */
+.ds-ref-tray {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+.ds-ref-tray .ds-ref-chip {
+	gap: var(--space-1);
+	padding: 3px 4px 3px 3px;
+	border-radius: var(--radius-md);
+}
+.ds-ref-tray .ds-ref-chip img {
+	width: 36px;
+	height: 36px;
+	border-radius: var(--radius-sm);
+}
 .ds-tip {
 	font-size: var(--text-xs);
 }
