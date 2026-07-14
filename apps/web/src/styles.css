@@ -3590,15 +3590,19 @@ button:disabled {
 	min-height: 0;
 	overflow: hidden;
 }
-.cm-wrap .cm-editor {
+/* @uiw/react-codemirror mounts .cm-editor inside a plain wrapper <div> that it never
+   gives a height, so CodeMirror's height:100% resolved against an auto-height box and the
+   editor grew with content instead of scrolling. Force that wrapper to fill .cm-wrap so
+   the height chain (wrapper → .cm-editor → .cm-scroller) is bounded. */
+.cm-wrap > div {
 	height: 100%;
-	max-height: 100%;
 	min-height: 0;
+}
+.cm-wrap .cm-editor {
 	font-size: var(--text-sm);
 }
-/* Make the scroller the explicit wheel/scroll container. With height:100% CodeMirror
-   otherwise leaves overflow to an ancestor (here .cm-wrap is overflow:hidden), so the
-   mouse wheel had nothing to scroll even though the drag-scrollbar worked. */
+/* CM's base theme only sets overflow-x on .cm-scroller (and @uiw only sets its height),
+   so vertical wheel/scrollbar needs overflow:auto added explicitly. */
 .cm-wrap .cm-scroller {
 	font-family: var(--font-mono);
 	overflow: auto;
