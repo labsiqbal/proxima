@@ -163,12 +163,20 @@ class RunPrompting:
                 # Generate the catalog on first sight so the preamble can point at it.
                 if project_wiki is not None and project_wiki.is_dir() and not (project_wiki / "index.md").exists():
                     wiki_memory.rebuild_index(project_wiki)
+                # Brand guidelines live at <project>/design.md (a sibling of wiki/); read
+                # them so the design agent composes on-brand without a tool call.
+                design_guidelines = (
+                    wiki_memory.read_design_guidelines(project_wiki.parent)
+                    if (include_design_studio and project_wiki is not None)
+                    else None
+                )
                 preamble = wiki_memory.build_run_preamble(
                     project_name,
                     project_slug,
                     project_wiki,
                     include_design_studio=include_design_studio,
                     include_video=include_video,
+                    design_guidelines=design_guidelines,
                 )
                 if preamble:
                     prompt_text = preamble + "\n\n---\n\n" + prompt_text

@@ -192,6 +192,23 @@ the prompt so the model gets clean instructions. If the provider is text-to-imag
 the attachments are ignored and the reply says so. Existing image and media files remain
 readable through the normal artifact/file surfaces.
 
+**Clarify-on-thin-brief:** when a `/image` or `/design` command carries almost no
+direction (no attached image and fewer than 3 words after the command), the backend does
+NOT generate/draft something generic — it replies in the same chat with a compact
+`<question-form>` (image: subject/style/aspect; design: goal/format/audience/mood/copy).
+The form carries a `submit-as` attribute, so answering re-issues the original command with
+the answers as an enriched brief, and the same media path runs again — now with enough to
+act on. A brief that already has ≥3 words (or an attached image) skips the form and runs
+immediately. Implemented in `routes/chat.py` (`_media_brief_is_thin`, `_MEDIA_BRIEF_FORMS`,
+`_complete_media_ask`); the frontend prepends `submit-as` on submit
+(`questionForm.ts` / `QuestionForm.tsx`).
+
+These synchronous media completions (the clarify form, and the design/video draft cards)
+finish inside the POST and emit their run events before the client can subscribe to the
+stream, so `ChatScreen` treats a `status: "completed"` create-run response specially: it
+loads the assistant reply directly instead of waiting on the stream — otherwise the
+composer would sit stuck on the "Simmering…" thinking indicator.
+
 **Temporarily disabled by default:** Video and Design Studio remain in source but are
 server-gated with `PROXIMA_FEATURE_VIDEO=0` and
 `PROXIMA_FEATURE_DESIGN_STUDIO=0`. `GET /api/config` publishes the effective flags.

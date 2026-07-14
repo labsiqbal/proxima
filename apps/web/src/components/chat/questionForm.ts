@@ -25,6 +25,10 @@ export interface QuestionForm {
   description?: string
   questions: FormQuestion[]
   submitLabel?: string
+  /** When set, the submitted answers are sent PREFIXED with this text — used by the
+   * media-brief forms so answering re-issues the original slash command (e.g.
+   * "/design") with the answers as an enriched brief, re-triggering generation. */
+  submitAs?: string
 }
 export type FormSegment = { kind: 'text'; text: string } | { kind: 'form'; form: QuestionForm; raw: string }
 
@@ -57,7 +61,7 @@ export function hasQuestionForm(input: string): boolean {
 }
 
 function parseAttrs(raw: string): Record<string, string> {
-  const re = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+  const re = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
   const out: Record<string, string> = {}
   let m: RegExpExecArray | null
   while ((m = re.exec(raw)) !== null) out[m[1] as string] = (m[2] ?? m[3] ?? '') as string
@@ -93,7 +97,8 @@ function tryParseForm(body: string, attrs: Record<string, string>): QuestionForm
   const title = attrs.title ?? (typeof obj.title === 'string' ? obj.title : 'A few quick questions')
   const description = typeof obj.description === 'string' ? obj.description : undefined
   const submitLabel = typeof obj.submitLabel === 'string' ? obj.submitLabel : undefined
-  return { id, title, questions, ...(description ? { description } : {}), ...(submitLabel ? { submitLabel } : {}) }
+  const submitAs = attrs['submit-as'] ?? attrs.submitas ?? (typeof obj.submitAs === 'string' ? obj.submitAs : undefined)
+  return { id, title, questions, ...(description ? { description } : {}), ...(submitLabel ? { submitLabel } : {}), ...(submitAs ? { submitAs } : {}) }
 }
 
 function normalizeType(raw: unknown): QuestionType {

@@ -1,7 +1,7 @@
 import React from 'react'
 import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Circle, Transformer, Arrow } from 'react-konva'
 import type Konva from 'konva'
-import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
+import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, canBeImageFrame, isImageFrame, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type ShapeLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
 import { createRun } from '../api/runs'
 import { useRunStream } from '../hooks/useRunStream'
@@ -9,7 +9,7 @@ import { confirmDialog } from '../components/ui/Dialog'
 import { BackButton } from '../components/ui/BackButton'
 import { SURFACES, surfaceTemplates, sceneFromTemplate, type Surface, type Template } from '../components/design/templates'
 import { projectFs } from '../api/fsAdapter'
-import { fileUrl, uploadFile, genDesignImage, deletePath } from '../api/files'
+import { fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
 import { QuestionForm } from '../components/chat/QuestionForm'
@@ -186,7 +186,40 @@ const imageCrop = (img: HTMLImageElement | undefined, layer: ImageLayer) => {
   return { x, y, width, height }
 }
 
-function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupMove, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupMove?: (dx: number, dy: number) => void; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean }) {
+// A shape used as an image frame reuses the crop math with its image* fields.
+const frameCrop = (img: HTMLImageElement | undefined, l: { width: number; height: number; imageCropX?: number; imageCropY?: number; imageCropZoom?: number }) =>
+  imageCrop(img, { width: l.width, height: l.height, cropX: l.imageCropX, cropY: l.imageCropY, cropZoom: l.imageCropZoom } as ImageLayer)
+
+// Trace a shape's outline as the current path inside a Konva Group clipFunc, so an image
+// child gets masked to the shape (rect w/ corner radius, ellipse, triangle, star).
+const traceFrameClip = (ctx: Konva.Context, l: Layer) => {
+  const w = (l as { width: number }).width, h = (l as { height: number }).height
+  ctx.beginPath()
+  if (l.type === 'ellipse') {
+    ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2, false)
+  } else if (l.type === 'triangle') {
+    ctx.moveTo(w / 2, 0); ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath()
+  } else if (l.type === 'star') {
+    const pts = (l as StarLayer).points || 5, cx = w / 2, cy = h / 2
+    const outer = Math.min(w, h) / 2, inner = Math.min(w, h) / 4
+    for (let i = 0; i < pts * 2; i++) {
+      const r = i % 2 === 0 ? outer : inner
+      const a = (Math.PI / pts) * i - Math.PI / 2
+      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a)
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    }
+    ctx.closePath()
+  } else {
+    const crRaw = cornerRadiusOf(l as { cornerRadius?: number })
+    const cr = typeof crRaw === 'number' ? crRaw : (Array.isArray(crRaw) ? Math.max(...(crRaw as number[])) : 0)
+    const r = Math.min(cr, w / 2, h / 2)
+    if (r > 0) {
+      ctx.moveTo(r, 0); ctx.arcTo(w, 0, w, h, r); ctx.arcTo(w, h, 0, h, r); ctx.arcTo(0, h, 0, 0, r); ctx.arcTo(0, 0, w, 0, r); ctx.closePath()
+    } else { ctx.rect(0, 0, w, h) }
+  }
+}
+
+function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupMove, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode, onDropImage }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupMove?: (dx: number, dy: number) => void; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean; onDropImage?: (cx: number, cy: number) => boolean }) {
   const l = layer as unknown as AnyL
   const dragLast = React.useRef<{ x: number; y: number } | null>(null)
   const lastGuides = React.useRef<string>('') // dedupe guide emits — only setState when the lines change (else every frame re-renders and resets the dragged node = flicker)
@@ -252,6 +285,9 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
       if (multi && onGroupEnd) onGroupEnd()
       else {
         const nx = Math.round(e.target.x()), ny = Math.round(e.target.y())
+        // Dropped an image onto a shape? Absorb it into the shape as an image frame
+        // (Canva behaviour) and skip the normal position commit — the layer is removed.
+        if (layer.type === 'image' && onDropImage && onDropImage(nx + layer.width / 2, ny + layer.height / 2)) return
         const patch: AnyL = { x: nx, y: ny }
         if (layer.type === 'line') { patch.x2 = Math.round(layer.x2 + (nx - layer.x)); patch.y2 = Math.round(layer.y2 + (ny - layer.y)) }
         onChange(patch as Partial<Layer>)
@@ -291,7 +327,9 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
       onChange(p as Partial<Layer>)
     },
   }
-  const img = useImg(layer.type === 'image' ? (resolveSrc ? resolveSrc(layer.src) : layer.src) : '')
+  // Load the pixels for an image layer OR a shape that's being used as an image frame.
+  const rawImgSrc = layer.type === 'image' ? layer.src : (isImageFrame(layer) ? (layer.imageSrc || '') : '')
+  const img = useImg(rawImgSrc ? (resolveSrc ? resolveSrc(rawImgSrc) : rawImgSrc) : '')
   // Keep the image's size + crop consistent in EVERY painted frame. react-konva can
   // apply the new width/height a beat before the recomputed crop rect, so mid crop-drag
   // the image draws stretched for a frame. useLayoutEffect runs synchronously after the
@@ -304,6 +342,20 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
     ;(n as Konva.Node).setAttrs({ width: layer.width, height: layer.height, crop: imageCrop(img, layer) })
     n.getLayer()?.batchDraw()
   }, [img, layer])
+  // Image frame: a shape holding a clipped image (Canva-style). Once the image loads,
+  // render it masked to the shape outline; until then fall through so the shape's fill
+  // shows as a placeholder. The clip group carries all interaction (ref/drag/select).
+  if (isImageFrame(layer) && img) {
+    // Keep the KImage listening (default): it's the Group's only hit area, so listening
+    // false made the whole frame un-grabbable. Konva bubbles the click/drag up to the
+    // Group (which carries select + drag), and the clipFunc clips the hit graph too, so
+    // you grab the visible shape — like Canva.
+    return <Group {...common} x={layer.x} y={layer.y} {...effectShadowOf(layer)}>
+      <Group clipFunc={(ctx: Konva.Context) => traceFrameClip(ctx, layer)}>
+        <KImage image={img} x={0} y={0} width={layer.width} height={layer.height} crop={frameCrop(img, layer)} />
+      </Group>
+    </Group>
+  }
   switch (layer.type) {
     case 'text': return <Group {...common} x={layer.x} y={layer.y} opacity={editing ? 0 : (layer.opacity ?? 1)}>
       {layer.glow && <Text {...textStyleOf(layer)} fill={layer.glowColor || layer.fill} opacity={layer.glowOpacity ?? 0.55} shadowColor={layer.glowColor || layer.fill} shadowBlur={layer.glowBlur ?? 18} shadowOpacity={layer.glowOpacity ?? 0.65} listening={false} />}
@@ -347,7 +399,85 @@ const FILL_TYPE_OPTIONS: DropdownOption[] = [
 const STROKE_CAP_OPTIONS: DropdownOption[] = [{ value: 'butt', label: 'Butt' }, { value: 'round', label: 'Round' }, { value: 'square', label: 'Square' }]
 const fmtElapsed = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 const IMAGE_GEN_CLIENT_TIMEOUT_MS = 6 * 60 * 1000
-function StartScreen({ onCreate, onShowGallery, designCount, projectName }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; projectName: string }) {
+// Generate/refresh the project's design.md brand guideline from reference URLs (crawled
+// server-side), uploaded reference images (vision), and free-text notes. Runs an agent
+// task server-side; we poll design.md until it lands. The file then auto-feeds every
+// future design run so the AI composes on-brand.
+function BrandGuideModal({ token, slug, onClose, onOpenFile }: { token: string; slug: string; onClose: () => void; onOpenFile?: () => void }) {
+  const [urls, setUrls] = React.useState<string[]>([''])
+  const [notes, setNotes] = React.useState('')
+  const [images, setImages] = React.useState<{ path: string; name: string }[]>([])
+  const [uploading, setUploading] = React.useState(false)
+  const [phase, setPhase] = React.useState<'input' | 'working' | 'done' | 'slow' | 'error'>('input')
+  const [result, setResult] = React.useState('')
+  const [error, setError] = React.useState('')
+  const timerRef = React.useRef<number | null>(null)
+  React.useEffect(() => () => { if (timerRef.current) window.clearInterval(timerRef.current) }, [])
+
+  const setUrl = (i: number, v: string) => setUrls(u => u.map((x, j) => j === i ? v : x))
+  const addUrl = () => setUrls(u => [...u, ''])
+  const removeUrl = (i: number) => setUrls(u => u.length > 1 ? u.filter((_, j) => j !== i) : [''])
+  const onUpload = async (files: FileList | null) => {
+    if (!files?.length) return
+    setUploading(true); setError('')
+    try {
+      for (const f of Array.from(files).slice(0, 6)) {
+        const r = await uploadFile(token, slug, f, 'artifacts/design/_assets')
+        setImages(im => [...im, { path: r.path, name: r.name }])
+      }
+    } catch (e) { setError(String(e)) } finally { setUploading(false) }
+  }
+  const hasInput = urls.some(u => u.trim()) || images.length > 0 || notes.trim().length > 0
+
+  const generate = async () => {
+    setPhase('working'); setError('')
+    let before = ''
+    try { before = (await readFile(token, slug, 'design.md')).content } catch { /* no file yet */ }
+    try {
+      await generateBrandGuide(token, slug, { urls: urls.map(u => u.trim()).filter(Boolean), imagePaths: images.map(i => i.path), notes: notes.trim() })
+    } catch (e) { setError(String(e)); setPhase('error'); return }
+    let tries = 0
+    timerRef.current = window.setInterval(async () => {
+      tries += 1
+      try {
+        const r = await readFile(token, slug, 'design.md')
+        if (r.content && r.content.trim() && r.content !== before) {
+          if (timerRef.current) window.clearInterval(timerRef.current)
+          setResult(r.content); setPhase('done'); return
+        }
+      } catch { /* not written yet */ }
+      if (tries > 50) { if (timerRef.current) window.clearInterval(timerRef.current); setPhase('slow') }
+    }, 3500)
+  }
+
+  return <div className="modal-scrim" onClick={() => phase !== 'working' && onClose()}>
+    <div className="modal-card brand-guide-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className="bg-head"><strong>Generate brand guide</strong><span className="muted">→ design.md — steers every future design</span></div>
+      {phase === 'input' && <div className="bg-body">
+        <label className="bg-label">Reference URLs<span className="muted"> — brand site, Pinterest, any reference (crawled for colour/type/copy)</span></label>
+        {urls.map((u, i) => <div className="bg-url-row" key={i}>
+          <input type="url" placeholder="https://…" value={u} onChange={e => setUrl(i, e.target.value)} />
+          <button className="ghost-button" title="Remove" onClick={() => removeUrl(i)}>✕</button>
+        </div>)}
+        <button className="ghost-button bg-add" onClick={addUrl}>+ Add URL</button>
+        <label className="bg-label">Reference images<span className="muted"> — logo, moodboard, screenshots (read with vision)</span></label>
+        <div className="bg-images">
+          {images.map((im, i) => <span className="bg-chip" key={im.path}>{im.name}<button className="ghost-button" onClick={() => setImages(x => x.filter((_, j) => j !== i))}>✕</button></span>)}
+          <label className="ghost-button bg-upload">{uploading ? 'Uploading…' : '+ Upload'}<input type="file" accept="image/*" multiple hidden onChange={e => { void onUpload(e.target.files); e.currentTarget.value = '' }} /></label>
+        </div>
+        <label className="bg-label">Notes / preferences<span className="muted"> — free text</span></label>
+        <textarea rows={3} placeholder="e.g. earthy + premium, serif headlines, avoid neon…" value={notes} onChange={e => setNotes(e.target.value)} />
+        <div className="bg-foot"><button className="ghost-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!hasInput} onClick={() => void generate()}>Generate design.md</button></div>
+      </div>}
+      {phase === 'working' && <div className="bg-body bg-center"><span className="typing"><i /><i /><i /></span><p className="shimmer">Analyzing references and writing design.md…</p><p className="muted">Crawling your URLs and composing the brand guideline — this can take a minute.</p></div>}
+      {phase === 'slow' && <div className="bg-body bg-center"><p>Still working — the agent is taking a while.</p><p className="muted">It'll land in <code>design.md</code>; reopen this project's file to check.</p><div className="bg-foot"><button className="primary-button" onClick={onClose}>Close</button></div></div>}
+      {phase === 'error' && <div className="bg-body bg-center"><p>⚠️ Couldn't start generation.</p><p className="muted">{error}</p><div className="bg-foot"><button className="ghost-button" onClick={() => setPhase('input')}>Back</button></div></div>}
+      {phase === 'done' && <div className="bg-body"><p className="bg-done">✓ Saved to <code>design.md</code> — it now steers every design.</p><pre className="bg-preview">{result}</pre><div className="bg-foot"><button className="ghost-button" onClick={onClose}>Close</button>{onOpenFile && <button className="primary-button" onClick={() => { onOpenFile(); onClose() }}>Open design.md</button>}</div></div>}
+    </div>
+  </div>
+}
+
+function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBrandGuide }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; projectName: string; onBrandGuide?: () => void }) {
   const [surface, setSurface] = React.useState<Surface>('graphic')
   const [brief, setBrief] = React.useState('')
   const tpls = surfaceTemplates(surface)
@@ -359,7 +489,10 @@ function StartScreen({ onCreate, onShowGallery, designCount, projectName }: { on
     <div className="ds-prompt">
       <textarea rows={3} placeholder="Describe your design — e.g. Acme launch post, dark mood, bold headline, blue CTA" value={brief} onChange={e => setBrief(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generate() }} />
       <div className="ds-prompt-bar">
-        <div className="ds-surface-pills">{SURFACES.map(s => <button key={s.key} className={surface === s.key ? 'active' : ''} onClick={() => setSurface(s.key)}>{s.label}</button>)}</div>
+        <div className="ds-surface-pills">
+          {SURFACES.map(s => <button key={s.key} className={surface === s.key ? 'active' : ''} onClick={() => setSurface(s.key)}>{s.label}</button>)}
+          {onBrandGuide && <button type="button" className="ds-brand-pill" title="Generate design.md brand guide from references" onClick={onBrandGuide}>✦ Brand guide</button>}
+        </div>
         <button className="primary-button" disabled={!brief.trim()} onClick={generate}>Generate →</button>
       </div>
     </div>
@@ -428,6 +561,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [middlePan, setMiddlePan] = React.useState(false)
   const [multiMode, setMultiMode] = React.useState(false) // touch multi-select: tapping layer rows toggles selection
   const [stage, setStage] = React.useState<'start' | 'studio' | 'gallery'>('start')
+  const [brandGuideOpen, setBrandGuideOpen] = React.useState(false)
   const [scene, setScene] = React.useState<Scene | null>(null)
   const [saved, setSaved] = React.useState<'idle' | 'saving' | 'saved'>('idle')
   // Explicit saved versions (snapshots the user chose to keep) — distinct from the
@@ -692,7 +826,11 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         if (on) setChatBusyRun(null)
       } catch { /* transient — retry next tick */ }
     }
-    const t = window.setInterval(check, 20000)
+    // Check right away (a run that finished while we were reconnecting, or whose
+    // terminal SSE/WS event was missed, must land WITHOUT a manual refresh), then
+    // poll on a tight cadence so live completion reconciles in seconds, not tens.
+    void check()
+    const t = window.setInterval(check, 5000)
     return () => { on = false; window.clearInterval(t) }
   }, [chatBusyRun, scene?.sessionId, token, restoreRun, setChatBusyRun, chatBusyRunRef])
 
@@ -976,7 +1114,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         }
         if (s && mountedRef.current && seq === sessionOpenSeq.current) {
           openedTargetRef.current = targetKey
-          dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? openSession.id; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setLeftTab('chat'); setStage('studio'); pendingResolveRef.current = s.id
+          dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? openSession.id; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setLeftTab('chat'); setStage('studio'); pendingResolveRef.current = s.id
         }
       } finally { if (mountedRef.current && seq === sessionOpenSeq.current) onOpened?.() }
     })()
@@ -1048,20 +1186,31 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const f = await designFs.read(`${id}/scene.json`)
       if (!mountedRef.current || seq !== openSeq.current) return
       const s = JSON.parse(f.content) as Scene
-      dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? null; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setStage('studio')
+      dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? null; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setStage('studio')
       pendingResolveRef.current = s.id
-    } catch { /* ignore */ }
-  }
-  // Deep-open a specific design by folder id (e.g. one a workflow just produced).
-  React.useEffect(() => {
-    if (openDesignId && designFs) {
-      const targetKey = `${project?.slug || ''}:design:${openDesignId}`
-      if (openedTargetRef.current !== targetKey) {
-        openedTargetRef.current = targetKey
-        void openDesign(openDesignId)
-      }
-      onOpened?.()
+    } catch (e) {
+      // The design couldn't be read (deleted, or written a beat after the card was
+      // clicked). Show the gallery rather than a bare start screen so the user still
+      // sees their designs instead of an empty "home".
+      console.warn('[DesignStudio] openDesign failed for', id, e)
+      if (mountedRef.current && seq === openSeq.current) setStage('gallery')
     }
+  }
+  // Deep-open a specific design by folder id (e.g. a /design draft's card, or one a
+  // workflow just produced). Guard on the LOADED scene (not a sticky ref that survives
+  // Fast Refresh / a re-click without remount): if the requested design isn't already on
+  // screen, (re)open it. Defer onOpened() until openDesign() settles so clearing the
+  // pending prop can't let the restore-last-design effect race in and drop us on "home".
+  React.useEffect(() => {
+    if (!openDesignId) return
+    if (!designFs) { console.warn('[DesignStudio] deep-open waiting: no designFs yet (project not ready?)', { openDesignId, project: project?.slug }); return }
+    // Mark a deep-link handled so the restore-last-design effect stays out of the way,
+    // but decide whether to load from the scene actually on screen — never skip the
+    // open just because a ref persisted across Fast Refresh / a remount-less re-click.
+    openedTargetRef.current = `${project?.slug || ''}:design:${openDesignId}`
+    if (sceneRef.current?.id === openDesignId && stage === 'studio') { console.debug('[DesignStudio] deep-open: already showing', openDesignId); onOpened?.(); return }
+    console.debug('[DesignStudio] deep-open: loading', openDesignId)
+    void openDesign(openDesignId).finally(() => onOpened?.())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDesignId, designFs])
 
@@ -1107,7 +1256,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   if (!project) return <section className="design-studio"><div className="ds-start"><div className="ds-start-inner center"><h1>Pick a project first</h1><p className="muted ds-sub">Design Studio saves your work into the active project's <code>artifacts/design</code>. Choose a project from the sidebar.</p></div></div></section>
   if (stage === 'gallery') return <section className="design-studio"><GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} /></section>
-  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen designCount={designs.length} projectName={cleanProjectName(project.name)} onShowGallery={() => setStage('gallery')} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} /></section>
+  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen designCount={designs.length} projectName={cleanProjectName(project.name)} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
+    {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
+  </section>
 
   const findLayer = (id: string): Layer | null => { for (const a of scene.artboards) { const l = a.layers.find(x => x.id === id); if (l) return l } return null }
   const selected = selectedId ? findLayer(selectedId) : null
@@ -1182,6 +1333,37 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const addLayer = (l: Layer) => { snapshot(); setScene(s => s && ({ ...s, artboards: s.artboards.map((a, i) => i === focusAb ? { ...a, layers: [...a.layers, l] } : a) })); setSelectedId(l.id) }
   const removeLayer = (id: string) => { const l = findLayer(id); if (l?.locked) return; snapshot(); setScene(s => s && ({ ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.filter(l => l.id !== id) })) })); if (selectedId === id) setSelectedId(null) }
   const removeSelected = () => { const ids = selectedIds.filter(id => !findLayer(id)?.locked); if (!ids.length) return; snapshot(); setScene(s => s && ({ ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.filter(l => !ids.includes(l.id)) })) })); setSelectedId(null) }
+  // Drop an image layer onto a frame-able shape → the shape absorbs it as a clipped
+  // image (Canva image frame). Returns true if absorbed (caller skips the move commit).
+  const dropImageIntoFrame = (imageId: string, ai: number, cx: number, cy: number): boolean => {
+    const art = scene?.artboards[ai]; if (!art) return false
+    const src = art.layers.find(l => l.id === imageId)
+    if (!src || src.type !== 'image') return false
+    // Topmost frame-able shape under the drop point (layers render bottom→top, so scan
+    // from the end). Skip the image itself, locked shapes, and frames that already hold
+    // an image (replace still works via the inspector, not an accidental drop).
+    const target = [...art.layers].reverse().find(l => l.id !== imageId && !l.locked && canBeImageFrame(l) && !(l as ShapeLayer).imageSrc
+      && cx >= l.x && cx <= l.x + (l as ShapeLayer).width && cy >= l.y && cy <= l.y + (l as ShapeLayer).height)
+    if (!target) return false
+    snapshot()
+    setScene(s => s && ({ ...s, artboards: s.artboards.map((a, i) => i !== ai ? a : ({
+      ...a,
+      layers: a.layers
+        .map(l => l.id === target.id ? ({ ...l, imageSrc: (src as ImageLayer).src, imageCropX: 50, imageCropY: 50, imageCropZoom: 1 } as Layer) : l)
+        .filter(l => l.id !== imageId),
+    })) }))
+    setSelectedId(target.id)
+    return true
+  }
+  // Pop the image back out of a frame into a standalone image layer sitting over the shape.
+  const detachFrameImage = (id: string) => {
+    const l = findLayer(id) as ShapeLayer | undefined
+    if (!l || !isImageFrame(l)) return
+    snapshot()
+    const imgLayer: ImageLayer = { id: uid('img'), type: 'image', x: l.x, y: l.y, width: l.width, height: l.height, src: l.imageSrc as string, rotation: l.rotation, opacity: l.opacity, cropX: l.imageCropX, cropY: l.imageCropY, cropZoom: l.imageCropZoom } as ImageLayer
+    setScene(s => s && ({ ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.flatMap(x => x.id === id ? [{ ...x, imageSrc: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Layer, imgLayer] : [x]) })) }))
+    setSelectedId(imgLayer.id)
+  }
   const groupSelected = () => {
     const ids = selectedIds.filter(id => ab.layers.some(l => l.id === id && !l.locked))
     if (ids.length < 2) return
@@ -1573,6 +1755,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     toGen.forEach(({ l }) => genInFlightRef.current.add(`${sc.id}:${l.id}`))
     startImgBusy('resolve')
     let failed = 0
+    let lastError = ''
     for (const { l } of toGen) {
       try {
         const raw = l.src.replace(/^gen:/i, '').trim()
@@ -1580,15 +1763,19 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         if (!mountedRef.current) return
         // Swap by layer id, only while the same scene is still on the canvas.
         setScene(s => s && s.id === sc.id ? { ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.map(x => x.id === l.id ? { ...x, src: r.path } as Layer : x) })) } : s)
-      } catch {
+      } catch (e) {
         failed += 1 // leave gen: src so it retries next reopen
+        lastError = e instanceof Error ? e.message : String(e)
+        console.warn('[DesignStudio] gen image failed for layer', l.id, '—', lastError)
       } finally {
         genInFlightRef.current.delete(`${sc.id}:${l.id}`)
       }
     }
     if (mountedRef.current) {
       stopImgBusy(); loadAssets()
-      if (failed) setChat(c => [...c, { role: 'assistant', content: `⚠️ ${failed} image${failed > 1 ? 's' : ''} could not be generated — they stay as placeholders and will retry when you reopen the design (or use "Generate image" on the layer).` }])
+      // Surface the actual reason (provider error / timeout) so a real problem — not a
+      // transient blip — is visible instead of a generic "couldn't generate".
+      if (failed) setChat(c => [...c, { role: 'assistant', content: `⚠️ ${failed} image${failed > 1 ? 's' : ''} could not be generated${lastError ? ` (${lastError})` : ''} — they stay as placeholders and will retry when you reopen the design (or use "Generate image" on the layer).` }])
     }
   }
   const flat = scene.artboards.flatMap((a, ai) => a.layers.map(l => ({ l, ai })))
@@ -1794,6 +1981,25 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const els: string[] = []
       for (const l of a.layers) {
         const at = `position:absolute;left:${l.x}px;top:${l.y}px;${l.rotation ? `transform:rotate(${l.rotation}deg);transform-origin:0 0;` : ''}${l.opacity != null && l.opacity !== 1 ? `opacity:${l.opacity};` : ''}`
+        // A shape used as an image frame exports as a clipped <img> (border-radius for
+        // rect/ellipse, clip-path polygon for triangle/star) — matches the canvas clip.
+        // Assign to a local (not `if (isImageFrame(l))`) so `l` isn't narrowed for the
+        // ordinary shape branches below.
+        const frame = isImageFrame(l) ? l as ShapeLayer & { imageSrc: string; imageCropX?: number; imageCropY?: number; imageCropZoom?: number } : null
+        if (frame) {
+          const f = frame
+          const cx = f.imageCropX ?? 50, cy = f.imageCropY ?? 50, cz = f.imageCropZoom || 1
+          let clip = ''
+          if (f.type === 'ellipse') clip = 'border-radius:50%;'
+          else if (f.type === 'triangle') clip = 'clip-path:polygon(50% 0,100% 100%,0 100%);'
+          else if (f.type === 'star') {
+            const n = (f as StarLayer).points || 5, sw = f.width, sh = f.height, scx = sw / 2, scy = sh / 2, ro = Math.min(sw, sh) / 2, ri = ro * 0.5, pts: string[] = []
+            for (let i = 0; i < n * 2; i++) { const rr = i % 2 ? ri : ro, ang = (Math.PI / n) * i - Math.PI / 2; pts.push(`${((scx + Math.cos(ang) * rr) / sw * 100).toFixed(2)}% ${((scy + Math.sin(ang) * rr) / sh * 100).toFixed(2)}%`) }
+            clip = `clip-path:polygon(${pts.join(',')});`
+          } else clip = `border-radius:${cssRadius(f as unknown as RectLayer)};`
+          els.push(`<div style="${at}width:${f.width}px;height:${f.height}px;overflow:hidden;box-sizing:border-box;${clip}${cssEffects((l as RectLayer).effects)}"><img src="${await toDataUrl(f.imageSrc)}" style="width:100%;height:100%;object-fit:cover;object-position:${cx}% ${cy}%;transform:scale(${cz});transform-origin:${cx}% ${cy}%;display:block;"/></div>`)
+          continue
+        }
         if (l.type === 'text') { const t = l as TextLayer; const tsh = cssTextShadow(t); els.push(`<div style="${at}width:${t.width}px;${t.height ? `height:${t.height}px;display:grid;align-content:${t.verticalAlign === 'middle' ? 'center' : t.verticalAlign === 'bottom' ? 'end' : 'start'};` : ''}font-family:'${t.fontFamily || 'Inter'}',sans-serif;font-size:${t.fontSize}px;font-weight:${t.fontStyle?.includes('bold') ? 700 : 400};font-style:${t.fontStyle?.includes('italic') ? 'italic' : 'normal'};${t.textDecoration ? `text-decoration:${t.textDecoration};` : ''}${cssTextFill(t)}${t.textStroke ? `-webkit-text-stroke:${t.textStrokeWidth ?? 1}px ${t.textStroke};` : ''}text-align:${t.align || 'left'};line-height:${t.lineHeight || 1.2};letter-spacing:${t.letterSpacing || 0}px;${tsh ? `text-shadow:${tsh};` : ''}${cssEffects(t.effects)}white-space:pre-wrap;overflow-wrap:break-word;">${esc(textDisplayValue(t))}</div>`) }
         else if (l.type === 'rect') { const r = l as RectLayer; els.push(`<div style="${at}width:${r.width}px;height:${r.height}px;background:${cssFill(r)};opacity:${(r.opacity ?? 1) * (r.fillOpacity ?? 1)};box-sizing:border-box;border-radius:${cssRadius(r)};${cssStroke(r)}${r.shadow ? 'box-shadow:0 20px 45px rgba(0,0,0,.30);' : ''}${cssEffects(r.effects)}"></div>`) }
         else if (l.type === 'ellipse') { const e = l as EllipseLayer; els.push(`<div style="${at}width:${e.width}px;height:${e.height}px;background:${cssFill(e)};opacity:${(e.opacity ?? 1) * (e.fillOpacity ?? 1)};border-radius:50%;box-sizing:border-box;${cssStroke(e)}${cssEffects(e.effects)}"></div>`) }
@@ -1977,7 +2183,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             {scene.artboards.map((a, ai) => <Group key={a.id} name="ab" x={layout.xs[ai]} y={layout.ys[ai]}
               {...(a.layers.some(l => l.id === selectedId) ? {} : { clipX: 0, clipY: 0, clipWidth: a.width, clipHeight: a.height })}>
               <Rect x={0} y={0} width={a.width} height={a.height} {...fillOf(artboardFill(a))} shadowColor="#000" shadowBlur={24} shadowOpacity={0.4} onMouseDown={e => { if (panMode) return; e.cancelBubble = true; startMarquee(ai, e.evt.metaKey || e.evt.ctrlKey || e.evt.shiftKey) }} />
-              {a.layers.map(l => <LayerNode key={l.id} layer={l} resolveSrc={resolveSrc} onRef={n => { nodeRefs.current[l.id] = n }} onSelect={additive => { if (l.locked) return; setFocusAb(ai); if (additive) toggleSelect(l.id); else if (!selectedIds.includes(l.id)) setSelectedId(l.id) }} onChange={patch => patchLayer(l.id, patch)} onLiveChange={patch => patchLayerLive(l.id, patch)} onContext={(x, y) => { if (l.locked) return; setFocusAb(ai); if (!selectedIds.includes(l.id)) setSelectedId(l.id); setCtx({ x, y, id: l.id }) }} onEdit={() => { if (l.type === 'text' && !l.locked) startTextEdit(l.id) }} aw={a.width} ah={a.height} snapT={8 / view.scale} boxes={a.layers.map(getBox)} onGuides={lines => setGuides(lines.length ? { ai, lines } : null)} multi={selectedIds.length > 1 && selectedIds.includes(l.id) && !l.locked} onGroupStart={groupStart} onGroupEnd={commitGroup} onAltClone={() => { setSelectedId(l.id); cloneInPlace(l.id) }} editing={edit?.id === l.id} cropEditing={cropMode?.id === l.id} shiftRef={shiftRef} onGroupSnap={computeGroupSnap} mobileSnap={mobileSnap} panMode={panMode} />)}
+              {a.layers.map(l => <LayerNode key={l.id} layer={l} resolveSrc={resolveSrc} onRef={n => { nodeRefs.current[l.id] = n }} onSelect={additive => { if (l.locked) return; setFocusAb(ai); if (additive) toggleSelect(l.id); else if (!selectedIds.includes(l.id)) setSelectedId(l.id) }} onChange={patch => patchLayer(l.id, patch)} onLiveChange={patch => patchLayerLive(l.id, patch)} onContext={(x, y) => { if (l.locked) return; setFocusAb(ai); if (!selectedIds.includes(l.id)) setSelectedId(l.id); setCtx({ x, y, id: l.id }) }} onEdit={() => { if (l.type === 'text' && !l.locked) startTextEdit(l.id) }} aw={a.width} ah={a.height} snapT={8 / view.scale} boxes={a.layers.map(getBox)} onGuides={lines => setGuides(lines.length ? { ai, lines } : null)} multi={selectedIds.length > 1 && selectedIds.includes(l.id) && !l.locked} onGroupStart={groupStart} onGroupEnd={commitGroup} onAltClone={() => { setSelectedId(l.id); cloneInPlace(l.id) }} editing={edit?.id === l.id} cropEditing={cropMode?.id === l.id} shiftRef={shiftRef} onGroupSnap={computeGroupSnap} mobileSnap={mobileSnap} panMode={panMode} onDropImage={(cx, cy) => dropImageIntoFrame(l.id, ai, cx, cy)} />)}
               {selectedIds.length === 1 && (() => {
                 const ln = a.layers.find(l => l.id === selectedId && l.type === 'line' && !l.locked) as LineLayer | undefined
                 if (!ln) return null
@@ -2212,6 +2418,15 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
                   <GradientEditor fill={sh} width={sh.width} height={sh.height} onChange={patch => patchLayer(sh.id, patch as Partial<Layer>)} />
                 </>}
               </PropertySection>
+              {canBeImageFrame(selected) && (isImageFrame(selected)
+                ? <PropertySection title="Image frame" defaultOpen>
+                    <div className="ds-row2"><NumberAdjuster label="Position X" value={sh.imageCropX ?? 50} min={0} max={100} step={1} onChange={v => patchLayer(sh.id, { imageCropX: v } as Partial<Layer>)} /><NumberAdjuster label="Position Y" value={sh.imageCropY ?? 50} min={0} max={100} step={1} onChange={v => patchLayer(sh.id, { imageCropY: v } as Partial<Layer>)} /></div>
+                    <NumberAdjuster label="Zoom" value={sh.imageCropZoom ?? 1} min={1} max={4} step={0.01} onChange={v => patchLayer(sh.id, { imageCropZoom: v } as Partial<Layer>)} />
+                    <div className="ds-row2"><button className="ghost-button" onClick={() => detachFrameImage(sh.id)}>Detach image</button><button className="ghost-button" onClick={() => patchLayer(sh.id, { imageSrc: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Partial<Layer>)}>Remove image</button></div>
+                  </PropertySection>
+                : <PropertySection title="Image frame">
+                    <p className="muted ds-frame-hint">Drag an image onto this shape to fill it — the image clips to the shape's outline (Canva-style).</p>
+                  </PropertySection>)}
               {selected.type === 'rect' && <>
                 <PropertySection title="Corner radius">
                   <NumberAdjuster label="Corner radius" value={sh.cornerRadius ?? 0} min={0} max={240} step={1} onChange={v => patchLayer(sh.id, { cornerRadius: v, cornerRadiusTL: v, cornerRadiusTR: v, cornerRadiusBR: v, cornerRadiusBL: v } as Partial<Layer>)} />

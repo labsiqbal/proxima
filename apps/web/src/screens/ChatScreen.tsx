@@ -496,7 +496,16 @@ export function ChatScreen(props: {
 				activeSessionIdRef.current !== session.id
 			)
 				return;
-			setBusyRun(run.run_id);
+			if (run.status === "completed") {
+				// A media command that finished synchronously — a /image or /design
+				// clarify form, or a design/video draft. Its run.completed event already
+				// fired before we could subscribe to the stream, so waiting on the stream
+				// would leave the composer stuck "Simmering…". Don't set busy; just load
+				// the assistant reply (the form / artifact card) directly.
+				await loadMessages(session.id);
+			} else {
+				setBusyRun(run.run_id);
+			}
 			const eventBody = await listEvents(props.token, session.id);
 			if (
 				mountedRef.current &&

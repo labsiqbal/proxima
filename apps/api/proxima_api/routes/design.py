@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
+from .. import brand_extract
 from .. import design_scenes
 from .. import features
 from .. import fsapi
@@ -28,12 +29,85 @@ def register(app, deps):
     cfg = deps["cfg"]
     current_user = deps["current_user"]
     _project_root = deps["_project_root"]
+    profile_for_user = deps["profile_for_user"]
+    visible_project = deps["visible_project"]
 
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         db().execute(
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
             (user["id"], action, slug, json.dumps({"path": path})),
         )
+
+    @app.post("/api/projects/{slug}/design/brand-guide")
+    def generate_brand_guide(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+        """Kick off an agent run that synthesises a project's brand guideline into
+        <project>/design.md from reference URLs (crawled here), uploaded reference
+        images (vision), and free-text notes. The generated design.md is then
+        auto-injected into every future design run (see wiki_memory.read_design_guidelines).
+        Async, like /design: returns {run_id, session_id}; the client watches the run
+        and reloads design.md when it finishes."""
+        features.require(cfg, features.DESIGN_STUDIO)
+        data = payload or {}
+        urls = [u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()][:8]
+        notes = (data.get("notes") or "").strip()[:4000]
+        image_rels: list[str] = []
+        root = _project_root(slug, user)
+        for rel in (data.get("imagePaths") or [])[:6]:
+            if not isinstance(rel, str):
+                continue
+            try:
+                if fsapi.resolve_in_project(root, rel).is_file():
+                    image_rels.append(rel)
+            except fsapi.FsError:
+                continue
+        if not urls and not image_rels and not notes:
+            raise HTTPException(status_code=400, detail="Give at least one reference URL, image, or a note to generate from.")
+
+        digests = [brand_extract.fetch_url_digest(u) for u in urls]
+        parts = [
+            "You are a brand/design director. Study the references below and write a concise, "
+            "OPINIONATED brand guideline to a file named `design.md` at the ROOT of this project "
+            "(overwrite it if it exists). This file steers every future design in Design Studio.",
+            "",
+            "Cover, in this order, as short markdown sections:",
+            "1. **Essence** — one line: what this brand feels like.",
+            "2. **Palette** — 3–6 named roles with exact hex (background / ink / accent / muted / …).",
+            "3. **Typography** — display + body pairing (real font names) and how to use them.",
+            "4. **Imagery & texture** — photo/illustration direction, mood, what to avoid.",
+            "5. **Tone of voice** — 3–5 adjectives + a do/don't for copy.",
+            "6. **Do / Don't** — a handful of concrete rules a designer can follow.",
+            "Keep it tight and usable — floors and direction, not an essay. Infer a coherent system "
+            "even from thin references; where the references conflict, pick one deliberate direction.",
+        ]
+        if digests:
+            parts += ["", "## Reference URLs (crawled)", *[brand_extract.digest_to_markdown(d) for d in digests]]
+        if image_rels:
+            parts += ["", "## Reference images", "The attached image(s) are visual references — read their palette, mood, composition, and type."]
+        if notes:
+            parts += ["", "## Owner's notes / preferences", notes]
+        prompt = "\n".join(parts)
+        if image_rels:
+            # The worker strips this marker and delivers the images to the agent as vision.
+            prompt += "\n\n⟦VISION:" + "|".join(image_rels) + "⟧"
+
+        project = visible_project(slug, user)
+        profile = profile_for_user(data.get("profile_id"), user)
+        title = "Brand guide"
+        cur = db().execute(
+            "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility, mode) VALUES (?, ?, ?, ?, ?, 'private', 'chat')",
+            (title, project["id"], user["id"], profile["id"], profile["runner_id"]),
+        )
+        session_id = int(cur.lastrowid)
+        db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)", (session_id, "Generate design.md brand guideline from the provided references.", user["username"]))
+        run = db().execute(
+            "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind) "
+            "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'brand_guide')",
+            (session_id, project["id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
+        )
+        run_id = int(run.lastrowid)
+        app.state.worker.add_event(run_id, session_id, project["id"], "run.queued", {"runner": profile["runner_id"], "kind": "brand_guide"})
+        _audit_fs(user, "design.brand_guide", slug, "design.md")
+        return {"run_id": run_id, "session_id": session_id, "urls": [{"url": d["url"], "ok": d.get("ok", False)} for d in digests]}
 
     @app.post("/api/projects/{slug}/designs/from-image")
     def design_from_image(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):

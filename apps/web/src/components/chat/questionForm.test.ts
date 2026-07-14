@@ -45,6 +45,15 @@ describe('questionForm parser', () => {
     expect(out).toContain('Notes: (skipped)') // unanswered
   })
 
+  it('parses a hyphenated submit-as attribute (media-brief forms)', () => {
+    const withPrefix = `<question-form id="design-brief" title="What are we designing?" submit-as="/design">` +
+      `{"questions":[{"id":"goal","label":"Goal?","type":"text","required":true}]}</question-form>`
+    const seg = splitOnQuestionForms(withPrefix).find(s => s.kind === 'form')
+    if (!seg || seg.kind !== 'form') throw new Error('expected form')
+    expect(seg.form.submitAs).toBe('/design')
+    expect(seg.form.id).toBe('design-brief')
+  })
+
   it('strips form blocks, keeping only prose', () => {
     const stripped = stripQuestionForms(`Please answer:\n${FORM}\nThanks`)
     expect(stripped).toContain('Please answer:')

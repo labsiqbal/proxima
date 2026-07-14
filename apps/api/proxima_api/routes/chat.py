@@ -575,6 +575,68 @@ def register(app, deps):
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         return {"run_id": run_id, "session_id": session["id"], "status": "completed", "media_action": kind, "artifact": artifact}
 
+    def _complete_media_ask(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest, user: dict[str, Any], kind: str, text: str) -> dict[str, Any]:
+        """Post a form-only assistant turn (a <question-form>, no artifact, nothing
+        generated) — used when a /image or /design brief is too thin to act on. The
+        form's ``submit-as`` re-issues the command with the answers, so the SAME media
+        path fires again with an enriched brief. Mirrors _complete_media_run's events
+        so the chat renders it like any finished turn, just without output links."""
+        profile = profile_for_user(payload.profile_id, user)
+        cur = db().execute(
+            """
+            INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind, started_at, heartbeat_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (session["id"], session["project_id"], user["id"], profile["id"], profile["runner_id"], payload.message, payload.model or profile["default_model"], profile["hermes_home"], f"media_ask_{kind}"),
+        )
+        run_id = int(cur.lastrowid)
+        msg = db().execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session["id"], text, profile["name"], run_id))
+        app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": f"media_ask_{kind}"})
+        app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
+        app.state.worker.add_event(run_id, session["id"], session["project_id"], "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": []})
+        app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.completed", {"stop_reason": "media"})
+        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
+        return {"run_id": run_id, "session_id": session["id"], "status": "completed", "media_action": f"{kind}_ask"}
+
+    # Compact clarifying forms shown when a /image or /design brief is too thin to act
+    # on. `submit-as` makes answering re-issue the command with the answers as the brief.
+    _MEDIA_BRIEF_FORMS = {
+        "image": (
+            "Before I generate — a couple of quick things so it lands right:\n"
+            '<question-form id="image-brief" title="What should I make?" submit-as="/image">\n'
+            '{"questions":[\n'
+            '  {"id":"subject","label":"What should the image show?","type":"text","required":true,"placeholder":"e.g. an orange cat asleep on a sofa"},\n'
+            '  {"id":"style","label":"Style / mood","type":"text","placeholder":"e.g. photographic, cinematic, flat illustration"},\n'
+            '  {"id":"aspect","label":"Size / aspect","type":"radio","options":[{"value":"square 1:1","label":"Square 1:1"},{"value":"portrait 4:5","label":"Portrait 4:5"},{"value":"story 9:16","label":"Story 9:16"},{"value":"landscape 16:9","label":"Landscape 16:9"}]}\n'
+            "]}\n"
+            "</question-form>"
+        ),
+        "image-studio": (
+            "Before I draft the design — a few quick things so it's on-brief:\n"
+            '<question-form id="design-brief" title="What are we designing?" submit-as="/design">\n'
+            '{"questions":[\n'
+            '  {"id":"goal","label":"Main message / goal?","type":"text","required":true,"placeholder":"e.g. promo 20% off the new coffee menu"},\n'
+            '  {"id":"format","label":"Format","type":"radio","options":[{"value":"IG post 1:1","label":"IG post 1:1"},{"value":"IG story 9:16","label":"IG story 9:16"},{"value":"poster","label":"Poster"},{"value":"web banner","label":"Web / banner"}]},\n'
+            '  {"id":"audience","label":"Who is it for?","type":"text","placeholder":"e.g. young adults 18–25"},\n'
+            '  {"id":"mood","label":"Visual mood / style","type":"text","placeholder":"e.g. clean minimal, bold energetic"},\n'
+            '  {"id":"copy","label":"Specific headline/copy? (optional)","type":"text","placeholder":"leave blank to let me write it"}\n'
+            "]}\n"
+            "</question-form>"
+        ),
+    }
+
+    def _media_brief_is_thin(message: str) -> bool:
+        """A brief is 'thin' when the user gave (almost) no direction: no attached
+        reference image and fewer than 3 words after the command. Answers submitted
+        back from the form are long, so they never re-trigger the ask."""
+        text = (message or "").strip()
+        command = text.lower().split(maxsplit=1)[0] if text else ""
+        arg = text[len(command):].strip()
+        if re.search(r"!\[[^\]]*\]\([^)]+\)", arg):
+            return False  # has an attached image — intent is clear enough
+        words = [w for w in re.split(r"\s+", re.sub(r"!\[[^\]]*\]\([^)]+\)", "", arg)) if w]
+        return len(words) < 3
+
     MEDIA_RUN_MAX_SECONDS = 1800.0
 
     def _finish_media_run(run_id: int, session_id: int, project_id: int | None, profile_name: str, generate_fn, database_path: str) -> None:
@@ -667,6 +729,12 @@ def register(app, deps):
             return None
         root = _project_root(slug, user)
         kind, prompt = media
+        # Thin brief → clarify in THIS (main) chat with a compact form instead of
+        # generating something generic. Answering re-issues the command (submit-as)
+        # with the answers as the brief, so this same path runs again — now with enough
+        # to go on. Only for the image + design surfaces; video keeps its own flow.
+        if kind in _MEDIA_BRIEF_FORMS and _media_brief_is_thin(payload.message):
+            return _complete_media_ask(session, payload, user, kind, _MEDIA_BRIEF_FORMS[kind])
         if kind == "image":
             cfg = _resolve_chat_image_gen()
             provider = image_providers.get_provider(cfg.get("provider"))

@@ -119,6 +119,62 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
     assert links[0]["actions"] == ["use-as-reference"]
 
 
+def test_thin_image_brief_asks_question_form_instead_of_generating(tmp_path, monkeypatch):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+    })
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+
+    def boom(*a, **k):
+        raise AssertionError("generate must not run on a thin brief")
+
+    monkeypatch.setattr(image_providers, "generate", boom)
+    # Bare /image (no subject) — should clarify, not generate.
+    res = client.post("/api/chat/send", headers=headers, json={"project_slug": "demo", "message": "/image"})
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert body["media_action"] == "image_ask"
+    messages = client.get(f"/api/sessions/{body['session_id']}/messages", headers=headers).json()["messages"]
+    content = messages[-1]["content"]
+    assert "<question-form" in content and 'submit-as="/image"' in content
+    # No artifact/output links on a clarify turn.
+    events = client.get(f"/api/sessions/{body['session_id']}/events", headers=headers).json()["events"]
+    complete = [e for e in events if e["type"] == "message.complete"][-1]
+    assert complete["payload"]["output_links"] == []
+
+
+def test_thin_design_brief_asks_form_but_rich_brief_creates_draft(tmp_path):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "feature_design_studio": True,
+    })
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+
+    # Thin /design → clarify form (submit-as re-issues /design).
+    thin = client.post("/api/chat/send", headers=headers, json={"project_slug": "demo", "message": "/design"}).json()
+    assert thin["media_action"] == "image-studio_ask"
+    ask_msg = client.get(f"/api/sessions/{thin['session_id']}/messages", headers=headers).json()["messages"][-1]["content"]
+    assert "<question-form" in ask_msg and 'submit-as="/design"' in ask_msg
+
+    # A rich brief (what the answered form re-issues) creates the draft + design session.
+    rich = client.post("/api/chat/send", headers=headers, json={
+        "project_slug": "demo",
+        "message": "/design promo 20% off new coffee menu, IG post, clean minimal",
+    }).json()
+    assert rich["media_action"] == "image-studio"
+    assert rich["artifact"]["type"] == "design"
+
+
 def test_main_chat_video_request_uses_video_generation_provider(tmp_path, monkeypatch):
     app = create_app(
         {

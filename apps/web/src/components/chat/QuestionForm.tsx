@@ -50,7 +50,10 @@ export function QuestionForm({ form, disabled, onSubmit }: { form: QForm; disabl
     setSent(true)
     const eff: Record<string, string | string[]> = {}
     for (const q of form.questions) eff[q.id] = effective(q)
-    onSubmit(formatFormAnswers(form, eff))
+    const answers = formatFormAnswers(form, eff)
+    // A media-brief form re-issues its slash command with the answers as the brief,
+    // so /design (or /image) fires again — now with enough detail to generate.
+    onSubmit(form.submitAs ? `${form.submitAs} ${answers}` : answers)
   }
   const locked = disabled || sent
 

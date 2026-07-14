@@ -3592,10 +3592,17 @@ button:disabled {
 }
 .cm-wrap .cm-editor {
 	height: 100%;
+	max-height: 100%;
+	min-height: 0;
 	font-size: var(--text-sm);
 }
+/* Make the scroller the explicit wheel/scroll container. With height:100% CodeMirror
+   otherwise leaves overflow to an ancestor (here .cm-wrap is overflow:hidden), so the
+   mouse wheel had nothing to scroll even though the drag-scrollbar worked. */
 .cm-wrap .cm-scroller {
 	font-family: var(--font-mono);
+	overflow: auto;
+	overscroll-behavior: contain;
 }
 .cm-wrap .cm-editor.cm-focused {
 	outline: none;
@@ -8688,6 +8695,104 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* Brand guide action pill — sits in the surface-pill row but reads as an action, not a
+   selectable surface: accent-tinted outline, filling on hover. */
+.ds-surface-pills .ds-brand-pill {
+	margin-left: var(--space-1);
+	border-color: color-mix(in srgb, var(--ui-accent) 45%, transparent);
+	color: var(--ui-accent);
+	font-weight: 600;
+}
+.ds-surface-pills .ds-brand-pill:hover {
+	background: var(--ui-accent);
+	color: var(--ui-on-accent);
+	border-color: var(--ui-accent);
+}
+/* Brand guide (design.md) modal */
+.brand-guide-modal {
+	width: min(560px, 94vw);
+	max-height: 88vh;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4);
+	overflow: auto;
+}
+.brand-guide-modal .bg-head {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.brand-guide-modal .bg-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.brand-guide-modal .bg-center {
+	align-items: center;
+	text-align: center;
+	padding: var(--space-4) var(--space-2);
+	gap: var(--space-2);
+}
+.brand-guide-modal .bg-label {
+	font-size: var(--text-sm);
+	font-weight: 600;
+	margin-top: var(--space-2);
+}
+.brand-guide-modal .bg-url-row {
+	display: flex;
+	gap: var(--space-2);
+}
+.brand-guide-modal .bg-url-row input {
+	flex: 1;
+	min-width: 0;
+}
+.brand-guide-modal .bg-add {
+	align-self: flex-start;
+}
+.brand-guide-modal .bg-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	align-items: center;
+}
+.brand-guide-modal .bg-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 220px;
+	padding: 4px 6px 4px 10px;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-full);
+	font-size: var(--text-xs);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.brand-guide-modal .bg-upload {
+	cursor: pointer;
+}
+.brand-guide-modal .bg-foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+.brand-guide-modal .bg-done {
+	font-size: var(--text-sm);
+}
+.brand-guide-modal .bg-preview {
+	max-height: 46vh;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	background: var(--ui-bg-sidebar);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	padding: var(--space-3);
+	font-size: var(--text-xs);
+	line-height: 1.5;
+}
 .ds-gallery {
 	flex: 1;
 	min-height: 0;
@@ -11484,6 +11589,11 @@ div.result-media {
 	min-height: 0;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
+	/* Bound the single row to the container's height. Without this the row is auto-sized
+	   to content, and the preview column — whose only child is the position:absolute
+	   .file-editor (zero in-flow height) — collapsed to the list's height, leaving the
+	   source editor too short (or 0) to scroll. */
+	grid-template-rows: minmax(0, 1fr);
 	gap: var(--space-6);
 	overflow: hidden;
 }

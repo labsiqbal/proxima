@@ -3,15 +3,15 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-140 endpoints across 12 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+145 endpoints across 12 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
-- [`routes/auth.py`](#routes-auth-py) — 5 endpoints
+- [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
-- [`routes/design.py`](#routes-design-py) — 3 endpoints
+- [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 54 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
@@ -35,10 +35,14 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| GET | `/api/me` | `me` |  |
+| GET | `/api/me` | `me` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
 | GET | `/api/setup/status` | `setup_status` |  |
-| POST | `/auth/auto` | `auth_auto` | Single-user cockpit auto-login: no credentials, returns the owner + a |
+| POST | `/auth/auto` | `auth_auto` | Passwordless auto-login (network-only mode). Disabled once a password is |
+| POST | `/auth/change-password` | `change_password` | Change the password (from Settings): verify the current one, set the new, |
+| POST | `/auth/login` | `login_with_password` | Verify the owner's password and start a session (no expiry until logout). |
 | POST | `/auth/logout` | `logout` |  |
+| POST | `/auth/resume` | `resume` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
+| POST | `/auth/set-password` | `set_password` | First-run: set the owner's password. Only allowed while none is set (later |
 | GET | `/health` | `health` |  |
 
 
@@ -76,6 +80,7 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
+| POST | `/api/projects/{slug}/design/brand-guide` | `generate_brand_guide` | Kick off an agent run that synthesises a project's brand guideline into |
 | POST | `/api/projects/{slug}/design/image` | `design_image` | Generate (text→image) or edit (image+prompt→image) via the configured |
 | GET | `/api/projects/{slug}/design/image-models` | `design_image_models` | For the codex provider there's no static model list (login-based); for |
 | POST | `/api/projects/{slug}/designs/from-image` | `design_from_image` | Seed a new Design Studio scene containing an existing project image as a |
@@ -85,9 +90,9 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| API_ROUTE | `/api/appview/{token}/{slug}/{path:path}` | `app_view` |  |
+| API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
 | GET | `/api/events` | `hyperframes_events` |  |
-| GET | `/api/preview/{token}/{slug}/{file_path:path}` | `project_preview` |  |
+| GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
 | GET | `/api/projects/{slug}/app/status` | `app_status` |  |
 | POST | `/api/projects/{slug}/app/stop` | `app_stop` |  |
@@ -235,4 +240,4 @@
 
 
 ---
-_Generated 2026-07-12 23:28 UTC._
+_Generated 2026-07-14 06:44 UTC._

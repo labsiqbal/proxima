@@ -52,6 +52,11 @@ export const genDesignImage = (token: string, slug: string, body: { prompt: stri
 export const designImageModels = (token: string, slug: string) =>
   api<{ models: string[]; configured: boolean }>(`/api/projects/${slug}/design/image-models`, token)
 
+// Kick off an agent run that writes <project>/design.md brand guidelines from reference
+// URLs (crawled server-side), uploaded reference images (vision), and free-text notes.
+export const generateBrandGuide = (token: string, slug: string, body: { urls?: string[]; imagePaths?: string[]; notes?: string }) =>
+  api<{ run_id: number; session_id: number; urls: { url: string; ok: boolean }[] }>(`/api/projects/${slug}/design/brand-guide`, token, { method: 'POST', body: JSON.stringify(body) })
+
 // URL for inline preview/download of a project file (<img>/<a>); cookie-authed.
 export const fileUrl = (slug: string, path: string) =>
   `/api/preview/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`
