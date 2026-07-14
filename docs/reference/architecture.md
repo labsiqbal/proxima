@@ -248,7 +248,11 @@ Cancel with `/goal/cancel`.
   (preview) → `POST /.../wiki-note/commit` writes the markdown into the project's
   `wiki/` and rebuilds the index.
 + **Workflow:** `POST /.../promote-workflow` has an architect agent decompose the
-  conversation into ordered steps → a new `workflow` row.
+  conversation. The default linear path emits ordered steps. When
+  `PROXIMA_FEATURE_WORKFLOW_GRAPH=1`, it instead emits a normalized typed DAG draft;
+  the frontend materializes that as a queued graph job so the owner can inspect/edit
+  the frozen plan before explicit start. `POST /api/graph/jobs/{id}/save-template`
+  persists a reviewed plan as a reusable graph-backed `workflow` row.
 
 ### 6. Workflow → Job → execution
 
@@ -262,6 +266,12 @@ job = frozen snapshot of steps + per-step state (steps_state JSON)
     ▼
 job done  →  artifacts surface in the Result view / Artifacts gallery
 ```
+
+The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attempt in
+`node_states`, dispatches one ready node at a time in a fresh hidden ACP session, and
+passes only explicit typed upstream outputs. Plan edits are allowed only while queued;
+execution therefore always starts behind a human approval action. Review/correction
+can edit or rerun a node and marks every transitive descendant stale before redispatch.
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.

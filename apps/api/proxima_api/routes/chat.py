@@ -18,6 +18,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,57 @@ from ..schemas import (
     PermissionResponse, PromoteWorkflowRequest, RunCreateRequest,
     SessionCreateRequest, SessionUpdateRequest, WikiCommitRequest, WikiDraftRequest,
 )
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
+def _decode_json(value: Any) -> Any:
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("expected valid JSON") from exc
+
+
+def _event_payload(row: sqlite3.Row) -> dict[str, Any]:
+    event = dict(row)
+    event["payload"] = _decode_json(event["payload"] or "{}")
+    return event
+
+
+async def _stream_session_events(
+    app: Any,
+    request: Request,
+    session_id: int,
+    after_id: int,
+    db_factory: Callable[[], sqlite3.Connection],
+) -> AsyncIterator[str]:
+    hub = app.state.hub
+    event_signal = hub.subscribe(session_id)
+    last_id = after_id
+    try:
+        while not await request.is_disconnected():
+            event_signal.clear()
+            rows = db_factory().execute(
+                "SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC",
+                (session_id, last_id),
+            ).fetchall()
+            for row in rows:
+                last_id = row["id"]
+                yield (
+                    f"id: {row['id']}\nevent: {row['type']}\n"
+                    f"data: {json.dumps(_event_payload(row))}\n\n"
+                )
+            try:
+                await asyncio.wait_for(event_signal.wait(), timeout=15)
+            except asyncio.TimeoutError as _exc:
+                yield ": keepalive\n\n"
+    finally:
+        hub.unsubscribe(session_id, event_signal)
 
 
 def _mode_display_message(mode: str, message: str, display_message: str | None) -> str:
@@ -230,7 +282,7 @@ def register(app, deps):
         activity_by_run: dict[int, list[dict[str, Any]]] = {}
         duration_by_run: dict[int, int] = {}
         if run_ids:
-            run_id_filter = ",".join(str(int(rid)) for rid in run_ids)
+            run_id_filter = ",".join(str(_as_int(rid)) for rid in run_ids)
             order: dict[int, list[str]] = {}
             items: dict[int, dict[str, dict[str, Any]]] = {}
             for e in db().execute(
@@ -238,7 +290,7 @@ def register(app, deps):
                 (run_id_filter,),
             ).fetchall():
                 rid = e["run_id"]
-                p = json.loads(e["payload"] or "{}")
+                p = _decode_json(e["payload"] or "{}")
                 tid = str(p.get("id") or "")
                 if not tid:
                     continue
@@ -264,7 +316,7 @@ def register(app, deps):
         for row in rows:
             m = dict(row)
             try:
-                links = json.loads(m.pop("output_links", "[]") or "[]")
+                links = _decode_json(m.pop("output_links", "[]") or "[]")
             except Exception:
                 links = []
             if links:
@@ -340,7 +392,7 @@ def register(app, deps):
                 """,
                 (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], payload.prompt_mode),
             )
-            run_id = int(cur.lastrowid)
+            run_id = _as_int(cur.lastrowid)
             msg = db().execute(
                 "INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)",
                 (session_id, payload.instant_result.strip(), profile["name"], run_id),
@@ -358,7 +410,7 @@ def register(app, deps):
             """,
             (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], payload.prompt_mode),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": payload.prompt_mode})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
@@ -379,7 +431,7 @@ def register(app, deps):
             "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
             (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], build_goal_prompt(payload.objective, True), payload.model or profile["default_model"], profile["hermes_home"]),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "goal.update", {"status": "running", "iteration": 0, "max": payload.max_iter, "objective": payload.objective})
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "goal": True})
         return {"run_id": run_id, "session_id": session_id, "status": "running"}
@@ -402,11 +454,11 @@ def register(app, deps):
                 (session_id,),
             )
             for r in active:
-                app.state.worker.add_event(int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
-                app.state.worker.cancel(int(r["id"]))
+                app.state.worker.add_event(_as_int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
+                app.state.worker.cancel(_as_int(r["id"]))
         lr = db().execute("SELECT id FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
         if lr:
-            app.state.worker.add_event(int(lr["id"]), session_id, session["project_id"], "goal.update", {"status": "cancelled"})
+            app.state.worker.add_event(_as_int(lr["id"]), session_id, session["project_id"], "goal.update", {"status": "cancelled"})
         return {"status": "cancelled"}
 
     def _session_wiki_root(session: dict[str, Any], user: dict[str, Any]) -> Path | None:
@@ -434,7 +486,7 @@ def register(app, deps):
             """,
             (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": "wiki_draft"})
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 
@@ -447,16 +499,23 @@ def register(app, deps):
             "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 50", (session_id,)
         ).fetchall()
         convo = "\n".join(f"{m['role']}: {m['content']}" for m in reversed(rows))
-        prompt = wf.ARCHITECT_SYSTEM + "\n\nCONVERSATION:\n" + convo
+        if payload.engine == "graph":
+            features.require(feature_cfg, features.WORKFLOW_GRAPH)
+        graph_planning = payload.engine == "graph" or (
+            payload.engine == "auto"
+            and features.enabled(feature_cfg, features.WORKFLOW_GRAPH)
+        )
+        prompt = wf.architect_system(graph=graph_planning) + "\n\nCONVERSATION:\n" + convo
+        run_kind = "workflow_graph_draft" if graph_planning else "workflow_draft"
         cur = db().execute(
             """
             INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'workflow_draft')
+            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
             """,
-            (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
+            (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"], run_kind),
         )
-        run_id = int(cur.lastrowid)
-        app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": "workflow_draft"})
+        run_id = _as_int(cur.lastrowid)
+        app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": run_kind})
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 
     @app.post("/api/sessions/{session_id}/wiki-note/commit")
@@ -470,7 +529,7 @@ def register(app, deps):
             if payload.mode == "append":
                 try:
                     prior = fsapi.read_file(root, payload.path)
-                except fsapi.FsError:
+                except fsapi.FsError as _exc:
                     prior = ""
                 content = (prior.rstrip() + "\n\n" + payload.content.strip() + "\n") if prior else payload.content
             else:
@@ -542,7 +601,7 @@ def register(app, deps):
 
     def _write_video_shell(root: Path, prompt: str) -> dict[str, Any]:
         title = _video_title(prompt)
-        video_id = f"{_slug(title, 'video')}-{int(time.time())}"
+        video_id = f"{_slug(title, 'video')}-{_as_int(time.time())}"
         rel_dir = f"artifacts/video/{video_id}"
         d = fsapi.resolve_in_project(root, rel_dir)
         d.mkdir(parents=True, exist_ok=True)
@@ -556,7 +615,7 @@ def register(app, deps):
         (d / "brief.json").write_text(json.dumps({"title": title, "prompt": prompt}, indent=2), encoding="utf-8")
         return {"type": "video", "id": video_id, "title": title, "path": rel_dir}
 
-    def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
+    def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
         profile = profile_for_user(payload.profile_id, user)
         cur = db().execute(
             """
@@ -565,7 +624,7 @@ def register(app, deps):
             """,
             (session["id"], session["project_id"], user["id"], profile["id"], profile["runner_id"], payload.message, payload.model or profile["default_model"], profile["hermes_home"], f"media_{kind}"),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         msg = db().execute("INSERT INTO messages(session_id, role, content, author, run_id, output_links) VALUES (?, 'assistant', ?, ?, ?, ?)", (session["id"], text, profile["name"], run_id, json.dumps([artifact])))
         _merge_session_artifact(db(), session["id"], artifact)
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": f"media_{kind}"})
@@ -575,7 +634,7 @@ def register(app, deps):
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         return {"run_id": run_id, "session_id": session["id"], "status": "completed", "media_action": kind, "artifact": artifact}
 
-    def _complete_media_ask(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest, user: dict[str, Any], kind: str, text: str) -> dict[str, Any]:
+    def _complete_media_ask(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, text: str) -> dict[str, Any]:
         """Post a form-only assistant turn (a <question-form>, no artifact, nothing
         generated) — used when a /image or /design brief is too thin to act on. The
         form's ``submit-as`` re-issues the command with the answers, so the SAME media
@@ -589,7 +648,7 @@ def register(app, deps):
             """,
             (session["id"], session["project_id"], user["id"], profile["id"], profile["runner_id"], payload.message, payload.model or profile["default_model"], profile["hermes_home"], f"media_ask_{kind}"),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         msg = db().execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session["id"], text, profile["name"], run_id))
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": f"media_ask_{kind}"})
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
@@ -661,7 +720,7 @@ def register(app, deps):
             started = time.monotonic()
             while not done.wait(20.0):
                 if time.monotonic() - started > MEDIA_RUN_MAX_SECONDS:
-                    box.setdefault("error", TimeoutError(f"Media generation timed out after {int(MEDIA_RUN_MAX_SECONDS)}s."))
+                    box.setdefault("error", TimeoutError(f"Media generation timed out after {_as_int(MEDIA_RUN_MAX_SECONDS)}s."))
                     break
                 with app.state.db_lock:
                     conn.execute("UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
@@ -705,7 +764,7 @@ def register(app, deps):
             """,
             (session["id"], session["project_id"], user["id"], profile["id"], profile["runner_id"], payload.message, payload.model or profile["default_model"], profile["hermes_home"], f"media_{kind}"),
         )
-        run_id = int(cur.lastrowid)
+        run_id = _as_int(cur.lastrowid)
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": f"media_{kind}", "label": payload.message})
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
@@ -746,7 +805,7 @@ def register(app, deps):
             # prompt so the model gets clean instructions + the attached pixels.
             ref_paths = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prompt)
             clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
-            sources: list[tuple[bytes, str]] = []
+            sources: list[tuple[bytes, str | None]] = []
             if ref_paths and caps.get("imageEdit"):
                 for rel in ref_paths:
                     try:
@@ -765,11 +824,11 @@ def register(app, deps):
             refs_ignored = bool(ref_paths) and not sources
 
             def generate_image() -> tuple[dict[str, Any], str]:
-                target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{int(time.time())}.png")
+                target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{_as_int(time.time())}.png")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 i = 1
                 while target.exists():
-                    target = target.parent / f"chat-{int(time.time())}-{i}.png"
+                    target = target.parent / f"chat-{_as_int(time.time())}-{i}.png"
                     i += 1
                 raw = image_providers.generate(
                     provider.id,
@@ -828,11 +887,11 @@ def register(app, deps):
             if result.content is None and not result.url:
                 raise video_providers.VideoProviderError("Video provider returned no video data.")
             ext = Path(result.filename or "video.mp4").suffix or ".mp4"
-            target = fsapi.resolve_in_project(root, f"artifacts/media/videos/chat-{int(time.time())}{ext}")
+            target = fsapi.resolve_in_project(root, f"artifacts/media/videos/chat-{_as_int(time.time())}{ext}")
             target.parent.mkdir(parents=True, exist_ok=True)
             i = 1
             while target.exists():
-                target = target.parent / f"chat-{int(time.time())}-{i}{ext}"; i += 1
+                target = target.parent / f"chat-{_as_int(time.time())}-{i}{ext}"; i += 1
             if result.content is not None:
                 target.write_bytes(result.content)
             else:
@@ -858,25 +917,20 @@ def register(app, deps):
         # endpoint the chat UI posts to); project_slug rides along for new sessions.
         return create_run(session_id, RunCreateRequest(message=payload.message, profile_id=payload.profile_id, model=payload.model, project_slug=payload.project_slug), user)
 
-    def event_payload(row: sqlite3.Row) -> dict[str, Any]:
-        event = dict(row)
-        event["payload"] = json.loads(event["payload"] or "{}")
-        return event
-
     @app.get("/api/sessions/{session_id}/events")
     def list_events(session_id: int, after_id: int = 0, user: dict[str, Any] = Depends(current_user)):
         # Resume by events.id — the session-monotonic key. seq is per-run (it resets
         # to 1 each run), so it's NOT a valid session-level cursor.
         session_for_user(session_id, user)
         rows = db().execute("SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC", (session_id, after_id)).fetchall()
-        return {"events": [event_payload(row) for row in rows]}
+        return {"events": [_event_payload(row) for row in rows]}
 
     @app.get("/api/dashboard")
     def dashboard(user: dict[str, Any] = Depends(current_user)):
         """Aggregated real-data summary for the Home dashboard."""
         from datetime import datetime as _dtm, timedelta as _td, timezone as _tz
         d = db()
-        stale_seconds = int(getattr(app.state, "config", {}).get("run_stale_seconds") or 60)
+        stale_seconds = _as_int(getattr(app.state, "config", {}).get("run_stale_seconds") or 60)
         active_runs_count = d.execute(
             "SELECT COUNT(DISTINCT session_id) AS c FROM runs WHERE "
             "((status = 'running' AND COALESCE(heartbeat_at, started_at, created_at) >= datetime('now', ?)) "
@@ -910,7 +964,7 @@ def register(app, deps):
             "(SELECT MAX(updated_at) FROM sessions s WHERE s.project_id = p.id) AS last_activity "
             "FROM projects p ORDER BY last_activity DESC").fetchall()]
         workflows_out = [
-            {"id": r["id"], "name": r["name"], "category": r["category"], "steps": len(json.loads(r["steps"] or "[]"))}
+            {"id": r["id"], "name": r["name"], "category": r["category"], "steps": len(_decode_json(r["steps"] or "[]"))}
             for r in d.execute("SELECT id, name, category, steps FROM workflows WHERE status != 'archived' ORDER BY updated_at DESC, id DESC LIMIT 6").fetchall()
         ]
         now_local = _dtm.now()
@@ -1019,7 +1073,7 @@ def register(app, deps):
     def active_runs(user: dict[str, Any] = Depends(current_user)):
         """Sessions with an in-flight run, so the sidebar can show a thinking
         indicator that survives navigating away from the chat view."""
-        stale_seconds = int(getattr(app.state, "config", {}).get("run_stale_seconds") or 60)
+        stale_seconds = _as_int(getattr(app.state, "config", {}).get("run_stale_seconds") or 60)
         rows = db().execute(
             "SELECT DISTINCT session_id FROM runs WHERE "
             "((status = 'running' AND COALESCE(heartbeat_at, started_at, created_at) >= datetime('now', ?)) "
@@ -1032,28 +1086,8 @@ def register(app, deps):
     async def stream_events(request: Request, session_id: int, after_id: int = 0, token: str = ""):
         user = user_from_token_query(token or request.cookies.get("proxima_session", ""))
         session_for_user(session_id, user)
-
-        async def gen():
-            hub = app.state.hub
-            ev = hub.subscribe(session_id)
-            # Resume from events.id (session-monotonic). Previously this also skipped
-            # rows by per-run seq, which wrongly dropped a later run's low-seq events.
-            last_id = after_id
-            try:
-                while not await request.is_disconnected():
-                    ev.clear()  # clear before reading so a notify during the read isn't lost
-                    rows = db().execute("SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id ASC", (session_id, last_id)).fetchall()
-                    for row in rows:
-                        last_id = row["id"]
-                        yield f"id: {row['id']}\nevent: {row['type']}\ndata: {json.dumps(event_payload(row))}\n\n"
-                    try:
-                        await asyncio.wait_for(ev.wait(), timeout=15)  # instant wake on new event; 15s = keepalive fallback
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
-            finally:
-                hub.unsubscribe(session_id, ev)
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        events = _stream_session_events(app, request, session_id, after_id, db)
+        return StreamingResponse(events, media_type="text/event-stream")
 
     @app.websocket("/api/ws/terminal")
     async def ws_terminal(websocket: WebSocket, token: str = "", project: str = ""):
@@ -1113,9 +1147,9 @@ def register(app, deps):
                     t = msg["text"]
                     if t.startswith("{"):
                         try:
-                            j = json.loads(t)
+                            j = _decode_json(t)
                             if j.get("type") == "resize":
-                                term.resize(int(j.get("rows", 24)), int(j.get("cols", 80)))
+                                term.resize(_as_int(j.get("rows", 24)), _as_int(j.get("cols", 80)))
                             elif j.get("type") == "input":
                                 term.write(str(j.get("data", "")).encode())
                             else:
@@ -1157,10 +1191,10 @@ def register(app, deps):
                 rows = db().execute("SELECT * FROM events WHERE session_id=? AND id>? ORDER BY id ASC", (session_id, last_id)).fetchall()
                 for row in rows:
                     last_id = row["id"]
-                    await websocket.send_json(event_payload(row))
+                    await websocket.send_json(_event_payload(row))
                 try:
                     await asyncio.wait_for(ev.wait(), timeout=15)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError as _exc:
                     pass
         except WebSocketDisconnect:
             return
@@ -1186,7 +1220,7 @@ def register(app, deps):
         output_paths: set[str] = set()
         for m in db().execute("SELECT output_links FROM messages WHERE run_id = ?", (run_id,)).fetchall():
             try:
-                for a in json.loads(m["output_links"] or "[]"):
+                for a in _decode_json(m["output_links"] or "[]"):
                     if a.get("path"):
                         output_paths.add(str(a["path"]))
             except Exception:
@@ -1245,7 +1279,7 @@ def register(app, deps):
                     # Guarded (request-thread side of the worker race): only cancel a
                     # still-live collaboration — never flip one the worker just finished.
                     state.guarded_transition(
-                        db(), "prompt_collaborations", int(collab_row["id"]), "cancelled",
+                        db(), "prompt_collaborations", _as_int(collab_row["id"]), "cancelled",
                         state.non_terminal(state.COLLABORATION),
                         set_extra="updated_at = CURRENT_TIMESTAMP",
                     )
@@ -1253,7 +1287,7 @@ def register(app, deps):
             app.state.worker.add_event(run_id, row["session_id"], row["project_id"], "run.cancelled", {})
         notified: set[int] = set()
         for q in [*collab_cancelled, *queued]:
-            qid = int(q["id"])
+            qid = _as_int(q["id"])
             if qid in notified:
                 continue
             notified.add(qid)

@@ -10,6 +10,13 @@ from . import workflows as wf
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
 class RunDrafts:
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -27,12 +34,12 @@ class RunDrafts:
         persistence should stop.
         """
         kind = run.get("kind", "chat")
-        if kind not in {"wiki_draft", "workflow_draft"}:
+        if kind not in {"wiki_draft", "workflow_draft", "workflow_graph_draft"}:
             return False
 
         db = self.app.state.worker_db
-        run_id = int(run["id"])
-        session_id = int(run["session_id"])
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
 
         if kind == "wiki_draft":

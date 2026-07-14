@@ -208,6 +208,35 @@ def test_gate_approval_then_final_job_approval(tmp_path):
     assert approved_job.json()["status"] == "done"
 
 
+def test_save_reviewed_graph_as_reusable_template(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = _create(client)
+
+    saved = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={
+            "name": "Research and publish",
+            "description": "Reusable reviewed DAG",
+            "category": "research",
+        },
+    )
+
+    assert saved.status_code == 201, saved.text
+    template = saved.json()
+    assert template["name"] == "Research and publish"
+    assert template["steps"] == []
+    assert template["graph"] == job["graph"]
+    stored = app.state.db.execute(
+        "SELECT graph FROM workflows WHERE id = ?", (template["id"],)
+    ).fetchone()
+    assert stored is not None
+    linked = app.state.db.execute(
+        "SELECT workflow_id FROM jobs WHERE id = ?", (job["id"],)
+    ).fetchone()
+    assert linked["workflow_id"] == template["id"]
+
+
 def test_graph_routes_are_inert_while_feature_is_off(tmp_path):
     app = _app(tmp_path, enabled=False)
     client = _client(app)

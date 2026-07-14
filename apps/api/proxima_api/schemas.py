@@ -131,6 +131,12 @@ class GraphDefinitionUpdateRequest(BaseModel):
     graph: dict[str, Any]
 
 
+class GraphTemplateSaveRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str = ""
+    category: str = "other"
+
+
 class GraphNodeOutputEditRequest(BaseModel):
     value: Any
 
@@ -153,6 +159,7 @@ class ScheduleUpdateRequest(BaseModel):
 
 class PromoteWorkflowRequest(BaseModel):
     profile_id: int | None = None
+    engine: str = Field(default="auto", pattern="^(auto|linear|graph)$")
 
 
 class ProjectVisibilityRequest(BaseModel):

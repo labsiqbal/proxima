@@ -15,6 +15,7 @@ from ..schemas import (
     GraphDefinitionUpdateRequest,
     GraphJobCreateRequest,
     GraphNodeOutputEditRequest,
+    GraphTemplateSaveRequest,
 )
 
 
@@ -278,6 +279,59 @@ def register(app, deps):
     ):
         require_graph()
         return graph_job_payload(graph_job_or_404(job_id, user))
+
+    @app.post("/api/graph/jobs/{job_id}/save-template", status_code=status.HTTP_201_CREATED)
+    def save_graph_template(
+        job_id: int,
+        payload: GraphTemplateSaveRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        require_graph()
+        job = graph_job_or_404(job_id, user)
+        graph = normalize_graph(job["graph"] or "")
+        name = (payload.name or str(job["title"] or "Graph workflow")).strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="template name must not be blank")
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO workflows(
+                      project_id, name, description, category, status,
+                      steps, graph, inputs, created_by
+                    ) VALUES (?, ?, ?, ?, 'active', '[]', ?, '[]', ?)
+                    """,
+                    (
+                        job["project_id"],
+                        name,
+                        payload.description,
+                        payload.category,
+                        json.dumps(graph, ensure_ascii=False),
+                        user["id"],
+                    ),
+                )
+                workflow_id = _as_int(cur.lastrowid)
+                conn.execute(
+                    "UPDATE jobs SET workflow_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (workflow_id, job_id),
+                )
+                conn.execute("COMMIT")
+            except Exception as exc:
+                _rollback(conn)
+                raise exc
+        return {
+            "id": workflow_id,
+            "project_id": job["project_id"],
+            "name": name,
+            "description": payload.description,
+            "category": payload.category,
+            "status": "active",
+            "steps": [],
+            "graph": graph,
+            "inputs": [],
+        }
 
     @app.patch("/api/graph/jobs/{job_id}/graph")
     def update_graph_definition(
