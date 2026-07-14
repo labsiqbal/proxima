@@ -13,6 +13,7 @@ import contextlib
 import html
 import json
 import logging
+import mimetypes
 import re
 import sqlite3
 import threading
@@ -669,7 +670,31 @@ def register(app, deps):
         if kind == "image":
             cfg = _resolve_chat_image_gen()
             provider = image_providers.get_provider(cfg.get("provider"))
+            caps = provider.capabilities or {}
             model = payload.model or cfg.get("model")
+            # Images the user attached (the composer appends ![name](path) markdown) become
+            # source/reference images when the provider can edit — so "/image … with this
+            # logo" actually uses the logo instead of ignoring it. Strip the refs from the
+            # prompt so the model gets clean instructions + the attached pixels.
+            ref_paths = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prompt)
+            clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
+            sources: list[tuple[bytes, str]] = []
+            if ref_paths and caps.get("imageEdit"):
+                for rel in ref_paths:
+                    try:
+                        src = fsapi.resolve_in_project(root, rel.strip())
+                        if src.is_file():
+                            sources.append((src.read_bytes(), mimetypes.guess_type(src.name)[0] or "image/png"))
+                    except Exception:
+                        logging.getLogger("proxima.api").debug("chat /image reference skipped: %s", rel, exc_info=True)
+                if len(sources) > 1 and not caps.get("referenceImages"):
+                    sources = sources[:1]
+            image_bytes = sources[0][0] if sources else None
+            image_mime = sources[0][1] if sources else None
+            extra_images = sources[1:] or None
+            gen_prompt = clean_prompt or (prompt if not ref_paths else "Compose an image using the attached reference image(s).")
+            # Attached images but the selected provider can't use them (text-to-image only).
+            refs_ignored = bool(ref_paths) and not sources
 
             def generate_image() -> tuple[dict[str, Any], str]:
                 target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{int(time.time())}.png")
@@ -681,8 +706,11 @@ def register(app, deps):
                 raw = image_providers.generate(
                     provider.id,
                     cfg.get("apiKey"),
-                    prompt=prompt,
+                    prompt=gen_prompt,
                     model=model,
+                    image_bytes=image_bytes,
+                    image_mime=image_mime,
+                    extra_images=extra_images,
                     base_url=cfg.get("baseUrl"),
                 )
                 target.write_bytes(raw)
@@ -691,6 +719,10 @@ def register(app, deps):
                     actions.insert(0, "open-design-studio")
                 artifact = {"type": "image", "title": target.name, "path": str(target.relative_to(root)), "project_slug": slug, "actions": actions}
                 text = f"Generated image artifact: `{artifact['path']}`. Saved as a reusable project artifact."
+                if refs_ignored:
+                    text += " Note: the attached image was not used as a reference — the selected image provider is text-to-image only. Pick a provider that supports image editing to compose with attachments."
+                elif sources:
+                    text += f" Used {len(sources)} attached image(s) as reference."
                 if features.enabled(feature_cfg, features.DESIGN_STUDIO):
                     text += " Open/Edit it in Design Studio or use it as a reference."
                 return artifact, text

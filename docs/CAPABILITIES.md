@@ -183,8 +183,14 @@ it. Folder field picks what to run.
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under
-`artifacts/media/images/`, and returns the artifact in the originating chat. Existing
-image and media files remain readable through the normal artifact/file surfaces.
+`artifacts/media/images/`, and returns the artifact in the originating chat. Images
+attached to the message (rendered as `![name](path)` markdown by the composer) are used
+as reference/source images when the selected provider advertises `imageEdit` — the
+first attachment is the primary source and the rest are passed as `extra_images` when
+the provider also supports `referenceImages`; the reference markdown is stripped from
+the prompt so the model gets clean instructions. If the provider is text-to-image only,
+the attachments are ignored and the reply says so. Existing image and media files remain
+readable through the normal artifact/file surfaces.
 
 **Temporarily disabled by default:** Video and Design Studio remain in source but are
 server-gated with `PROXIMA_FEATURE_VIDEO=0` and
