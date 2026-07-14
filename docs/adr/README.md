@@ -59,3 +59,4 @@ Supersedes / superseded-by / links to feature docs.
 | ADR | Title | Status |
 |-----|-------|--------|
 | [0001](0001-workflow-execution-model.md) | Workflow execution model — own the orchestration primitives | Accepted |
+| [0002](0002-license-agpl.md) | License — AGPL-3.0-or-later, pure commons (DCO, no CLA) | Accepted |

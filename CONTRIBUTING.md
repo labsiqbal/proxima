@@ -2,6 +2,20 @@
 
 Thank you for your interest in contributing. Please read this document before opening a PR.
 
+Proxima is **not meant to be "done"** — it's a self-hosted control plane that evolves as the
+agents it drives evolve. Contributions from humans **and** AI agents are welcome, as long as
+they keep the project coherent. By contributing you agree your work is licensed under
+[**AGPL-3.0-or-later**](LICENSE) and you certify it under the [DCO](#sign-your-work-dco).
+
+## Does it belong? (the DNA filter)
+
+Before building anything substantial, run the idea through the **five DNA pillars** and the
+**anti-goals** in [`docs/ROADMAP.md`](docs/ROADMAP.md). If a change doesn't strengthen a
+pillar — or chases an anti-goal — it won't be merged, however well-built. Open an issue to
+discuss direction first. The *why* behind existing architecture lives in
+[`docs/adr/`](docs/adr/); read the relevant ADR before changing a settled decision, and don't
+re-litigate one.
+
 ## Dev setup
 
 Prerequisites: Linux, `uv`, `npm`, and (for real agent runs) a working Hermes CLI install.
@@ -78,6 +92,22 @@ entry, and prefer additive changes. Migrations run once each on startup, in
 order, and the database is snapshotted to `<data dir>/backups/` before any
 pending migration is applied. Add a test in `tests/test_migrations.py`.
 
+## Documentation is part of "done"
+
+Docs ship in the **same PR** as the code (the contract at the top of
+[`AGENTS.md`](AGENTS.md)). Depending on what you changed, produce:
+
+| You changed… | Ship this |
+|---|---|
+| **An architectural decision** (subsystem, execution model, a dependency, a policy) | An **[ADR](docs/adr/README.md)** — numbered, same PR |
+| **A feature or flow** | Update [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) + a feature doc; update [`docs/reference/architecture.md`](docs/reference/architecture.md) if structure/flow changed |
+| **A feature meant to grow** (e.g. a new node/provider type) | An **extension playbook** — "how to add another one" |
+| **Routes or the DB schema** | `apps/api/.venv/bin/python scripts/gen_docs.py` (regenerates `api.md` + `database.md` — never hand-edit those) |
+| **A dependency** | Update [`docs/reference/tech-stack.md`](docs/reference/tech-stack.md) |
+
+This repo's own [ADRs](docs/adr/) and feature docs are the worked example — mirror them. If a
+change makes a doc wrong and you leave it, you've shipped a bug.
+
 ## Commit style
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):
@@ -90,6 +120,27 @@ chore: bump uvicorn to 0.30
 ```
 
 Keep the subject line under 72 characters. Add a body if the change needs explanation.
+
+### Sign your work (DCO)
+
+Every commit must be signed off, certifying you have the right to submit it under the
+project's license — the [Developer Certificate of Origin](https://developercertificate.org/):
+
+```bash
+git commit -s -m "feat: ..."   # appends: Signed-off-by: Your Name <you@example.com>
+```
+
+There is **no CLA**: Proxima is a pure commons — every contributor, maintainers included,
+plays by the same AGPL rules. The DCO sign-off is the only ceremony.
+
+## AI-agent contributors
+
+Agents are first-class contributors here. If you're an agent (or driving one): everything
+above is binding — the DNA filter, `AGENTS.md`, the documentation set, and the DCO. Sign off
+your commits and additionally attribute the model, e.g.
+`Co-Authored-By: <model> <noreply@…>`. The docs exist so you can contribute *correctly
+without asking*: read the ADRs and `AGENTS.md`, follow the documentation set, and when a
+decision is genuinely new, write an ADR rather than guessing silently.
 
 ## What not to commit
 

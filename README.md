@@ -121,6 +121,15 @@ templates/       project workspace templates
 - [Capabilities / feature map](docs/CAPABILITIES.md)
 - [Installation](docs/installation.md) · [Security boundaries](docs/security-boundaries.md) · [Backup & recovery](docs/backup.md)
 
+## Contributing
+
+Humans **and** AI agents are welcome. Proxima is *not meant to be "done"* — it evolves as the
+agents it drives evolve. See [CONTRIBUTING.md](CONTRIBUTING.md) (DNA filter, the documentation
+set, DCO sign-off — no CLA) and the [Architecture Decision Records](docs/adr/) for the *why*.
+
 ## License
 
-[MIT](LICENSE)
+[GNU AGPL-3.0-or-later](LICENSE). Proxima is a pure commons: you may self-host, modify, and
+even run it as a service — but any derivative, **including a hosted/SaaS one**, must keep its
+source open (AGPL §13). It cannot be closed or captured. Reasoning:
+[ADR-0002](docs/adr/0002-license-agpl.md).
