@@ -965,7 +965,7 @@ def register(app, deps):
             "FROM projects p ORDER BY last_activity DESC").fetchall()]
         workflows_out = [
             {"id": r["id"], "name": r["name"], "category": r["category"], "steps": len(_decode_json(r["steps"] or "[]"))}
-            for r in d.execute("SELECT id, name, category, steps FROM workflows WHERE status != 'archived' ORDER BY updated_at DESC, id DESC LIMIT 6").fetchall()
+            for r in d.execute("SELECT id, name, category, steps FROM workflows WHERE graph IS NULL AND status != 'archived' ORDER BY updated_at DESC, id DESC LIMIT 6").fetchall()
         ]
         now_local = _dtm.now()
         schedules_out = []

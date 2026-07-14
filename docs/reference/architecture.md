@@ -277,7 +277,9 @@ can edit or rerun a node and marks every transitive descendant stale before redi
 topological-layer layout (`graphLayout.ts`) and native SVG edges/nodes, so no graph
 library is required. The screen lists graph jobs separately from classic Activity,
 allows node and dependency edits only while queued, and exposes the correction and
-approval protocol once execution begins.
+approval protocol once execution begins. Saved graph templates are listed and reused
+only through the gated graph surface; classic workflow lists and execution remain
+strictly linear.
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.

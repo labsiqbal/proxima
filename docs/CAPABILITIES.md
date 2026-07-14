@@ -141,14 +141,16 @@ frozen `{nodes,edges}` DAG, fresh ACP session per node attempt, typed
 version/run-id guarded `node_states`. The graph API supports create/inspect/edit-plan,
 start, edit-output, rerun-node with downstream dirty propagation, approve a review
 gate, final approval, and saving a reviewed graph as a reusable workflow template.
-Disabled routes return 503 before writes, and queued `wf_node` runs are rejected before
-runner setup. The canvas supports queued-plan node/dependency editing, explicit
+Disabled routes return 503 before writes, and queued graph architect/`wf_node` runs are
+rejected before runner setup. The canvas supports queued-plan node/dependency editing, explicit
 approve-and-start, live node state, typed output correction, rerun, gate/final
 approval, and save-as-template.
-**Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/jobs/{id}`,
+**Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/templates`,
+`GET /api/graph/jobs/{id}`,
 `PATCH /api/graph/jobs/{id}/graph`, `POST /save-template`, `POST /start`,
 `PATCH /nodes/{node}/output`, `POST /nodes/{node}/rerun`,
-`/nodes/{node}/approve`, `/approve`.
+`/nodes/{node}/approve`, `/approve`. See the
+[Workflow Graph Engine guide](workflow-graph.md).
 
 ## 8. Jobs / Activity (executions)
 

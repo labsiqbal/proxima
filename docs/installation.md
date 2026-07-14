@@ -110,9 +110,9 @@ Notes:
   it is enabled.
 - Video and Design Studio are temporarily disabled by default. Image generation
   remains available without Studio bridge actions.
-- `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps the new graph workflow engine (ADR-0001)
-  inert. Its schema and flag exist but no graph routes/worker/UI run until it is on;
-  the classic linear job engine is unaffected either way.
+- `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps the graph architect, navigation, routes,
+  and worker inert. Set it to `1` and restart to use the reviewable DAG canvas; the
+  classic linear engine is unaffected either way. See [workflow-graph.md](workflow-graph.md).
 
 Restart after backend/config changes:
 

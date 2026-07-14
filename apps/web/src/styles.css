@@ -6132,11 +6132,12 @@ div.result-media {
 @container graph-screen (max-width: 52rem) {
 	.graph-workspace {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: auto var(--graph-canvas-min-height) auto;
+		grid-template-rows: var(--graph-list-max-height) var(--graph-canvas-min-height) auto;
 		overflow: auto;
 	}
 	.graph-job-list {
-		max-height: var(--graph-list-max-height);
+		height: var(--graph-list-max-height);
+		max-height: none;
 		border-right: 0;
 		border-bottom: 1px solid var(--ui-stroke-secondary);
 	}

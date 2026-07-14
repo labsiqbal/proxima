@@ -6,6 +6,7 @@ import {
   editGraphNodeOutput,
   getGraphJob,
   listGraphJobs,
+  listGraphTemplates,
   rerunGraphNode,
   saveGraphTemplate,
   startGraphJob,
@@ -16,6 +17,7 @@ import type {
   GraphNodeDefinition,
   GraphNodeState,
   GraphOutputKind,
+  GraphTemplate,
   GraphWorkflowDraft,
   Project,
   WorkflowGraph,
@@ -129,6 +131,7 @@ export function GraphScreen({
   onPendingConsumed?: () => void
 }) {
   const [jobs, setJobs] = React.useState<GraphJob[]>([])
+  const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
@@ -153,8 +156,14 @@ export function GraphScreen({
   const refreshList = React.useCallback(async () => {
     const seq = ++loadSeq.current
     try {
-      const response = await listGraphJobs(token, activeProject?.slug)
-      if (mounted.current && seq === loadSeq.current) setJobs(response.items)
+      const [jobResponse, templateResponse] = await Promise.all([
+        listGraphJobs(token, activeProject?.slug),
+        listGraphTemplates(token, activeProject?.slug),
+      ])
+      if (mounted.current && seq === loadSeq.current) {
+        setJobs(jobResponse.items)
+        setTemplates(templateResponse.items)
+      }
     } catch (cause) {
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
     }
@@ -307,7 +316,42 @@ export function GraphScreen({
     setError('')
     try {
       const template = await saveGraphTemplate(token, job.id, { name: job.title })
-      if (mounted.current) setNotice(`Saved reusable workflow “${template.name}”.`)
+      if (mounted.current) {
+        setTemplates(current => [{
+          id: template.id,
+          project_id: job.project_id,
+          project_slug: job.project_slug,
+          name: template.name,
+          status: 'active',
+          graph: job.graph,
+        }, ...current.filter(item => item.id !== template.id)])
+        setNotice(`Saved reusable workflow “${template.name}”.`)
+      }
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  async function createFromTemplate(template: GraphTemplate) {
+    if (busy) return
+    setBusy('use-template')
+    setError('')
+    try {
+      const created = await createGraphJob(token, {
+        title: template.name,
+        graph: template.graph,
+        workflow_id: template.id,
+        project_slug: activeProject?.slug ?? template.project_slug,
+        profile_id: profileId,
+      })
+      if (!mounted.current) return
+      setJob(created)
+      setPlan(created.graph)
+      setSelectedId(created.graph.nodes[0]?.id ?? null)
+      setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
+      setNotice(`Created a queued run from “${template.name}”. Review the frozen plan before starting.`)
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
@@ -356,6 +400,12 @@ export function GraphScreen({
           ? <p className="muted graph-empty-list">No graph plans yet. Promote a chat to create one.</p>
           : jobs.map(item => <button key={item.id} className={`graph-job-row${job?.id === item.id ? ' selected' : ''}`} onClick={() => void loadJob(item.id)}>
               <span>{item.title}</span><small>{statusLabel(item.status)}</small>
+            </button>)}
+        <div className="graph-list-head"><strong>Templates</strong></div>
+        {templates.length === 0
+          ? <p className="muted graph-empty-list">No saved graph templates.</p>
+          : templates.map(template => <button key={template.id} className="graph-job-row" onClick={() => void createFromTemplate(template)} disabled={!!busy}>
+              <span>{template.name}</span><small>New queued run</small>
             </button>)}
       </aside>
 

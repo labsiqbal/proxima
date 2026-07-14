@@ -90,11 +90,26 @@ def register(app, deps):
             payload["project_slug"] = project["slug"] if project else None
         return payload
 
+    def graph_template_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["graph"] = normalize_graph(payload.get("graph") or "")
+        payload["steps"] = []
+        payload["inputs"] = _decode_json(payload.get("inputs"), [])
+        if payload.get("project_id"):
+            project = db().execute(
+                "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
+            ).fetchone()
+            payload["project_slug"] = project["slug"] if project else None
+        return payload
+
     def workflow_or_404(workflow_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute(
             "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
         ).fetchone()
-        if row and not _can_access(row["created_by"], row["project_id"], user):
+        if row and (
+            row["graph"] is None
+            or not _can_access(row["created_by"], row["project_id"], user)
+        ):
             row = None
         if not row:
             raise HTTPException(status_code=404, detail="workflow not found")
@@ -272,6 +287,36 @@ def register(app, deps):
                 (user["id"], user["id"], resolved_project_id),
             ).fetchall()
         return {"items": [graph_job_payload(row) for row in rows]}
+
+    @app.get("/api/graph/templates")
+    def list_graph_templates(
+        project_id: int | None = None,
+        project_slug: str | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        require_graph()
+        resolved_project_id = (
+            _member_project_id(project_id, project_slug, user)
+            if project_id is not None or project_slug
+            else None
+        )
+        if resolved_project_id is None:
+            rows = db().execute(
+                "SELECT * FROM workflows WHERE graph IS NOT NULL AND status != 'archived' "
+                "AND (created_by = ? OR project_id IN "
+                "(SELECT id FROM projects WHERE owner_user_id = ?)) "
+                "ORDER BY updated_at DESC, id DESC",
+                (user["id"], user["id"]),
+            ).fetchall()
+        else:
+            rows = db().execute(
+                "SELECT * FROM workflows WHERE graph IS NOT NULL AND status != 'archived' "
+                "AND (created_by = ? OR project_id IN "
+                "(SELECT id FROM projects WHERE owner_user_id = ?)) "
+                "AND project_id = ? ORDER BY updated_at DESC, id DESC",
+                (user["id"], user["id"], resolved_project_id),
+            ).fetchall()
+        return {"items": [graph_template_payload(row) for row in rows]}
 
     @app.get("/api/graph/jobs/{job_id}")
     def get_graph_job(

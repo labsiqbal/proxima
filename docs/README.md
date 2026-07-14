@@ -23,6 +23,8 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |
+| [workflow-graph.md](workflow-graph.md) | How the gated workflow graph engine plans, executes, reviews, and corrects DAGs | by hand |
+| [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
@@ -94,6 +96,8 @@ docs/
 │   ├── api.md                 GENERATED  ← scripts/gen_docs.py
 │   └── database.md            GENERATED  ← scripts/gen_docs.py
 ├── CAPABILITIES.md        ← feature map (source of truth for "what does X do")
+├── workflow-graph.md      ← graph workflow feature and operator guide
+├── adding-workflow-node-type.md ← graph extension playbook
 ├── product/               ← vision + core flows
 ├── *.md (ops/dev/security)← installation, backup, developing, security…
 ├── plans/                 ← pending design (meeting-mode)

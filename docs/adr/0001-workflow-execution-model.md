@@ -149,5 +149,5 @@ single-task runs) and supersedes it for multi-step workflows over time.
 
 - Superseded by: —
 - Supersedes: — (first ADR)
-- Feature docs to follow: a workflow feature doc + an "adding a node type" extension
-  playbook, per the documentation contract in `AGENTS.md`.
+- Feature guide: [Workflow Graph Engine](../workflow-graph.md)
+- Extension playbook: [Adding a Workflow Node Type or Output Contract](../adding-workflow-node-type.md)

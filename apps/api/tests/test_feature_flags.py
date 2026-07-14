@@ -207,6 +207,7 @@ def test_disabled_features_do_not_block_ordinary_artifact_reads(tmp_path):
         ("chat", "/video queued", "chat", features.VIDEO),
         ("design", "edit scene", "chat", features.DESIGN_STUDIO),
         ("chat", "execute graph node", "wf_node", features.WORKFLOW_GRAPH),
+        ("chat", "architect graph", "workflow_graph_draft", features.WORKFLOW_GRAPH),
     ],
 )
 def test_worker_rejects_disabled_queued_work_before_runner_setup(

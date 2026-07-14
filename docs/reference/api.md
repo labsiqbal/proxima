@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-155 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+156 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -13,7 +13,7 @@
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 54 endpoints
-- [`routes/graph.py`](#routes-graph-py) — 10 endpoints
+- [`routes/graph.py`](#routes-graph-py) — 11 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
@@ -161,6 +161,7 @@
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/rerun` | `rerun_node` |  |
 | POST | `/api/graph/jobs/{job_id}/save-template` | `save_graph_template` |  |
 | POST | `/api/graph/jobs/{job_id}/start` | `start_graph_job` |  |
+| GET | `/api/graph/templates` | `list_graph_templates` |  |
 
 
 ## routes/profiles.py
@@ -257,4 +258,4 @@
 
 
 ---
-_Generated 2026-07-14 17:52 UTC._
+_Generated 2026-07-14 18:31 UTC._

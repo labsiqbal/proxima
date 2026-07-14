@@ -350,6 +350,57 @@ def test_runner_failure_marks_current_graph_node_failed_and_reviewable(tmp_path)
     assert job_status == "review"
 
 
+def test_prompt_to_artifact_graph_flow_reaches_final_review(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "research",
+                "name": "Research",
+                "instruction": "Collect verified facts",
+                "output_kind": "text",
+            },
+            {
+                "id": "deliver",
+                "name": "Deliver",
+                "instruction": "Write the final report",
+                "output_kind": "artifact-ref",
+            },
+        ],
+        "edges": [{"from": "research", "to": "deliver"}],
+    }
+    job_id = _create_graph_job(app, graph)
+    research_run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+    research_run = _finish_run_row(app, research_run_id)
+
+    app.state.worker._advance_job(research_run, "verified facts")
+
+    deliver_state = _state(app, job_id, "deliver")
+    assert deliver_state["status"] == "running"
+    deliver_run = _finish_run_row(app, deliver_state["run_id"])
+    assert "verified facts" in deliver_run["prompt"]
+    root = tmp_path / "ws" / "scratch" / "workflow-runs" / f"job-{job_id}"
+    artifact = root / "artifacts" / "report.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("final report", encoding="utf-8")
+
+    app.state.worker._advance_job(
+        deliver_run,
+        '[{"path":"artifacts/report.md","type":"document"}]',
+    )
+
+    delivered = _state(app, job_id, "deliver")
+    assert delivered["status"] == "done"
+    assert _decode_json(delivered["output"]) == [
+        {"path": "artifacts/report.md", "type": "document"}
+    ]
+    job_status = app.state.worker_db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"]
+    assert job_status == "review"
+
+
 def test_artifact_ref_contract_requires_existing_contained_paths(tmp_path):
     app = _app(tmp_path, enabled=True)
     _client(app)

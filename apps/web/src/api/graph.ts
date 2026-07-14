@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { GraphJob, WorkflowGraph } from '../types'
+import type { GraphJob, GraphTemplate, WorkflowGraph } from '../types'
 
 export type GraphJobCreate = {
   title: string
@@ -17,6 +17,11 @@ export const createGraphJob = (token: string, body: GraphJobCreate) =>
 export const listGraphJobs = (token: string, projectSlug?: string | null) => {
   const query = projectSlug ? `?project_slug=${encodeURIComponent(projectSlug)}` : ''
   return api<{ items: GraphJob[] }>(`/api/graph/jobs${query}`, token)
+}
+
+export const listGraphTemplates = (token: string, projectSlug?: string | null) => {
+  const query = projectSlug ? `?project_slug=${encodeURIComponent(projectSlug)}` : ''
+  return api<{ items: GraphTemplate[] }>(`/api/graph/templates${query}`, token)
 }
 
 export const getGraphJob = (token: string, jobId: number) =>

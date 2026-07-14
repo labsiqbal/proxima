@@ -56,6 +56,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Design canvas | **Konva** / **react-konva** | dependency retained; Design Studio disabled by default |
 | Terminal UI | **xterm.js** (`@xterm/xterm` + fit addon) | in-browser terminal |
 | Wiki graph | **react-force-graph-2d** | linked-note graph |
+| Workflow graph | Native **SVG** + pure topological layout | no workflow graph UI dependency; gated by `PROXIMA_FEATURE_WORKFLOW_GRAPH` |
 | Search | **minisearch** | client-side global search |
 | Markdown | **react-markdown** + **remark-gfm** | chat + wiki rendering |
 | Export | **jspdf**, **jszip** | retained Studio PNG/PDF/zip implementation |

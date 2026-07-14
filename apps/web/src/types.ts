@@ -232,6 +232,17 @@ export type GraphNodeState = {
 	run_id?: number | null;
 };
 
+export type GraphTemplate = {
+	id: number;
+	project_id?: number | null;
+	project_slug?: string | null;
+	name: string;
+	description?: string;
+	category?: string;
+	status: string;
+	graph: WorkflowGraph;
+};
+
 export type GraphJob = {
 	id: number;
 	project_id?: number | null;

@@ -27,7 +27,7 @@ five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 Single-user cockpit · full-power chat (live agent config) · **Home dashboard** ·
 multi-agent **brainstorm / debate** + **validate** sidecar · **workflows + jobs /
-activity with cron schedules** · in-browser terminal · interactive approval/choice
+activity with cron schedules** · gated **reviewable workflow graphs** · in-browser terminal · interactive approval/choice
 cards · projects + **link existing folders** · agent profiles as personas
 (per-profile instructions) · files + live preview · wiki + graph · dark/light +
 design tokens · daily encrypted backup.

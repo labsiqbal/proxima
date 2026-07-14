@@ -211,6 +211,15 @@ def test_gate_approval_then_final_job_approval(tmp_path):
 def test_save_reviewed_graph_as_reusable_template(tmp_path):
     app = _app(tmp_path, enabled=True)
     client = _client(app)
+    linear = client.post(
+        "/api/workflows",
+        json={"name": "Linear only", "steps": [{"name": "One", "instruction": "Do it"}]},
+    ).json()
+    rejected = client.post(
+        "/api/graph/jobs",
+        json={"title": "Wrong engine", "workflow_id": linear["id"], "graph": _chain_graph()},
+    )
+    assert rejected.status_code == 404
     job = _create(client)
 
     saved = client.post(
@@ -235,6 +244,27 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
         "SELECT workflow_id FROM jobs WHERE id = ?", (job["id"],)
     ).fetchone()
     assert linked["workflow_id"] == template["id"]
+
+    graph_templates = client.get("/api/graph/templates").json()["items"]
+    assert [item["id"] for item in graph_templates] == [template["id"]]
+    assert all(item["id"] != template["id"] for item in client.get("/api/workflows").json())
+    assert all(
+        item["id"] != template["id"]
+        for item in client.get("/api/dashboard").json()["workflows"]
+    )
+    classic_job = client.post("/api/jobs", json={"workflow_id": template["id"]})
+    assert classic_job.status_code == 404
+
+    reused = client.post(
+        "/api/graph/jobs",
+        json={
+            "title": "Second research run",
+            "workflow_id": template["id"],
+            "graph": template["graph"],
+        },
+    )
+    assert reused.status_code == 201, reused.text
+    assert reused.json()["workflow_id"] == template["id"]
 
 
 def test_graph_routes_are_inert_while_feature_is_off(tmp_path):
