@@ -46,6 +46,11 @@ design tokens · daily encrypted backup.
   finishes or needs approval, so you can leave and get pinged. *(Cockpit)*
 - **In-app Tailscale onboarding** — guided "serve + scan QR" for phone access.
   *(Self-hosted)*
+- **Relocate a project folder** — change a project's linked path from settings
+  (reuse the onboarding folder-picker) when you move/rename its folder on disk;
+  history stays since it's keyed by project id and Proxima reads the folder live —
+  only the stored path is stale. Bonus: detect a project whose folder has gone
+  missing and offer to re-point it instead of breaking silently. *(Cockpit, Self-hosted)*
 
 ## Next — the orchestration layer (the real differentiator)
 
