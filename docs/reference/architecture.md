@@ -104,7 +104,11 @@ run while it is off, so the classic linear job engine is unaffected. The pure
 `graph.py` boundary already normalizes planner/UI input to canonical edges, rejects
 cycles and invalid references, computes deterministic topological/ready sets, and
 validates each node's `text` / `json` / `artifact-ref` output contract (including
-JSON Schema definitions); it performs no DB, runner, or HTTP work.
+JSON Schema definitions); it performs no DB, runner, or HTTP work. The gated
+`graph_executor.py` adapter then selects the deterministic ready set with Phase-1
+concurrency fixed at one, snapshots explicit job/upstream data into a `wf_node` run,
+and creates a fresh hidden `sessions.job_id` thread per attempt so ACP history cannot
+leak between nodes. It queues work through `RunWorker`; it never calls a runner itself.
 
 ## Media provider setup
 

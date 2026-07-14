@@ -179,14 +179,24 @@ def test_disabled_features_do_not_block_ordinary_artifact_reads(tmp_path):
     assert client.get("/api/projects/demo/raw", headers=headers, params={"path": "artifacts/media/videos/existing.mp4"}).content == b"mp4"
     read_scene = client.get("/api/projects/demo/file", headers=headers, params={"path": "artifacts/design/existing/scene.json"})
     assert read_scene.status_code == 200
-    assert json.loads(read_scene.json()["content"])["id"] == "existing"
+    try:
+        scene_payload = json.loads(read_scene.json()["content"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise AssertionError("scene response did not contain valid JSON") from exc
+    assert scene_payload["id"] == "existing"
 
 
 @pytest.mark.parametrize(
-    ("session_mode", "prompt", "feature"),
-    [("chat", "/video queued", features.VIDEO), ("design", "edit scene", features.DESIGN_STUDIO)],
+    ("session_mode", "prompt", "run_kind", "feature"),
+    [
+        ("chat", "/video queued", "chat", features.VIDEO),
+        ("design", "edit scene", "chat", features.DESIGN_STUDIO),
+        ("chat", "execute graph node", "wf_node", features.WORKFLOW_GRAPH),
+    ],
 )
-def test_worker_rejects_disabled_queued_work_before_runner_setup(tmp_path, monkeypatch, session_mode, prompt, feature):
+def test_worker_rejects_disabled_queued_work_before_runner_setup(
+    tmp_path, monkeypatch, session_mode, prompt, run_kind, feature
+):
     app, client, headers, _root = _client_with_project(tmp_path)
     owner = app.state.worker_db.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
     profile = app.state.worker_db.execute("SELECT * FROM profiles LIMIT 1").fetchone()
@@ -197,8 +207,17 @@ def test_worker_rejects_disabled_queued_work_before_runner_setup(tmp_path, monke
     ).lastrowid
     run_id = app.state.worker_db.execute(
         "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, hermes_home, kind) "
-        "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, 'chat')",
-        (session, project, owner, profile["id"], profile["runner_id"], prompt, profile["hermes_home"]),
+        "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+        (
+            session,
+            project,
+            owner,
+            profile["id"],
+            profile["runner_id"],
+            prompt,
+            profile["hermes_home"],
+            run_kind,
+        ),
     ).lastrowid
     run = dict(app.state.worker_db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
     monkeypatch.setattr("proxima_api.worker.runner_spec", lambda *_: pytest.fail("runner setup called"))
@@ -207,7 +226,10 @@ def test_worker_rejects_disabled_queued_work_before_runner_setup(tmp_path, monke
 
     saved = app.state.worker_db.execute("SELECT status, error FROM runs WHERE id = ?", (run_id,)).fetchone()
     assert dict(saved) == {"status": "failed", "error": f"feature_disabled:{feature}"}
-    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ?", (session,)).fetchone()["c"] == 0
+    message_count = app.state.worker_db.execute(
+        "SELECT COUNT(*) AS c FROM messages WHERE session_id = ?", (session,)
+    ).fetchone()["c"]
+    assert message_count == 0
 
 
 def test_disabled_design_session_secondary_actions_do_not_write(tmp_path):
@@ -254,6 +276,8 @@ def test_agent_guidance_omits_disabled_features(tmp_path):
     capabilities = workflows.build_capability_preamble()
 
     for text in (preamble, capabilities):
+        if text is None:
+            raise AssertionError("agent guidance unexpectedly returned no text")
         assert "Design Studio" not in text
         assert "Video Studio" not in text
         assert "artifacts/design" not in text

@@ -41,6 +41,7 @@ from .prompt_collaborations import (
     format_final,
     loads_list,
 )
+from .graph_executor import GRAPH_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
 from .run_summaries import RunSummaries
 from .run_advancers import RunAdvancers
@@ -49,12 +50,32 @@ from .run_outputs import RunOutputs
 from .run_drafts import RunDrafts
 
 
+def _as_int(value: Any) -> int:
+    """Convert trusted config/SQLite identifiers with an explicit failure boundary."""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
+def _json_array(value: Any) -> list[Any]:
+    """Decode one SQLite JSON-array column at an explicit failure boundary."""
+    try:
+        decoded = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("expected a JSON array") from exc
+    if not isinstance(decoded, list):
+        raise ValueError("expected a JSON array")
+    return decoded
+
+
 class RunWorker:
     def __init__(self, app: FastAPI):
         self.app = app
         self.reaper = RunReaper(app, self._fail_interrupted)
         self.summaries = RunSummaries(app)
         self.advancers = RunAdvancers(app)
+        self.graph_executor = GraphExecutor(app)
         self.prompting = RunPrompting(app)
         self.outputs = RunOutputs(app)
         self.drafts = RunDrafts(app)
@@ -89,16 +110,16 @@ class RunWorker:
             self.run_tasks.pop(run_id, None)
             try:
                 task.result()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as _exc:
                 pass
             except Exception as exc:
                 logging.getLogger("proxima.worker").exception("run task %s crashed: %s", run_id, exc)
 
     async def loop(self) -> None:
         cfg = self.app.state.config
-        poll = max(0.05, int(cfg.get("run_worker_poll_interval_ms", 250)) / 1000)
-        concurrency = max(1, int(cfg.get("run_worker_concurrency") or 1))
-        stale_seconds = int(cfg.get("run_stale_seconds") or 60)
+        poll = max(0.05, _as_int(cfg.get("run_worker_poll_interval_ms", 250)) / 1000)
+        concurrency = max(1, _as_int(cfg.get("run_worker_concurrency") or 1))
+        stale_seconds = _as_int(cfg.get("run_stale_seconds") or 60)
         reap_every = max(5.0, stale_seconds / 2)
         last_reap = 0.0
         while not self.stop_event.is_set():
@@ -114,14 +135,14 @@ class RunWorker:
                     run = self.claim_run()
                     if not run:
                         break
-                    run_id = int(run["id"])
+                    run_id = _as_int(run["id"])
                     self.run_tasks[run_id] = asyncio.create_task(self.execute_run(run), name=f"proxima-run-{run_id}")
                     claimed = True
                 if not claimed:
                     await asyncio.sleep(poll)
                 else:
                     await asyncio.sleep(0)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as _exc:
                 raise
             except Exception as exc:
                 print(f"run worker error: {exc}", flush=True)
@@ -129,7 +150,7 @@ class RunWorker:
 
     def claim_run(self) -> dict[str, Any] | None:
         db = self.app.state.worker_db
-        stale_seconds = int(getattr(self.app.state, "config", {}).get("run_stale_seconds") or 60)
+        stale_seconds = _as_int(getattr(self.app.state, "config", {}).get("run_stale_seconds") or 60)
         self.reap_stale_run_blockers(stale_seconds)
         with self.app.state.db_lock:
             # Per-session serialization: normal chat runs must not overlap. Prompt
@@ -256,7 +277,7 @@ class RunWorker:
                             "UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = (SELECT parent_run_id FROM prompt_collaborations WHERE id = ?)",
                             (row["collaboration_id"],),
                         )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as _exc:
             raise
 
     def add_event(self, run_id: int, session_id: int, project_id: int | None, event_type: str, payload: dict[str, Any]) -> None:
@@ -270,7 +291,7 @@ class RunWorker:
         if event_type in {"message.delta", "reasoning.delta", "tool.start", "tool.complete", "approval.request"} and live["status"] != "running":
             return
         seq_row = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM events WHERE run_id = ?", (run_id,)).fetchone()
-        seq = int(seq_row["next_seq"])
+        seq = _as_int(seq_row["next_seq"])
         db.execute(
             "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) VALUES (?, ?, ?, ?, ?, ?)",
             (run_id, session_id, project_id, seq, event_type, json.dumps(payload)),
@@ -281,6 +302,10 @@ class RunWorker:
         self.advancers.advance_goal(run, answer, self.add_event)
 
     def _advance_job(self, run: dict[str, Any], answer: str) -> None:
+        # Graph completions get their typed/stateful advancer in Phase 1.4. Never
+        # let them fall through the classic steps_state/current_step_idx cursor.
+        if run.get("kind") == GRAPH_NODE_RUN_KIND:
+            return
         self.advancers.advance_job(run, answer, self.add_event, self._produced_artifacts)
 
     def _complete_message_review(self, run: dict[str, Any], answer: str, stop_reason: str | None) -> bool:
@@ -288,8 +313,8 @@ class RunWorker:
         if kind not in {"message_review", "message_review_merge"}:
             return False
         db = self.app.state.worker_db
-        run_id = int(run["id"])
-        session_id = int(run["session_id"])
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
         if kind == "message_review_merge":
             with self.app.state.db_lock:
@@ -366,9 +391,9 @@ class RunWorker:
         collab = collab or db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
         if not collab:
             return
-        profile = profile or self._collaboration_profile(int(run["profile_id"] if isinstance(run, sqlite3.Row) else run.get("profile_id") or 0))
-        run_id = int(run["id"] if isinstance(run, sqlite3.Row) else run["id"])
-        session_id = int(run["session_id"] if isinstance(run, sqlite3.Row) else run["session_id"])
+        profile = profile or self._collaboration_profile(_as_int(run["profile_id"] if isinstance(run, sqlite3.Row) else run.get("profile_id") or 0))
+        run_id = _as_int(run["id"] if isinstance(run, sqlite3.Row) else run["id"])
+        session_id = _as_int(run["session_id"] if isinstance(run, sqlite3.Row) else run["session_id"])
         project_id = run["project_id"] if isinstance(run, sqlite3.Row) else run.get("project_id")
         role = run["collaboration_role"] if isinstance(run, sqlite3.Row) else run.get("collaboration_role")
         self.add_event(run_id, session_id, project_id, f"collaboration.child.{event_type}", collaboration_card_payload(dict(collab), run_id, profile, role, status, text, error))
@@ -385,8 +410,8 @@ class RunWorker:
             """,
             (collab["session_id"], collab["project_id"], collab["user_id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"], kind, collab["id"], role),
         )
-        run_id = int(cur.lastrowid)
-        ids = [int(x) for x in json.loads(collab["child_run_ids"] or "[]")]
+        run_id = _as_int(cur.lastrowid)
+        ids = [_as_int(x) for x in _json_array(collab["child_run_ids"])]
         ids.append(run_id)
         db.execute("UPDATE prompt_collaborations SET child_run_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (json.dumps(ids), collab["id"]))
         self.add_event(run_id, collab["session_id"], collab["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": kind, "collaboration_id": collab["id"], "role": role})
@@ -404,18 +429,18 @@ class RunWorker:
             return
         self.app.state.worker_db.execute("UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_id,))
         if text:
-            self.add_event(int(parent_id), collab["session_id"], collab["project_id"], "message.delta", {"text": text})
+            self.add_event(_as_int(parent_id), collab["session_id"], collab["project_id"], "message.delta", {"text": text})
 
     def _finish_collaboration(self, collab: sqlite3.Row, outputs: list[dict[str, Any]], synthesis: str, stop_reason: str | None) -> None:
         db = self.app.state.worker_db
-        parent_id = int(collab["parent_run_id"])
+        parent_id = _as_int(collab["parent_run_id"])
         final = format_final(collab["mode"], collab["prompt"], outputs, synthesis)
         self.outputs.save_assistant_message(parent_id, collab["session_id"], collab["project_id"], final, collab["mode"].title(), [], self.add_event)
         msg = db.execute("SELECT id FROM messages WHERE run_id = ? ORDER BY id DESC LIMIT 1", (parent_id,)).fetchone()
         # Guarded: a concurrent cancel (chat.py cancel_run) may have set this
         # collaboration terminal — don't overwrite it back to 'done'.
         state.guarded_transition(
-            db, "prompt_collaborations", int(collab["id"]), "done",
+            db, "prompt_collaborations", _as_int(collab["id"]), "done",
             state.non_terminal(state.COLLABORATION),
             set_extra="final_message_id = ?, updated_at = CURRENT_TIMESTAMP",
             set_params=(msg["id"] if msg else None,),
@@ -435,16 +460,16 @@ class RunWorker:
         collab_id = run.get("collaboration_id")
         if not collab_id:
             return False
-        run_id = int(run["id"])
-        session_id = int(run["session_id"])
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
         with self.app.state.db_lock:
             collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
             if not collab:
                 return False
-            profile = self._collaboration_profile(int(run.get("profile_id") or 0))
+            profile = self._collaboration_profile(_as_int(run.get("profile_id") or 0))
             outputs = loads_list(collab["child_outputs"])
-            outputs = [o for o in outputs if int(o.get("run_id") or 0) != run_id]
+            outputs = [o for o in outputs if _as_int(o.get("run_id") or 0) != run_id]
             if not kind.endswith("_synthesis"):
                 outputs.append({
                     "run_id": run_id,
@@ -478,7 +503,7 @@ class RunWorker:
                 # created (before any child is queued), so it is the reliable
                 # expected child count: synthesize only once every expected child
                 # exists AND none is still in flight.
-                expected = len(json.loads(collab["profile_ids"] or "[]"))
+                expected = len(_json_array(collab["profile_ids"]))
                 created = db.execute(
                     "SELECT COUNT(*) AS c FROM runs WHERE collaboration_id = ? AND kind = 'collab_brainstorm_child'",
                     (collab_id,),
@@ -491,7 +516,7 @@ class RunWorker:
                 self._add_collaboration_progress(collab)
                 if all_children_done and not collab["synthesis_run_id"]:
                     outputs = loads_list(collab["child_outputs"])
-                    synth_profile = self._collaboration_profile(int(json.loads(collab["profile_ids"] or "[]")[0]))
+                    synth_profile = self._collaboration_profile(_as_int(_json_array(collab["profile_ids"])[0]))
                     synth_id = self._queue_collaboration_run(collab, synth_profile, build_brainstorm_synthesis_prompt(collab["prompt"], outputs), "collab_brainstorm_synthesis", "synthesis")
                     db.execute("UPDATE prompt_collaborations SET synthesis_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (synth_id, collab_id))
                     # Stream the result header now; the synthesis text follows via
@@ -500,7 +525,7 @@ class RunWorker:
                 return True
 
             if kind.startswith("collab_debate_") and kind != "collab_debate_synthesis":
-                profile_ids = [int(x) for x in json.loads(collab["profile_ids"] or "[]")]
+                profile_ids = [_as_int(x) for x in _json_array(collab["profile_ids"])]
                 target_rounds = self._debate_round_target()
                 debate_outputs = [o for o in outputs if o.get("role") != "synthesis"]
                 if len(debate_outputs) < target_rounds:
@@ -534,13 +559,13 @@ class RunWorker:
         if not collab:
             return
         state.guarded_transition(
-            db, "prompt_collaborations", int(collab["id"]), "failed",
+            db, "prompt_collaborations", _as_int(collab["id"]), "failed",
             state.non_terminal(state.COLLABORATION),
             set_extra="error = ?, updated_at = CURRENT_TIMESTAMP", set_params=(error,),
         )
         parent_id = collab["parent_run_id"]
         failed_run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-        failed_profile = self._collaboration_profile(int(failed_run["profile_id"] if failed_run else 0))
+        failed_profile = self._collaboration_profile(_as_int(failed_run["profile_id"] if failed_run else 0))
         siblings = db.execute(
             "SELECT * FROM runs WHERE collaboration_id = ? AND id != ? AND (? IS NULL OR id != ?) AND status IN ('queued','running')",
             (collab["id"], run_id, parent_id, parent_id),
@@ -550,7 +575,7 @@ class RunWorker:
             (collab["id"], run_id, parent_id, parent_id),
         )
         for sibling in siblings:
-            sid = int(sibling["id"])
+            sid = _as_int(sibling["id"])
             self.add_event(sid, sibling["session_id"], sibling["project_id"], "run.cancelled", {"kind": "collaboration"})
             self._emit_collaboration_child_event("cancelled", sibling, "cancelled", collab=collab)
             self.cancel(sid)
@@ -562,7 +587,7 @@ class RunWorker:
             self._emit_collaboration_child_event("failed", failed_run, "failed", error=error, collab=collab, profile=failed_profile)
         if parent_id:
             db.execute("UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'", (error, parent_id))
-            self.add_event(int(parent_id), collab["session_id"], collab["project_id"], "run.failed", {"error": error, "kind": f"collab_{collab['mode']}"})
+            self.add_event(_as_int(parent_id), collab["session_id"], collab["project_id"], "run.failed", {"error": error, "kind": f"collab_{collab['mode']}"})
         self.add_event(run_id, session_id, project_id, "run.failed", {"error": error, "kind": "collaboration"})
 
     def _fail_message_review(self, run_id: int, session_id: int, project_id: int | None, error: str) -> None:
@@ -621,8 +646,8 @@ class RunWorker:
     async def execute_run(self, run: dict[str, Any]) -> None:
         db = self.app.state.worker_db
         cfg = self.app.state.config
-        run_id = int(run["id"])
-        session_id = int(run["session_id"])
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
         project_id = run["project_id"]
         mode_row = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
         session_mode = (mode_row["mode"] if mode_row else None) or "chat"
@@ -672,7 +697,7 @@ class RunWorker:
                 (run["collaboration_id"],),
             ).fetchone()
             if crow and crow["parent_run_id"]:
-                synth_parent_id = int(crow["parent_run_id"])
+                synth_parent_id = _as_int(crow["parent_run_id"])
 
         def on_update(u: dict[str, Any]) -> None:
             kind = u.get("sessionUpdate")
@@ -732,7 +757,7 @@ class RunWorker:
                 self.active_runs,
             )
             hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
-            timeout = int(cfg.get("run_timeout_seconds") or 600)
+            timeout = _as_int(cfg.get("run_timeout_seconds") or 600)
             # Session kind is authoritative: a design session's runs are always framed as
             # design server-side, so a message that reaches it by any path is handled as a
             # design edit — never misread as a generic request (defense behind the UI gating).
@@ -885,12 +910,12 @@ class RunWorker:
                     await self._write_auto_log(run, proc, acp_sid)
                 except Exception:
                     logging.getLogger("proxima.worker").exception("auto-log failed (non-fatal)")
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as _exc:
             # Graceful shutdown: close the run cleanly (salvaging streamed text)
             # instead of leaving it orphaned in 'running'.
             self._fail_interrupted(run_id, session_id, project_id, "Interrupted by server shutdown")
             raise
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as _exc:
             # Abort the agent's turn so it stops working in the background and the
             # next message isn't "queued for the next turn" against a busy session.
             # session/cancel is best-effort and a turn wedged inside a blocking

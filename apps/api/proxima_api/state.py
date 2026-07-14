@@ -55,6 +55,19 @@ REVIEW: Mapping[str, set[str]] = {
     "cancelled": set(),
 }
 
+# Graph workflow node lifecycle (ADR-0001). Unlike RUN/JOB rows, node states
+# carry an optimistic-concurrency version and use guarded_versioned_transition.
+NODE: Mapping[str, set[str]] = {
+    "pending": {"ready", "stale", "skipped"},
+    "ready": {"running", "stale", "skipped"},
+    "running": {"done", "review", "failed", "stale"},
+    "review": {"done", "failed", "stale"},
+    "done": {"stale"},
+    "failed": {"ready", "stale"},
+    "stale": {"ready", "skipped"},
+    "skipped": {"stale"},
+}
+
 # The set of statuses across all machines that no transition may leave.
 TERMINAL: frozenset[str] = frozenset({"completed", "failed", "cancelled", "done"})
 
@@ -94,14 +107,116 @@ def guarded_transition(
     finished_at=CURRENT_TIMESTAMP"``); its bound values go in ``set_params`` and
     are spliced in immediately after ``status``.
     """
-    froms = list(dict.fromkeys(allowed_from))  # de-dupe, preserve order
-    if not froms:
+    source_statuses = list(dict.fromkeys(allowed_from))  # de-dupe, preserve order
+    if not source_statuses:
         raise ValueError("allowed_from must be non-empty")
-    placeholders = ",".join("?" for _ in froms)
+    placeholders = ",".join("?" for _ in source_statuses)
     extra = f", {set_extra}" if set_extra else ""
     sql = (
         f"UPDATE {table} SET status = ?{extra} "
         f"WHERE id = ? AND status IN ({placeholders})"
     )
-    cur = cx.execute(sql, (to, *set_params, row_id, *froms))
+    cur = cx.execute(sql, (to, *set_params, row_id, *source_statuses))
+    return (cur.rowcount or 0) > 0
+
+
+_UNSET = object()
+_NODE_STATUS_SLOTS = 8
+
+
+def guarded_node_transition(
+    cx: sqlite3.Connection,
+    row_id: int,
+    to: str,
+    allowed_from: Iterable[str],
+    expected_version: int,
+    *,
+    run_id: int | None | object = _UNSET,
+    inputs: str | None | object = _UNSET,
+    output_kind: str | None | object = _UNSET,
+    output: str | None | object = _UNSET,
+    checkpoint: str | None | object = _UNSET,
+    error: str | None | object = _UNSET,
+    mark_started: bool = False,
+    clear_started: bool = False,
+    mark_finished: bool = False,
+    clear_finished: bool = False,
+    expected_run_id: int | None | object = _UNSET,
+) -> bool:
+    """CAS one ``node_states`` row and increment ``version`` exactly once.
+
+    The SQL shape is fixed deliberately: node state is a security/correctness
+    boundary written by both request and worker threads, so callers pass values,
+    never table names or SQL fragments. ``expected_run_id`` rejects late callbacks
+    from older rerun attempts.
+    """
+    source_statuses = list(dict.fromkeys(allowed_from))
+    if not source_statuses:
+        raise ValueError("allowed_from must be non-empty")
+    if len(source_statuses) > _NODE_STATUS_SLOTS:
+        raise ValueError("too many allowed node statuses")
+    illegal_sources = [status for status in source_statuses if not can(NODE, status, to)]
+    if illegal_sources:
+        raise ValueError(
+            f"illegal node transition to {to!r} from: {', '.join(illegal_sources)}"
+        )
+    padded_source_statuses = [
+        *source_statuses,
+        *([""] * (_NODE_STATUS_SLOTS - len(source_statuses))),
+    ]
+
+    def optional(value: object) -> tuple[int, object | None]:
+        return (0, None) if value is _UNSET else (1, value)
+
+    set_run_id, run_id_value = optional(run_id)
+    set_inputs, inputs_value = optional(inputs)
+    set_output_kind, output_kind_value = optional(output_kind)
+    set_output, output_value = optional(output)
+    set_checkpoint, checkpoint_value = optional(checkpoint)
+    set_error, error_value = optional(error)
+    guard_run_id, expected_run_id_value = optional(expected_run_id)
+
+    cur = cx.execute(
+        """
+        UPDATE node_states
+        SET status = ?,
+            version = version + 1,
+            run_id = CASE WHEN ? THEN ? ELSE run_id END,
+            inputs = CASE WHEN ? THEN ? ELSE inputs END,
+            output_kind = CASE WHEN ? THEN ? ELSE output_kind END,
+            output = CASE WHEN ? THEN ? ELSE output END,
+            checkpoint = CASE WHEN ? THEN ? ELSE checkpoint END,
+            error = CASE WHEN ? THEN ? ELSE error END,
+            started_at = CASE
+                WHEN ? THEN CURRENT_TIMESTAMP
+                WHEN ? THEN NULL
+                ELSE started_at
+            END,
+            finished_at = CASE
+                WHEN ? THEN CURRENT_TIMESTAMP
+                WHEN ? THEN NULL
+                ELSE finished_at
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND version = ?
+          AND status IN (?, ?, ?, ?, ?, ?, ?, ?)
+          AND (? = 0 OR run_id IS ?)
+        """,
+        (
+            to,
+            set_run_id, run_id_value,
+            set_inputs, inputs_value,
+            set_output_kind, output_kind_value,
+            set_output, output_value,
+            set_checkpoint, checkpoint_value,
+            set_error, error_value,
+            mark_started, clear_started,
+            mark_finished, clear_finished,
+            row_id,
+            expected_version,
+            *padded_source_statuses,
+            guard_run_id, expected_run_id_value,
+        ),
+    )
     return (cur.rowcount or 0) > 0
