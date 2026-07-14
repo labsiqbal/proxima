@@ -43,6 +43,8 @@ npm --prefix apps/web run build
 ```
 
 Use `python -m pytest`; plain `uv run pytest` is known to fail to spawn in this environment.
+The root `pyrightconfig.json` points Python language servers at `apps/api` and its
+`.venv`, so the nested `proxima_api` package resolves when the repo root is opened.
 
 Packaged local serve:
 

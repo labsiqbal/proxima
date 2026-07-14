@@ -4,7 +4,7 @@ _Hand-maintained. Verify versions against `apps/api/pyproject.toml` and
 `apps/web/package.json` when they change._
 
 Proxima is a two-part app in one repo: a **Python/FastAPI backend** (`apps/api`)
-and a **React/TypeScript PWA frontend** (`apps/web`). It is a *control plane* — it
+and a **React/TypeScript PWA frontend** (`apps/web`). It is a _control plane_ — it
 drives AI coding-agent CLIs you already own over the **Agent Client Protocol (ACP)**;
 it ships no model and no credentials of its own.
 
@@ -16,6 +16,7 @@ it ships no model and no credentials of its own.
 | Web framework | **FastAPI** (`>=0.115`) | REST + WebSocket + SSE |
 | ASGI server | **Uvicorn** (`>=0.30`) | entrypoint `proxima_api.main:app` |
 | Data validation | **Pydantic v2** (`>=2.8`) | request models in `schemas.py` |
+| JSON contracts | **jsonschema** (`>=4.23`) | validates graph-node output schemas before execution |
 | HTTP client | **httpx** (`>=0.27`) | outbound calls (image providers, Cloudflare, proxy) |
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
@@ -31,7 +32,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 ### Key backend concepts
 
 - **ACP runners** (`acp.py`, `runners.py`, `runner_specs.py`) — each supported CLI
-  (Claude Code, Codex, Gemini CLI, Hermes) is described by a *runner spec* (spawn
+  (Claude Code, Codex, Gemini CLI, Hermes) is described by a _runner spec_ (spawn
   argv + credential home + readiness check). The app spawns one ACP subprocess per
   `(runner, home, cwd)` on demand.
 - **Run worker** (`worker.py`) — a bounded-concurrency background worker that
@@ -66,7 +67,7 @@ fetch wrappers to the backend), `src/hooks`, `src/lib`, `src/theme.ts` (6 themes
 
 ## Runtime & operations
 
-- **Database & runtime data** live *outside* the repo, under
+- **Database & runtime data** live _outside_ the repo, under
   `~/.local/share/proxima/` (DB, workspace, per-profile agent homes, backups)
   and `~/.config/proxima/proxima.env` (config). See
   [architecture.md](architecture.md#runtime--repo-split).

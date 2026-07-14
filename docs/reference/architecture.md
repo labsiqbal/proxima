@@ -83,7 +83,8 @@ code never mixes with per-install state:
 
 ```text
 PROXIMA_FEATURE_VIDEO=0 ───────────────┐
-PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┼─> GET /api/config ─> frontend capability map
+PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┤
+PROXIMA_FEATURE_WORKFLOW_GRAPH=0 ──────┼─> GET /api/config ─> frontend capability map
                                        └─> route/run guards before side effects
 ```
 
@@ -94,6 +95,16 @@ calling providers, spawning processes, or dispatching collaboration. The fronten
 uses the published flags to omit navigation, deep links, commands, settings,
 provider health checks, bridge actions, and agent guidance. Image generation remains
 enabled, and existing media files remain readable as ordinary artifacts.
+
+`PROXIMA_FEATURE_WORKFLOW_GRAPH` gates the new graph workflow engine (ADR-0001).
+It is the **master safety switch** for that engine: its schema (`jobs.engine`,
+`jobs.graph`, `workflows.graph`, the `node_states` table) and the flag exist, but the
+engine is **inert** until the flag is turned on — no graph routes, worker path, or UI
+run while it is off, so the classic linear job engine is unaffected. The pure
+`graph.py` boundary already normalizes planner/UI input to canonical edges, rejects
+cycles and invalid references, computes deterministic topological/ready sets, and
+validates each node's `text` / `json` / `artifact-ref` output contract (including
+JSON Schema definitions); it performs no DB, runner, or HTTP work.
 
 ## Media provider setup
 
@@ -121,6 +132,9 @@ agent turn each); a run emits ordered `events` that stream to the UI. Repeatable
 is a `workflow` (recipe, steps as JSON); one execution is a `job` (frozen step
 snapshot + state); a `schedule` fires jobs on cron. `tasks` are a kanban surface
 unified onto the jobs model. `agent_sessions` maps a chat to its per-home ACP session.
+A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
+and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-node state
+in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_GRAPH`.
 Full column-level detail: [database.md](database.md).
 
 ## Key flows

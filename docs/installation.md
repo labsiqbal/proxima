@@ -99,6 +99,7 @@ PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_VIDEO=0
 PROXIMA_FEATURE_DESIGN_STUDIO=0
+PROXIMA_FEATURE_WORKFLOW_GRAPH=0
 ```
 
 Notes:
@@ -109,6 +110,9 @@ Notes:
   it is enabled.
 - Video and Design Studio are temporarily disabled by default. Image generation
   remains available without Studio bridge actions.
+- `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps the new graph workflow engine (ADR-0001)
+  inert. Its schema and flag exist but no graph routes/worker/UI run until it is on;
+  the classic linear job engine is unaffected either way.
 
 Restart after backend/config changes:
 

@@ -19,7 +19,7 @@
 The foundation everything leans on. Least allowed to change casually.
 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | Auth & Session Tokens | active | `routes/auth.py`, `route_deps.py` (`current_user`), `main.py` (`/api/preview-auth`) | `api/client.ts`, `App.tsx` | `users`, `auth_sessions` | gates every route, Preview Proxy |
 | Health / Config / Feature Flags | active | `main.py` (`/api/health`, `/api/config`), `features.py` | `features.ts`, `api/config.ts` | — | Design/Video Studio gates |
 | Projects & FS Linking | active | `routes/projects.py`, `fsapi.py` | `screens/ProjectsScreen.tsx` | `projects` | files, tasks, wiki, apps, workflows |
@@ -32,6 +32,7 @@ The foundation everything leans on. Least allowed to change casually.
 | Provisioning & Migrations | active | `provisioning.py`, `migrations.py`, `db.py`, `profile_seed.py` | — | `schema_migrations`, all | startup |
 
 **Notes**
+
 - *Event Log & Streaming* — `events.id` (autoincrement) is the de-facto global cursor and SSE resumes correctly via `after_id`. But **WS reconnect hardcodes `last_id=0`** → replays the whole session (duplicate transcript), and `worker.add_event` **drops streaming events once a run leaves `running`** (cancel mid-stream loses text). `seq = MAX(seq)+1` is race-safe only by the single-writer + `db_lock` convention.
 - *Reaper* — stale-run reaping is purely time-based (60s heartbeat), no lease → a genuinely-live long run can be false-positive killed under CPU/lock contention.
 - *Provisioning & Migrations* — mixed strategy (`SCHEMA` + idempotent `_add_column` each boot). Missing FKs on `messages.run_id`, `sessions.task_id/job_id/workflow_id`.
@@ -43,7 +44,7 @@ The foundation everything leans on. Least allowed to change casually.
 The primary gate. Everything reachable from a chat. This is the surface that keeps breaking on feature adds — the isolation target.
 
 | Feature | Status | Backend | Frontend | Relates to |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Composer / input | active | `routes/chat.py` → `create_run` | `components/chat/Composer.tsx`, `ChatScreen.tsx` | core chat/runs |
 | File attach / upload | active | `routes/files.py` (upload) | `Composer.tsx`, `api/files.ts` | files, artifacts |
 | Slash commands | active | `commands.py`, `/api/commands/catalog` | `Composer.tsx`, `ChatScreen.tsx` (`localCommandReply`) | sessions, projects, runners |
@@ -70,6 +71,7 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 | Reasoning-token panel | dead | — | — | — |
 
 **Notes**
+
 - *Brainstorm* — setup publishes children before `child_run_ids` is persisted → synthesis can fire after one child; double-writer on `child_run_ids` can be overwritten.
 - *Cancel run* — runs on the request thread with no `db_lock`/transaction, races the worker → a cancelled collaboration can keep running and flip back to `done`.
 - *Goal loop* — advance-vs-cancel TOCTOU: advancer reads `goal_status='running'` then writes blind, can overwrite a concurrent cancel and spawn one extra turn.
@@ -84,8 +86,8 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 Larger capabilities that stand as modules. Target state: each touches core only through a contract, never core tables directly.
 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
-|---|---|---|---|---|---|
-| Workflows & Jobs | active | `routes/work.py`, `workflows.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx` | `workflows`, `jobs`, `sessions` | scheduler, run lifecycle |
+| --- | --- | --- | --- | --- | --- |
+| Workflows & Jobs | active | `routes/work.py`, `workflows.py`, `graph.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx` | `workflows`, `jobs`, `node_states`, `sessions` | scheduler, run lifecycle |
 | **Cron Scheduling** | **risk** | `routes/work.py`, `scheduler.py`, `main.py` loop | `WorkflowsScreen.tsx` | `schedules`, `jobs`, `workflows` | workflows/jobs |
 | **Tasks (Kanban)** | **risk** | `routes/tasks.py` | `TasksScreen.tsx`, `TaskChat.tsx` | `tasks`, `sessions` | sessions, jobs |
 | Wiki Memory | active | `routes/wiki.py`, `wiki_memory.py`, `run_summaries.py` | `WikiScreen.tsx`, `WikiGraph.tsx` | — (FS wiki) | run lifecycle, tasks |
@@ -104,6 +106,8 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | PWA / Static serving | active | `frontend_static.py` | `src/pwa.ts`, `public/` | — | tab label |
 
 **Notes**
+
+- *Workflows & Jobs — graph engine foundation (ADR-0001)* — the `jobs.engine` discriminator (`linear`|`graph`), `jobs.graph`/`workflows.graph`, the `node_states` table (per-node durable state + `version`), and pure DAG/I/O-contract primitives in `graph.py` have landed. Gated `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`, **inert**: no graph routes/worker/UI exist yet; `list_jobs` filters to `engine='linear'` so graph jobs can't reach the linear Activity screen. Linear jobs (`current_step_idx` + `steps_state`) are the only live path.
 - *Cron Scheduling* — `last_run_minute` check-and-set is not atomic (lock released in between); safe only because there is a single scheduler task. No DB-level claim.
 - *Tasks* — **duplication**: the `tasks` table is still live *alongside* `jobs`. Two routed kanbans (Tasks screen vs Activity) whose status can contradict; a task-backed session carries both `sessions.task_id` and `sessions.job_id`.
 - *Artifacts* — `produced_artifacts`/`output_links` are free-floating JSON blobs pointing at filesystem paths with no artifact table; can reference deleted files, and concurrent read-modify-write can lose updates.
@@ -117,7 +121,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 Every card on the Home ("Command Center") dashboard and the Activity screen. Home = one `GET /api/dashboard` call (polled 5s). Activity = `GET /api/jobs`.
 
 | Card | Status | Data source | Renders in |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Home · Headline status flag | active | `/api/dashboard` (pendingApprovals, reviewCount, activeSessions) | `HomeScreen.tsx:108-119` |
 | Home · Quick actions (6 buttons) | active | `/api/dashboard` | `HomeScreen.tsx:122-129` |
 | Home · Activity log (C1) | active | `/api/dashboard` (recent, activeSessions) | `HomeScreen.tsx:134-146` |
@@ -134,6 +138,7 @@ Every card on the Home ("Command Center") dashboard and the Activity screen. Hom
 | Activity · Job detail (flow + steps + review bar + artifact chips) | active | `GET /api/jobs/{id}`, `POST /api/jobs/{id}/approve` | `ActivityScreen.tsx:136-191` |
 
 **Notes**
+
 - The only data-viz on Home is the C2 task-status segmented bar. There is no chart/sparkline library; `runsPerDay` is a returned-but-unrendered time series.
 - Activity list auto-refreshes every 2.5 s while any job is `queued`/`running`; Job-detail step polls 1.5 s while running.
 - Design-open from a Job-detail artifact chip is gated on `designStudioEnabled`.
