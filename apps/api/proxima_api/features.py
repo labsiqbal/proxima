@@ -7,15 +7,18 @@ from fastapi import HTTPException
 
 VIDEO = "video"
 DESIGN_STUDIO = "design_studio"
+WORKFLOW_GRAPH = "workflow_graph"
 
 _CONFIG_KEYS = {
     VIDEO: "feature_video",
     DESIGN_STUDIO: "feature_design_studio",
+    WORKFLOW_GRAPH: "feature_workflow_graph",
 }
 
 _DISPLAY_NAMES = {
     VIDEO: "Video",
     DESIGN_STUDIO: "Design Studio",
+    WORKFLOW_GRAPH: "Workflow Graph",
 }
 
 _COMMAND_FEATURES = {
@@ -39,6 +42,7 @@ def public_flags(config: Mapping[str, Any] | None) -> dict[str, bool]:
     return {
         VIDEO: enabled(config, VIDEO),
         DESIGN_STUDIO: enabled(config, DESIGN_STUDIO),
+        WORKFLOW_GRAPH: enabled(config, WORKFLOW_GRAPH),
     }
 
 

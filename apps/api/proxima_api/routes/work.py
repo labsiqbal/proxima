@@ -242,6 +242,11 @@ def register(app, deps):
         # Single-user: scope to the owner's own jobs + jobs in projects they own.
         where = ["(created_by = ? OR project_id IN (SELECT id FROM projects WHERE owner_user_id = ?))"]
         args: list[Any] = [user["id"], user["id"]]
+        # Coexistence (ADR-0001): the linear Activity list only shows linear jobs.
+        # Graph jobs (engine='graph') carry no steps_state and are served by the
+        # graph engine's own surface — keep them out of the classic screen so it
+        # can't choke on the node/edge model it doesn't understand.
+        where.append("COALESCE(engine,'linear') = 'linear'")
         if not include_archived:
             where.append("archived_at IS NULL")
         if status:

@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS workflows (
   category TEXT NOT NULL DEFAULT 'other',
   status TEXT NOT NULL DEFAULT 'active',
   steps TEXT NOT NULL DEFAULT '[]',
+  -- Optional graph definition {nodes,edges} for the new orchestration engine
+  -- (ADR-0001). NULL = linear recipe (steps only), the classic engine.
+  graph TEXT,
   inputs TEXT NOT NULL DEFAULT '[]',
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -186,6 +189,13 @@ CREATE TABLE IF NOT EXISTS jobs (
   current_step_idx INTEGER NOT NULL DEFAULT 0,
   input TEXT,
   steps_state TEXT NOT NULL DEFAULT '[]',
+  -- Execution engine discriminator (ADR-0001). 'linear' = the classic
+  -- current_step_idx/steps_state cursor; 'graph' = node/edge engine whose
+  -- per-node state lives in node_states (steps_state stays '[]'). The two
+  -- engines coexist; linear jobs are untouched by the graph path.
+  engine TEXT NOT NULL DEFAULT 'linear',
+  -- Frozen {nodes,edges} snapshot for graph jobs (NULL for linear).
+  graph TEXT,
   schedule_id INTEGER,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -215,6 +225,29 @@ CREATE INDEX IF NOT EXISTS idx_jobs_project_status ON jobs(project_id, status, c
 CREATE INDEX IF NOT EXISTS idx_jobs_workflow ON jobs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_archived ON jobs(archived_at);
 CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id, status);
+-- Durable per-node state for graph jobs (ADR-0001 primitive #2). One row per
+-- (job, node): the node's own status, the run it dispatched, its resolved
+-- inputs, its validated typed output, and a version for guarded transitions.
+-- Replaces the linear steps_state cursor for engine='graph' jobs.
+CREATE TABLE IF NOT EXISTS node_states (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+  inputs TEXT,
+  output_kind TEXT,
+  output TEXT,
+  checkpoint TEXT,
+  error TEXT,
+  version INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  finished_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(job_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status);
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -325,9 +358,36 @@ def _ensure_message_reviews(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_run ON message_reviews(run_id)")
 
 
+def _ensure_node_states(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS node_states (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          node_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+          inputs TEXT,
+          output_kind TEXT,
+          output TEXT,
+          checkpoint TEXT,
+          error TEXT,
+          version INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(job_id, node_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status)")
+
+
 def migrate_existing(conn: sqlite3.Connection) -> None:
     _ensure_message_reviews(conn)
     _ensure_prompt_collaborations(conn)
+    _ensure_node_states(conn)
     _add_column(conn, "users", "password_hash", "password_hash TEXT")
     _add_column(conn, "users", "password_set_at", "password_set_at TEXT")
     _add_column(conn, "projects", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
@@ -339,6 +399,10 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "sessions", "manual_title", "manual_title INTEGER NOT NULL DEFAULT 0")
     _add_column(conn, "sessions", "produced_artifacts", "produced_artifacts TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "workflows", "inputs", "inputs TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, "workflows", "graph", "graph TEXT")
+    # Graph engine (ADR-0001): additive, coexists with the linear cursor.
+    _add_column(conn, "jobs", "engine", "engine TEXT NOT NULL DEFAULT 'linear'")
+    _add_column(conn, "jobs", "graph", "graph TEXT")
     _add_column(conn, "runs", "heartbeat_at", "heartbeat_at TEXT")
     _add_column(conn, "profiles", "runner_id", f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
     # Per-profile skill/MCP selection (JSON: {"skills":[ids],"mcp":[names]}).

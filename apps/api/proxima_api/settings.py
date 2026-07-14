@@ -38,6 +38,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "update_token": None,
     "feature_video": False,
     "feature_design_studio": False,
+    # Graph workflow engine (ADR-0001). Master safety switch: OFF by default so
+    # the new engine is inert until explicitly enabled.
+    "feature_workflow_graph": False,
 }
 
 
@@ -61,6 +64,7 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
     cfg["feature_video"] = _bool_flag(cfg.get("feature_video"))
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
+    cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
     return cfg
 
 

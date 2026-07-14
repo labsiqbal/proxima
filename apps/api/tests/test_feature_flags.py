@@ -48,17 +48,17 @@ def test_public_config_defaults_both_features_off(tmp_path):
     response = TestClient(app).get("/api/config")
 
     assert response.status_code == 200
-    assert response.json()["features"] == {"video": False, "design_studio": False}
+    assert response.json()["features"] == {"video": False, "design_studio": False, "workflow_graph": False}
 
 
 def test_public_config_reports_explicit_boot_opt_in(tmp_path):
     app = _app(tmp_path, feature_video=True, feature_design_studio=True)
-    assert TestClient(app).get("/api/config").json()["features"] == {"video": True, "design_studio": True}
+    assert TestClient(app).get("/api/config").json()["features"] == {"video": True, "design_studio": True, "workflow_graph": False}
 
 
 def test_programmatic_zero_values_do_not_enable_features():
     config = normalize_config({"feature_video": "0", "feature_design_studio": "false"})
-    assert features.public_flags(config) == {"video": False, "design_studio": False}
+    assert features.public_flags(config) == {"video": False, "design_studio": False, "workflow_graph": False}
 
 
 def test_disabled_commands_are_omitted_and_rejected(tmp_path):
