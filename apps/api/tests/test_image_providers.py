@@ -94,6 +94,34 @@ def test_http_generate_surfaces_provider_error(monkeypatch):
         image_providers.generate("openai-compatible", "sk-bad", prompt="x")
 
 
+def test_openai_compatible_generate_forwards_size(monkeypatch):
+    b64 = base64.b64encode(b"x").decode()
+    captured = {}
+    def fake_post(self, url, headers=None, json=None, data=None, files=None):
+        captured["json"] = json
+        return _Resp(200, {"data": [{"b64_json": b64}]})
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    image_providers.generate("openai-compatible", "sk-test", prompt="x", model="gpt-image-1", size="1024x1024")
+    assert captured["json"].get("size") == "1024x1024"
+
+
+def test_xai_generate_omits_unsupported_size_argument(monkeypatch):
+    # xAI's grok image API 400s on a `size` argument; text-to-image must not send it.
+    png = b"GROK"
+    b64 = base64.b64encode(png).decode()
+    captured = {}
+    def fake_post(self, url, headers=None, json=None, data=None, files=None):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp(200, {"data": [{"b64_json": b64}]})
+    monkeypatch.setattr(image_providers, "_read_hermes_oauth_token", lambda p: "tok-xai")
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    out = image_providers.generate("xai-oauth", None, prompt="a fox", size="1024x1024", base_url="https://api.x.ai/v1")
+    assert out == png
+    assert captured["url"].endswith("/images/generations")
+    assert "size" not in (captured["json"] or {})
+
+
 def test_http_generate_edit_uses_edits_endpoint(monkeypatch):
     png = b"EDITED"
     b64 = base64.b64encode(png).decode()

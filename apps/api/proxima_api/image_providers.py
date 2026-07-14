@@ -511,10 +511,13 @@ def _gen_http(provider, key, *, prompt, model, size, image_bytes, image_mime, ba
     if not key:
         raise ImageProviderError("This provider requires an API key (set it in Settings).")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    # xAI's grok image API derives its own resolution and rejects a `size` argument
+    # ("Argument not supported: size"), so never forward size to it.
+    is_xai = provider.id == "xai-oauth" or "api.x.ai" in (base_url or "")
     try:
         if image_bytes is not None:
             mime = image_mime or "image/png"
-            if provider.id == "xai-oauth" or "api.x.ai" in (base_url or ""):
+            if is_xai:
                 # xAI's /images/edits speaks JSON, not multipart (verified against the
                 # live API): {"prompt", "image": {"url": <data URL or https URL>}}.
                 body_edit: dict[str, Any] = {
@@ -543,7 +546,7 @@ def _gen_http(provider, key, *, prompt, model, size, image_bytes, image_mime, ba
             body: dict[str, Any] = {"prompt": prompt, "n": 1}
             if model:
                 body["model"] = model
-            if size:
+            if size and not is_xai:
                 body["size"] = size
             body["response_format"] = "b64_json"
             with httpx.Client(timeout=timeout) as cx:
