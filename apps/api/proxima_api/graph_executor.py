@@ -98,8 +98,9 @@ def build_node_prompt(
         "OUTPUT CONTRACT:\n"
         f"{json.dumps(contract, ensure_ascii=False, indent=2)}\n\n"
         "Return only this node's result. For kind=json, return one JSON value with no "
-        "markdown fence. For kind=artifact-ref, return JSON describing project-relative "
-        "artifact references."
+        "markdown fence. For kind=artifact-ref, return a JSON object or array of objects "
+        "with a project-relative path and optional type/title/id; every path must already "
+        "exist inside the job workspace."
     )
 
 

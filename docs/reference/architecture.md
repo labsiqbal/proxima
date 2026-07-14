@@ -109,6 +109,11 @@ JSON Schema definitions); it performs no DB, runner, or HTTP work. The gated
 concurrency fixed at one, snapshots explicit job/upstream data into a `wf_node` run,
 and creates a fresh hidden `sessions.job_id` thread per attempt so ACP history cannot
 leak between nodes. It queues work through `RunWorker`; it never calls a runner itself.
+On completion, `graph_advancers.py` validates and canonicalizes the declared output
+(JSON Schema for `json`; contained, existing workspace paths for `artifact-ref`) before
+a version/run-id guarded state transition. Invalid/blocked/runner-failed nodes pause the
+job in `review`; valid nodes dispatch the next ready node, while review gates and the
+final node also pause for human review.
 
 ## Media provider setup
 

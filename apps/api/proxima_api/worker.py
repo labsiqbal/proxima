@@ -41,6 +41,7 @@ from .prompt_collaborations import (
     format_final,
     loads_list,
 )
+from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImports]
 from .graph_executor import GRAPH_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
 from .run_summaries import RunSummaries
@@ -76,6 +77,7 @@ class RunWorker:
         self.summaries = RunSummaries(app)
         self.advancers = RunAdvancers(app)
         self.graph_executor = GraphExecutor(app)
+        self.graph_advancers = GraphAdvancers(app, self.graph_executor)
         self.prompting = RunPrompting(app)
         self.outputs = RunOutputs(app)
         self.drafts = RunDrafts(app)
@@ -242,7 +244,7 @@ class RunWorker:
                 "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
                 (reason, run_id),
             )
-        self._fail_job(session_id, reason)
+        self._fail_job(session_id, reason, run_id)
 
     def _is_recoverable_agent_history_error(self, exc: Exception) -> bool:
         detail = str(exc)
@@ -302,9 +304,8 @@ class RunWorker:
         self.advancers.advance_goal(run, answer, self.add_event)
 
     def _advance_job(self, run: dict[str, Any], answer: str) -> None:
-        # Graph completions get their typed/stateful advancer in Phase 1.4. Never
-        # let them fall through the classic steps_state/current_step_idx cursor.
         if run.get("kind") == GRAPH_NODE_RUN_KIND:
+            self.graph_advancers.advance_run(run, answer, self.add_event)
             return
         self.advancers.advance_job(run, answer, self.add_event, self._produced_artifacts)
 
@@ -605,9 +606,8 @@ class RunWorker:
             (error, run_id),
         )
 
-    def _fail_job(self, session_id: int, error: str) -> None:
-        """If the failed run belonged to a workflow job, mark the job + its current
-        step failed so it doesn't hang in 'running'."""
+    def _fail_job(self, session_id: int, error: str, run_id: int | None = None) -> None:
+        """Terminally record a failed linear step or pause a failed graph node."""
         db = self.app.state.worker_db
         with self.app.state.db_lock:
             srow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
@@ -615,6 +615,13 @@ class RunWorker:
                 return
             job = db.execute("SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)).fetchone()
             if not job or job["status"] != "running":
+                return
+            if job["engine"] == "graph":
+                if run_id is None:
+                    return
+                run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                if run:
+                    self.graph_advancers.fail_run(dict(run), error, self.add_event)
                 return
             self._mark_job_failed(job, error)
 
@@ -947,7 +954,7 @@ class RunWorker:
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": "Hermes runner timed out"})
-            self._fail_job(session_id, "Hermes runner timed out")
+            self._fail_job(session_id, "Hermes runner timed out", run_id)
         except Exception as exc:
             detail = str(exc)[-2000:]
             with self.app.state.db_lock:
@@ -966,7 +973,7 @@ class RunWorker:
                 cur = db.execute("INSERT INTO messages(session_id, role, content) VALUES (?, 'error', ?)", (session_id, f"Run failed: {detail}"))
                 self.add_event(run_id, session_id, project_id, "message.complete", {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"})
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
-            self._fail_job(session_id, detail)
+            self._fail_job(session_id, detail, run_id)
         finally:
             if hb_task:
                 hb_task.cancel()
