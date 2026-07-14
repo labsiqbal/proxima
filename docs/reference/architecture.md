@@ -113,7 +113,11 @@ On completion, `graph_advancers.py` validates and canonicalizes the declared out
 (JSON Schema for `json`; contained, existing workspace paths for `artifact-ref`) before
 a version/run-id guarded state transition. Invalid/blocked/runner-failed nodes pause the
 job in `review`; valid nodes dispatch the next ready node, while review gates and the
-final node also pause for human review.
+final node also pause for human review. Feature-gated `routes/graph.py` is the human
+correction boundary: queued plans can be edited before start; a reviewed node can have
+its typed output replaced or be rerun; either action marks every transitive descendant
+`stale` and resumes deterministic execution. A gate is approved node-by-node, and a
+job reaches `done` only after all nodes are `done` and final approval is explicit.
 
 ## Media provider setup
 

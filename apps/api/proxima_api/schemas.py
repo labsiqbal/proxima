@@ -117,6 +117,24 @@ class JobApproveRequest(BaseModel):
     edited_output: str | None = None
 
 
+class GraphJobCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    graph: dict[str, Any]
+    input: dict[str, Any] | None = None
+    project_id: int | None = None
+    project_slug: str | None = None
+    profile_id: int | None = None
+    workflow_id: int | None = None
+
+
+class GraphDefinitionUpdateRequest(BaseModel):
+    graph: dict[str, Any]
+
+
+class GraphNodeOutputEditRequest(BaseModel):
+    value: Any
+
+
 class ScheduleCreateRequest(BaseModel):
     workflow_id: int
     cron: str = Field(min_length=1)

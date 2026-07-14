@@ -12,6 +12,7 @@ from proxima_api.graph import (  # pyright: ignore[reportMissingImports]
     GraphValidationError,
     OutputContract,
     dependency_map,
+    descendant_node_ids,
     normalize_graph,
     parse_output_contract,
     ready_node_ids,
@@ -72,6 +73,14 @@ def test_topological_order_is_stable_for_a_diamond():
     graph = _diamond_graph()
 
     assert topological_order(graph) == ["collect", "draft-a", "draft-b", "merge"]
+
+
+def test_descendants_follow_topological_order_without_duplicates():
+    graph = _diamond_graph()
+
+    assert descendant_node_ids(graph, "collect") == ["draft-a", "draft-b", "merge"]
+    assert descendant_node_ids(graph, "draft-a") == ["merge"]
+    assert descendant_node_ids(graph, "merge") == []
 
 
 def test_ready_set_requires_all_dependencies_done():

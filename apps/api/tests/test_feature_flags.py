@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import app_settings, features, video_providers, wiki_memory, workflows
-from proxima_api.main import create_app
+from proxima_api.main import _config_from_env, create_app
 from proxima_api.settings import normalize_config
 
 
@@ -52,8 +52,23 @@ def test_public_config_defaults_both_features_off(tmp_path):
 
 
 def test_public_config_reports_explicit_boot_opt_in(tmp_path):
-    app = _app(tmp_path, feature_video=True, feature_design_studio=True)
-    assert TestClient(app).get("/api/config").json()["features"] == {"video": True, "design_studio": True, "workflow_graph": False}
+    app = _app(
+        tmp_path,
+        feature_video=True,
+        feature_design_studio=True,
+        feature_workflow_graph=True,
+    )
+    assert TestClient(app).get("/api/config").json()["features"] == {
+        "video": True,
+        "design_studio": True,
+        "workflow_graph": True,
+    }
+
+
+def test_workflow_graph_environment_flag_reaches_asgi_config(monkeypatch):
+    monkeypatch.setenv("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1")
+
+    assert _config_from_env()["feature_workflow_graph"]
 
 
 def test_programmatic_zero_values_do_not_enable_features():

@@ -243,6 +243,8 @@ class GraphExecutor:
                         int(node_state["version"]) + 1,
                         run_id=run_id,
                         inputs=json.dumps(inputs, ensure_ascii=False),
+                        output=None,
+                        checkpoint=None,
                         error=None,
                         mark_started=True,
                         clear_finished=True,

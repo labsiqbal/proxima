@@ -129,13 +129,29 @@ workflow" folds the conversation back into the recipe. Per-step **rules** (injec
 + **skills** hints + mid-workflow **review gates** (pause → approve / edit-&-continue).
 **Endpoints:** `POST/GET/PATCH/DELETE /api/workflows[...]`, `/workflows/{id}/iterate`.
 
+### Graph workflow engine (gated backend foundation)
+
+**Status:** backend-only and default-off behind `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`;
+there is no graph navigation/canvas yet. When explicitly enabled, graph jobs use a
+frozen `{nodes,edges}` DAG, fresh ACP session per node attempt, typed
+`text|json|artifact-ref` outputs, sequential ready-set dispatch, and durable
+version/run-id guarded `node_states`. The graph API supports create/inspect/edit-plan,
+start, edit-output, rerun-node with downstream dirty propagation, approve a review
+gate, and final approval. Disabled routes return 503 before writes, and queued
+`wf_node` runs are rejected before runner setup.
+**Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/jobs/{id}`,
+`PATCH /api/graph/jobs/{id}/graph`, `POST /start`, `PATCH /nodes/{node}/output`,
+`POST /nodes/{node}/rerun`, `/nodes/{node}/approve`, `/approve`.
+
 ## 8. Jobs / Activity (executions)
 
 **Why:** Every execution — a workflow run or an ad-hoc 1-step task — as one trackable
 pipeline.
-**How:** `jobs` table = frozen snapshot of steps + per-step state. Steps run
-sequentially in one ACP session (context carries free). Live-polls while running;
-auto-archive after 30 days. Old kanban tasks were migrated to 1-step jobs.
+**How:** classic `engine='linear'` jobs use a frozen step snapshot and run
+sequentially in one ACP session (context carries free). Gated graph jobs share the
+job lifecycle but keep per-node state in `node_states` and are intentionally excluded
+from the classic Activity list. Live-polls while running; auto-archive after 30 days.
+Old kanban tasks were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/approve`, `GET /api/jobs[...]`.
 
 ## 9. Schedules (cron)

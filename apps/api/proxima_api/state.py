@@ -62,8 +62,8 @@ NODE: Mapping[str, set[str]] = {
     "ready": {"running", "stale", "skipped"},
     "running": {"done", "review", "failed", "stale"},
     "review": {"done", "failed", "stale"},
-    "done": {"stale"},
-    "failed": {"ready", "stale"},
+    "done": {"done", "stale"},  # done->done = human output correction + version bump
+    "failed": {"ready", "done", "stale"},
     "stale": {"ready", "skipped"},
     "skipped": {"stale"},
 }

@@ -261,6 +261,26 @@ def topological_order(graph: Mapping[str, Any]) -> list[str]:
     return result
 
 
+def descendant_node_ids(graph: Mapping[str, Any], node_id: str) -> list[str]:
+    """Return all transitive downstream nodes in deterministic topological order."""
+    node_order = topological_order(graph)
+    if node_id not in node_order:
+        raise GraphValidationError(f"graph node not found: {node_id}")
+    downstream: dict[str, list[str]] = {candidate: [] for candidate in node_order}
+    for edge in graph.get("edges", []):
+        downstream[edge["from"]].append(edge["to"])
+
+    seen: set[str] = set()
+    stack = list(reversed(downstream[node_id]))
+    while stack:
+        candidate = stack.pop()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        stack.extend(reversed(downstream[candidate]))
+    return [candidate for candidate in node_order if candidate in seen]
+
+
 def ready_node_ids(
     graph: Mapping[str, Any],
     statuses: Mapping[str, str],

@@ -87,7 +87,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
-| Workflows & Jobs | active | `routes/work.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
+| Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
 | **Cron Scheduling** | **risk** | `routes/work.py`, `scheduler.py`, `main.py` loop | `WorkflowsScreen.tsx` | `schedules`, `jobs`, `workflows` | workflows/jobs |
 | **Tasks (Kanban)** | **risk** | `routes/tasks.py` | `TasksScreen.tsx`, `TaskChat.tsx` | `tasks`, `sessions` | sessions, jobs |
 | Wiki Memory | active | `routes/wiki.py`, `wiki_memory.py`, `run_summaries.py` | `WikiScreen.tsx`, `WikiGraph.tsx` | — (FS wiki) | run lifecycle, tasks |
@@ -107,7 +107,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 
 **Notes**
 
-- *Workflows & Jobs — graph engine foundation (ADR-0001)* — schema, version/run-attempt guarded node transitions, pure DAG/I/O contracts, sequential isolated dispatch, and typed completion advancement have landed. `graph_advancers.py` accepts text, JSON Schema values, or existing contained artifact references; invalid/blocked/failed nodes, review gates, and final completion pause the graph job in `review`. Gated `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`, **inert**: no graph routes/UI exist yet and queued graph runs are rejected before runner setup while disabled. `list_jobs` still filters to `engine='linear'`, so graph jobs cannot reach the classic Activity screen.
+- *Workflows & Jobs — graph engine foundation (ADR-0001)* — schema, version/run-attempt guarded state, isolated dispatch, typed advancement, and feature-gated graph job/correction routes have landed. Inspect/edit-output/rerun/approve are per-node; correction marks all transitive descendants `stale` before sequential redispatch. Default `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps every route and queued `wf_node` inert; no graph UI exists yet. `list_jobs` still filters to `engine='linear'`, so graph jobs cannot reach the classic Activity screen.
 - *Cron Scheduling* — `last_run_minute` check-and-set is not atomic (lock released in between); safe only because there is a single scheduler task. No DB-level claim.
 - *Tasks* — **duplication**: the `tasks` table is still live *alongside* `jobs`. Two routed kanbans (Tasks screen vs Activity) whose status can contradict; a task-backed session carries both `sessions.task_id` and `sessions.job_id`.
 - *Artifacts* — `produced_artifacts`/`output_links` are free-floating JSON blobs pointing at filesystem paths with no artifact table; can reference deleted files, and concurrent read-modify-write can lose updates.

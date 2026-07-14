@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-145 endpoints across 12 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+154 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -13,6 +13,7 @@
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 54 endpoints
+- [`routes/graph.py`](#routes-graph-py) — 9 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
@@ -146,6 +147,21 @@
 | API_ROUTE | `/api/video-studio/{token}/{slug}/{video_id}/{path:path}` | `video_studio_view` |  |
 
 
+## routes/graph.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/graph/jobs` | `list_graph_jobs` |  |
+| POST | `/api/graph/jobs` | `create_graph_job` |  |
+| GET | `/api/graph/jobs/{job_id}` | `get_graph_job` |  |
+| POST | `/api/graph/jobs/{job_id}/approve` | `approve_graph_job` |  |
+| PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
+| PATCH | `/api/graph/jobs/{job_id}/nodes/{node_id}/output` | `edit_node_output` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/rerun` | `rerun_node` |  |
+| POST | `/api/graph/jobs/{job_id}/start` | `start_graph_job` |  |
+
+
 ## routes/profiles.py
 
 | Method | Path | Handler | Description |
@@ -240,4 +256,4 @@
 
 
 ---
-_Generated 2026-07-14 15:37 UTC._
+_Generated 2026-07-14 17:35 UTC._

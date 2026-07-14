@@ -45,84 +45,93 @@ from .routes import (
     wiki as routes_wiki,
     work as routes_work,
 )
+from .routes import graph as routes_graph  # pyright: ignore[reportAttributeAccessIssue]
 
 logger = logging.getLogger("proxima.api")
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    cfg = app.state.config
+    app.state.hub.bind_loop(asyncio.get_running_loop())
+    if cfg.get("auto_provision", True):
+        try:
+            backfill(app.state.db, cfg)
+        except Exception as _exc:
+            logging.getLogger("proxima.provisioning").exception("startup backfill failed")
+    try:
+        with app.state.db_lock:
+            archive_old_jobs(app.state.db, _as_int(cfg.get("job_archive_days", 30)))
+    except Exception as _exc:
+        logging.getLogger("proxima.api").exception("job archive sweep failed (non-fatal)")
+    worker = app.state.worker
+    # Reclaim runs orphaned by a previous shutdown: a run left in 'running'
+    # had in-memory ACP state that's now gone, so it can never complete.
+    # Mark it failed (and emit a terminal event) instead of leaving it stuck.
+    try:
+        with app.state.db_lock:
+            orphaned = [dict(r) for r in app.state.worker_db.execute(
+                "SELECT id, session_id, project_id FROM runs WHERE status = 'running'"
+            ).fetchall()]
+        for r in orphaned:
+            worker._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Interrupted by server restart")
+        worker.reap_orphaned_jobs()
+    except Exception as _exc:
+        logging.getLogger("proxima.worker").exception("orphaned run cleanup failed")
+    if cfg.get("start_worker", True):
+        worker.start()
+    scheduler_task: asyncio.Task | None = None
+    if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
+        async def _scheduler_loop() -> None:
+            while True:
+                # Align to the top of each minute. A fixed sleep(60) measured from
+                # the end of the previous tick drifts forward (tick work + scheduling
+                # jitter), eventually skipping a whole wall-clock minute so a cron
+                # set for that minute never fires. Sleeping to the next :00 keeps
+                # every minute sampled exactly once.
+                now = datetime.now()
+                await asyncio.sleep(max(1.0, 60 - now.second - now.microsecond / 1_000_000))
+                try:
+                    _scheduler_tick(app)
+                except Exception as _exc:
+                    logging.getLogger("proxima.scheduler").exception("scheduler tick failed")
+        scheduler_task = asyncio.create_task(_scheduler_loop())
+    app.state.updates.reconcile_marker()  # finalize a marker left by a self-update restart
+    update_task: asyncio.Task | None = None
+    if cfg.get("update_check", True):
+        async def _update_check_loop() -> None:
+            await asyncio.sleep(UPDATE_FIRST_CHECK_DELAY_SECONDS)
+            while True:
+                try:
+                    await app.state.updates.check_now()  # contract: never raises
+                except Exception as _exc:
+                    logging.getLogger("proxima.updates").exception("update check loop tick failed")
+                await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
+        update_task = asyncio.create_task(_update_check_loop())
+    yield
+    if scheduler_task:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
+    if update_task:
+        update_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await update_task
+    await worker.stop()
+    await app.state.acp_manager.shutdown()
+    await app.state.app_manager.shutdown()
+
+
 def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     cfg = normalize_config(config)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.hub.bind_loop(asyncio.get_running_loop())
-        if cfg.get("auto_provision", True):
-            try:
-                backfill(app.state.db, cfg)
-            except Exception:
-                logging.getLogger("proxima.provisioning").exception("startup backfill failed")
-        try:
-            with app.state.db_lock:
-                archive_old_jobs(app.state.db, int(cfg.get("job_archive_days", 30)))
-        except Exception:
-            logging.getLogger("proxima.api").exception("job archive sweep failed (non-fatal)")
-        worker = app.state.worker
-        # Reclaim runs orphaned by a previous shutdown: a run left in 'running'
-        # had in-memory ACP state that's now gone, so it can never complete.
-        # Mark it failed (and emit a terminal event) instead of leaving it stuck.
-        try:
-            with app.state.db_lock:
-                orphaned = [dict(r) for r in app.state.worker_db.execute(
-                    "SELECT id, session_id, project_id FROM runs WHERE status = 'running'"
-                ).fetchall()]
-            for r in orphaned:
-                worker._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Interrupted by server restart")
-            worker.reap_orphaned_jobs()
-        except Exception:
-            logging.getLogger("proxima.worker").exception("orphaned run cleanup failed")
-        if cfg.get("start_worker", True):
-            worker.start()
-        scheduler_task: asyncio.Task | None = None
-        if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
-            async def _scheduler_loop() -> None:
-                while True:
-                    # Align to the top of each minute. A fixed sleep(60) measured from
-                    # the end of the previous tick drifts forward (tick work + scheduling
-                    # jitter), eventually skipping a whole wall-clock minute so a cron
-                    # set for that minute never fires. Sleeping to the next :00 keeps
-                    # every minute sampled exactly once.
-                    now = datetime.now()
-                    await asyncio.sleep(max(1.0, 60 - now.second - now.microsecond / 1_000_000))
-                    try:
-                        _scheduler_tick(app)
-                    except Exception:
-                        logging.getLogger("proxima.scheduler").exception("scheduler tick failed")
-            scheduler_task = asyncio.create_task(_scheduler_loop())
-        app.state.updates.reconcile_marker()  # finalize a marker left by a self-update restart
-        update_task: asyncio.Task | None = None
-        if cfg.get("update_check", True):
-            async def _update_check_loop() -> None:
-                await asyncio.sleep(UPDATE_FIRST_CHECK_DELAY_SECONDS)
-                while True:
-                    try:
-                        await app.state.updates.check_now()  # contract: never raises
-                    except Exception:
-                        logging.getLogger("proxima.updates").exception("update check loop tick failed")
-                    await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
-            update_task = asyncio.create_task(_update_check_loop())
-        yield
-        if scheduler_task:
-            scheduler_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await scheduler_task
-        if update_task:
-            update_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await update_task
-        await worker.stop()
-        await app.state.acp_manager.shutdown()
-        await app.state.app_manager.shutdown()
-
-    app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=lifespan)
+    app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
     app.state.db = connect(cfg["database_path"])
     app.state.db_lock = __import__("threading").RLock()
@@ -187,6 +196,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         }
 
     routes_work.register(app, _route_deps)
+    routes_graph.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)
@@ -286,6 +296,7 @@ def _config_from_env() -> dict[str, Any]:
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
         "feature_video": os.environ.get("PROXIMA_FEATURE_VIDEO", "").lower() in ("1", "true", "yes", "on"),
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "").lower() in ("1", "true", "yes", "on"),
+        "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "").lower() in ("1", "true", "yes", "on"),
     }
 
 
