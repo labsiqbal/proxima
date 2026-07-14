@@ -133,16 +133,18 @@ workflow" folds the conversation back into the recipe. Per-step **rules** (injec
 
 ### Graph workflow engine (gated foundation)
 
-**Status:** default-off behind `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`; there is no graph
-navigation/canvas yet. When explicitly enabled, chat promotion can produce a typed DAG
-draft for human plan review, and graph jobs use a
+**Status:** default-off behind `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`. When explicitly
+enabled, **Workflow Graphs** provides a dedicated hand-rolled SVG canvas. Chat
+promotion can produce a typed DAG draft for human plan review, and graph jobs use a
 frozen `{nodes,edges}` DAG, fresh ACP session per node attempt, typed
 `text|json|artifact-ref` outputs, sequential ready-set dispatch, and durable
 version/run-id guarded `node_states`. The graph API supports create/inspect/edit-plan,
 start, edit-output, rerun-node with downstream dirty propagation, approve a review
 gate, final approval, and saving a reviewed graph as a reusable workflow template.
 Disabled routes return 503 before writes, and queued `wf_node` runs are rejected before
-runner setup.
+runner setup. The canvas supports queued-plan node/dependency editing, explicit
+approve-and-start, live node state, typed output correction, rerun, gate/final
+approval, and save-as-template.
 **Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/jobs/{id}`,
 `PATCH /api/graph/jobs/{id}/graph`, `POST /save-template`, `POST /start`,
 `PATCH /nodes/{node}/output`, `POST /nodes/{node}/rerun`,

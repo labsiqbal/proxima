@@ -273,6 +273,12 @@ passes only explicit typed upstream outputs. Plan edits are allowed only while q
 execution therefore always starts behind a human approval action. Review/correction
 can edit or rerun a node and marks every transitive descendant stale before redispatch.
 
+`GraphScreen.tsx` is the gated control plane for this sibling engine. It uses a pure
+topological-layer layout (`graphLayout.ts`) and native SVG edges/nodes, so no graph
+library is required. The screen lists graph jobs separately from classic Activity,
+allows node and dependency edits only while queued, and exposes the correction and
+approval protocol once execution begins.
+
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
 

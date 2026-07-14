@@ -41,6 +41,7 @@ export type Runner = {
 export type AppFeatures = {
 	video: boolean;
 	designStudio: boolean;
+	workflowGraph: boolean;
 };
 export type ChatSession = {
 	id: number;
@@ -185,6 +186,67 @@ export type WorkflowDraft = {
 		type?: string;
 	}[];
 };
+
+export type GraphOutputKind = "text" | "json" | "artifact-ref";
+
+export type GraphNodeDefinition = {
+	id: string;
+	name: string;
+	instruction: string;
+	output_kind: GraphOutputKind;
+	output_schema?: Record<string, unknown>;
+	review_required?: boolean;
+};
+
+export type GraphEdge = { from: string; to: string };
+export type WorkflowGraph = { nodes: GraphNodeDefinition[]; edges: GraphEdge[] };
+
+export type GraphWorkflowDraft = {
+	name: string;
+	description?: string;
+	category?: string;
+	graph: WorkflowGraph;
+	steps?: [];
+};
+
+export type GraphNodeStatus =
+	| "pending"
+	| "ready"
+	| "running"
+	| "review"
+	| "done"
+	| "failed"
+	| "stale";
+
+export type GraphNodeState = {
+	id: number;
+	job_id: number;
+	node_id: string;
+	status: GraphNodeStatus;
+	output_kind: GraphOutputKind;
+	inputs?: unknown;
+	output?: unknown;
+	checkpoint?: unknown;
+	error?: string | null;
+	version: number;
+	run_id?: number | null;
+};
+
+export type GraphJob = {
+	id: number;
+	project_id?: number | null;
+	project_slug?: string | null;
+	workflow_id?: number | null;
+	session_id: number;
+	title: string;
+	status: JobStatus;
+	input?: Record<string, unknown>;
+	engine: "graph";
+	graph: WorkflowGraph;
+	node_states: GraphNodeState[];
+	created_at?: string;
+	updated_at?: string;
+};
 // A cron schedule that fires a workflow on a cadence. `cron` is a standard
 // 5-field expression (min hour day-of-month month day-of-week).
 export type Schedule = {
@@ -246,6 +308,7 @@ export type View =
 	| "artifacts"
 	| "workflows"
 	| "activity"
+	| "graph"
 	| "terminal"
 	| "design"
 	| "video"

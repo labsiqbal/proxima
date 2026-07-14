@@ -17,6 +17,7 @@ const nav: NavItem[] = [
   { id: 'wiki', label: 'Wiki', icon: IconWiki },
   { id: 'artifacts', label: 'Artifacts', icon: IconFile },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
+  { id: 'graph', label: 'Workflow Graphs', icon: IconWorkflows },
   { id: 'activity', label: 'Activity', icon: IconActivity },
   { id: 'terminal', label: 'Terminal', icon: IconTerminal }
 ]
@@ -48,7 +49,7 @@ export function Sidebar(props: {
   const [projOpen, setProjOpen] = React.useState(false)
   return <div className="sidebar-inner">
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><div className="sidebar-actions"><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div></div>
-    <section className="nav-group">{nav.filter(item => (item.id !== 'video' || props.features.video) && (item.id !== 'design' || props.features.designStudio)).map(item => {
+    <section className="nav-group">{nav.filter(item => (item.id !== 'video' || props.features.video) && (item.id !== 'design' || props.features.designStudio) && (item.id !== 'graph' || props.features.workflowGraph)).map(item => {
       const Icon = item.icon
       const onClick = () => {
         if (item.action === 'new-chat') props.onNewChat()

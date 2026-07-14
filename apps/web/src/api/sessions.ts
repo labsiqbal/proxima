@@ -14,4 +14,4 @@ export const setSessionProfile = (token: string, sessionId: number, profileId: n
 export const deleteSession = (token: string, sessionId: number) => api<{ ok: boolean }>(`/api/sessions/${sessionId}`, token, { method: 'DELETE' })
 // Promote a chat into a reusable workflow draft. Enqueues a run (202); the
 // result arrives async as a `workflow.draft` event on the session's stream.
-export const promoteWorkflow = (token: string, sessionId: number, profileId?: number | null) => api<{ run_id: number; session_id: number; status: string }>(`/api/sessions/${sessionId}/promote-workflow`, token, { method: 'POST', body: JSON.stringify({ profile_id: profileId ?? null }) })
+export const promoteWorkflow = (token: string, sessionId: number, profileId?: number | null, engine: 'auto' | 'linear' | 'graph' = 'auto') => api<{ run_id: number; session_id: number; status: string }>(`/api/sessions/${sessionId}/promote-workflow`, token, { method: 'POST', body: JSON.stringify({ profile_id: profileId ?? null, engine }) })

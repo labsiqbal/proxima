@@ -20,6 +20,7 @@ import { useRunStream } from "../hooks/useRunStream";
 import type {
 	ChatMessage,
 	ChatSession,
+	GraphWorkflowDraft,
 	AppFeatures,
 	OutputLink,
 	Profile,
@@ -85,6 +86,7 @@ export function ChatScreen(props: {
 	onRefresh: () => Promise<void>;
 	onNewSession: () => Promise<void>;
 	onWorkflowDraft?: (draft: WorkflowDraft) => void;
+	onGraphDraft?: (draft: GraphWorkflowDraft) => void;
 	onOpenOutput?: (link: OutputLink, origin: ChatSession | null) => void;
 	runRecipeNonce?: number;
 	runRecipePrompt?: string;
@@ -732,16 +734,26 @@ export function ChatScreen(props: {
 						profileId={props.activeProfile?.id ?? null}
 						label="Save to workflow"
 						busyLabel="Saving…"
-						onDraft={saveToWorkflow}
+						engine="linear"
+						onDraft={draft => {
+							if ("graph" in draft) setError("Expected a linear workflow draft.");
+							else void saveToWorkflow(draft);
+						}}
 						onError={setError}
 					/>
 				) : (
-					props.onWorkflowDraft && (
+					(props.onWorkflowDraft || props.onGraphDraft) && (
 						<ConvertToWorkflowButton
 							token={props.token}
 							sessionId={activeSession.id}
 							profileId={props.activeProfile?.id ?? null}
-							onDraft={props.onWorkflowDraft}
+							engine={props.features.workflowGraph ? "graph" : "linear"}
+							label={props.features.workflowGraph ? "To graph" : "To workflow"}
+							busyLabel={props.features.workflowGraph ? "Building graph…" : "Building workflow…"}
+							onDraft={draft => {
+								if ("graph" in draft) props.onGraphDraft?.(draft);
+								else props.onWorkflowDraft?.(draft);
+							}}
 							onError={setError}
 						/>
 					)

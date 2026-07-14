@@ -90,6 +90,7 @@ app = create_app(
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
         "feature_video": env_bool("PROXIMA_FEATURE_VIDEO", False),
         "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", False),
+        "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", False),
     }
 )
 

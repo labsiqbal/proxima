@@ -7,7 +7,7 @@ import { activeRuns } from './api/runs'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isDisabledFeatureHash, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
-import type { AppFeatures, ChatSession, OutputLink, Profile, Project, Runner, User, View, WorkflowDraft } from './types'
+import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View, WorkflowDraft } from './types'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
@@ -24,6 +24,7 @@ const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ 
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
+const GraphScreen = React.lazy(() => import('./screens/GraphScreen').then(m => ({ default: m.GraphScreen })))
 const TerminalTabs = React.lazy(() => import('./components/terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
 const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(m => ({ default: m.ProfilesScreen })))
 const RunnersScreen = React.lazy(() => import('./screens/RunnersScreen').then(m => ({ default: m.RunnersScreen })))
@@ -51,6 +52,8 @@ export function App() {
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
   const [pendingJob, setPendingJob] = React.useState<number | null>(null)
   const [pendingDraft, setPendingDraft] = React.useState<WorkflowDraft | null>(null)
+  const [pendingGraphDraft, setPendingGraphDraft] = React.useState<GraphWorkflowDraft | null>(null)
+  const [pendingGraphJob, setPendingGraphJob] = React.useState<number | null>(null)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
   const [pendingVideoId, setPendingVideoId] = React.useState<string | null>(null)
@@ -73,6 +76,8 @@ export function App() {
   const clearPendingNavigation = React.useCallback(() => {
     setPendingJob(null)
     setPendingDraft(null)
+    setPendingGraphDraft(null)
+    setPendingGraphJob(null)
     setPendingDesign(null)
     setPendingDesignId(null)
     setPendingVideoId(null)
@@ -403,7 +408,7 @@ export function App() {
         // chat (kind is authoritative — this is the last-line guard behind the session
         // list + Home routing already excluding design sessions).
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onWorkflowDraft={draft => { setPendingDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
+        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onWorkflowDraft={draft => { setPendingDraft(draft); setView('workflows') }} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('graph') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
         // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
         return activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
@@ -414,6 +419,7 @@ export function App() {
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onBackToChat={returnToChat ? backToOriginChat : undefined} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onOpenJob={jobId => { setPendingJob(jobId); setView('activity') }} onIterate={s => { setActiveSession(s); setView('chat') }} draft={pendingDraft} onDraftConsumed={() => setPendingDraft(null)} /></React.Suspense>}
       {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading activity..." />}><ActivityScreen token={token} activeProject={activeProject} pendingJobId={pendingJob} onPendingConsumed={() => setPendingJob(null)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('activity'); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></React.Suspense>}
+      {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profileId={activeProfile?.id ?? null} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} /></React.Suspense>}
       {/* Always mounted (hidden when inactive) so the PTY shells survive navigating
           to another view and back — unmounting would kill every running session. */}
       {terminalMounted.current && <section className="chat-stage" style={{ display: view === 'terminal' ? 'flex' : 'none' }}><React.Suspense fallback={<ViewFallback label="Loading terminal..." />}><TerminalTabs token={token} projectSlug={activeProject?.slug} /></React.Suspense></section>}

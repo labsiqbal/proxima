@@ -1,17 +1,18 @@
 import type { AppFeatures, View } from './types'
 
-export const DEFAULT_FEATURES: AppFeatures = { video: false, designStudio: false }
+export const DEFAULT_FEATURES: AppFeatures = { video: false, designStudio: false, workflowGraph: false }
 
 export function parseAppFeatures(value: unknown): AppFeatures {
   const features = value && typeof value === 'object' && 'features' in value
     ? (value as { features?: unknown }).features
     : null
   const source = features && typeof features === 'object'
-    ? features as { video?: unknown; design_studio?: unknown }
+    ? features as { video?: unknown; design_studio?: unknown; workflow_graph?: unknown }
     : {}
   return {
     video: source.video === true,
     designStudio: source.design_studio === true,
+    workflowGraph: source.workflow_graph === true,
   }
 }
 
@@ -24,7 +25,9 @@ export async function resolveAppFeatures(load: () => Promise<unknown>): Promise<
 }
 
 export function isFeatureViewEnabled(view: View, features: AppFeatures): boolean {
-  return (view !== 'video' || features.video) && (view !== 'design' || features.designStudio)
+  return (view !== 'video' || features.video)
+    && (view !== 'design' || features.designStudio)
+    && (view !== 'graph' || features.workflowGraph)
 }
 
 export function isFeatureSessionEnabled(session: { title?: string | null; mode?: string | null }, features: AppFeatures): boolean {

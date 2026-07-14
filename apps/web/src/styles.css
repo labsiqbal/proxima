@@ -35,6 +35,13 @@
 	--space-5: 20px;
 	--space-6: 24px;
 	--space-8: 32px;
+	--graph-list-width: 15rem;
+	--graph-inspector-width: 21rem;
+	--graph-canvas-min-width: 46rem;
+	--graph-canvas-min-height: 28rem;
+	--graph-inspector-max-height: 24rem;
+	--graph-list-max-height: 12rem;
+	--graph-edge-width: 2px;
 
 	color-scheme: light;
 	--font-sans:
@@ -75,6 +82,8 @@
 	--ui-success: #22c55e;
 	--ui-success-strong: #15803d;
 	--ui-success-bg: #f0fdf4;
+	--ui-warning: #d97706;
+	--ui-warning-bg: #fffbeb;
 	--brand-mark-deep: #070a0f;
 	--brand-mark-glow: #172b51;
 	--brand-mark-ink: #f7faff;
@@ -5802,6 +5811,340 @@ div.result-media {
 }
 .job-step-head .job-pill {
 	flex: 0 0 auto;
+}
+
+/* Workflow graph — dedicated DAG plan/review canvas */
+.graph-screen {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	background: var(--ui-bg-editor);
+	container: graph-screen / inline-size;
+}
+.graph-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface);
+}
+.graph-header h1,
+.graph-inspector h2 {
+	margin: 0;
+	font-size: var(--text-xl);
+}
+.graph-header p {
+	margin: var(--space-1) 0 0;
+}
+.graph-eyebrow {
+	margin: 0;
+	font-size: var(--text-2xs);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-tertiary);
+}
+.graph-header-actions,
+.graph-form-actions,
+.graph-list-head,
+.graph-status-bar,
+.graph-inspector-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.graph-header-actions,
+.graph-form-actions {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+.graph-workspace {
+	display: grid;
+	grid-template-columns: var(--graph-list-width) minmax(0, 1fr) var(
+			--graph-inspector-width
+		);
+	flex: 1;
+	min-height: 0;
+}
+.graph-job-list,
+.graph-inspector {
+	min-height: 0;
+	overflow: auto;
+	background: var(--ui-surface);
+}
+.graph-job-list {
+	padding: var(--space-3);
+	border-right: 1px solid var(--ui-stroke-secondary);
+}
+.graph-inspector {
+	padding: var(--space-4);
+	border-left: 1px solid var(--ui-stroke-secondary);
+}
+.graph-project-filter,
+.graph-plan-form label,
+.graph-run-detail > label {
+	display: grid;
+	gap: var(--space-1);
+	font-size: var(--text-sm);
+	font-weight: 600;
+	color: var(--ui-text-secondary);
+}
+.graph-project-filter select,
+.graph-plan-form input,
+.graph-plan-form textarea,
+.graph-plan-form select,
+.graph-run-detail textarea {
+	width: 100%;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--ui-stroke-primary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-bg-editor);
+	color: var(--ui-text-primary);
+}
+.graph-list-head {
+	justify-content: space-between;
+	margin: var(--space-4) 0 var(--space-2);
+}
+.graph-job-row {
+	display: grid;
+	width: 100%;
+	gap: var(--space-1);
+	padding: var(--space-3);
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	text-align: left;
+	color: var(--ui-text-primary);
+}
+.graph-job-row:hover {
+	background: var(--ui-row-hover-background);
+}
+.graph-job-row.selected {
+	background: var(--ui-row-active-background);
+}
+.graph-job-row small {
+	color: var(--ui-text-tertiary);
+	text-transform: capitalize;
+}
+.graph-empty-list,
+.graph-loading,
+.graph-empty {
+	padding: var(--space-4);
+}
+.graph-main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	background: var(--ui-surface-subtle);
+}
+.graph-status-bar {
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface);
+	font-size: var(--text-sm);
+	color: var(--ui-text-secondary);
+}
+.graph-status,
+.graph-dirty {
+	display: inline-flex;
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--radius-full);
+	background: var(--ui-surface-subtle);
+	font-size: var(--text-xs);
+	font-weight: 700;
+	text-transform: capitalize;
+}
+.graph-status.st-running,
+.graph-status.st-ready {
+	color: var(--ui-accent);
+	background: var(--ui-row-active-background);
+}
+.graph-status.st-review,
+.graph-dirty {
+	color: var(--ui-warning);
+	background: var(--ui-warning-bg);
+}
+.graph-status.st-done {
+	color: var(--ui-success-strong);
+	background: var(--ui-success-bg);
+}
+.graph-status.st-failed {
+	color: var(--ui-danger);
+	background: var(--ui-danger-bg);
+}
+.graph-canvas-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--space-3);
+}
+.graph-canvas {
+	display: block;
+	width: 100%;
+	min-width: var(--graph-canvas-min-width);
+	min-height: var(--graph-canvas-min-height);
+}
+.graph-edge {
+	fill: none;
+	stroke: var(--ui-stroke-primary);
+	stroke-width: var(--graph-edge-width);
+}
+.graph-arrow-head {
+	fill: var(--ui-stroke-primary);
+}
+.graph-node {
+	cursor: pointer;
+	outline: none;
+}
+.graph-node rect {
+	fill: var(--ui-surface);
+	stroke: var(--ui-stroke-primary);
+	stroke-width: var(--graph-edge-width);
+	transition:
+		stroke var(--t-fast) var(--ease),
+		fill var(--t-fast) var(--ease);
+}
+.graph-node:hover rect,
+.graph-node:focus rect {
+	fill: var(--ui-row-hover-background);
+	stroke: var(--ui-accent);
+}
+.graph-node.selected rect {
+	fill: var(--ui-row-active-background);
+	stroke: var(--ui-accent);
+}
+.graph-node circle {
+	fill: var(--ui-text-tertiary);
+}
+.graph-node.st-running circle,
+.graph-node.st-ready circle {
+	fill: var(--ui-accent);
+}
+.graph-node.st-review circle {
+	fill: var(--ui-warning);
+}
+.graph-node.st-done circle {
+	fill: var(--ui-success);
+}
+.graph-node.st-failed circle {
+	fill: var(--ui-danger);
+}
+.graph-node-name {
+	fill: var(--ui-text-primary);
+	font-size: var(--text-base);
+	font-weight: 700;
+}
+.graph-node-kind,
+.graph-node-status {
+	fill: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+}
+.graph-node-status {
+	fill: var(--ui-text-tertiary);
+}
+.graph-notice {
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-success-bg);
+	color: var(--ui-success-strong);
+	font-size: var(--text-sm);
+}
+.graph-inspector-head {
+	justify-content: space-between;
+	align-items: flex-start;
+	margin-bottom: var(--space-4);
+}
+.graph-plan-form,
+.graph-run-detail {
+	display: grid;
+	gap: var(--space-4);
+}
+.graph-plan-form fieldset {
+	display: grid;
+	gap: var(--space-2);
+	margin: 0;
+	padding: var(--space-3);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-sm);
+}
+.graph-plan-form legend {
+	padding: 0 var(--space-1);
+	font-size: var(--text-sm);
+	font-weight: 700;
+}
+.graph-check {
+	display: flex !important;
+	grid-template-columns: none;
+	align-items: center;
+	gap: var(--space-2) !important;
+	font-weight: 500 !important;
+}
+.graph-check input {
+	width: auto;
+	accent-color: var(--ui-accent);
+}
+.graph-run-detail dl {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-2);
+	margin: 0;
+}
+.graph-run-detail dl div {
+	padding: var(--space-2);
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface-subtle);
+}
+.graph-run-detail dt {
+	font-size: var(--text-xs);
+	color: var(--ui-text-tertiary);
+}
+.graph-run-detail dd {
+	margin: var(--space-1) 0 0;
+	font-size: var(--text-sm);
+}
+.graph-output,
+.graph-run-detail details pre {
+	max-height: var(--graph-canvas-min-height);
+	overflow: auto;
+	margin: 0;
+	padding: var(--space-3);
+	border-radius: var(--radius-sm);
+	background: var(--ui-code-bg);
+	color: var(--ui-code-fg);
+	font: var(--text-xs) var(--font-mono);
+	white-space: pre-wrap;
+}
+@container graph-screen (max-width: 70rem) {
+	.graph-workspace {
+		grid-template-columns: var(--graph-list-width) minmax(0, 1fr);
+	}
+	.graph-inspector {
+		grid-column: 1 / -1;
+		max-height: var(--graph-inspector-max-height);
+		border-top: 1px solid var(--ui-stroke-secondary);
+		border-left: 0;
+	}
+}
+@container graph-screen (max-width: 52rem) {
+	.graph-workspace {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto var(--graph-canvas-min-height) auto;
+		overflow: auto;
+	}
+	.graph-job-list {
+		max-height: var(--graph-list-max-height);
+		border-right: 0;
+		border-bottom: 1px solid var(--ui-stroke-secondary);
+	}
+	.graph-inspector {
+		grid-column: 1;
+		max-height: none;
+		overflow: visible;
+	}
 }
 
 /* Activity — job list + pipeline (reuses kanban + task-detail patterns) */
