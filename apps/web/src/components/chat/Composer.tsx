@@ -56,7 +56,6 @@ export function Composer({
 	promptModes = true,
 	generateKinds,
 	combinedActions = false,
-	footerContext,
 	submitIconOnly = false,
 	submitLabel = "Send",
 	submittingLabel = "Sending…",
@@ -77,7 +76,6 @@ export function Composer({
 	promptModes?: boolean;
 	generateKinds?: Array<"image" | "design" | "video">;
 	combinedActions?: boolean;
-	footerContext?: React.ReactNode;
 	submitIconOnly?: boolean;
 	submitLabel?: string;
 	submittingLabel?: string;
@@ -424,7 +422,6 @@ export function Composer({
 						);
 					})}
 				</div>}
-				{footerContext}
 				<button
 					className={`primary-button ${submitIconOnly ? "icon-only" : ""}`}
 					disabled={

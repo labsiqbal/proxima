@@ -1,7 +1,7 @@
 import React from "react";
 import { Composer } from "../chat/Composer";
 import { Dropdown } from "../ui/Dropdown";
-import { IconChevronRight, IconFolder } from "../shell/icons";
+import { IconAgents, IconAudit, IconChevronRight, IconFolder } from "../shell/icons";
 import type { AppFeatures, Profile, Project } from "../../types";
 
 export type OpsExecutionPolicy = "guarded" | "autonomous";
@@ -182,6 +182,7 @@ export function TaskComposer({
 		<label className="task-agent-control">
 			<span className="sr-only">Agent</span>
 			<Dropdown
+				icon={<IconAgents size={15} />}
 				value={activeProfile ? String(activeProfile.id) : ""}
 				onChange={(id) => {
 					const profile = profiles.find((item) => item.id === Number(id));
@@ -208,7 +209,6 @@ export function TaskComposer({
 					promptModes={false}
 					generateKinds={["image", "design"]}
 					combinedActions
-					footerContext={agentControl}
 					submitIconOnly
 					submitLabel="Start task"
 					submittingLabel="Starting…"
@@ -221,9 +221,11 @@ export function TaskComposer({
 						onChange={onActiveProject}
 						onManage={onManageProjects}
 					/>
+					{agentControl}
 					<label className="task-policy-control">
 						<span className="sr-only">Execution policy</span>
 						<Dropdown
+							icon={<IconAudit size={15} />}
 							value={executionPolicy}
 							onChange={(value) =>
 								setExecutionPolicy(value as OpsExecutionPolicy)
