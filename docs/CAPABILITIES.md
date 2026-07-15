@@ -8,10 +8,10 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 > code locations (backend + frontend), tables/events touched, relations, and
 > status/flag. This doc explains *what & why*; that one maps *where*.
 
-> **Model:** single-user cockpit. One owner, no in-app accounts. The access gate is
-> the network (loopback / Cloudflare Access). The owner is auto-created on first
-> request; the frontend auto-logs-in via `POST /auth/auto` (no password). Per-user
-> data lives outside the repo (`~/.local/share/proxima/`).
+> **Model:** single-user cockpit. One owner, no in-app accounts. Network controls
+> remain the primary access boundary, with a first-run owner password and authenticated
+> bearer-token or HttpOnly-cookie sessions as defense in depth. Runtime data lives
+> outside the repo (`~/.local/share/proxima/`).
 
 ---
 
@@ -53,8 +53,8 @@ never blocks other chats. Streaming via SSE (`/events/stream`) + WebSocket.
 
 ### Per-prompt Brainstorm / Debate modes
 
-> **Status:** the `Brainstorm`/`Debate` chips are shown in the **main chat and task
-> chat**. The retained Studio composer also disables them, but Design Studio itself
+> **Status:** the `Brainstorm`/`Debate` chips are shown only in **Code chat**. Ops
+> Task Composer omits collaboration modes. The retained Studio composer also disables them, but Design Studio itself
 > is unavailable while `PROXIMA_FEATURE_DESIGN_STUDIO=0`.
 
 **Why:** Run a prompt through multiple agents before the answer lands in the
@@ -152,16 +152,16 @@ approval, and save-as-template.
 `/nodes/{node}/approve`, `/approve`. See the
 [Workflow Graph Engine guide](workflow-graph.md).
 
-## 8. Jobs / Activity (executions)
+## 8. Tasks / jobs (executions)
 
 **Why:** Every execution — a workflow run or an ad-hoc 1-step task — as one trackable
 pipeline.
 **How:** classic `engine='linear'` jobs use a frozen step snapshot and run
 sequentially in one ACP session (context carries free). Gated graph jobs share the
 job lifecycle but keep per-node state in `node_states` and are intentionally excluded
-from the classic Activity list. Live-polls while running; auto-archive after 30 days.
+from the linear Tasks list. Live-polls while running; auto-archive after 30 days.
 Old kanban tasks were migrated to 1-step jobs.
-**Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/approve`, `GET /api/jobs[...]`.
+**Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
 
 ## 9. Schedules (cron)
 
@@ -323,3 +323,13 @@ first-run team bootstrap, invite links, project membership/sharing, project
 visibility (private/shared), team name. Collaboration model is instead: **everyone
 self-hosts their own instance + shares folders/repos.** The runtime model is one
 owner; legacy invite/member tables have been dropped.
+
+## Compact shell, Ops tasks, and Code
+
++ **Ops** uses a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. Home does not duplicate Tasks, Scheduled, Artifacts, or Projects as dashboard cards. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible Code conversation.
++ **Code** opens the current chat and adds only a real-context header (session, project, profile). Only the Code header’s **New session** action clears the active session; the chat remains lazily created on first send.
++ The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, a single Workflows destination, Artifacts, gated Design, and gated Graph/Video. Code contains New session, Projects, Terminal, and project-scoped recents. Tasks is the permanent execution/review index; Ops Home and workflow runs open the same task workspace. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ The single **Workflows** destination contains Sequential recipes, feature-gated Advanced graph orchestration, and Scheduled automation. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
++ Terminal is lazy-mounted on first visit and then hidden rather than unmounted, preserving PTYs. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
+
+Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.

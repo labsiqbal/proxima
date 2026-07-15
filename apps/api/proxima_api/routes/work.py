@@ -16,7 +16,7 @@ from fastapi import Depends, HTTPException
 from ..auth import iso_now
 from .. import workflows as wf
 from ..schemas import (
-    JobApproveRequest, JobCreateRequest, ScheduleCreateRequest,
+    JobApproveRequest, JobCreateRequest, JobRunLinkRequest, ScheduleCreateRequest,
     ScheduleUpdateRequest, WorkflowCreateRequest, WorkflowUpdateRequest,
 )
 
@@ -179,7 +179,7 @@ def register(app, deps):
 
     @app.post("/api/jobs")
     def create_job(payload: JobCreateRequest, user: dict[str, Any] = Depends(current_user)):
-        profile = profile_for_user(None, user)
+        profile = profile_for_user(payload.profile_id, user)
         req_project_id = _member_project_id(payload.project_id, payload.project_slug, user)
         if payload.workflow_id:
             wfrow = _workflow_or_404(payload.workflow_id, user)
@@ -214,7 +214,8 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="job has no steps")
         if not job["session_id"]:
             raise HTTPException(status_code=409, detail="job session missing")
-        profile = profile_for_user(None, user)
+        session = db().execute("SELECT profile_id FROM sessions WHERE id = ?", (job["session_id"],)).fetchone()
+        profile = profile_for_user(session["profile_id"] if session else None, user)
         inputs = _decode_json(job["input"]) if job["input"] else {}
         prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
         conn = db()
@@ -249,6 +250,60 @@ def register(app, deps):
                 _rollback(conn)
                 raise
         app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
+        return _job_payload(_job_or_404(job_id, user))
+
+    @app.post("/api/jobs/{job_id}/link-run")
+    def link_job_run(job_id: int, payload: JobRunLinkRequest, user: dict[str, Any] = Depends(current_user)):
+        """Attach a project-scoped media run to a queued ad-hoc task.
+
+        Chat and Ops share the proven /image and /design execution path, while the
+        job remains the durable lifecycle owner (running -> review -> done).
+        """
+        job = _job_or_404(job_id, user)
+        if job["workflow_id"] is not None or not job["project_id"] or not job["session_id"]:
+            raise HTTPException(status_code=409, detail="only project-scoped ad-hoc tasks can link media runs")
+        run = db().execute(
+            "SELECT * FROM runs WHERE id=? AND session_id=? AND project_id=? AND user_id=?",
+            (payload.run_id, job["session_id"], job["project_id"], user["id"]),
+        ).fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="task media run not found")
+        if run["kind"] not in {"media_image", "media_image-studio"}:
+            raise HTTPException(status_code=422, detail="run is not an image or design task")
+        steps = _decode_json(job["steps_state"] or "[]")
+        if len(steps) != 1:
+            raise HTTPException(status_code=409, detail="media task must have exactly one step")
+        linked_id = steps[0].get("run_id")
+        if linked_id is not None and _as_int(linked_id) != payload.run_id:
+            raise HTTPException(status_code=409, detail="task already has a different run")
+        if job["status"] == "queued":
+            steps[0]["status"] = "running"
+            steps[0]["run_id"] = payload.run_id
+            steps[0]["started_at"] = run["started_at"] or iso_now()
+            with app.state.db_lock:
+                claimed = db().execute(
+                    "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, current_step_idx=0, steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                    (json.dumps(steps), job_id),
+                )
+            if claimed.rowcount == 0:
+                job = _job_or_404(job_id, user)
+        elif job["status"] not in {"running", "review", "done"}:
+            raise HTTPException(status_code=409, detail=f"task cannot link a run while {job['status']}")
+        # Re-read after linking: a fast provider may have completed between the
+        # initial authorization lookup and the queued -> running claim.
+        run = db().execute("SELECT * FROM runs WHERE id=?", (payload.run_id,)).fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="task media run disappeared")
+        run_dict = dict(run)
+        if run["status"] in {"completed", "failed", "cancelled"}:
+            message = db().execute(
+                "SELECT content FROM messages WHERE run_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (payload.run_id,),
+            ).fetchone()
+            answer = message["content"] if message else "Agent produced no output"
+            if run["status"] != "completed":
+                answer = f"BLOCKED: {answer}"
+            app.state.worker._advance_job(run_dict, answer)
         return _job_payload(_job_or_404(job_id, user))
 
     @app.get("/api/jobs")

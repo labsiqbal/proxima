@@ -23,6 +23,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |
+| [ui-shell.md](ui-shell.md) | Shell IA, Ops/Code lifecycle, navigation, gates, accessibility, and extension points | by hand |
 | [workflow-graph.md](workflow-graph.md) | How the gated workflow graph engine plans, executes, reviews, and corrects DAGs | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
@@ -48,7 +49,7 @@ latest state; don't treat as spec.
 | Doc | Role |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | What's next / planned. |
-| `STATUS.md` · `bugfix-log.md` · `wiki/` | Maintainer-local living logs (untracked; present on maintainer machines only). |
+| `STATUS.md` · `bugfix-log.md` · `wiki/` · `CLAUDE-HANDOFF.md` | Maintainer-local living logs and session handoffs (untracked; present on maintainer machines only). |
 
 ## 🧭 Pending design
 

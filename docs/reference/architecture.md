@@ -26,8 +26,9 @@ Client Protocol (ACP)**.
 Owner ── Profile ── Runner ── Project / Workspace
 ```
 
-+ **Owner** — the sole user. Auto-created on first request; the SPA signs in via
-  `POST /auth/auto` (no password). The access gate is the _network_, not a login.
++ **Owner** — the sole user. First run requires setting an owner password; login
+  establishes a bearer-token/HttpOnly-cookie session. Network controls remain the
+  primary boundary, with application authentication as defense in depth.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
   model, and system instructions ("soul").
 + **Runner** — the agent CLI a profile drives (Claude Code / Codex / Gemini / Hermes),
@@ -357,8 +358,16 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 
 ## Security boundary
 
-Proxima assumes **external** network access control. Anyone who reaches the API
-is treated as the owner; agents run with the OS privileges of the service user. There
-is no in-app authz beyond `/auth/auto`. Detail + threat model:
+Proxima relies primarily on **external** network access control and adds a single-owner
+password/session gate as defense in depth. Authenticated requests act as the owner;
+agents run with the OS privileges of the service user. Detail + threat model:
 [security-boundaries.md](../security-boundaries.md) and
 [prompt-injection-hardening.md](../prompt-injection-hardening.md).
+
+## Shell and task/schedule data flow
+
+`App.tsx` remains the single view owner. It also owns a Workflows mode (`sequential | advanced | scheduled`) without extending `View`; Advanced embeds the gated graph surface under the single Workflows destination. Ops Task Composer creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Ops project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
+
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, account actions, and terminal-compatible content mounting. `App.tsx` tracks the selected workspace plus each workspace's last destination; `Sidebar` renders Ops-specific or Code-specific navigation. Global Projects/Agents/Settings preserve the selected workspace. Terminal is classified as Code-only and remains mount-once/hide; Tasks and task detail are Ops-owned destinations. The removed generic right panel does not affect destination-owned layouts: Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+
+Authentication boot checks setup state, requires set-password or login, and resumes from the HttpOnly `proxima_session` cookie into an in-memory bearer token.

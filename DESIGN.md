@@ -1,6 +1,6 @@
 # Design
 
-Visual system for Proxima. Documents the **existing** implementation in `apps/web/src/styles.css` (single global stylesheet, CSS custom properties). Register: dual — **characterful command-center** for signature surfaces (Home / Command Center), **calm and focused** for working tools (the tool disappears into the task). (See PRODUCT.md; the earlier "premium-minimal" framing was dropped as too plain.) Edit the tokens in `styles.css`; this file is the map.
+Visual system for Proxima. Documents the **existing** implementation in `apps/web/src/styles.css` (single global stylesheet, CSS custom properties). The register is calm, compact, and task-first: the shell keeps real work in front without decorative command-center theater. Edit the tokens in `styles.css`; this file is the map.
 
 ## Theme & color strategy
 
@@ -12,7 +12,7 @@ Visual system for Proxima. Documents the **existing** implementation in `apps/we
 ### Color roles (light → dark via `[data-theme]`)
 
 | Role | Token | Light | Dark |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Body / chat surface | `--ui-chat-surface-background` | `#fbfcfe` | `#0d1117` |
 | Surface (cards) | `--ui-surface` | `#ffffff` | `#161b22` |
 | Surface subtle | `--ui-surface-subtle` | `#f8fafc` | `#1c232c` |
@@ -63,26 +63,21 @@ Visual system for Proxima. Documents the **existing** implementation in `apps/we
 
 ## Layout
 
-- **App shell:** CSS grid — left sidebar (`--left-w` ~294px) · main pane · right rail (`--right-w` ~292px). `.main-pane` scrolls; content capped ~1060px and centered on wide screens.
-- **Responsive (structural, not fluid type):** right rail hidden ≤1180px; sidebar becomes a drawer + `.mobile-topbar` ≤767px; kanban 4→2→1 cols; home grid 2→1 col; the job-flow + side panel stack ≤860px.
-- **Home dashboard:** deterministic 2-col grid — Activity (full) → Workflows | Scheduled → Tasks | Recent(tall) → Projects.
+- **App shell:** CSS grid — left sidebar (`--left-w` ~294px) and the main pane. `.main-pane` scrolls; content is centered and uses the available width.
+- **Responsive (structural, not fluid type):** sidebar becomes a drawer + `.mobile-topbar` ≤767px; kanban 4→2→1 cols; home grid 2→1 col; the job-flow + side panel stack ≤860px.
+- **Ops Home:** a single integrated Task Composer leads. Project/folder, Agent, attachments, image/design intents, and execution policy belong inside its chrome; destination dashboard cards do not render beneath it. At most one compact review-attention strip follows.
 - **Density on demand:** roomy by default; tables/logs/data go dense only where the task needs it.
 
-## Signature surfaces — Command Center (the Home)
+## Ops Home
 
-The Home is the **brand moment**: a deliberate **dark "command-center"** hero, independent of the app theme, that contrasts with the lighter task tools around it. Pattern (see `.home-command` / `.cmd-*` in `styles.css`):
+Home is the task-first Ops surface, not a decorative command center. Its primary action creates a real project-scoped durable task through a dedicated composer without Code collaboration pills. Project, Scheduled, Deliverables, and task monitoring live in their dedicated destinations rather than duplicate Home cards. Home may show one truthful compact review-attention strip and never mixes ordinary Code sessions into Ops. The surface follows the active theme and shared token/component vocabulary.
 
-- **Always-dark surface:** near-black `#070a0f`, ink `#e9eff7`, dim `#707c8c`, hairline `rgba(255,255,255,.075)` (scoped `--cmd-*` vars). Not theme-flipped.
-- **Accent = neon.** The active theme's `--ui-accent` is the glow colour (so it still personalizes). Glow via `text-shadow` / SVG `feGaussianBlur` / `box-shadow` with `color-mix(... var(--ui-accent) …%, transparent)`. Green `--ui-success` = live/online glow.
-- **Depth, not flat:** radial accent glows + a faint masked grid texture (`.cmd-bg`) behind translucent panels (`linear-gradient(rgba white .03→.01)` + hairline border).
-- **Operator typography:** `--font-mono` for labels, readouts, timestamps, status lines — uppercase, wide tracking. Inter for the big focal headline.
-- **Glowing data viz:** SVG area+line with a glow filter; the line **draws in** (`pathLength=1` + `stroke-dashoffset` 1→0). Mono readouts count up. Live dots blink/pulse.
-- **Restraint still applies:** it breathes (glow + space), it is not cluttered; reduced-motion kills the draws/pulses.
+**Do:** prioritize the brief, project context, truthful state, clear focus, and compact supporting information. **Don't:** add synthetic telemetry, always-dark command-center chrome, identical marketing cards, gradient text, or effects that compete with the task.
 
-This dual register is intentional: **signature surfaces are bold; working tools stay focused** (the established light/dark product system above).
+## Compact Ops / Code shell
 
-## Do / Don't (Proxima specific)
+Proxima uses a compact two-region desktop shell: subdued navigation on the left and a centered working surface. The Ops/Code switch changes working register without changing the underlying job or chat lifecycle. Ops is task-first and calm; Code preserves the current chat session. A New session control in the Code header is the explicit action that clears the current session.
 
-**Do:** reuse the `--ui-*` tokens + component classes for **working tools**; give **signature surfaces** real presence (the command-center pattern); use the accent as the one bold/glow colour; resolve every state with the motion scale; respect reduced-motion + low-end hardware (transform/opacity, glow stays cheap).
+The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, one Workflows destination, Artifacts, feature-gated Design, and an Advanced group for Video. Workflows itself contains Sequential, feature-gated Advanced, and Scheduled modes. Code contains New session, Projects, Terminal, and recent sessions. Tasks is the permanent Ops execution/review index and each task opens a dedicated workspace. Agents and Settings stay in the account/profile menu; Wiki is under Settings → Knowledge & Wiki. Artifacts are project-owned outputs; Design is a separate, gated canvas destination.
 
-**Don't:** the AI-2026 cream-bg + violet-accent monoculture (default accent stays blue; signatures go dark); stiff corporate navy-gold; **cheap-SaaS clichés** (hero-metric template, identical icon-heading-text card grids, eyebrows-everywhere, gradient *text*); thoughtless clutter; or the opposite failure — a **flat, characterless, all-white** dashboard with no presence. Side-stripe borders and default decorative glassmorphism remain banned.
+The left navigation can collapse or resize by pointer or keyboard; mobile uses a drawer and a narrow single-column Ops dashboard.

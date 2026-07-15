@@ -6,6 +6,7 @@ import type { Project } from '../types'
 
 export function ProjectsScreen({ token, projects, onActiveProject, onRefresh }: { token: string; projects: Project[]; onActiveProject: (p: Project) => void; onRefresh: () => Promise<void> }) {
   const [slug, setSlug] = React.useState('')
+  const [query, setQuery] = React.useState('')
   const [slugEdited, setSlugEdited] = React.useState(false)
   const [name, setName] = React.useState('')
   const [selected, setSelected] = React.useState<Project | null>(projects[0] || null)
@@ -66,11 +67,14 @@ export function ProjectsScreen({ token, projects, onActiveProject, onRefresh }: 
     } catch (err) { if (mountedRef.current && seq === actionSeq.current) setError(msg(err)) } finally { if (mountedRef.current && seq === actionSeq.current) setBusy(null) }
   }
 
-  return <section className="projects-view">
+  const filteredProjects = projects.filter(project => `${project.name} ${project.slug}`.toLowerCase().includes(query.trim().toLowerCase()))
+
+  return <section className="projects-view destination-view">
     <div className="panel project-list-panel">
       <div className="panel-head"><h3>Projects</h3><span>{projects.length}</span></div>
+      <input className="destination-search" type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search projects" aria-label="Search projects" />
       <button className={`project-add-btn ${rightMode === 'add' ? 'active' : ''}`} disabled={!!busy} onClick={() => { setRightMode('add'); setSelected(null) }}>➕ Add project</button>
-      {projects.map(project => <button className={`project-card ${rightMode === 'manage' && selected?.slug === project.slug ? 'active' : ''}`} disabled={!!busy} key={project.slug} onClick={() => { setSelected(project); onActiveProject(project); setRenameVal(''); setRightMode('manage') }}><strong>{project.name}</strong><small>{project.slug}</small></button>)}
+      {filteredProjects.map(project => <button className={`project-card ${rightMode === 'manage' && selected?.slug === project.slug ? 'active' : ''}`} disabled={!!busy} key={project.slug} onClick={() => { setSelected(project); onActiveProject(project); setRenameVal(''); setRightMode('manage') }}><strong>{project.name}</strong><small>{project.slug}</small></button>)}
     </div>
     <div className="panel project-actions-panel">
       {rightMode === 'add'

@@ -2,10 +2,12 @@ import { api } from './client'
 import type { Job, JobStatus } from '../types'
 
 // No workflow_id = ad-hoc 1-step job; put the task text in input.brief.
-export const createJob = (token: string, body: { workflow_id?: number | null; project_id?: number | null; project_slug?: string | null; input?: any; title?: string }) =>
+export const createJob = (token: string, body: { workflow_id?: number | null; project_id?: number | null; project_slug?: string | null; profile_id?: number | null; input?: any; title?: string }) =>
   api<Job>('/api/jobs', token, { method: 'POST', body: JSON.stringify(body) })
 
 export const startJob = (token: string, id: number) => api<Job>(`/api/jobs/${id}/start`, token, { method: 'POST' })
+
+export const linkJobRun = (token: string, id: number, runId: number) => api<Job>(`/api/jobs/${id}/link-run`, token, { method: 'POST', body: JSON.stringify({ run_id: runId }) })
 
 export const getJob = (token: string, id: number) => api<Job>(`/api/jobs/${id}`, token)
 

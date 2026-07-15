@@ -6,6 +6,7 @@ import { listSchedules, createSchedule, updateSchedule, deleteSchedule } from '.
 import { Dropdown } from '../components/ui/Dropdown'
 import { confirmDialog } from '../components/ui/Dialog'
 import { BackButton } from '../components/ui/BackButton'
+import { ScheduleManager, isValidCron } from '../components/workflows/ScheduleManager'
 
 const clean = (n: string) => n.replace(/\s*\(private\)\s*$/i, '')
 type StepDraft = StepInput
@@ -208,8 +209,6 @@ function cronHint(cron: string): string {
   const hit = CRON_PRESETS.find(p => p.cron && p.cron === cron.trim())
   return hit ? hit.label : cron
 }
-const isValidCron = (cron: string) => cron.trim().split(/\s+/).length === 5
-
 function ScheduleModal({ token, workflow, onClose }: { token: string; workflow: Workflow; onClose: () => void }) {
   const declared = workflow.inputs || []
   const hasInputs = declared.length > 0
@@ -349,8 +348,8 @@ function ScheduleModal({ token, workflow, onClose }: { token: string; workflow: 
   </div></div>
 }
 
-export function WorkflowsScreen({ token, projects, activeProject, onActiveProject, onOpenJob, onIterate, draft, onDraftConsumed }: {
-  token: string; projects: Project[]; activeProject: Project | null; onActiveProject?: (p: Project) => void
+export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedContent, token, projects, activeProject, onActiveProject, onOpenJob, onIterate, draft, onDraftConsumed }: {
+  mode?: 'sequential' | 'advanced' | 'scheduled'; onModeChange?: (mode: 'sequential' | 'advanced' | 'scheduled') => void; advancedContent?: React.ReactNode; token: string; projects: Project[]; activeProject: Project | null; onActiveProject?: (p: Project) => void
   onOpenJob: (jobId: number) => void; onIterate: (s: ChatSession) => void
   draft?: WorkflowDraft | null; onDraftConsumed?: () => void
 }) {
@@ -465,12 +464,18 @@ export function WorkflowsScreen({ token, projects, activeProject, onActiveProjec
     }
   }
 
+  const modeNav = <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow type"><button className={mode === 'sequential' ? 'active' : ''} role="tab" aria-selected={mode === 'sequential'} onClick={() => onModeChange?.('sequential')}>Sequential</button>{advancedContent && <button className={mode === 'advanced' ? 'active' : ''} role="tab" aria-selected={mode === 'advanced'} onClick={() => onModeChange?.('advanced')}>Advanced</button>}<button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button></div>
+
+  if (mode === 'advanced' && advancedContent) return <section className="workflow-advanced-view">{modeNav}{advancedContent}</section>
+  if (mode === 'scheduled') return <section className="tasks-view scheduled-view">{modeNav}<ScheduleManager token={token} workflows={workflows} /></section>
+
   if (editor) return <section className="tasks-view"><WorkflowEditor token={token} init={editor} projectSlug={slug || null}
     onBack={() => setEditor(null)}
     onSaved={async w => { setEditor(null); await reload(); void w }}
     onDeleted={() => { setEditor(null); void reload() }} /></section>
 
   return <section className="tasks-view">
+    {modeNav}
     <div className="tasks-head">
       {projects.length > 0 && <Dropdown value={slug} onChange={pickProject} minWidth={200} disabled={!!actionKey} options={projects.map(p => ({ value: p.slug, label: clean(p.name) }))} />}
       <button className="primary-button" disabled={!!actionKey} onClick={() => setEditor({ id: null, name: '', description: '', category: '', inputs: [], steps: [blankStep()] })}>New workflow</button>

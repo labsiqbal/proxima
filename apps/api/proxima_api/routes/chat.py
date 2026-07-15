@@ -734,6 +734,9 @@ def register(app, deps):
                     conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
                 worker.add_event(run_id, session_id, project_id, "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": []})
                 worker.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
+                run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                if run_row:
+                    worker._advance_job(dict(run_row), f"BLOCKED: {text}")
                 return
             artifact, text = box["result"]
             with app.state.db_lock:
@@ -743,6 +746,9 @@ def register(app, deps):
                 conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
             worker.add_event(run_id, session_id, project_id, "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": [artifact]})
             worker.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": "media"})
+            run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run_row:
+                worker._advance_job(dict(run_row), text)
         except Exception:
             logging.getLogger("proxima.api").exception("media run %s finalization failed", run_id)
             with contextlib.suppress(Exception):

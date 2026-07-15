@@ -133,6 +133,15 @@ class RunAdvancers:
             # resumes via /approve (which enqueues the next step when one remains).
             last = idx + 1 >= len(steps)
             gate = bool(steps[idx].get("review_required"))
+            inputs = json.loads(job["input"] or "{}")
+            if last and inputs.get("execution_policy") == "autonomous":
+                state.guarded_transition(
+                    db, "jobs", int(job["id"]), "done", ("running",),
+                    set_extra="steps_state = ?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
+                    set_params=(json.dumps(steps),),
+                )
+                add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "done", "step": idx, "autonomous": True})
+                return
             if last or gate:
                 state.guarded_transition(
                     db, "jobs", int(job["id"]), "review", ("running",),
@@ -141,7 +150,6 @@ class RunAdvancers:
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "review", "step": idx, "gate": gate})
                 return
-            inputs = json.loads(job["input"] or "{}")
             nxt = idx + 1
             prompt = wf.build_step_prompt(steps[nxt], nxt, len(steps), inputs)
             cur = db.execute(

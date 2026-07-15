@@ -319,6 +319,7 @@ export type View =
 	| "artifacts"
 	| "workflows"
 	| "activity"
+	| "task"
 	| "graph"
 	| "terminal"
 	| "design"

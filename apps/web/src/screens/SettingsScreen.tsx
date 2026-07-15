@@ -25,6 +25,7 @@ import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
 import type { AppFeatures, Profile, Project, Runner, User } from '../types'
 import { RunnersScreen } from './RunnersScreen'
+import { WikiScreen } from './WikiScreen'
 
 function CollaborationSettingsPanel({ token }: { token: string }) {
   const [brainstormAgents, setBrainstormAgents] = React.useState<2 | 3>(3)
@@ -81,11 +82,12 @@ const shortText = (s?: string | null, max = 120) => {
   const clean = (s || '').replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
 }
-type SettingsSectionKey = 'account' | 'agents' | 'media' | 'remote' | 'diagnostics'
+type SettingsSectionKey = 'account' | 'agents' | 'knowledge' | 'media' | 'remote' | 'diagnostics'
 
 const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
   { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
+  { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
   { key: 'media', label: 'Media & Integrations', hint: 'Image and video generation backends' },
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
@@ -501,7 +503,7 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, runners, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; runners: Runner[]; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
@@ -540,6 +542,7 @@ export function SettingsScreen({ token, user, profiles, projects, runners, featu
   const activeMeta = settingsSections.find(s => s.key === activeSection) ?? settingsSections[0]
 
   const accountPanel = <div className="panel"><div className="panel-head"><h3>Account</h3></div><div className="settings-account"><strong>{user.username}</strong><span className="muted">{profiles.length} profile{profiles.length !== 1 ? 's' : ''} · {projects.length} project{projects.length !== 1 ? 's' : ''}</span></div></div>
+  const sourceLink = <a className="ghost-button" href="https://github.com/labsiqbal/proxima" target="_blank" rel="noopener noreferrer">Source code · AGPL-3.0</a>
   const updatesPanel = <div className="panel"><div className="panel-head"><h3>Updates</h3><span>releases</span></div>
     <div className="settings-updates">
       <strong>Proxima v{updateStatus?.current_version ?? '…'}</strong>
@@ -548,7 +551,7 @@ export function SettingsScreen({ token, user, profiles, projects, runners, featu
         : <span className="muted">{updateStatus ? `Up to date${updateStatus.checked_at ? ` · checked ${new Date(updateStatus.checked_at).toLocaleString()}` : ' · not checked yet'}` : 'Loading…'}</span>}
       <button type="button" className="ghost-button" onClick={() => void onCheckUpdates?.()} disabled={!!updateChecking}>{updateChecking ? 'Checking…' : 'Check for updates'}</button>
       {/* AGPL §13: network users must be able to get the source of the running app. */}
-      <a className="ghost-button" href="https://github.com/labsiqbal/proxima" target="_blank" rel="noopener noreferrer">Source code · AGPL-3.0</a>
+      {sourceLink}
     </div></div>
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <button className={`toggle-pill ${notif ? 'on' : ''}`} onClick={() => void toggleNotif()} disabled={notifBusy}><span className="toggle-knob" />{notifBusy ? 'Requesting…' : notif ? 'On' : 'Off'}</button> : <p className="muted">Not supported in this browser.</p>}</div>
@@ -558,7 +561,9 @@ export function SettingsScreen({ token, user, profiles, projects, runners, featu
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : activeSection === 'agents'
       ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
-      : activeSection === 'media'
+      : activeSection === 'knowledge'
+        ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
+        : activeSection === 'media'
         ? <><ImageGenerationPanel token={token} />{features.video && <VideoGenerationPanel token={token} />}</>
         : activeSection === 'remote'
           ? <RemoteAccessGuide />

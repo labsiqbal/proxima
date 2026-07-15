@@ -107,8 +107,13 @@ class JobCreateRequest(BaseModel):
     workflow_id: int | None = None
     project_id: int | None = None
     project_slug: str | None = None
+    profile_id: int | None = None
     input: dict[str, Any] | None = None
     title: str | None = None
+
+
+class JobRunLinkRequest(BaseModel):
+    run_id: int = Field(gt=0)
 
 
 class JobApproveRequest(BaseModel):

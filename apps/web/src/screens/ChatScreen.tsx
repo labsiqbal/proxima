@@ -34,7 +34,7 @@ import { WikiNotePreview } from "../components/wiki/WikiNotePreview";
 import { ConvertToWorkflowButton } from "../components/ConvertToWorkflowButton";
 import { Composer } from "../components/chat/Composer";
 import { Dropdown } from "../components/ui/Dropdown";
-import { IconAgents, IconClose, IconWiki } from "../components/shell/icons";
+import { IconAgents, IconClose, IconNewChat, IconWiki } from "../components/shell/icons";
 import { notify } from "../lib/notify";
 
 const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
@@ -771,7 +771,11 @@ export function ChatScreen(props: {
 		</div>
 	) : null;
 	return (
-		<section className="chat-stage">
+		<section className="chat-stage code-view">
+			<header className="code-header">
+				<div><p className="eyebrow">Code</p><strong>{activeSession?.title || "New session"}</strong></div>
+				<div className="code-context"><span>{props.activeProject ? cleanName(props.activeProject.name) : "No project"}</span><span>{props.activeProfile?.name || "No profile"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New session" title="Start a new Code session"><IconNewChat size={15} /><span>New session</span></button></div>
+			</header>
 			{buildBanner}
 			{goalBanner}
 			<ChatThread

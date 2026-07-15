@@ -54,6 +54,13 @@ export function Composer({
 	placeholder = "Message your agent in this project…",
 	attachIconOnly = false,
 	promptModes = true,
+	generateKinds,
+	combinedActions = false,
+	footerContext,
+	submitIconOnly = false,
+	submitLabel = "Send",
+	submittingLabel = "Sending…",
+	textareaLabel,
 	draftSeed,
 	draftSeedNonce,
 	onSubmit,
@@ -68,6 +75,13 @@ export function Composer({
 	// dropdown. Studio chats (design/video) turn this off — they are single-agent
 	// scene-editing sessions where neither collaboration modes nor media commands apply.
 	promptModes?: boolean;
+	generateKinds?: Array<"image" | "design" | "video">;
+	combinedActions?: boolean;
+	footerContext?: React.ReactNode;
+	submitIconOnly?: boolean;
+	submitLabel?: string;
+	submittingLabel?: string;
+	textareaLabel?: string;
 	draftSeed?: string;
 	draftSeedNonce?: number;
 	onSubmit: (text: string, promptMode?: PromptMode) => Promise<void>;
@@ -75,6 +89,7 @@ export function Composer({
 	const [draft, setDraft] = React.useState("");
 	const [mode, setMode] = React.useState<PromptMode>("chat");
 	const [genOpen, setGenOpen] = React.useState(false);
+	const mediaKinds = generateKinds ?? (promptModes ? ["image", "design", "video"] as const : []);
 	const genRef = React.useRef<HTMLDivElement>(null);
 
 	React.useEffect(() => {
@@ -230,6 +245,11 @@ export function Composer({
 		setMode("chat");
 		try {
 			await onSubmit(content, submitMode);
+		} catch {
+			if (mountedRef.current && seq === submitSeq.current) {
+				setDraft(text);
+				setAtts(atts);
+			}
 		} finally {
 			if (mountedRef.current && seq === submitSeq.current) setSubmitting(false);
 		}
@@ -297,6 +317,7 @@ export function Composer({
 			<textarea
 				ref={taRef}
 				rows={1}
+				aria-label={textareaLabel}
 				placeholder={placeholder}
 				value={draft}
 				onChange={(e) => setDraft(e.target.value)}
@@ -326,7 +347,7 @@ export function Composer({
 					hidden
 					onChange={(e) => void handleFiles(e.target.files)}
 				/>
-				<button
+				{!combinedActions && <button
 					type="button"
 					className="attach-btn"
 					disabled={!slug || uploading || submitting}
@@ -346,33 +367,36 @@ export function Composer({
 							{uploading ? "Uploading…" : "Attach"}
 						</span>
 					)}
-				</button>
+				</button>}
 				{/* Media generate lives with the prompt modes: studio chats (promptModes
 				    off) are scene-editing sessions where /image · /video don't apply. */}
-				{promptModes && <div className="composer-gen" ref={genRef}>
+				{(combinedActions || mediaKinds.length > 0) && <div className="composer-gen" ref={genRef}>
 					<button
 						type="button"
 						className="attach-btn"
 						disabled={disabled || submitting}
 						aria-haspopup="menu"
 						aria-expanded={genOpen}
-							title="Generate media with the selected provider (/image, /video) or draft a design (/design)"
+						title={combinedActions ? "Add files, image task, or design task" : "Generate media with the selected provider (/image, /video) or draft a design (/design)"}
 						onClick={() => setGenOpen((o) => !o)}
 					>
-						<IconSparkle size={15} />
-						{!attachIconOnly && <span className="composer-label">Generate</span>}
+						{combinedActions ? <IconPlus size={16} /> : <IconSparkle size={15} />}
+						{!attachIconOnly && <span className="composer-label">{combinedActions ? "Add" : "Generate"}</span>}
 					</button>
 					{genOpen && (
 						<div className="composer-gen-menu" role="menu">
-							<button type="button" role="menuitem" onClick={() => pickGenerate("/image")}>
+							{combinedActions && <button type="button" role="menuitem" disabled={!slug || uploading} onClick={() => { setGenOpen(false); fileRef.current?.click(); }}>
+								<IconFile size={15} /> Attach files
+							</button>}
+							{mediaKinds.includes("image") && <button type="button" role="menuitem" onClick={() => pickGenerate("/image")}>
 								<IconSparkle size={15} /> Image
 								<span className="composer-gen-hint">/image</span>
-							</button>
-								{features.designStudio && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
+							</button>}
+								{mediaKinds.includes("design") && features.designStudio && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
 									<IconDesign size={15} /> Design draft
 									<span className="composer-gen-hint">/design</span>
 								</button>}
-								{features.video && <button type="button" role="menuitem" onClick={() => pickGenerate("/video")}>
+								{mediaKinds.includes("video") && features.video && <button type="button" role="menuitem" onClick={() => pickGenerate("/video")}>
 									<IconVideo size={15} /> Video
 									<span className="composer-gen-hint">/video</span>
 								</button>}
@@ -400,8 +424,9 @@ export function Composer({
 						);
 					})}
 				</div>}
+				{footerContext}
 				<button
-					className="primary-button"
+					className={`primary-button ${submitIconOnly ? "icon-only" : ""}`}
 					disabled={
 						disabled ||
 						uploading ||
@@ -409,15 +434,15 @@ export function Composer({
 						(!draft.trim() && atts.length === 0)
 					}
 					type="submit"
-					aria-label={submitting ? "Sending message" : "Send message"}
-					title={submitting ? "Sending…" : "Send"}
+					aria-label={submitting ? submittingLabel : submitLabel}
+					title={submitting ? submittingLabel : submitLabel}
 				>
 					<span className="composer-icon" aria-hidden="true">
 						<IconSend size={16} />
 					</span>
-					<span className="composer-label">
-						{submitting ? "Sending…" : "Send"}
-					</span>
+					{!submitIconOnly && <span className="composer-label">
+						{submitting ? submittingLabel : submitLabel}
+					</span>}
 				</button>
 			</div>
 		</form>

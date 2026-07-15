@@ -160,7 +160,7 @@ function FileView({ token, slug, path, fs, onClose }: { token: string; slug: str
   </div>
 }
 
-export function ArtifactsScreen({ token, projects, activeProject, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onBackToChat, designStudioEnabled = false, onOpenDesign }: {
+export function ArtifactsScreen({ token, projects, activeProject, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign }: {
   token: string
   projects: Project[]
   activeProject: Project | null
@@ -169,7 +169,8 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
   onPendingConsumed?: () => void
   onPendingArtifactConsumed?: () => void
   onActiveProject?: (p: Project) => void
-  onBackToChat?: () => void
+  onBack?: () => void
+  backLabel?: string
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
 }) {
@@ -309,7 +310,7 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
 
   return <section className="artifacts-view">
     <div className="artifacts-head">
-      {onBackToChat && <BackButton label="Back to chat" onClick={onBackToChat} />}
+      {onBack && <BackButton label={backLabel} onClick={onBack} />}
       <div>
         <h2>Artifacts</h2>
         <p className="muted">Outputs and app previews for the active project.</p>
