@@ -13518,6 +13518,12 @@ div.result-media {
   --shadow-shell-card: 0 0.75rem 2.5rem color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
 }
 :root[data-theme="dark"] {
+  /* Surfaces here are warm charcoal (R≥G≥B). The base dark accent #4f8cff is a cold,
+     vivid sky-blue that clashes against them, so soften it toward the same temperature:
+     lower saturation, a hair warmer. Still unmistakably blue (PRODUCT.md), just no
+     longer fighting the neutrals. */
+  --ui-accent: #5f92e6;
+  --theme-primary: #5f92e6;
   --ui-bg-chrome: #20201f;
   --ui-bg-sidebar: #292928;
   --ui-bg-editor: #222221;
