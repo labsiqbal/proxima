@@ -18,10 +18,17 @@ from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[re
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
 
 OutputKind: TypeAlias = Literal["text", "json", "artifact-ref"]
+NodeType: TypeAlias = Literal["agent", "trigger"]
 Graph: TypeAlias = dict[str, Any]
 
 _OUTPUT_KINDS: frozenset[str] = frozenset({"text", "json", "artifact-ref"})
 _RUNNABLE_STATUSES: frozenset[str] = frozenset({"pending", "stale"})
+_NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger"})
+# Only manual entry exists today. Schedule/webhook/event arrive as further kinds
+# on this node, which is the whole point of modelling the entry point as a node:
+# adding one is a new kind here, not a new execution path.
+_TRIGGER_KINDS: frozenset[str] = frozenset({"manual"})
+TRIGGER_OUTPUT_KIND: OutputKind = "json"
 
 
 class GraphValidationError(ValueError):
@@ -61,6 +68,55 @@ def parse_output_contract(raw: Mapping[str, Any]) -> OutputContract:
             raise GraphValidationError(f"output_schema is invalid: {exc.message}") from exc
 
     return OutputContract(kind=cast(OutputKind, kind), schema=schema)
+
+
+def parse_node_type(raw: Mapping[str, Any], node_id: str) -> NodeType:
+    """Parse a node's ``type``, defaulting to the agent node every graph had."""
+    node_type = raw["type"] if "type" in raw else "agent"
+    if not isinstance(node_type, str) or node_type not in _NODE_TYPES:
+        allowed = ", ".join(sorted(_NODE_TYPES))
+        raise GraphValidationError(f"node '{node_id}' type must be one of: {allowed}")
+    return cast(NodeType, node_type)
+
+
+def _parse_trigger_kind(raw: Mapping[str, Any], node_id: str) -> str:
+    kind = raw["trigger_kind"] if "trigger_kind" in raw else "manual"
+    if not isinstance(kind, str) or kind not in _TRIGGER_KINDS:
+        allowed = ", ".join(sorted(_TRIGGER_KINDS))
+        raise GraphValidationError(
+            f"node '{node_id}' trigger_kind must be one of: {allowed}"
+        )
+    return kind
+
+
+def _parse_profile_id(raw: Mapping[str, Any], node_id: str) -> int | None:
+    """Parse the optional per-node execution agent.
+
+    The value is only a *reference*. Whether the profile exists and belongs to the
+    job's owner is settled by the executor against the database at dispatch time —
+    this module performs no I/O, and an authorization check that ran here would be
+    stale by the time the node runs anyway.
+    """
+    value = raw.get("profile_id")
+    if value is None:
+        return None
+    # bool is an int subclass; profile_id=True must not silently mean profile 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise GraphValidationError(
+            f"node '{node_id}' profile_id must be an integer or null"
+        )
+    return value
+
+
+def _parse_coordinate(raw: Mapping[str, Any], node_id: str, axis: str) -> float | None:
+    value = raw.get(axis)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise GraphValidationError(f"node '{node_id}' {axis} must be a number or null")
+    if value != value or value in (float("inf"), float("-inf")):  # NaN/inf
+        raise GraphValidationError(f"node '{node_id}' {axis} must be a finite number")
+    return float(value)
 
 
 def _parse_raw_graph(raw: Mapping[str, Any] | str) -> Mapping[str, Any]:
@@ -120,21 +176,47 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
         ):
             raise GraphValidationError(f"node '{node_id}' depends_on must be an array of node ids")
 
-        contract = parse_output_contract(raw_node)
+        node_type = parse_node_type(raw_node, node_id)
         node = deepcopy(dict(raw_node))
         node.update(
             {
                 "id": node_id,
+                "type": node_type,
                 "name": name.strip(),
                 "instruction": instruction.strip(),
                 "depends_on": list(dict.fromkeys(dep.strip() for dep in depends_on)),
-                "output_kind": contract.kind,
             }
         )
-        if contract.schema is not None:
-            node["output_schema"] = contract.schema
-        else:
+
+        if node_type == "trigger":
+            # A trigger emits the job input, so its contract is fixed rather than
+            # authored: forcing it here keeps every downstream node's hand-off
+            # typed the same way whether the graph starts at a trigger or not.
+            node["trigger_kind"] = _parse_trigger_kind(raw_node, node_id)
+            node["output_kind"] = TRIGGER_OUTPUT_KIND
             node.pop("output_schema", None)
+            node.pop("profile_id", None)
+            node.pop("review_required", None)
+        else:
+            contract = parse_output_contract(raw_node)
+            node["output_kind"] = contract.kind
+            node.pop("trigger_kind", None)
+            if contract.schema is not None:
+                node["output_schema"] = contract.schema
+            else:
+                node.pop("output_schema", None)
+            profile_id = _parse_profile_id(raw_node, node_id)
+            if profile_id is None:
+                node.pop("profile_id", None)
+            else:
+                node["profile_id"] = profile_id
+
+        for axis in ("x", "y"):
+            coordinate = _parse_coordinate(raw_node, node_id, axis)
+            if coordinate is None:
+                node.pop(axis, None)
+            else:
+                node[axis] = coordinate
         nodes.append(node)
 
     edges: list[dict[str, Any]] = []
@@ -175,6 +257,8 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
         # delete an edge only for normalize_graph() to silently recreate it.
         node.pop("depends_on", None)
 
+    _validate_triggers(nodes, edges)
+
     graph: Graph = deepcopy(dict(source))
     graph["nodes"] = nodes
     graph["edges"] = edges
@@ -182,6 +266,35 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
     # free of derived state so it remains stable as a frozen job snapshot.
     topological_order(graph)
     return graph
+
+
+def _validate_triggers(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+    """Enforce that a trigger is an entry point, and that there is only one.
+
+    A trigger with an upstream would have to wait for work to finish before the
+    workflow could start, which is a contradiction. One trigger per graph keeps
+    "when does this run" a single answer the owner can read off the canvas.
+    """
+    triggers = [node["id"] for node in nodes if node["type"] == "trigger"]
+    if len(triggers) > 1:
+        raise GraphValidationError(
+            f"graph must have at most one trigger node; found: {', '.join(triggers)}"
+        )
+    if not triggers:
+        return
+    trigger_id = triggers[0]
+    if any(edge["to"] == trigger_id for edge in edges):
+        raise GraphValidationError(
+            f"trigger node '{trigger_id}' must have no dependencies"
+        )
+
+
+def trigger_node_id(graph: Mapping[str, Any]) -> str | None:
+    """Return the graph's trigger node id, if it has one."""
+    for node in graph.get("nodes", []):
+        if node.get("type") == "trigger":
+            return str(node["id"])
+    return None
 
 
 def dependency_map(graph: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:

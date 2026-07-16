@@ -66,6 +66,14 @@ app = create_app(
         "refresh_credentials": env_bool("PROXIMA_REFRESH_CREDENTIALS", True),
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", 900),
         "run_worker_poll_interval_ms": env_int("PROXIMA_RUN_WORKER_POLL_MS", 250),
+        # Graph fan-out is bounded by both of these: the graph budget decides how
+        # many nodes are dispatched, the worker decides how many actually execute.
+        "run_worker_concurrency": env_int(
+            "PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])
+        ),
+        "graph_node_concurrency": env_int(
+            "PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])
+        ),
         "seed_users": [],
         # Single-user cockpit mode (no login wall / team mgmt; auto-auth as owner).
         "single_user": env_bool("PROXIMA_SINGLE_USER", False),

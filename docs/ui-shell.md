@@ -46,8 +46,12 @@ Workflows appears once in Ops navigation. Its screen owns three modes:
   - **Testing** — a **step outline on the right** (`.wf-outline`) lists the steps with a count and gate markers, and is the workflow's table of contents for a form that gets long: clicking a step jumps the form to it and flashes it. Each outline row carries its own **Run test**, which runs the recipe *through* that step (steps 1..N, inlining the live form so unsaved edits count) and shows the result in the chat. Testing step N runs 1..N because a step's output only means anything with its upstream context; the reply carries no recipe block, so the form is left alone.
 
   There is no separate Iterate action — opening a recipe *is* opening its authoring chat.
-- **Advanced** opens the feature-gated dependency graph for parallel, reviewable orchestration.
+- **Advanced** opens the feature-gated dependency graph for parallel, reviewable orchestration. Where Sequential is chat-and-form, Advanced is **canvas-first**: the canvas is the workspace and everything else yields to it. Node-level actions stay with the node; the plan list collapses; and the node inspector exists only while a node is selected, so an unused panel never holds canvas width.
 - **Scheduled** manages real schedule rows for Sequential workflows.
+
+The modes are one tab click apart, so the bar directly under the tabs is **one shared shell**, not a per-mode invention: same height, padding, gap and rule, with the project picker at the left in the shared `Dropdown` (never a native `<select>`) and the mode's actions at the right — Sequential's *New workflow*, Advanced's *Save template / Save plan / Approve plan & start*. Sequential and Advanced express this from a single CSS rule so they cannot drift apart again. No mode repeats its own tab name back at the user in a title block; the tab already said it.
+
+**Scheduled does not yet follow this.** It still opens with a centred `AUTOMATION / Scheduled / Run real workflows…` title block and has no bar, because it has no bar-level controls (schedules are not project-scoped). Aligning it means deciding where its cron explanation lives — an open call, not an oversight.
 
 Schedule inputs mirror each workflow's declared definitions, validate required values, and serialize values by declared input ID. Workflows without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
 

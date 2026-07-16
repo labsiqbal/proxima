@@ -15,8 +15,11 @@ routes inert and prevents queued graph-architect or graph-node runs from reachin
 ## What it provides
 
 - An architect turns a chat into a typed directed acyclic graph (DAG).
-- The owner reviews and edits the frozen plan before explicitly starting it.
+- The owner reviews, lays out, and edits the frozen plan before explicitly starting it.
 - Every node attempt runs in a fresh hidden ACP session against the selected runner.
+- Each node may name **its own agent**; nodes without one use the job's agent.
+- Independent branches execute **in parallel**, bounded by a concurrency budget.
+- An optional **trigger node** is the graph's entry point. Only `manual` exists today.
 - Upstream results are passed as explicit typed inputs, never implicit chat history.
 - Node output is validated as `text`, JSON Schema-backed `json`, or a contained
   `artifact-ref` before downstream work can start.
@@ -26,9 +29,28 @@ routes inert and prevents queued graph-architect or graph-node runs from reachin
   `stale`, then deterministically recomputes that affected subgraph.
 - A reviewed graph can be saved as a reusable workflow template.
 
-Phase 1 deliberately dispatches only one ready node at a time. A diamond is a real
-DAG and has durable branch state, but its branches do not execute concurrently yet.
-Bounded parallel execution is Phase 2.
+## Concurrency
+
+`dispatch_ready` queues **every** node whose dependencies are satisfied, so the two
+branches of a diamond run at the same time. Two separate limits apply, and the
+smaller one wins:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `graph_node_concurrency` (`PROXIMA_GRAPH_NODE_CONCURRENCY`) | 4 | Nodes of one graph job dispatched at once |
+| `run_worker_concurrency` (`PROXIMA_RUN_WORKER_CONCURRENCY`) | 2 | Runs the worker executes at once, across all of Proxima |
+
+Dispatching is not executing: node runs are queued into the ordinary `runs` table and
+executed by `RunWorker`, so **`run_worker_concurrency` is the real ceiling**. Raising
+the graph budget alone will not widen a fan-out. Both are bounded by the machine —
+each concurrent node is another runner subprocess (see ADR-0001, *Parallelism is
+modest, not massive*).
+
+Because branches overlap, a review gate or failure on one branch pauses the **job**
+while its siblings are still running. Those in-flight nodes are still allowed to
+finish and persist their output; what stops is pulling *new* work forward. Corrections
+wait until no node is `ready`/`running` (`ensure_reviewable`), so a paused job settles
+before it can be edited.
 
 ## Graph data contract
 
@@ -38,14 +60,26 @@ A graph is frozen on each `engine='graph'` job:
 {
   "nodes": [
     {
+      "id": "start",
+      "type": "trigger",
+      "trigger_kind": "manual",
+      "name": "When I run it",
+      "x": -290,
+      "y": 40
+    },
+    {
       "id": "research",
+      "type": "agent",
       "name": "Research",
       "instruction": "Collect verified facts",
       "output_kind": "json",
       "output_schema": {
         "type": "object",
         "required": ["facts"]
-      }
+      },
+      "profile_id": 3,
+      "x": 40,
+      "y": 40
     },
     {
       "id": "write",
@@ -55,13 +89,45 @@ A graph is frozen on each `engine='graph'` job:
       "review_required": true
     }
   ],
-  "edges": [{ "from": "research", "to": "write" }]
+  "edges": [
+    { "from": "start", "to": "research" },
+    { "from": "research", "to": "write" }
+  ]
 }
 ```
 
 Node IDs are unique, edges must reference existing nodes, self-edges and cycles are
 rejected, and edges are the canonical dependency representation. Planner input may
 use `depends_on`; normalization converts it to edges and removes it from nodes.
+
+### Node fields
+
+| Field | Meaning |
+| --- | --- |
+| `type` | `agent` (default) or `trigger`. Absent means `agent`, so graphs predating node types keep working. |
+| `trigger_kind` | Trigger nodes only. `manual` is the only kind today. |
+| `profile_id` | Agent nodes only. The agent this node runs as; absent/null = the job's agent. |
+| `x`, `y` | Canvas position. Absent until the node is dragged, which is what lets un-placed nodes stay auto-laid-out. |
+
+`profile_id` is only a reference. `graph.py` does no I/O, so whether the profile exists
+and belongs to the job's owner is checked by the executor at dispatch time — a node
+naming an agent that is gone fails loudly rather than silently running as the job's
+agent, which would return a plausible answer from the wrong agent.
+
+### The trigger node
+
+A trigger is the graph's entry point and is validated as one: **at most one per graph**,
+and it may have **no incoming edges** (an entry point that waited on upstream work would
+be a contradiction). Its contract is fixed rather than authored — it is forced to
+`output_kind: "json"` and drops `profile_id`/`review_required`/`output_schema`.
+
+It resolves without a runner: `dispatch_ready` completes it immediately with the
+approved **job input** as its output, so downstream nodes receive that input as
+ordinary typed upstream data rather than through a special case. A manual trigger *is*
+the owner pressing start, so there is no work to do.
+
+The point of modelling the entry point as a node is that `schedule`, `webhook`, and
+`event` become further `trigger_kind` values here — not a second execution path.
 
 ### Output contracts
 
@@ -79,22 +145,35 @@ grant permission to read source, config, secrets, or unrelated paths.
 ```text
 chat promotion
   → architect DAG draft
-  → queued graph job (human plan edit gate)
+  → queued graph job (human plan edit + layout gate)
   → Approve plan & start
-  → pending → ready → running → done
-                         ├─ review gate → review → approve → done
-                         └─ invalid/error → failed + job review
+  → trigger (if any) → done immediately, output = job input, no run
+  → every ready node, up to the concurrency budget, in parallel:
+      pending → ready → running → done
+                           ├─ review gate → review → approve → done
+                           └─ invalid/error → failed + job review
   → final review
   → Approve final result → done
 ```
+
+A trigger walks that same `pending → ready → running → done` path rather than jumping
+straight to `done`: skipping states would need a `pending → done` edge in the node state
+machine, and that hole would then exist for every node. The intermediate states never
+leave the dispatch transaction.
 
 The durable state is split between:
 
 - `jobs.graph`: frozen graph snapshot and graph-level status;
 - `node_states`: node status, resolved inputs, validated output, run attempt,
   checkpoint, and optimistic `version`;
-- `runs.kind='wf_node'`: one runner activity for one node attempt;
-- hidden `sessions.job_id`: a fresh ACP conversation for each attempt.
+- `runs.kind='wf_node'`: one runner activity for one node attempt, carrying that
+  node's own agent (`profile_id`/`runner_id`/`model`), not necessarily the job's;
+- hidden `sessions.job_id`: a fresh ACP conversation for each attempt. A fresh session
+  per node is also what lets branches run at once — `claim_run` serializes runs *per
+  session*, so nodes sharing one session could never overlap.
+
+A trigger node has a `node_states` row like any other, but no `runs` row and no
+session: `node_states.run_id` stays null because nothing was executed.
 
 State transitions use status/version/run-attempt guards. Late callbacks from a stale
 attempt cannot overwrite a corrected or rerun node.
@@ -103,8 +182,9 @@ attempt cannot overwrite a corrected or rerun node.
 
 1. Enable the flag and restart Proxima.
 2. Open a chat and choose **To graph**. The architect result opens as a queued plan.
-3. Inspect each node. While queued, edit its name, instruction, output contract,
-   review gate, or dependencies; add/remove nodes; then choose **Save plan**.
+3. Inspect each node. While queued, edit its name, instruction, **agent**, output
+   contract, review gate, or dependencies; add/remove nodes; add a trigger; drag
+   nodes and connections; then choose **Save plan**.
 4. Optionally choose **Save template**.
 5. Choose **Approve plan & start**. This is the mandatory human execution gate.
 6. Inspect live node state and validated outputs on the canvas.
@@ -113,8 +193,74 @@ attempt cannot overwrite a corrected or rerun node.
 8. Saved templates appear in the canvas sidebar; select one to create a fresh queued
    graph job and review its new frozen snapshot before starting.
 
-The SVG canvas uses deterministic topological columns from `graphLayout.ts`; Proxima
-does not add a workflow graph UI dependency.
+### Canvas interaction
+
+Modelled on n8n so the gestures do not have to be guessed:
+
+| Gesture | Result |
+| --- | --- |
+| Drag a node | Moves it; the position is saved on the node as `x`/`y` |
+| Drag empty canvas | Pans |
+| Wheel / **+** / **−** / **⤢** | Zooms; **⤢** frames the whole graph |
+| Drag from a node's right handle onto another node | Creates a connection |
+| Click a connection, then **×** | Removes it |
+
+### Screen layout
+
+The canvas is the workspace; the chrome yields to it.
+
+- **Header bar**: the *same* bar Sequential uses — one shared `.tasks-head, .graph-header`
+  rule, so the two modes cannot drift apart again. Left to right: plan-list toggle, the
+  project picker (the shared `Dropdown`, exactly as Sequential has it), plan title, job
+  status, node count, unsaved marker; then the **plan-level** actions — Save template, Save
+  plan, Approve plan & start. Plan actions live here rather than in the node form because
+  they act on the plan, which is also what allows the inspector to close. The mode tab
+  already names the screen, so the bar does not repeat it in a title block.
+- **Plan list** (plans, templates): collapsible from the header. It is navigation between
+  plans, not something needed while authoring one. The project picker is deliberately *not*
+  here — it is the same control Sequential puts in the bar, so it belongs in the same place.
+- **Canvas tools** (`+ Node`, `+ Trigger`): on the canvas, since adding a node is a canvas
+  act and must not depend on a node being selected. Zoom sits opposite them.
+- **Node inspector**: rendered **only while a node is selected**, with **×** to dismiss. It
+  holds node-level config and the one node-level action, Remove node. A permanent column
+  saying "select a node" would be furniture spending width the canvas could use.
+
+Selecting a plan opens it showing the whole graph with nothing selected. The live poll
+keeps an existing selection but drops one whose node has disappeared.
+
+The screen paints no background of its own — `.main-pane`'s gradient is the app's
+backdrop, and every other destination lets it through (Sequential's card grid, and even
+Tasks' own `.job-list`). The graph screen used to paint an opaque shell *and* opaque
+panels over it, which is why the gradient stopped dead under the mode tabs here and
+nowhere else. The rail and inspector are delineated by their border, not by a fill.
+
+A trigger node is the same shape and size as every other node; only its dashed stroke,
+name and `manual` subtitle mark it as the entry point. It deliberately does not use the
+accent tint, because that is the selection fill — an unselected trigger wearing it read as
+permanently selected.
+
+Layout is flex, not grid: the rail and the inspector each come and go, and flex simply
+reclaims their space — a grid would need a column template per combination. Below 70rem
+the inspector wraps under the canvas; below 52rem everything stacks.
+
+Editing gestures are live only while the job is `queued` — the same window in which
+`PATCH /graph` accepts a plan. Positions are part of the graph, so they are saved by
+**Save plan** along with everything else, not written behind the owner's back.
+
+A connection that would make the graph loop back on itself is refused on the canvas
+with an explanation, rather than being sent to the server for a 422.
+
+The **Dependencies** checkboxes in the inspector edit the same edges as drag-to-connect.
+They are not redundant: the canvas gesture is pointer-only, and the list is how the
+same edit is made by keyboard.
+
+The SVG canvas is Proxima's own — no workflow graph UI dependency was added.
+`graphLayout.ts` lays out nodes in deterministic topological columns as a *fallback*:
+a node carrying `x`/`y` keeps its hand-placed position, since an architect draft
+arrives with no coordinates and re-layering a node the owner deliberately moved would
+undo that edit on every reload. The canvas is infinite, so the layout reports a real
+bounding box — a hand-placed node may sit at negative coordinates, and anything that
+frames the graph reads that origin rather than assuming `(0,0)`.
 
 ## API and code map
 

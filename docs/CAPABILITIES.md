@@ -150,12 +150,17 @@ beside a form. Per-step **rules** (injected)
 enabled, **Workflow Graphs** provides a dedicated hand-rolled SVG canvas. Chat
 promotion can produce a typed DAG draft for human plan review, and graph jobs use a
 frozen `{nodes,edges}` DAG, fresh ACP session per node attempt, typed
-`text|json|artifact-ref` outputs, sequential ready-set dispatch, and durable
-version/run-id guarded `node_states`. The graph API supports create/inspect/edit-plan,
-start, edit-output, rerun-node with downstream dirty propagation, approve a review
-gate, final approval, and saving a reviewed graph as a reusable workflow template.
-Disabled routes return 503 before writes, and queued graph architect/`wf_node` runs are
-rejected before runner setup. The canvas supports queued-plan node/dependency editing, explicit
+`text|json|artifact-ref` outputs, **parallel ready-set dispatch** bounded by
+`graph_node_concurrency` (then by `run_worker_concurrency`), an optional **manual
+trigger node** as the entry point, an optional **per-node agent** (`profile_id`), and
+durable version/run-id guarded `node_states`. The graph API supports
+create/inspect/edit-plan, start, edit-output, rerun-node with downstream dirty
+propagation, approve a review gate, final approval, and saving a reviewed graph as a
+reusable workflow template. Disabled routes return 503 before writes, and queued graph
+architect/`wf_node` runs are rejected before runner setup. The canvas is n8n-style:
+draggable nodes with persisted positions, pan/zoom/fit, drag-to-connect and
+click-to-remove connections, a node config panel (name, instruction, agent, output
+contract, review gate, dependencies), queued-plan-only editing, explicit
 approve-and-start, live node state, typed output correction, rerun, gate/final
 approval, and save-as-template.
 **Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/templates`,

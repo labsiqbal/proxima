@@ -42,6 +42,14 @@
 	--graph-inspector-max-height: 24rem;
 	--graph-list-max-height: 12rem;
 	--graph-edge-width: 2px;
+	--graph-edge-hit-width: 14px;
+	--graph-handle-stroke: 2px;
+	/* One height for every control on the graph screen — text buttons and icon
+	   buttons alike — so no two sit at different sizes in the same row. Set to the
+	   app's own button height (2.5rem = the 8px+13px padding `.primary-button`
+	   resolves to) so the Advanced bar matches Sequential's, which is one tab away
+	   and holds the same kind of controls. */
+	--graph-control-height: 2.5rem;
 
 	color-scheme: light;
 	--font-sans:
@@ -73,6 +81,12 @@
 	--ui-surface-subtle: #f8fafc;
 	--ui-surface-translucent: rgba(255, 255, 255, 0.82);
 	--ui-on-accent: #ffffff;
+	/* The accent when it has to CARRY --ui-on-accent text, rather than BE text.
+	   Same as the accent by default: on a light surface the accent is already dark
+	   enough to sit under a white label (#0053fd gives 7.3:1), so there is nothing
+	   to solve and themes are left exactly as they are. Only the dark theme
+	   overrides this — see the note there. */
+	--ui-accent-fill: var(--ui-accent);
 	--ui-danger: #dc2626;
 	--ui-danger-strong: #b91c1c;
 	--ui-danger-text: #7f1d1d;
@@ -827,9 +841,9 @@ button:disabled {
 .panel button,
 .button-row button {
 	border: 1px solid
-		color-mix(in srgb, var(--ui-accent) 28%, var(--ui-stroke-secondary));
+		color-mix(in srgb, var(--ui-accent-fill) 28%, var(--ui-stroke-secondary));
 	border-radius: var(--radius-md);
-	background: var(--ui-accent);
+	background: var(--ui-accent-fill);
 	color: var(--ui-on-accent);
 	padding: 8px 13px;
 	font-weight: 600;
@@ -5103,11 +5117,17 @@ div.result-media {
 	flex: 1;
 	overflow: hidden;
 }
-.tasks-head {
+/* The bar under the Workflows mode tabs. Sequential and Advanced share this one
+   rule rather than each carrying its own copy, which is how they drifted apart
+   (52px vs 68px, different border, one with a background) while sitting one tab
+   click from each other. Values are the tokens the old literals already equalled
+   (12/16/20 = --space-3/4/5). */
+.tasks-head,
+.graph-header {
 	display: flex;
-	gap: 12px;
+	gap: var(--space-3);
 	align-items: center;
-	padding: 16px 20px;
+	padding: var(--space-4) var(--space-5);
 	border-bottom: 1px solid var(--ui-stroke-tertiary);
 }
 .tasks-head .ui-select {
@@ -5806,30 +5826,72 @@ div.result-media {
 }
 
 /* Workflow graph — dedicated DAG plan/review canvas */
+
+/* The shared button classes are not a matched set: `.primary-button` declares no
+   font-size, so it inherits 1rem and sits off the type scale entirely, while
+   `.ghost-button` is --text-xs — a row holding both rendered 35px next to 25px at
+   14px vs 10.64px. Sizing them per screen is this codebase's existing answer
+   (.tasks-head, .settings-view and .task-kickoff each do the same); here every
+   control on the screen is pinned to one height, radius, size and weight. */
+.graph-screen .ghost-button,
+.graph-screen .primary-button {
+	display: inline-flex;
+	align-items: center;
+	height: var(--graph-control-height);
+	padding: 0 var(--space-3);
+	border-radius: var(--radius-sm);
+	/* --text-base is the scale's nearest step to the 1rem `.primary-button` falls
+	   back to elsewhere; unlike that 1rem, it is actually on the scale. */
+	font-size: var(--text-base);
+	font-weight: 600;
+}
+.graph-screen .row-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--graph-control-height);
+	height: var(--graph-control-height);
+	padding: 0;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-sm);
+}
+/* No background of its own, exactly like Sequential's `.tasks-view`. `.main-pane`
+   carries a radial-gradient backdrop that the mode tabs sit on; painting an opaque
+   --ui-bg-editor here covered it from the header down, leaving a visible seam right
+   under the tab strip. The panels inside (rail, canvas, inspector) still paint
+   themselves — it is only this shell that must stay out of the way. */
 .graph-screen {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
 	min-height: 0;
-	background: var(--ui-bg-editor);
 	container: graph-screen / inline-size;
 }
-.graph-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--space-4);
-	padding: var(--space-4) var(--space-5);
-	border-bottom: 1px solid var(--ui-stroke-secondary);
-	background: var(--ui-surface);
+/* Metrics come from the shared `.tasks-head, .graph-header` rule above — the point
+   is that Sequential and Advanced cannot drift again. Only the graph-specific bits
+   live here. */
+.graph-header h1 {
+	margin: 0;
+	overflow: hidden;
+	font-size: var(--text-base);
+	font-weight: 700;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
-.graph-header h1,
+/* The node name is a panel title, so it matches the screen title rather than
+   towering over it — it used to be --text-xl back when the header was a block. */
 .graph-inspector h2 {
 	margin: 0;
-	font-size: var(--text-xl);
+	font-size: var(--text-base);
+	font-weight: 700;
 }
-.graph-header p {
-	margin: var(--space-1) 0 0;
+.graph-node-count {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	white-space: nowrap;
+}
+.graph-rail-toggle {
+	flex: none;
 }
 .graph-eyebrow {
 	margin: 0;
@@ -5842,7 +5904,6 @@ div.result-media {
 .graph-header-actions,
 .graph-form-actions,
 .graph-list-head,
-.graph-status-bar,
 .graph-inspector-head {
 	display: flex;
 	align-items: center;
@@ -5853,29 +5914,38 @@ div.result-media {
 	flex-wrap: wrap;
 	justify-content: flex-end;
 }
+/* Pushes the actions to the far end regardless of how much status precedes them. */
+.graph-header-actions {
+	margin-left: auto;
+	flex: none;
+}
+/* Flex, not grid: the rail and the inspector each come and go, and flex simply
+   drops their space when they do — a grid would need a template per combination. */
 .graph-workspace {
-	display: grid;
-	grid-template-columns: var(--graph-list-width) minmax(0, 1fr) var(
-			--graph-inspector-width
-		);
+	display: flex;
 	flex: 1;
 	min-height: 0;
 }
+/* No background: `.main-pane`'s gradient is the app's backdrop and every other
+   destination lets it through — Sequential's card grid and even Tasks' `.job-list`
+   paint nothing. These panels are delineated by their border, not by a fill. */
 .graph-job-list,
 .graph-inspector {
 	min-height: 0;
 	overflow: auto;
-	background: var(--ui-surface);
 }
 .graph-job-list {
+	width: var(--graph-list-width);
+	flex: none;
 	padding: var(--space-3);
 	border-right: 1px solid var(--ui-stroke-secondary);
 }
 .graph-inspector {
+	width: var(--graph-inspector-width);
+	flex: none;
 	padding: var(--space-4);
 	border-left: 1px solid var(--ui-stroke-secondary);
 }
-.graph-project-filter,
 .graph-plan-form label,
 .graph-run-detail > label {
 	display: grid;
@@ -5884,7 +5954,6 @@ div.result-media {
 	font-weight: 600;
 	color: var(--ui-text-secondary);
 }
-.graph-project-filter select,
 .graph-plan-form input,
 .graph-plan-form textarea,
 .graph-plan-form select,
@@ -5900,15 +5969,31 @@ div.result-media {
 	justify-content: space-between;
 	margin: var(--space-4) 0 var(--space-2);
 }
+/* The rail now starts with "Plans" (the project picker moved to the header), so
+   the first heading should not push itself off the top of the panel. */
+.graph-list-head.first {
+	margin-top: 0;
+}
+/* "Plans"/"Templates" are section labels, so they get the same eyebrow treatment
+   as "Node" in the inspector. Left as a bare <strong> they inherited 1rem and
+   rendered larger than the screen title itself. */
+.graph-list-head strong {
+	font-size: var(--text-2xs);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ui-text-tertiary);
+}
 .graph-job-row {
 	display: grid;
 	width: 100%;
 	gap: var(--space-1);
-	padding: var(--space-3);
+	padding: var(--space-2);
 	border: 0;
 	border-radius: var(--radius-sm);
 	background: transparent;
 	text-align: left;
+	font-size: var(--text-sm);
 	color: var(--ui-text-primary);
 }
 .graph-job-row:hover {
@@ -5917,7 +6002,9 @@ div.result-media {
 .graph-job-row.selected {
 	background: var(--ui-row-active-background);
 }
+/* <small> is a browser-relative size (0.83em), so it never lands on the scale. */
 .graph-job-row small {
+	font-size: var(--text-xs);
 	color: var(--ui-text-tertiary);
 	text-transform: capitalize;
 }
@@ -5926,19 +6013,20 @@ div.result-media {
 .graph-empty {
 	padding: var(--space-4);
 }
+/* Placeholder copy in the rail, sized like the rows it stands in for rather than
+   inheriting 1rem and shouting louder than them. */
+.graph-empty-list,
+.graph-loading {
+	font-size: var(--text-xs);
+}
+/* The canvas is the biggest surface on the screen, so painting it opaque is what
+   actually hid the app's gradient here while every other page showed it. */
 .graph-main {
 	display: flex;
+	flex: 1;
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	background: var(--ui-surface-subtle);
-}
-.graph-status-bar {
-	padding: var(--space-2) var(--space-4);
-	border-bottom: 1px solid var(--ui-stroke-secondary);
-	background: var(--ui-surface);
-	font-size: var(--text-sm);
-	color: var(--ui-text-secondary);
 }
 .graph-status,
 .graph-dirty {
@@ -5968,22 +6056,98 @@ div.result-media {
 	color: var(--ui-danger);
 	background: var(--ui-danger-bg);
 }
+/* The canvas pans and zooms in place, so it never scrolls: the transform is the
+   viewport. overflow:hidden keeps a dragged node from growing the layout. */
 .graph-canvas-scroll {
+	position: relative;
 	flex: 1;
 	min-height: 0;
-	overflow: auto;
-	padding: var(--space-3);
+	overflow: hidden;
+	touch-action: none;
 }
 .graph-canvas {
 	display: block;
 	width: 100%;
-	min-width: var(--graph-canvas-min-width);
+	height: 100%;
 	min-height: var(--graph-canvas-min-height);
+	cursor: grab;
+}
+.graph-canvas.grabbing-pan {
+	cursor: grabbing;
+}
+.graph-canvas.grabbing-node,
+.graph-canvas.grabbing-link {
+	cursor: grabbing;
+}
+/* Both floating clusters share one spec, so the toolbar and the zoom cluster are
+   the same height and sit at the same inset on opposite corners. */
+.graph-zoom-controls,
+.graph-canvas-tools {
+	position: absolute;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface);
+}
+.graph-zoom-controls {
+	right: var(--space-3);
+	bottom: var(--space-3);
+}
+.graph-canvas-tools {
+	left: var(--space-3);
+	top: var(--space-3);
 }
 .graph-edge {
 	fill: none;
 	stroke: var(--ui-stroke-primary);
 	stroke-width: var(--graph-edge-width);
+}
+.graph-edge-hit {
+	fill: none;
+	stroke: transparent;
+	stroke-width: var(--graph-edge-hit-width);
+	cursor: pointer;
+}
+.graph-edge-group:hover .graph-edge,
+.graph-edge-group.selected .graph-edge {
+	stroke: var(--ui-accent);
+}
+.graph-edge-pending {
+	stroke: var(--ui-accent);
+	stroke-dasharray: 6 4;
+	pointer-events: none;
+}
+.graph-edge-delete {
+	cursor: pointer;
+}
+.graph-edge-delete circle {
+	fill: var(--ui-danger-bg);
+	stroke: var(--ui-danger);
+	stroke-width: var(--graph-edge-width);
+}
+.graph-edge-delete text {
+	fill: var(--ui-danger);
+	font-size: var(--text-sm);
+	text-anchor: middle;
+	pointer-events: none;
+}
+.graph-handle {
+	fill: var(--ui-surface);
+	stroke: var(--ui-stroke-primary);
+	stroke-width: var(--graph-handle-stroke);
+	transition: fill var(--t-fast) var(--ease);
+}
+.graph-handle-out {
+	cursor: crosshair;
+}
+.graph-node:hover .graph-handle,
+.graph-handle:hover {
+	fill: var(--ui-accent);
+	stroke: var(--ui-accent);
 }
 .graph-arrow-head {
 	fill: var(--ui-stroke-primary);
@@ -5991,6 +6155,17 @@ div.result-media {
 .graph-node {
 	cursor: pointer;
 	outline: none;
+}
+.graph-node.draggable {
+	cursor: grab;
+}
+/* A trigger is the same shape as every other node — only its dashed stroke marks it
+   as the entry point, alongside its name and "manual" subtitle. It must not borrow
+   the accent tint: that is the selection fill, and an unselected trigger wearing it
+   read as permanently selected. */
+.graph-node.is-trigger rect {
+	fill: var(--ui-surface-subtle);
+	stroke-dasharray: 5 4;
 }
 .graph-node rect {
 	fill: var(--ui-surface);
@@ -6009,20 +6184,20 @@ div.result-media {
 	fill: var(--ui-row-active-background);
 	stroke: var(--ui-accent);
 }
-.graph-node circle {
+.graph-node .graph-node-dot {
 	fill: var(--ui-text-tertiary);
 }
-.graph-node.st-running circle,
-.graph-node.st-ready circle {
+.graph-node.st-running .graph-node-dot,
+.graph-node.st-ready .graph-node-dot {
 	fill: var(--ui-accent);
 }
-.graph-node.st-review circle {
+.graph-node.st-review .graph-node-dot {
 	fill: var(--ui-warning);
 }
-.graph-node.st-done circle {
+.graph-node.st-done .graph-node-dot {
 	fill: var(--ui-success);
 }
-.graph-node.st-failed circle {
+.graph-node.st-failed .graph-node-dot {
 	fill: var(--ui-danger);
 }
 .graph-node-name {
@@ -6110,12 +6285,13 @@ div.result-media {
 	font: var(--text-xs) var(--font-mono);
 	white-space: pre-wrap;
 }
+/* Too narrow for three columns: the inspector wraps under the canvas. */
 @container graph-screen (max-width: 70rem) {
 	.graph-workspace {
-		grid-template-columns: var(--graph-list-width) minmax(0, 1fr);
+		flex-wrap: wrap;
 	}
 	.graph-inspector {
-		grid-column: 1 / -1;
+		width: 100%;
 		max-height: var(--graph-inspector-max-height);
 		border-top: 1px solid var(--ui-stroke-secondary);
 		border-left: 0;
@@ -6123,20 +6299,24 @@ div.result-media {
 }
 @container graph-screen (max-width: 52rem) {
 	.graph-workspace {
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: var(--graph-list-max-height) var(--graph-canvas-min-height) auto;
 		overflow: auto;
 	}
 	.graph-job-list {
+		width: 100%;
 		height: var(--graph-list-max-height);
 		max-height: none;
 		border-right: 0;
 		border-bottom: 1px solid var(--ui-stroke-secondary);
 	}
+	.graph-main {
+		flex: 1 1 100%;
+		min-height: var(--graph-canvas-min-height);
+	}
 	.graph-inspector {
-		grid-column: 1;
 		max-height: none;
-		overflow: visible;
+	}
+	.graph-header {
+		flex-wrap: wrap;
 	}
 }
 
@@ -13524,6 +13704,16 @@ div.result-media {
      longer fighting the neutrals. */
   --ui-accent: #5f92e6;
   --theme-primary: #5f92e6;
+  /* Dark only. On this surface one colour cannot play both accent roles: to clear
+     4.5:1 as link text on #2b2b2a the accent needs luminance >= 0.283, but to sit
+     under a white label it needs <= 0.183. --ui-accent is tuned for the text role
+     (4.55:1), which left every primary button's label at 3.12:1 — an AA failure,
+     since button labels are --text-xs and count as small text. So the fill role gets
+     its own value here, and only here: light themes have no such conflict and keep
+     fill = accent. 80% is not a round number — it is where this theme clears both
+     white-label 4.5:1 (4.62) and fill-vs-surface 3:1 (3.07); 78% loses the edge,
+     85% loses the label. Re-check both ratios before touching it. */
+  --ui-accent-fill: color-mix(in srgb, var(--ui-accent) 80%, #000);
   --ui-bg-chrome: #20201f;
   --ui-bg-sidebar: #292928;
   --ui-bg-editor: #222221;

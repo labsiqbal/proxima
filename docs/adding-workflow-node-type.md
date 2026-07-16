@@ -6,11 +6,18 @@ This playbook preserves the invariants of the graph engine described in
 
 ## Before changing code
 
-Phase 1 has one execution type: a runner-agnostic **agent node** dispatched as a
-`wf_node` run. `output_kind` is its data contract, not its execution type. Do not hide
-a shell step, HTTP action, or runner-specific subagent behind a new output kind.
-Deterministic execution types belong to Phase 3 and must still use the durable node
-state machine.
+There are two execution types today, both carried by the node's `type` field:
+
+- **`agent`** (the default, and what an absent `type` means): runner-agnostic work
+  dispatched as a `wf_node` run.
+- **`trigger`**: the graph's entry point. It resolves inside `dispatch_ready` without a
+  runner and has no `runs` row. `trigger_kind` selects the variety; only `manual`
+  exists. `schedule`/`webhook`/`event` belong here as further kinds — that is the whole
+  reason the entry point is a node.
+
+`output_kind` is a node's data contract, not its execution type. Do not hide a shell
+step, HTTP action, or runner-specific subagent behind a new output kind. Deterministic
+execution types belong to Phase 3 and must still use the durable node state machine.
 
 Write down:
 
@@ -40,9 +47,13 @@ to one runner, weakens node isolation, or bypasses the review/correction protoco
 
 ## Adding an execution node type
 
-1. **Extend the graph schema.** Add an explicit canonical field such as
-   `execution_kind` in `graph.py`; validate a small allowlist and default old graphs to
-   `agent`. Keep derived data out of the frozen graph.
+1. **Extend the graph schema.** Add the kind to the `type` allowlist in `graph.py`
+   (`_NODE_TYPES`) and to the frontend `GraphNodeType` union; keep `agent` the default
+   so graphs predating node types keep working. Validate the allowlist during
+   normalization and keep derived data out of the frozen graph. Follow the trigger's
+   precedent for fields a type does not use: force or drop them at normalization
+   (a trigger fixes `output_kind` to `json` and drops `profile_id`/`review_required`)
+   so no later stage has to ask whether a field is meaningful for this type.
 2. **Define typed inputs and output.** Reuse the existing edge resolution and output
    contract. If the node consumes extra configuration, validate it during
    normalization, not after dispatch.
@@ -50,11 +61,16 @@ to one runner, weakens node isolation, or bypasses the review/correction protoco
    executor interface. Agent work must still use the runner registry/ACP. A
    deterministic executor must return a durable attempt identity and must not mutate
    node state outside guarded helpers.
-4. **Persist the attempt.** Keep `node_states.run_id` semantics clear. If a
-   non-runner attempt needs another durable table/key, add it additively and document
-   migration/rollback behavior.
+4. **Persist the attempt.** Keep `node_states.run_id` semantics clear — a non-runner
+   type leaves it null, as the trigger does. If such an attempt needs another durable
+   table/key, add it additively and document migration/rollback behavior.
+   **Walk the node state machine** (`state.NODE`) rather than widening it: the trigger
+   resolves through `pending → ready → running → done` inside one transaction instead
+   of adding a `pending → done` edge, because that edge would then exist for every node.
 5. **Advance once.** Route completion through `graph_advancers.py`; validate output,
-   perform one guarded transition, and dispatch the next ready node only after commit.
+   perform one guarded transition, and dispatch whatever became ready only after commit.
+   Remember that siblings run concurrently: a job paused in `review` must still accept
+   an in-flight node's result, and only a `running` job may pull new work forward.
 6. **Handle failure as correctable.** Persist a useful node error and pause the graph
    job in review. Do not terminally destroy the plan or its prior outputs.
 7. **Expose inspection and correction.** Update graph API payloads and
@@ -81,7 +97,8 @@ At minimum add tests for:
 
 - normalization accepts valid configuration and rejects malformed/unknown values;
 - graph cycle/readiness behavior remains unchanged;
-- deterministic Phase 1 dispatch order and fresh agent sessions;
+- parallel ready-set dispatch, the concurrency budget capping a fan-out, and fresh
+  agent sessions per attempt;
 - valid output canonicalization and invalid output pausing in review;
 - correction uses the same validator as runner output;
 - stale callback rejection after correction/rerun;

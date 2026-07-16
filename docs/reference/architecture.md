@@ -103,18 +103,25 @@ It is the **master safety switch** for that engine: its schema (`jobs.engine`,
 engine is **inert** until the flag is turned on — no graph routes, worker path, or UI
 run while it is off, so the classic linear job engine is unaffected. The pure
 `graph.py` boundary already normalizes planner/UI input to canonical edges, rejects
-cycles and invalid references, computes deterministic topological/ready sets, and
-validates each node's `text` / `json` / `artifact-ref` output contract (including
-JSON Schema definitions); it performs no DB, runner, or HTTP work. The gated
-`graph_executor.py` adapter then selects the deterministic ready set with Phase-1
-concurrency fixed at one, snapshots explicit job/upstream data into a `wf_node` run,
-and creates a fresh hidden `sessions.job_id` thread per attempt so ACP history cannot
-leak between nodes. It queues work through `RunWorker`; it never calls a runner itself.
-On completion, `graph_advancers.py` validates and canonicalizes the declared output
-(JSON Schema for `json`; contained, existing workspace paths for `artifact-ref`) before
-a version/run-id guarded state transition. Invalid/blocked/runner-failed nodes pause the
-job in `review`; valid nodes dispatch the next ready node, while review gates and the
-final node also pause for human review. Feature-gated `routes/graph.py` is the human
+cycles and invalid references, computes deterministic topological/ready sets, validates
+node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
+trigger, no incoming edges), and validates each node's `text` / `json` / `artifact-ref`
+output contract (including JSON Schema definitions); it performs no DB, runner, or HTTP
+work. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+job input without a runner, then dispatches **every** ready node up to
+`graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
+against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
+`sessions.job_id` thread per attempt so ACP history cannot leak between nodes — and so
+that `claim_run`'s per-session serialization does not stop branches overlapping. It
+queues work through `RunWorker`, which is where `run_worker_concurrency` becomes the
+real ceiling; it never calls a runner itself. On completion, `graph_advancers.py`
+validates and canonicalizes the declared output (JSON Schema for `json`; contained,
+existing workspace paths for `artifact-ref`) before a version/run-id guarded state
+transition. Invalid/blocked/runner-failed nodes pause the job in `review`; valid nodes
+dispatch whatever became ready, while review gates and the final node pause for human
+review. Because branches overlap, a paused (`review`) job still accepts results from
+nodes already in flight — rejecting them would drop finished work and strand the node —
+but only a still-`running` job pulls new work forward. Feature-gated `routes/graph.py` is the human
 correction boundary: queued plans can be edited before start; a reviewed node can have
 its typed output replaced or be rerun; either action marks every transitive descendant
 `stale` and resumes deterministic execution. A gate is approved node-by-node, and a
@@ -269,18 +276,30 @@ job done  →  artifacts surface in the Result view / Artifacts gallery
 ```
 
 The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attempt in
-`node_states`, dispatches one ready node at a time in a fresh hidden ACP session, and
-passes only explicit typed upstream outputs. Plan edits are allowed only while queued;
-execution therefore always starts behind a human approval action. Review/correction
-can edit or rerun a node and marks every transitive descendant stale before redispatch.
+`node_states`, dispatches every ready node concurrently (bounded by
+`graph_node_concurrency`, then by `run_worker_concurrency`) in a fresh hidden ACP
+session per attempt, and passes only explicit typed upstream outputs. Each node may run
+as its own agent. Plan edits are allowed only while queued; execution therefore always
+starts behind a human approval action. Review/correction can edit or rerun a node and
+marks every transitive descendant stale before redispatch.
 
-`GraphScreen.tsx` is the gated control plane for this sibling engine. It uses a pure
-topological-layer layout (`graphLayout.ts`) and native SVG edges/nodes, so no graph
-library is required. The screen lists graph jobs separately from classic Activity,
-allows node and dependency edits only while queued, and exposes the correction and
-approval protocol once execution begins. Saved graph templates are listed and reused
-only through the gated graph surface; classic workflow lists and execution remain
-strictly linear.
+`GraphScreen.tsx` is the gated control plane for this sibling engine. It is a canvas-first,
+n8n-style surface — drag nodes, pan/zoom, drag-to-connect, click-to-remove a connection —
+built on native SVG, so no graph library is required. One slim bar holds the plan-list
+toggle, title, live status and the plan-level actions; the plan list collapses; and the
+node inspector is rendered only while a node is selected, so no unused panel holds canvas
+width. The workspace is flex rather than grid precisely because those two panels come and
+go. `graphLayout.ts` supplies deterministic
+topological columns as a *fallback*: a node's hand-placed `x`/`y` wins, and the layout
+reports a real bounding box because the canvas is infinite and positions may be
+negative. Node positions are part of the graph and are persisted by the same explicit
+**Save plan** action as every other plan edit, never written behind the owner's back.
+Drag-to-connect is pointer-only, so the inspector's dependency checkboxes remain the
+keyboard path to the same edges. The screen lists graph jobs separately from classic
+Activity, allows node/dependency/layout edits only while queued, and exposes the
+correction and approval protocol once execution begins. Saved graph templates are
+listed and reused only through the gated graph surface; classic workflow lists and
+execution remain strictly linear.
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.

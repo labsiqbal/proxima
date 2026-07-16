@@ -189,13 +189,27 @@ export type WorkflowDraft = {
 
 export type GraphOutputKind = "text" | "json" | "artifact-ref";
 
+export type GraphNodeType = "agent" | "trigger";
+// Only manual entry exists today; schedule/webhook/event become further kinds of
+// this same node rather than a separate execution path.
+export type GraphTriggerKind = "manual";
+
 export type GraphNodeDefinition = {
 	id: string;
+	// Absent on graphs authored before node types existed; those are agent nodes.
+	type?: GraphNodeType;
 	name: string;
 	instruction: string;
 	output_kind: GraphOutputKind;
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;
+	trigger_kind?: GraphTriggerKind;
+	// The agent this step runs as. Null/absent = the job's own agent.
+	profile_id?: number | null;
+	// Canvas position. Absent until the owner drags the node, which is what lets
+	// an un-dragged node stay auto-laid-out.
+	x?: number;
+	y?: number;
 };
 
 export type GraphEdge = { from: string; to: string };

@@ -1,8 +1,11 @@
 """Durable dispatcher for ADR-0001 graph workflow nodes.
 
-Phase 1 deliberately dispatches one ready node at a time. The executor does not
-call runners directly: it snapshots an isolated node prompt into the existing
-``runs`` queue, and ``RunWorker`` remains the only ACP execution boundary.
+Every node whose dependencies are satisfied is dispatched, up to a concurrency
+budget (``graph_node_concurrency``). The executor does not call runners directly:
+it snapshots an isolated node prompt into the existing ``runs`` queue, and
+``RunWorker`` remains the only ACP execution boundary — which also means the
+worker's own ``run_worker_concurrency`` is the real ceiling on how many node runs
+execute at once, whatever budget is set here.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from . import features, state
 from .graph import dependency_map, normalize_graph, ready_node_ids
 
 GRAPH_NODE_RUN_KIND = "wf_node"
-PHASE1_CONCURRENCY = 1
+DEFAULT_NODE_CONCURRENCY = 4
 
 
 class GraphExecutionError(RuntimeError):
@@ -110,18 +113,132 @@ class GraphExecutor:
     def __init__(self, app: Any):
         self.app = app
 
+    def _concurrency(self) -> int:
+        raw = self.app.state.config.get("graph_node_concurrency")
+        try:
+            budget = int(raw) if raw is not None else DEFAULT_NODE_CONCURRENCY
+        except (TypeError, ValueError):
+            budget = DEFAULT_NODE_CONCURRENCY
+        return max(1, budget)
+
+    def _node_execution(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, Any],
+        node: Mapping[str, Any],
+    ) -> tuple[int, str, str | None, str | None]:
+        """Resolve which agent runs one node: its own, else the job's.
+
+        A node naming a profile that is gone or belongs to somebody else is a hard
+        error rather than a silent fall back to the job agent — the owner picked a
+        specific agent for this step, and quietly running it as another one would
+        produce a plausible result from the wrong agent.
+        """
+        profile_id = node.get("profile_id")
+        if profile_id is None:
+            return (
+                int(job["execution_profile_id"]),
+                str(job["execution_runner_id"]),
+                job["execution_model"],
+                job["execution_home"],
+            )
+        row = db.execute(
+            "SELECT id, runner_id, default_model, hermes_home FROM profiles "
+            "WHERE id = ? AND user_id = ?",
+            (int(profile_id), int(job["created_by"])),
+        ).fetchone()
+        if not row or not row["runner_id"]:
+            raise GraphExecutionError(
+                f"node '{node.get('id')}' names an agent that is no longer available"
+            )
+        return (
+            int(row["id"]),
+            str(row["runner_id"]),
+            row["default_model"],
+            row["hermes_home"],
+        )
+
+    def _resolve_triggers(
+        self,
+        db: sqlite3.Connection,
+        job_id: int,
+        graph: Mapping[str, Any],
+        job_input: Mapping[str, Any],
+    ) -> list[str]:
+        """Complete entry-point trigger nodes without dispatching a runner.
+
+        A manual trigger *is* the owner pressing start, so it has no work to do: it
+        resolves to the approved job input, which is what makes the input reach
+        downstream nodes as ordinary typed upstream data instead of a special case.
+        """
+        resolved: list[str] = []
+        serialized = json.dumps(dict(job_input), ensure_ascii=False)
+        for node in graph.get("nodes", []):
+            if node.get("type") != "trigger":
+                continue
+            row = db.execute(
+                "SELECT * FROM node_states WHERE job_id = ? AND node_id = ?",
+                (job_id, node["id"]),
+            ).fetchone()
+            if not row or row["status"] not in {"pending", "stale"}:
+                continue
+            # Walk the ordinary node lifecycle rather than jumping straight to
+            # 'done'. Skipping states would need a pending->done edge in the state
+            # machine, and that hole would then exist for every node, not just this
+            # one. The intermediate states never escape this transaction.
+            state_id = int(row["id"])
+            version = int(row["version"])
+            claimed = state.guarded_node_transition(
+                db, state_id, "ready", ("pending", "stale"), version
+            )
+            if not claimed:
+                continue
+            started = state.guarded_node_transition(
+                db,
+                state_id,
+                "running",
+                ("ready",),
+                version + 1,
+                run_id=None,
+                inputs=json.dumps({"job_input": dict(job_input)}, ensure_ascii=False),
+                mark_started=True,
+                clear_finished=True,
+            )
+            if not started:
+                raise GraphExecutionError(
+                    f"lost node claim while resolving trigger '{node['id']}'"
+                )
+            done = state.guarded_node_transition(
+                db,
+                state_id,
+                "done",
+                ("running",),
+                version + 2,
+                output_kind=str(node["output_kind"]),
+                output=serialized,
+                error=None,
+                mark_finished=True,
+            )
+            if not done:
+                raise GraphExecutionError(
+                    f"lost node claim while resolving trigger '{node['id']}'"
+                )
+            resolved.append(str(node["id"]))
+        return resolved
+
     def dispatch_ready(self, job_id: int) -> list[int]:
-        """Queue at most one ready node for a running graph job.
+        """Queue every ready node for a running graph job, up to the budget.
 
         Returning an empty list is an idempotent no-op: the feature is disabled,
-        the job is not running, a node is already active, or no dependencies are
-        currently satisfied.
+        the job is not running, the concurrency budget is full, or no dependencies
+        are currently satisfied. Resolving a trigger also returns no run ids, since
+        a trigger completes without a runner.
         """
         if not features.enabled(self.app.state.config, features.WORKFLOW_GRAPH):
             return []
 
         db = self.app.state.worker_db
-        queued: list[tuple[int, int, str]] = []
+        queued: list[tuple[int, int, str, str]] = []
         with self.app.state.db_lock:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -161,6 +278,14 @@ class GraphExecutor:
                         (job_id, node["id"], node["output_kind"]),
                     )
 
+                job_input = json.loads(job["input"] or "{}")
+                if not isinstance(job_input, dict):
+                    raise GraphExecutionError("graph job input must be a JSON object")
+
+                # Triggers first: resolving one is what makes its dependents ready
+                # in this same pass, so a run never waits a poll cycle on it.
+                self._resolve_triggers(db, job_id, graph, job_input)
+
                 state_rows = [
                     dict(row)
                     for row in db.execute(
@@ -172,18 +297,27 @@ class GraphExecutor:
                 active_count = sum(
                     row["status"] in {"ready", "running"} for row in state_rows
                 )
-                capacity = max(0, PHASE1_CONCURRENCY - active_count)
+                capacity = max(0, self._concurrency() - active_count)
                 if capacity == 0:
                     db.execute("COMMIT")
                     return []
 
-                job_input = json.loads(job["input"] or "{}")
-                if not isinstance(job_input, dict):
-                    raise GraphExecutionError("graph job input must be a JSON object")
-
-                for node_id in ready_node_ids(graph, {k: v["status"] for k, v in states.items()})[:capacity]:
+                dispatchable = [
+                    node_id
+                    for node_id in ready_node_ids(
+                        graph, {k: v["status"] for k, v in states.items()}
+                    )
+                    if _node_by_id(graph, node_id).get("type") != "trigger"
+                ]
+                for node_id in dispatchable[:capacity]:
                     node = _node_by_id(graph, node_id)
                     node_state = states[node_id]
+                    (
+                        node_profile_id,
+                        node_runner_id,
+                        node_model,
+                        node_home,
+                    ) = self._node_execution(db, job, node)
                     became_ready = state.guarded_node_transition(
                         db,
                         int(node_state["id"]),
@@ -207,8 +341,8 @@ class GraphExecutor:
                             f"↳ {job['title']}: {node.get('name') or node_id}"[:200],
                             job["project_id"],
                             job["created_by"],
-                            job["execution_profile_id"],
-                            job["execution_runner_id"],
+                            node_profile_id,
+                            node_runner_id,
                             visibility,
                             job_id,
                         ),
@@ -226,12 +360,12 @@ class GraphExecutor:
                             session_id,
                             job["project_id"],
                             job["created_by"],
-                            job["execution_profile_id"],
-                            job["execution_runner_id"],
+                            node_profile_id,
+                            node_runner_id,
                             GRAPH_NODE_RUN_KIND,
                             prompt,
-                            job["execution_model"],
-                            job["execution_home"],
+                            node_model,
+                            node_home,
                         ),
                     )
                     run_id = int(run_cur.lastrowid)
@@ -253,23 +387,23 @@ class GraphExecutor:
                         raise GraphExecutionError(
                             f"lost node claim while dispatching '{node_id}'"
                         )
-                    queued.append((run_id, session_id, node_id))
+                    queued.append((run_id, session_id, node_id, node_runner_id))
 
                 db.execute("COMMIT")
             except Exception:
                 _rollback(db)
                 raise
 
-            for run_id, session_id, node_id in queued:
+            for run_id, session_id, node_id, node_runner_id in queued:
                 self.app.state.worker.add_event(
                     run_id,
                     session_id,
                     job["project_id"],
                     "run.queued",
                     {
-                        "runner": job["execution_runner_id"],
+                        "runner": node_runner_id,
                         "job": job_id,
                         "node_id": node_id,
                     },
                 )
-        return [run_id for run_id, _session_id, _node_id in queued]
+        return [entry[0] for entry in queued]

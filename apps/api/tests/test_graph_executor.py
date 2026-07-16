@@ -13,24 +13,26 @@ from proxima_api.graph_advancers import (  # pyright: ignore[reportMissingImport
 )
 from proxima_api.graph_executor import (  # pyright: ignore[reportMissingImports]
     GRAPH_NODE_RUN_KIND,
+    GraphExecutionError,
     GraphExecutor,
 )
 from proxima_api.main import create_app
 
 
-def _app(tmp_path, *, enabled: bool):
-    return create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "ws"),
-            "projectctl_path": "/usr/bin/true",
-            "seed_users": [
-                {"username": "bob", "role": "member", "os_user": "bob"}
-            ],
-            "feature_workflow_graph": enabled,
-            "start_worker": False,
-        }
-    )
+def _app(tmp_path, *, enabled: bool, concurrency: int | None = None):
+    config: dict[str, Any] = {
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "seed_users": [
+            {"username": "bob", "role": "member", "os_user": "bob"}
+        ],
+        "feature_workflow_graph": enabled,
+        "start_worker": False,
+    }
+    if concurrency is not None:
+        config["graph_node_concurrency"] = concurrency
+    return create_app(config)
 
 
 def _client(app) -> TestClient:
@@ -160,40 +162,194 @@ def test_dispatch_creates_one_isolated_hidden_node_run(tmp_path):
     assert no_second_run == []
 
 
-def test_phase1_dispatches_diamond_deterministically_with_fresh_sessions(tmp_path):
+def _nodes_for_runs(app, run_ids: list[int]) -> set[str]:
+    return {
+        app.state.worker_db.execute(
+            "SELECT node_id FROM node_states WHERE run_id = ?", (run_id,)
+        ).fetchone()["node_id"]
+        for run_id in run_ids
+    }
+
+
+def test_diamond_branches_dispatch_in_parallel_with_fresh_sessions(tmp_path):
     app = _app(tmp_path, enabled=True)
     _client(app)
-    graph = _diamond_graph()
-    job_id = _create_graph_job(app, graph)
+    job_id = _create_graph_job(app, _diamond_graph())
+    executor: GraphExecutor = app.state.worker.graph_executor
+    session_ids: list[int] = []
+
+    def sessions_for(run_ids: list[int]) -> None:
+        for run_id in run_ids:
+            session_ids.append(
+                app.state.worker_db.execute(
+                    "SELECT session_id FROM runs WHERE id = ?", (run_id,)
+                ).fetchone()["session_id"]
+            )
+
+    collect_runs = executor.dispatch_ready(job_id)
+    assert _nodes_for_runs(app, collect_runs) == {"collect"}
+    sessions_for(collect_runs)
+    _complete_current_node(app, job_id, "collect", "facts")
+
+    # The whole point of the graph engine: both branches of the diamond run at
+    # once rather than one after the other.
+    branch_runs = executor.dispatch_ready(job_id)
+    assert _nodes_for_runs(app, branch_runs) == {"draft-a", "draft-b"}
+    sessions_for(branch_runs)
+    assert executor.dispatch_ready(job_id) == []
+    _complete_current_node(app, job_id, "draft-a", "alpha")
+    _complete_current_node(app, job_id, "draft-b", "beta")
+
+    merge_runs = executor.dispatch_ready(job_id)
+    assert _nodes_for_runs(app, merge_runs) == {"merge"}
+    sessions_for(merge_runs)
+    merge_prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (merge_runs[0],)
+    ).fetchone()["prompt"]
+    assert "alpha" in merge_prompt
+    assert "beta" in merge_prompt
+    assert len(set(session_ids)) == len(session_ids) == 4
+
+
+def test_node_concurrency_budget_caps_a_fan_out(tmp_path):
+    app = _app(tmp_path, enabled=True, concurrency=1)
+    _client(app)
+    job_id = _create_graph_job(app, _diamond_graph())
     executor: GraphExecutor = app.state.worker.graph_executor
 
-    dispatched_nodes: list[str] = []
-    session_ids: list[int] = []
-    outputs = {
-        "collect": "facts",
-        "draft-a": "alpha",
-        "draft-b": "beta",
-    }
-    for expected_node in ("collect", "draft-a", "draft-b", "merge"):
-        run_ids = executor.dispatch_ready(job_id)
-        assert len(run_ids) == 1
-        node_row = app.state.worker_db.execute(
-            "SELECT node_id FROM node_states WHERE run_id = ?", (run_ids[0],)
-        ).fetchone()
-        node_id = node_row["node_id"]
-        dispatched_nodes.append(node_id)
-        run = app.state.worker_db.execute(
-            "SELECT session_id, prompt FROM runs WHERE id = ?", (run_ids[0],)
-        ).fetchone()
-        session_ids.append(run["session_id"])
-        assert node_id == expected_node
-        if node_id == "merge":
-            assert "alpha" in run["prompt"]
-            assert "beta" in run["prompt"]
-        _complete_current_node(app, job_id, node_id, outputs.get(node_id, "merged"))
+    executor.dispatch_ready(job_id)
+    _complete_current_node(app, job_id, "collect", "facts")
+    branch_runs = executor.dispatch_ready(job_id)
 
-    assert dispatched_nodes == ["collect", "draft-a", "draft-b", "merge"]
-    assert len(set(session_ids)) == len(session_ids)
+    assert len(branch_runs) == 1
+    assert executor.dispatch_ready(job_id) == []
+
+
+def test_manual_trigger_resolves_to_job_input_without_a_run(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {"id": "start", "type": "trigger", "name": "When I run it"},
+                {"id": "work", "name": "Work", "instruction": "Do it", "depends_on": ["start"]},
+            ]
+        }
+    )
+    job_id = _create_graph_job(app, graph)
+
+    run_ids = app.state.worker.graph_executor.dispatch_ready(job_id)
+
+    trigger = _state(app, job_id, "start")
+    assert trigger["status"] == "done"
+    assert trigger["run_id"] is None
+    assert _decode_json(trigger["output"]) == {"brief": "Launch plan"}
+    # No runner is spawned for the trigger; only the node behind it runs.
+    assert _nodes_for_runs(app, run_ids) == {"work"}
+    work_prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (run_ids[0],)
+    ).fetchone()["prompt"]
+    # The trigger reaches the next node as ordinary typed upstream data.
+    assert "Launch plan" in work_prompt
+
+
+def _second_profile(app) -> dict[str, Any]:
+    db = app.state.worker_db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    base = db.execute(
+        "SELECT * FROM profiles WHERE user_id = ? ORDER BY id LIMIT 1", (owner,)
+    ).fetchone()
+    profile_id = db.execute(
+        """
+        INSERT INTO profiles(user_id, slug, name, runner_id, default_model, hermes_home)
+        VALUES (?, 'specialist', 'Specialist', ?, 'specialist-model', ?)
+        """,
+        (owner, base["runner_id"], base["hermes_home"]),
+    ).lastrowid
+    return {"id": profile_id, "owner": owner}
+
+
+def test_node_runs_against_its_own_agent(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    specialist = _second_profile(app)
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {"id": "only", "name": "Only", "profile_id": specialist["id"]},
+            ]
+        }
+    )
+    job_id = _create_graph_job(app, graph)
+
+    run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+
+    run = app.state.worker_db.execute(
+        "SELECT * FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert run["profile_id"] == specialist["id"]
+    assert run["model"] == "specialist-model"
+    node_session = app.state.worker_db.execute(
+        "SELECT * FROM sessions WHERE id = ?", (run["session_id"],)
+    ).fetchone()
+    assert node_session["profile_id"] == specialist["id"]
+
+
+def test_node_naming_an_unavailable_agent_fails_loudly(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph({"nodes": [{"id": "only", "name": "Only", "profile_id": 9999}]})
+    job_id = _create_graph_job(app, graph)
+
+    try:
+        app.state.worker.graph_executor.dispatch_ready(job_id)
+    except GraphExecutionError as exc:
+        assert "no longer available" in str(exc)
+    else:
+        raise AssertionError("a node naming a missing agent was dispatched anyway")
+    # The transaction is rolled back whole, so nothing is left half-dispatched.
+    for table in ("runs", "node_states"):
+        count = app.state.worker_db.execute(
+            f"SELECT COUNT(*) AS c FROM {table}"  # noqa: S608 - fixed table names above
+        ).fetchone()["c"]
+        assert count == 0
+
+
+def test_sibling_result_survives_a_branch_pausing_the_job(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {"id": "gated", "name": "Gated", "review_required": True},
+                {"id": "sibling", "name": "Sibling"},
+            ]
+        }
+    )
+    job_id = _create_graph_job(app, graph)
+    run_ids = app.state.worker.graph_executor.dispatch_ready(job_id)
+    assert len(run_ids) == 2
+    by_node = {
+        app.state.worker_db.execute(
+            "SELECT node_id FROM node_states WHERE run_id = ?", (run_id,)
+        ).fetchone()["node_id"]: run_id
+        for run_id in run_ids
+    }
+
+    # The gated branch pauses the whole job while its sibling is still running.
+    app.state.worker._advance_job(_finish_run_row(app, by_node["gated"]), "needs review")
+    assert _state(app, job_id, "gated")["status"] == "review"
+    job_status = app.state.worker_db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"]
+    assert job_status == "review"
+
+    app.state.worker._advance_job(_finish_run_row(app, by_node["sibling"]), "sibling done")
+
+    # The in-flight sibling's work is kept, not dropped on the floor.
+    sibling = _state(app, job_id, "sibling")
+    assert sibling["status"] == "done"
+    assert _decode_json(sibling["output"]) == "sibling done"
 
 
 def test_dispatch_is_inert_when_graph_feature_is_off(tmp_path):
@@ -256,7 +412,7 @@ def test_graph_advancer_validates_output_and_dispatches_next_node(tmp_path):
     assert _state(app, job_id, "collect")["status"] == "done"
     assert _decode_json(_state(app, job_id, "collect")["output"]) == "facts"
     assert _state(app, job_id, "draft-a")["status"] == "running"
-    assert _state(app, job_id, "draft-b")["status"] == "pending"
+    assert _state(app, job_id, "draft-b")["status"] == "running"
     job_status = app.state.worker_db.execute(
         "SELECT status FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()["status"]

@@ -138,9 +138,77 @@ def test_invalid_graph_shapes_are_rejected():
             {"nodes": [{"id": "a", "depends_on": ["missing"]}]},
             "unknown source",
         ),
+        ({"nodes": [{"id": "a", "type": "webhook"}]}, "type must be one of"),
+        (
+            {"nodes": [{"id": "a", "type": "trigger", "trigger_kind": "cron"}]},
+            "trigger_kind must be one of",
+        ),
+        (
+            {
+                "nodes": [
+                    {"id": "start", "type": "trigger"},
+                    {"id": "also", "type": "trigger"},
+                ]
+            },
+            "at most one trigger",
+        ),
+        (
+            {
+                "nodes": [{"id": "work"}, {"id": "start", "type": "trigger"}],
+                "edges": [{"from": "work", "to": "start"}],
+            },
+            "must have no dependencies",
+        ),
+        ({"nodes": [{"id": "a", "profile_id": "3"}]}, "profile_id must be"),
+        ({"nodes": [{"id": "a", "profile_id": True}]}, "profile_id must be"),
+        ({"nodes": [{"id": "a", "x": "12"}]}, "x must be a number"),
+        ({"nodes": [{"id": "a", "y": float("inf")}]}, "y must be a finite"),
     ]
     for graph, message in cases:
         _expect_graph_error(message, lambda graph=graph: normalize_graph(graph))
+
+
+def test_canvas_and_agent_fields_survive_normalization():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {"id": "start", "type": "trigger", "name": "When I run it", "x": 10, "y": 20.5},
+                {"id": "work", "name": "Work", "profile_id": 7, "depends_on": ["start"]},
+            ]
+        }
+    )
+    trigger, work = graph["nodes"]
+
+    assert trigger["type"] == "trigger"
+    assert trigger["trigger_kind"] == "manual"
+    # A trigger emits the job input, so its contract is fixed rather than authored.
+    assert trigger["output_kind"] == "json"
+    assert (trigger["x"], trigger["y"]) == (10.0, 20.5)
+    assert work["type"] == "agent"
+    assert work["profile_id"] == 7
+    # Positions are optional: a node the owner never dragged stays auto-laid-out.
+    assert "x" not in work
+
+
+def test_trigger_ignores_authored_execution_fields():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "trigger",
+                    "output_kind": "text",
+                    "profile_id": 3,
+                    "review_required": True,
+                }
+            ]
+        }
+    )
+
+    trigger = graph["nodes"][0]
+    assert trigger["output_kind"] == "json"
+    assert "profile_id" not in trigger
+    assert "review_required" not in trigger
 
 
 def test_output_contract_parse_and_validation():

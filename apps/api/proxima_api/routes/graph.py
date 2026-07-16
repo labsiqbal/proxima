@@ -434,12 +434,28 @@ def register(app, deps):
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not run_ids:
-            db().execute(
-                "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='running'",
+            # No runs is not automatically a failure: a trigger resolves without a
+            # runner, so a graph of nothing but a trigger is already finished and
+            # belongs in final review rather than reset to queued.
+            unfinished = db().execute(
+                "SELECT 1 FROM node_states WHERE job_id = ? AND status != 'done' LIMIT 1",
                 (job_id,),
+            ).fetchone()
+            if unfinished:
+                db().execute(
+                    "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='running'",
+                    (job_id,),
+                )
+                raise HTTPException(status_code=409, detail="graph job has no dispatchable node")
+            state.guarded_transition(
+                db(),
+                "jobs",
+                job_id,
+                "review",
+                ("running",),
+                set_extra="finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
             )
-            raise HTTPException(status_code=409, detail="graph job has no dispatchable node")
         return graph_job_payload(graph_job_or_404(job_id, user))
 
     @app.patch("/api/graph/jobs/{job_id}/nodes/{node_id}/output")

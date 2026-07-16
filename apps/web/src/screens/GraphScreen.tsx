@@ -12,6 +12,7 @@ import {
   startGraphJob,
   updateGraphPlan,
 } from '../api/graph'
+import { Dropdown } from '../components/ui/Dropdown'
 import type {
   GraphJob,
   GraphNodeDefinition,
@@ -19,6 +20,7 @@ import type {
   GraphOutputKind,
   GraphTemplate,
   GraphWorkflowDraft,
+  Profile,
   Project,
   WorkflowGraph,
 } from '../types'
@@ -39,22 +41,236 @@ function statusLabel(status: GraphJob['status'] | GraphNodeState['status']): str
   return status.replaceAll('_', ' ')
 }
 
-function GraphCanvas({ job, selectedId, onSelect }: {
+const ZOOM_MIN = 0.35
+const ZOOM_MAX = 2.5
+const HANDLE_RADIUS = 6
+
+type CanvasView = { x: number; y: number; k: number }
+type Point = { x: number; y: number }
+
+/** Pointer gesture in progress. The canvas can only be doing one at a time. */
+type Gesture =
+  | { kind: 'pan'; from: Point; origin: Point }
+  | { kind: 'node'; nodeId: string; grab: Point }
+  | { kind: 'link'; from: string }
+  | null
+
+function edgePath(from: Point, to: Point): string {
+  const bend = Math.max(36, (to.x - from.x) / 2)
+  return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`
+}
+
+/** True when `from` can already be reached from `to`, i.e. the edge would cycle. */
+function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
+  const seen = new Set<string>()
+  const stack = [to]
+  while (stack.length) {
+    const current = stack.pop() as string
+    if (current === from) return true
+    if (seen.has(current)) continue
+    seen.add(current)
+    for (const edge of graph.edges) if (edge.from === current) stack.push(edge.to)
+  }
+  return false
+}
+
+function GraphCanvas({ job, plan, profiles, selectedId, onSelect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddTrigger, hasTrigger }: {
   job: GraphJob
+  plan: WorkflowGraph
+  profiles: Profile[]
   selectedId: string | null
   onSelect: (nodeId: string) => void
+  editable: boolean
+  onMoveNode: (nodeId: string, x: number, y: number) => void
+  onConnect: (from: string, to: string) => void
+  onDisconnect: (from: string, to: string) => void
+  onAddNode: () => void
+  onAddTrigger: () => void
+  hasTrigger: boolean
 }) {
-  const layout = React.useMemo(() => layoutGraph(job.graph), [job.graph])
+  const layout = React.useMemo(() => layoutGraph(plan), [plan])
   const positions = React.useMemo(
     () => new Map(layout.nodes.map(node => [node.id, node])),
     [layout.nodes],
   )
+  const svgRef = React.useRef<SVGSVGElement | null>(null)
+  const [view, setView] = React.useState<CanvasView>({ x: 0, y: 0, k: 1 })
+  const [gesture, setGesture] = React.useState<Gesture>(null)
+  const [linkAt, setLinkAt] = React.useState<Point | null>(null)
+  const [selectedEdge, setSelectedEdge] = React.useState<string | null>(null)
+
+  // A gesture reads the newest layout/view/callbacks without re-subscribing its
+  // window listeners on every pointermove.
+  const live = React.useRef({ view, layout, positions, plan, onMoveNode, onConnect })
+  live.current = { view, layout, positions, plan, onMoveNode, onConnect }
+
+  const toGraphPoint = React.useCallback((event: { clientX: number; clientY: number }): Point => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return { x: 0, y: 0 }
+    const { view: current } = live.current
+    return {
+      x: (event.clientX - rect.left - current.x) / current.k,
+      y: (event.clientY - rect.top - current.y) / current.k,
+    }
+  }, [])
+
+  const zoomTo = React.useCallback((nextK: number, focus?: Point) => {
+    setView(current => {
+      const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextK))
+      const rect = svgRef.current?.getBoundingClientRect()
+      const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
+      // Keep whatever sits under `at` pinned there while the scale changes.
+      return {
+        k,
+        x: at.x - (at.x - current.x) * (k / current.k),
+        y: at.y - (at.y - current.y) * (k / current.k),
+      }
+    })
+  }, [])
+
+  // React attaches wheel listeners passively at the root, so a non-passive native
+  // listener is the only way to zoom without the page scrolling underneath.
+  React.useEffect(() => {
+    const element = svgRef.current
+    if (!element) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const rect = element.getBoundingClientRect()
+      const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      setView(current => {
+        const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current.k * Math.exp(-event.deltaY * 0.0015)))
+        return {
+          k,
+          x: focus.x - (focus.x - current.x) * (k / current.k),
+          y: focus.y - (focus.y - current.y) * (k / current.k),
+        }
+      })
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+  }, [])
+
+  const fit = React.useCallback(() => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    const { layout: box } = live.current
+    if (!rect || !box.width || !box.height) return
+    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(rect.width / box.width, rect.height / box.height)))
+    // Offset by the content origin, which is negative once a node has been
+    // dragged left of or above where the auto-layout started.
+    setView({
+      k,
+      x: (rect.width - box.width * k) / 2 - box.x * k,
+      y: (rect.height - box.height * k) / 2 - box.y * k,
+    })
+  }, [])
+
+  // Frame the graph once it is known, so a plan never opens scrolled off-screen.
+  const framed = React.useRef(false)
+  React.useEffect(() => {
+    if (framed.current || !layout.nodes.length) return
+    framed.current = true
+    fit()
+  }, [fit, layout.nodes.length])
+
+  // Listening on the window rather than capturing the pointer means a gesture
+  // still completes when the pointer is released outside the canvas.
+  React.useEffect(() => {
+    if (!gesture) return
+    const onMove = (event: PointerEvent) => {
+      if (gesture.kind === 'pan') {
+        setView(current => ({
+          ...current,
+          x: gesture.origin.x + (event.clientX - gesture.from.x),
+          y: gesture.origin.y + (event.clientY - gesture.from.y),
+        }))
+        return
+      }
+      const point = toGraphPoint(event)
+      if (gesture.kind === 'node') {
+        live.current.onMoveNode(
+          gesture.nodeId,
+          Math.round(point.x - gesture.grab.x),
+          Math.round(point.y - gesture.grab.y),
+        )
+        return
+      }
+      setLinkAt(point)
+    }
+    const onUp = (event: PointerEvent) => {
+      if (gesture.kind === 'link') {
+        const point = toGraphPoint(event)
+        const { layout: currentLayout, plan: currentPlan, onConnect: connect } = live.current
+        let target: string | null = null
+        for (let index = currentLayout.nodes.length - 1; index >= 0; index -= 1) {
+          const node = currentLayout.nodes[index]
+          if (point.x >= node.x && point.x <= node.x + node.width
+            && point.y >= node.y && point.y <= node.y + node.height) {
+            target = node.id
+            break
+          }
+        }
+        const targetNode = currentPlan.nodes.find(node => node.id === target)
+        // A trigger is an entry point, so it can never be the far end of an edge.
+        if (target && targetNode && target !== gesture.from && targetNode.type !== 'trigger') {
+          connect(gesture.from, target)
+        }
+      }
+      setGesture(null)
+      setLinkAt(null)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [gesture, toGraphPoint])
+
+  function beginPan(event: React.PointerEvent<SVGSVGElement>) {
+    if (event.button !== 0) return
+    setSelectedEdge(null)
+    setGesture({ kind: 'pan', from: { x: event.clientX, y: event.clientY }, origin: { x: view.x, y: view.y } })
+  }
+
+  function beginNodeDrag(event: React.PointerEvent, nodeId: string) {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    onSelect(nodeId)
+    if (!editable) return
+    const position = positions.get(nodeId)
+    if (!position) return
+    const point = toGraphPoint(event)
+    setGesture({ kind: 'node', nodeId, grab: { x: point.x - position.x, y: point.y - position.y } })
+  }
+
+  function beginLink(event: React.PointerEvent, nodeId: string) {
+    if (event.button !== 0 || !editable) return
+    event.stopPropagation()
+    setLinkAt(toGraphPoint(event))
+    setGesture({ kind: 'link', from: nodeId })
+  }
+
+  const linking = gesture?.kind === 'link' ? gesture : null
+  const linkSource = linking ? positions.get(linking.from) : undefined
 
   return <div className="graph-canvas-scroll">
+    {/* Adding a node is a canvas act, so it lives on the canvas — reachable
+        whether or not a node happens to be selected. */}
+    {editable && <div className="graph-canvas-tools">
+      <button className="ghost-button" onClick={onAddNode}>+ Node</button>
+      <button className="ghost-button" onClick={onAddTrigger} disabled={hasTrigger}>+ Trigger</button>
+    </div>}
+    <div className="graph-zoom-controls">
+      <button className="row-action" onClick={() => zoomTo(view.k * 1.25)} aria-label="Zoom in">+</button>
+      <button className="row-action" onClick={() => zoomTo(view.k / 1.25)} aria-label="Zoom out">−</button>
+      <button className="row-action" onClick={fit} aria-label="Fit graph to view">⤢</button>
+    </div>
     <svg
-      className="graph-canvas"
-      viewBox={`0 0 ${layout.width} ${layout.height}`}
-      role="img"
+      ref={svgRef}
+      className={`graph-canvas${gesture ? ` grabbing-${gesture.kind}` : ''}`}
+      onPointerDown={beginPan}
       aria-label={`${job.title} workflow graph`}
     >
       <defs>
@@ -62,49 +278,106 @@ function GraphCanvas({ job, selectedId, onSelect }: {
           <path className="graph-arrow-head" d="M0,0 L0,6 L9,3 z" />
         </marker>
       </defs>
-      {job.graph.edges.map(edge => {
-        const source = positions.get(edge.from)
-        const target = positions.get(edge.to)
-        if (!source || !target) return null
-        const x1 = source.x + source.width
-        const y1 = source.y + source.height / 2
-        const x2 = target.x
-        const y2 = target.y + target.height / 2
-        const bend = Math.max(36, (x2 - x1) / 2)
-        return <path
-          key={`${edge.from}:${edge.to}`}
-          className="graph-edge"
-          d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`}
-          markerEnd="url(#graph-arrow)"
-        />
-      })}
-      {layout.nodes.map(position => {
-        const definition = job.graph.nodes.find(node => node.id === position.id)
-        if (!definition) return null
-        const state = stateFor(job, definition.id)
-        const selected = definition.id === selectedId
-        return <g
-          key={definition.id}
-          className={`graph-node st-${state?.status ?? 'pending'}${selected ? ' selected' : ''}`}
-          role="button"
-          tabIndex={0}
-          aria-label={`${definition.name}, ${statusLabel(state?.status ?? 'pending')}`}
-          onClick={() => onSelect(definition.id)}
-          onKeyDown={event => {
-            if (event.key === 'Enter' || event.key === ' ') onSelect(definition.id)
-          }}
-        >
-          <rect x={position.x} y={position.y} width={position.width} height={position.height} rx="12" />
-          <circle cx={position.x + 22} cy={position.y + 24} r="6" />
-          <text className="graph-node-name" x={position.x + 38} y={position.y + 29}>
-            {definition.name.length > 24 ? `${definition.name.slice(0, 23)}…` : definition.name}
-          </text>
-          <text className="graph-node-kind" x={position.x + 22} y={position.y + 55}>{definition.output_kind}</text>
-          <text className="graph-node-status" x={position.x + 22} y={position.y + 76}>
-            {statusLabel(state?.status ?? 'pending')}{definition.review_required ? ' · review gate' : ''}
-          </text>
-        </g>
-      })}
+      <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+        {plan.edges.map(edge => {
+          const source = positions.get(edge.from)
+          const target = positions.get(edge.to)
+          if (!source || !target) return null
+          const key = `${edge.from}:${edge.to}`
+          const from = { x: source.x + source.width, y: source.y + source.height / 2 }
+          const to = { x: target.x, y: target.y + target.height / 2 }
+          const selected = selectedEdge === key
+          return <g key={key} className={`graph-edge-group${selected ? ' selected' : ''}`}>
+            <path className="graph-edge" d={edgePath(from, to)} markerEnd="url(#graph-arrow)" />
+            {/* A 2px curve is far too thin to click; this invisible one is the hit area. */}
+            <path
+              className="graph-edge-hit"
+              d={edgePath(from, to)}
+              onPointerDown={event => {
+                if (!editable) return
+                event.stopPropagation()
+                setSelectedEdge(current => current === key ? null : key)
+              }}
+            />
+            {selected && editable && <g
+              className="graph-edge-delete"
+              role="button"
+              tabIndex={0}
+              aria-label={`Remove connection from ${edge.from} to ${edge.to}`}
+              onPointerDown={event => {
+                event.stopPropagation()
+                setSelectedEdge(null)
+                onDisconnect(edge.from, edge.to)
+              }}
+              onKeyDown={event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                setSelectedEdge(null)
+                onDisconnect(edge.from, edge.to)
+              }}
+            >
+              <circle cx={(from.x + to.x) / 2} cy={(from.y + to.y) / 2} r="9" />
+              <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 + 4}>×</text>
+            </g>}
+          </g>
+        })}
+
+        {linking && linkSource && linkAt && <path
+          className="graph-edge graph-edge-pending"
+          d={edgePath(
+            { x: linkSource.x + linkSource.width, y: linkSource.y + linkSource.height / 2 },
+            linkAt,
+          )}
+        />}
+
+        {layout.nodes.map(position => {
+          const definition = plan.nodes.find(node => node.id === position.id)
+          if (!definition) return null
+          const state = stateFor(job, definition.id)
+          const status = state?.status ?? 'pending'
+          const trigger = definition.type === 'trigger'
+          const agent = definition.profile_id
+            ? profiles.find(profile => profile.id === definition.profile_id)
+            : undefined
+          const subtitle = trigger
+            ? 'manual'
+            : `${definition.output_kind}${agent ? ` · ${agent.name}` : ''}`
+          return <g
+            key={definition.id}
+            className={`graph-node st-${status}${definition.id === selectedId ? ' selected' : ''}${trigger ? ' is-trigger' : ''}${editable ? ' draggable' : ''}`}
+            transform={`translate(${position.x} ${position.y})`}
+            role="button"
+            tabIndex={0}
+            aria-label={`${definition.name}, ${statusLabel(status)}`}
+            onPointerDown={event => beginNodeDrag(event, definition.id)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') onSelect(definition.id)
+            }}
+          >
+            <rect width={position.width} height={position.height} rx="12" />
+            <circle className="graph-node-dot" cx="22" cy="24" r="6" />
+            <text className="graph-node-name" x="38" y="29">
+              {definition.name.length > 24 ? `${definition.name.slice(0, 23)}…` : definition.name}
+            </text>
+            <text className="graph-node-kind" x="22" y="55">{subtitle}</text>
+            <text className="graph-node-status" x="22" y="76">
+              {statusLabel(status)}{definition.review_required ? ' · review gate' : ''}
+            </text>
+            {editable && !trigger && <circle
+              className="graph-handle graph-handle-in"
+              cx="0"
+              cy={position.height / 2}
+              r={HANDLE_RADIUS}
+            />}
+            {editable && <circle
+              className="graph-handle graph-handle-out"
+              cx={position.width}
+              cy={position.height / 2}
+              r={HANDLE_RADIUS}
+              onPointerDown={event => beginLink(event, definition.id)}
+            />}
+          </g>
+        })}
+      </g>
     </svg>
   </div>
 }
@@ -114,6 +387,7 @@ export function GraphScreen({
   projects,
   activeProject,
   onActiveProject,
+  profiles,
   profileId,
   pendingDraft,
   onDraftConsumed,
@@ -124,6 +398,7 @@ export function GraphScreen({
   projects: Project[]
   activeProject: Project | null
   onActiveProject?: (project: Project) => void
+  profiles: Profile[]
   profileId?: number | null
   pendingDraft?: GraphWorkflowDraft | null
   onDraftConsumed?: () => void
@@ -134,6 +409,7 @@ export function GraphScreen({
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [railOpen, setRailOpen] = React.useState(true)
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const [outputEdit, setOutputEdit] = React.useState('')
@@ -177,9 +453,9 @@ export function GraphScreen({
       setJob(next)
       setPlan(next.graph)
       setDirty(false)
-      setSelectedId(current => current && next.graph.nodes.some(node => node.id === current)
-        ? current
-        : next.graph.nodes[0]?.id ?? null)
+      // Open on the graph, not on a node nobody asked about. Keeps the live poll
+      // from clearing a selection, but drops one whose node is gone.
+      setSelectedId(current => current && next.graph.nodes.some(node => node.id === current) ? current : null)
     } catch (cause) {
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
     }
@@ -208,7 +484,7 @@ export function GraphScreen({
       if (!mounted.current || seq !== draftSeq.current) return
       setJob(created)
       setPlan(created.graph)
-      setSelectedId(created.graph.nodes[0]?.id ?? null)
+      setSelectedId(null)
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       setNotice('Architect draft ready. Review or edit the frozen plan before starting.')
     }).catch(cause => {
@@ -237,11 +513,48 @@ export function GraphScreen({
   function toggleDependency(dependencyId: string) {
     if (!definition || !plan) return
     const exists = plan.edges.some(edge => edge.from === dependencyId && edge.to === definition.id)
-    const edges = exists
-      ? plan.edges.filter(edge => !(edge.from === dependencyId && edge.to === definition.id))
-      : [...plan.edges, { from: dependencyId, to: definition.id }]
-    setPlan({ ...plan, edges })
+    if (exists) {
+      disconnect(dependencyId, definition.id)
+      return
+    }
+    connect(dependencyId, definition.id)
+  }
+
+  function connect(from: string, to: string) {
+    if (!plan) return
+    if (plan.edges.some(edge => edge.from === from && edge.to === to)) return
+    if (wouldCycle(plan, from, to)) {
+      setError('That connection would make the workflow loop back on itself.')
+      return
+    }
+    setError('')
+    setPlan({ ...plan, edges: [...plan.edges, { from, to }] })
     setDirty(true)
+  }
+
+  function disconnect(from: string, to: string) {
+    if (!plan) return
+    setPlan({
+      ...plan,
+      edges: plan.edges.filter(edge => !(edge.from === from && edge.to === to)),
+    })
+    setDirty(true)
+  }
+
+  function moveNode(nodeId: string, x: number, y: number) {
+    setPlan(current => current && {
+      ...current,
+      nodes: current.nodes.map(node => node.id === nodeId ? { ...node, x, y } : node),
+    })
+    setDirty(true)
+  }
+
+  /** Drop a new node clear of the ones already placed, so it never lands hidden. */
+  function freeSlot(current: WorkflowGraph): { x: number; y: number } {
+    const placed = layoutGraph(current).nodes
+    const right = Math.max(0, ...placed.map(node => node.x + node.width))
+    const top = Math.min(...placed.map(node => node.y))
+    return { x: right + 110, y: Number.isFinite(top) ? top : 40 }
   }
 
   function addNode() {
@@ -250,11 +563,31 @@ export function GraphScreen({
     while (plan.nodes.some(node => node.id === `node-${index}`)) index += 1
     const node: GraphNodeDefinition = {
       id: `node-${index}`,
+      type: 'agent',
       name: `Node ${index}`,
       instruction: '',
       output_kind: 'text',
+      ...freeSlot(plan),
     }
     setPlan({ ...plan, nodes: [...plan.nodes, node] })
+    setSelectedId(node.id)
+    setDirty(true)
+  }
+
+  function addTrigger() {
+    if (!plan || plan.nodes.some(node => node.type === 'trigger')) return
+    // Deliberately no x/y: a trigger has no dependencies, so the auto-layout puts
+    // it in the first column, and connecting it shifts the rest along. Pinning it
+    // by hand instead would leave a gap the moment the auto-placed nodes moved.
+    const node: GraphNodeDefinition = {
+      id: 'trigger',
+      type: 'trigger',
+      trigger_kind: 'manual',
+      name: 'When I run it',
+      instruction: '',
+      output_kind: 'json',
+    }
+    setPlan({ ...plan, nodes: [node, ...plan.nodes] })
     setSelectedId(node.id)
     setDirty(true)
   }
@@ -349,7 +682,7 @@ export function GraphScreen({
       if (!mounted.current) return
       setJob(created)
       setPlan(created.graph)
-      setSelectedId(created.graph.nodes[0]?.id ?? null)
+      setSelectedId(null)
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       setNotice(`Created a queued run from “${template.name}”. Review the frozen plan before starting.`)
     } catch (cause) {
@@ -361,16 +694,44 @@ export function GraphScreen({
 
   const allDone = !!job?.node_states.length && job.node_states.every(state => state.status === 'done')
 
+  const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
+
   return <section className="graph-screen">
+    {/* One bar, not two: the Advanced tab already says where you are, so the
+        eyebrow and the never-changing subtitle were spending 91px to repeat it. */}
     <header className="graph-header">
-      <div>
-        <p className="graph-eyebrow">Workflow graph</p>
-        <h1>{job?.title ?? 'Graph workflows'}</h1>
-        <p className="muted">Review the frozen DAG, then explicitly approve its execution.</p>
-      </div>
+      <button
+        className="row-action graph-rail-toggle"
+        onClick={() => setRailOpen(open => !open)}
+        aria-label={railOpen ? 'Hide plan list' : 'Show plan list'}
+        aria-expanded={railOpen}
+      >☰</button>
+      {/* Same control, same place, same component as Sequential's project picker —
+          it used to be a raw <select> in the rail, which is the very thing the
+          shared Dropdown exists to replace. */}
+      {projects.length > 0 && <Dropdown
+        value={activeProject?.slug ?? ''}
+        minWidth={200}
+        onChange={value => {
+          const project = projects.find(item => item.slug === value)
+          if (project) onActiveProject?.(project)
+        }}
+        options={projects.map(project => ({ value: project.slug, label: project.name }))}
+      />}
+      <h1>{job?.title ?? 'Graph workflows'}</h1>
+      {job && <>
+        <span className={`graph-status st-${job.status}`}>{statusLabel(job.status)}</span>
+        <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
+      </>}
+      {dirty && <span className="graph-dirty">Unsaved edits</span>}
       <div className="graph-header-actions">
         {job?.status === 'queued' && <>
           <button className="ghost-button" onClick={() => void saveTemplate()} disabled={!!busy || dirty}>Save template</button>
+          {/* Plan-level actions belong to the plan, not to whichever node happens
+              to be selected — which is also what lets the inspector close. */}
+          <button className="ghost-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>
+            {busy === 'save-plan' ? 'Saving…' : 'Save plan'}
+          </button>
           <button className="primary-button" onClick={() => void act('start', () => startGraphJob(token, job.id), 'Plan approved. Execution started.')} disabled={!!busy || dirty}>
             {busy === 'start' ? 'Starting…' : 'Approve plan & start'}
           </button>
@@ -386,16 +747,8 @@ export function GraphScreen({
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace">
-      <aside className="graph-job-list">
-        <label className="graph-project-filter">Project
-          <select value={activeProject?.slug ?? ''} onChange={event => {
-            const project = projects.find(item => item.slug === event.target.value)
-            if (project) onActiveProject?.(project)
-          }}>
-            {projects.map(project => <option key={project.slug} value={project.slug}>{project.name}</option>)}
-          </select>
-        </label>
-        <div className="graph-list-head"><strong>Plans</strong><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></div>
+      {railOpen && <aside className="graph-job-list">
+        <div className="graph-list-head first"><strong>Plans</strong><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></div>
         {jobs.length === 0
           ? <p className="muted graph-empty-list">No graph plans yet. Promote a chat to create one.</p>
           : jobs.map(item => <button key={item.id} className={`graph-job-row${job?.id === item.id ? ' selected' : ''}`} onClick={() => void loadJob(item.id)}>
@@ -407,47 +760,85 @@ export function GraphScreen({
           : templates.map(template => <button key={template.id} className="graph-job-row" onClick={() => void createFromTemplate(template)} disabled={!!busy}>
               <span>{template.name}</span><small>New queued run</small>
             </button>)}
-      </aside>
+      </aside>}
 
       <main className="graph-main">
         {!job || !plan
           ? <div className="graph-empty"><strong>Select a graph plan</strong><p className="muted">Architect drafts and graph executions appear here.</p></div>
           : <>
-            <div className="graph-status-bar">
-              <span className={`graph-status st-${job.status}`}>{statusLabel(job.status)}</span>
-              <span>{job.node_states.filter(state => state.status === 'done').length}/{job.node_states.length} nodes done</span>
-              {dirty && <span className="graph-dirty">Unsaved plan edits</span>}
-            </div>
-            <GraphCanvas job={{ ...job, graph: plan }} selectedId={selectedId} onSelect={setSelectedId} />
+            <GraphCanvas
+              job={job}
+              plan={plan}
+              profiles={profiles}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              editable={job.status === 'queued'}
+              onMoveNode={moveNode}
+              onConnect={connect}
+              onDisconnect={disconnect}
+              onAddNode={addNode}
+              onAddTrigger={addTrigger}
+              hasTrigger={plan.nodes.some(node => node.type === 'trigger')}
+            />
           </>}
       </main>
 
-      <aside className="graph-inspector">
-        {!job || !plan || !definition
-          ? <div className="graph-empty"><strong>Node inspector</strong><p className="muted">Select a node to inspect its contract and output.</p></div>
-          : <>
+      {/* Only when there is something to inspect. An empty 294px column that says
+          "select a node" is furniture the canvas could be using. */}
+      {job && plan && definition && <aside className="graph-inspector">
             <div className="graph-inspector-head">
               <div><p className="graph-eyebrow">Node</p><h2>{definition.name}</h2></div>
               <span className={`graph-status st-${selectedState?.status ?? 'pending'}`}>{statusLabel(selectedState?.status ?? 'pending')}</span>
+              <button className="row-action" onClick={() => setSelectedId(null)} aria-label="Close node inspector">×</button>
             </div>
             {job.status === 'queued' ? <div className="graph-plan-form">
               <label>Name<input value={definition.name} onChange={event => updateSelected({ name: event.target.value })} /></label>
-              <label>Instruction<textarea rows={6} value={definition.instruction} onChange={event => updateSelected({ instruction: event.target.value })} /></label>
-              <label>Output contract<select value={definition.output_kind} onChange={event => updateSelected({ output_kind: event.target.value as GraphOutputKind })}>
-                {OUTPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
-              </select></label>
-              <label className="graph-check"><input type="checkbox" checked={!!definition.review_required} onChange={event => updateSelected({ review_required: event.target.checked })} />Require human review</label>
-              <fieldset><legend>Dependencies</legend>{plan.nodes.filter(node => node.id !== definition.id).map(node => <label className="graph-check" key={node.id}>
-                <input type="checkbox" checked={plan.edges.some(edge => edge.from === node.id && edge.to === definition.id)} onChange={() => toggleDependency(node.id)} />{node.name}
-              </label>)}</fieldset>
+              {definition.type === 'trigger' ? <>
+                <label>Starts on<select value={definition.trigger_kind ?? 'manual'} disabled onChange={() => undefined}>
+                  <option value="manual">Manual — I press start</option>
+                </select></label>
+                <p className="muted graph-field-note">
+                  The trigger hands the workflow input to whatever it connects to. Schedules and
+                  webhooks become further options here.
+                </p>
+              </> : <>
+                <label>Instruction<textarea rows={6} value={definition.instruction} onChange={event => updateSelected({ instruction: event.target.value })} /></label>
+                <label>Agent<select
+                  value={definition.profile_id ?? ''}
+                  onChange={event => updateSelected({
+                    profile_id: event.target.value ? Number(event.target.value) : null,
+                  })}
+                >
+                  <option value="">Default — this run’s agent</option>
+                  {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                </select></label>
+                <label>Output contract<select value={definition.output_kind} onChange={event => updateSelected({ output_kind: event.target.value as GraphOutputKind })}>
+                  {OUTPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+                </select></label>
+                <label className="graph-check"><input type="checkbox" checked={!!definition.review_required} onChange={event => updateSelected({ review_required: event.target.checked })} />Require human review</label>
+              </>}
+              {definition.type !== 'trigger' && <fieldset>
+                <legend>Dependencies</legend>
+                {/* The canvas gesture is drag-to-connect; this list is the same edit
+                    for anyone not using a pointer. */}
+                {plan.nodes.filter(node => node.id !== definition.id).map(node => <label className="graph-check" key={node.id}>
+                  <input type="checkbox" checked={plan.edges.some(edge => edge.from === node.id && edge.to === definition.id)} onChange={() => toggleDependency(node.id)} />{node.name}
+                </label>)}
+              </fieldset>}
               <div className="graph-form-actions">
-                <button className="ghost-button" onClick={addNode}>Add node</button>
                 <button className="ghost-button danger" onClick={removeNode} disabled={plan.nodes.length <= 1}>Remove node</button>
-                <button className="primary-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>{busy === 'save-plan' ? 'Saving…' : 'Save plan'}</button>
               </div>
             </div> : <div className="graph-run-detail">
-              <p>{definition.instruction || 'No instruction.'}</p>
-              <dl><div><dt>Output</dt><dd>{definition.output_kind}</dd></div><div><dt>Attempt</dt><dd>{selectedState?.run_id ?? '—'}</dd></div></dl>
+              <p>{definition.type === 'trigger'
+                ? 'Manual trigger — this workflow starts when you press start.'
+                : definition.instruction || 'No instruction.'}</p>
+              <dl>
+                <div><dt>Output</dt><dd>{definition.output_kind}</dd></div>
+                {definition.type !== 'trigger' && <div><dt>Agent</dt><dd>
+                  {profiles.find(profile => profile.id === definition.profile_id)?.name ?? 'Run default'}
+                </dd></div>}
+                <div><dt>Attempt</dt><dd>{selectedState?.run_id ?? '—'}</dd></div>
+              </dl>
               {selectedState?.inputs != null && <details><summary>Resolved inputs</summary><pre>{JSON.stringify(selectedState.inputs, null, 2)}</pre></details>}
               {selectedState?.error && <p className="error-text">{selectedState.error}</p>}
               {selectedState?.output != null ? <pre className="graph-output">{outputText(selectedState)}</pre> : <p className="muted">No validated output yet.</p>}
@@ -460,8 +851,7 @@ export function GraphScreen({
                 </div>
               </>}
             </div>}
-          </>}
-      </aside>
+      </aside>}
     </div>
   </section>
 }

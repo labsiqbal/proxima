@@ -41,6 +41,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Graph workflow engine (ADR-0001). Master safety switch: OFF by default so
     # the new engine is inert until explicitly enabled.
     "feature_workflow_graph": False,
+    # How many nodes of one graph job may be in flight at once. This is a dispatch
+    # budget, not a guarantee: node runs are executed by the run worker, so
+    # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
+    "graph_node_concurrency": 4,
 }
 
 

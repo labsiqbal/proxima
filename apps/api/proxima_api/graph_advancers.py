@@ -222,10 +222,13 @@ class GraphAdvancers:
             db.execute("BEGIN IMMEDIATE")
             try:
                 attempt = self._attempt(run_id)
+                # A paused ('review') job still accepts results from nodes that were
+                # already in flight when a sibling gated or failed. Rejecting them
+                # would drop finished work and strand the node in 'running' forever.
                 if (
                     not attempt
                     or attempt["node_status"] != "running"
-                    or attempt["job_status"] != "running"
+                    or attempt["job_status"] not in {"running", "review"}
                 ):
                     db.execute("COMMIT")
                     return False
@@ -286,7 +289,7 @@ class GraphAdvancers:
                     "WHERE job_id = ? AND status != 'done'",
                     (attempt["job_id"],),
                 ).fetchone()["c"]
-                job_status = "running"
+                job_status = str(attempt["job_status"])
                 if gate or remaining == 0:
                     state.guarded_transition(
                         db,
@@ -297,7 +300,10 @@ class GraphAdvancers:
                         set_extra="updated_at=CURRENT_TIMESTAMP",
                     )
                     job_status = "review"
-                else:
+                elif job_status == "running":
+                    # Only a job that is still running may pull more work forward.
+                    # If a sibling already paused it, this node's dependents wait
+                    # for the owner to resolve that pause.
                     dispatch_job_id = _as_int(attempt["job_id"])
                 db.execute("COMMIT")
             except Exception as exc:
