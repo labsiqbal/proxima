@@ -13721,6 +13721,15 @@ div.result-media {
   --ui-chat-bubble-background: #292928;
   --ui-surface: #2b2b2a;
   --ui-surface-subtle: #272726;
+  /* The three this block used to leave behind. The FIRST dark block (~2796) is a
+     cold GitHub-ish navy set (--ui-surface #161b22, translucent rgba(30,37,46)),
+     and this block replaced its surfaces with warm charcoal but never these — so
+     they kept the navy. Same omission that left --ui-accent cold until af8486a;
+     `.panel` is the visible one, which is why Projects' panels sat blue-grey on a
+     warm-charcoal app. Code colours keep their contrast (13.76:1 vs 13.86:1). */
+  --ui-surface-translucent: rgba(43, 43, 42, 0.82);
+  --ui-code-bg: #1e1e1d;
+  --ui-code-fg: #ece9e2;
   --ui-stroke-primary: #575754;
   --ui-stroke-secondary: #41413f;
   --ui-stroke-tertiary: #353533;
