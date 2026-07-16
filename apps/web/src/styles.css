@@ -5291,6 +5291,14 @@ div.result-media {
 	font-weight: 600;
 	color: var(--ui-text-secondary);
 }
+/* A checkbox row is a <label> too, so the grid above detaches the box from its text.
+   Any `.wf-step-check` inside a modal (e.g. the schedule dialog's Enabled) needs the
+   inline row back — see the same rescue at `.caps-modal` and `.wiki-field`. */
+.modal-card label.wf-step-check {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
 .modal-card input,
 .modal-card textarea {
 	border: 1px solid var(--ui-stroke-secondary);
@@ -13552,6 +13560,11 @@ div.result-media {
 .schedule-create-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: var(--space-3); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-lg); background: var(--ui-surface); padding: var(--space-4); }
 .schedule-create-card label { display: grid; gap: var(--space-2); color: var(--ui-text-secondary); font-size: var(--text-sm); }
 .schedule-create-card input, .schedule-create-card textarea { width: 100%; border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-sm); background: var(--ui-bg-editor); color: var(--ui-text-primary); padding: var(--space-2); }
+/* `.wf-step-check` is a <label>, so the two rules above outrank it: the row would turn
+   into a grid and the checkbox would stretch to the full 100% column. Same trap as
+   `.caps-modal` and `.wiki-field` — win it back on specificity. */
+.schedule-create-card label.wf-step-check { display: flex; align-items: center; gap: var(--space-2); }
+.schedule-create-card label.wf-step-check input[type="checkbox"] { width: auto; }
 .schedule-brief { grid-column: span 2; }
 .schedule-list { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
 .schedule-row { display: flex; align-items: center; gap: var(--space-4); border: 1px solid var(--ui-stroke-tertiary); border-radius: var(--radius-md); background: var(--ui-surface); padding: var(--space-3); }

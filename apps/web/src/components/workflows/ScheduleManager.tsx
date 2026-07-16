@@ -1,6 +1,6 @@
 import React from 'react'
 import type { Schedule, Workflow } from '../../types'
-import { createSchedule, deleteSchedule, listSchedules, updateSchedule } from '../../api/schedules'
+import { createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule } from '../../api/schedules'
 import { confirmDialog } from '../ui/Dialog'
 import { Dropdown } from '../ui/Dropdown'
 
@@ -43,12 +43,15 @@ export const isValidCron = (cron: string) => {
   })
 }
 
-export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose }: {
+export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onOpenJob }: {
   token: string
   workflows: Workflow[]
   workflowId?: number
   compact?: boolean
   onClose?: () => void
+  // Given, "Run now" hands the owner straight to the task it spawned — a schedule you
+  // cannot watch is a schedule you cannot trust.
+  onOpenJob?: (jobId: number) => void
 }) {
   const available = workflowId ? workflows.filter(w => w.id === workflowId) : workflows
   const [selectedId, setSelectedId] = React.useState(workflowId || available[0]?.id || 0)
@@ -107,6 +110,12 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     }))
   }
   const toggle = (schedule: Schedule) => void act(() => updateSchedule(token, schedule.id, { enabled: !schedule.enabled }))
+  const runNow = (schedule: Schedule) => void act(async () => {
+    const job = await runScheduleNow(token, schedule.id)
+    // Only navigate once the job really exists; a 409 (overlap skip / unrunnable
+    // workflow) throws above and surfaces in the error bar instead.
+    if (mounted.current) onOpenJob?.(job.id)
+  })
   const remove = async (schedule: Schedule) => {
     const name = workflows.find(w => w.id === schedule.workflow_id)?.name || 'this workflow'
     if (!(await confirmDialog({ title: 'Delete schedule?', message: `Stop running “${name}” on ${cronHint(schedule.cron)}.`, confirmLabel: 'Delete', danger: true }))) return
@@ -141,6 +150,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
         return <article className="schedule-row" key={schedule.id}>
           <div><strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong><small>{cronHint(schedule.cron)} · <code>{schedule.cron}</code> · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'}</small></div>
           <label className="schedule-toggle"><input type="checkbox" checked={schedule.enabled} disabled={busy} onChange={() => toggle(schedule)} /> {schedule.enabled ? 'On' : 'Off'}</label>
+          <button className="ghost-button" disabled={busy} onClick={() => runNow(schedule)} title="Run this schedule now, without waiting for its cron">Run now</button>
           <button className="ghost-button danger" disabled={busy} onClick={() => void remove(schedule)}>Delete</button>
         </article>
       })}

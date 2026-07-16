@@ -44,10 +44,25 @@ def archive_old_jobs(conn: sqlite3.Connection, days: int = 30) -> int:
     return cur.rowcount
 
 
-def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str) -> int | None:
+def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | None) -> int | None:
     """Create + start a job for a due schedule, using the workflow owner's default
-    profile. Worker-side (worker_db). Returns the new job id, or None if skipped."""
+    profile. Worker-side (worker_db). Returns the new job id, or None if skipped.
+
+    `minute_key` is the scheduler's claim on the current minute. Pass None for a
+    manual "run now": the job is spawned identically, but the schedule's
+    last_run_minute is left alone so a manual run at 09:00 cannot swallow the real
+    09:00 tick.
+    """
     db = app.state.worker_db
+
+    def _claim_minute() -> None:
+        if minute_key is None:
+            return
+        db.execute(
+            "UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (minute_key, sched["id"]),
+        )
+
     with app.state.db_lock:
         wfrow = db.execute("SELECT * FROM workflows WHERE id = ?", (sched["workflow_id"],)).fetchone()
         uid = sched["created_by"] or (wfrow["created_by"] if wfrow else None)
@@ -55,12 +70,12 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str) -
             "SELECT * FROM profiles WHERE user_id = ? ORDER BY is_default DESC, id LIMIT 1", (uid,)
         ).fetchone() if uid else None
         if not wfrow or wfrow["status"] == "archived" or not prof:
-            db.execute("UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP WHERE id = ?", (minute_key, sched["id"]))
+            _claim_minute()
             return None
         inp = json.loads(sched["input"]) if sched["input"] else {}
         steps_state = [wf.step_state_from(s, inp) for s in json.loads(wfrow["steps"] or "[]")]
         if not steps_state:
-            db.execute("UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP WHERE id = ?", (minute_key, sched["id"]))
+            _claim_minute()
             return None
         project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
         title = wfrow["name"]
@@ -90,10 +105,27 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str) -
         )
         job_id = int(jcur.lastrowid)
         db.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
-        db.execute("UPDATE schedules SET last_run_minute = ?, last_tick_at = CURRENT_TIMESTAMP WHERE id = ?", (minute_key, sched["id"]))
+        _claim_minute()
     if run_id is not None:
-        app.state.worker.add_event(run_id, session_id, project_id, "run.queued", {"runner": prof["runner_id"], "job": job_id, "scheduled": True})
+        app.state.worker.add_event(run_id, session_id, project_id, "run.queued", {"runner": prof["runner_id"], "job": job_id, "scheduled": True, "manual": minute_key is None})
     return job_id
+
+
+def schedule_has_active_job(app: FastAPI, schedule_id: int) -> bool:
+    """True while this schedule still has a job the overlap policy would collide with."""
+    with app.state.db_lock:
+        return app.state.worker_db.execute(
+            "SELECT 1 FROM jobs WHERE schedule_id = ? AND status IN ('queued','running','review') LIMIT 1",
+            (schedule_id,),
+        ).fetchone() is not None
+
+
+def run_schedule_now(app: FastAPI, sched: dict[str, Any]) -> int | None:
+    """Fire a schedule immediately through the exact path the tick uses, so a manual
+    run proves the stored cron target — workflow, project, profile and input — rather
+    than a lookalike. Does not claim the scheduler's minute; overlap is the caller's
+    call so it can report a skip instead of silently doing nothing."""
+    return _spawn_scheduled_job(app, sched, None)
 
 
 def _scheduler_tick(app: FastAPI, now: datetime | None = None) -> list[int]:

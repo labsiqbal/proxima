@@ -168,7 +168,14 @@ Old kanban tasks were migrated to 1-step jobs.
 **Why:** Recurring agents — daily report, watch-and-summarize — while you sleep.
 **How:** `schedules` table + a 60s scheduler loop that materializes only *due* jobs
 (own 5-field cron matcher; overlap policy skip/allow). Failed step fails the job.
-**Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`.
+**Run now** fires a schedule on demand and opens the task it spawned, so the owner can
+prove a schedule before leaving it to fire unattended. It reuses the tick's own
+`_spawn_scheduled_job`, so it exercises the real cron target (workflow, project,
+profile, stored input) instead of a lookalike; it passes no minute key, so a manual run
+cannot claim — and thereby swallow — the scheduler's slot for that minute. It works on a
+disabled schedule (`enabled` gates the tick, and trying a schedule out is exactly when it
+is still off) and reports an overlap skip as a 409 rather than silently no-op'ing.
+**Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`, `POST /api/schedules/{id}/run`.
 
 ## 10. Tasks (kanban)
 

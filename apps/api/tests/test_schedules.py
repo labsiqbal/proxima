@@ -181,3 +181,83 @@ def test_disabled_and_nonmatching_schedules_do_not_spawn(tmp_path):
     c.post("/api/schedules", json={"workflow_id": wid, "cron": "* * * * *", "enabled": False})
     c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 3 * * *"})  # 3am only
     assert main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 30)) == []
+
+
+def test_run_now_fires_the_schedule_through_the_scheduler_path(tmp_path):
+    # "Run now" must prove the stored cron target, so it goes through the same spawn
+    # the tick uses: same workflow, same project, same substituted input.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = c.post("/api/workflows", json={"name": "W", "steps": [{"name": "A", "instruction": "write {{topic}}"}]}).json()["id"]
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "input": {"topic": "weekly memo"}}).json()
+
+    job = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert job["schedule_id"] == sch["id"]
+    assert job["workflow_id"] == wid
+    assert job["status"] == "running"
+    assert job["steps_state"][0]["instruction"] == "write weekly memo"
+
+
+def test_run_now_does_not_swallow_the_real_tick_for_that_minute(tmp_path):
+    # The guard that matters: a manual run at 09:00 must not claim the 09:00 minute
+    # and leave the owner thinking the schedule fired on its own.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "allow"}).json()
+
+    manual = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert c.get("/api/schedules").json()[0]["last_run_minute"] is None
+
+    spawned = main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 0))
+    assert len(spawned) == 1 and spawned[0] != manual["id"]
+    assert c.get("/api/schedules").json()[0]["last_run_minute"] == "2026-06-22T09:00"
+
+
+def test_run_now_works_on_a_disabled_schedule(tmp_path):
+    # 'enabled' governs the tick. Trying a schedule before trusting it to fire on its
+    # own is exactly when it is still switched off.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "enabled": False}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").json()["schedule_id"] == sch["id"]
+    assert main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 0)) == []
+
+
+def test_run_now_reports_an_overlap_skip_instead_of_doing_nothing(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "skip"}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").status_code == 200
+    blocked = c.post(f"/api/schedules/{sch['id']}/run")
+    assert blocked.status_code == 409
+    assert "overlap" in blocked.json()["detail"]
+
+
+def test_run_now_allows_a_second_run_when_overlap_is_allow(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "allow"}).json()
+
+    first = c.post(f"/api/schedules/{sch['id']}/run").json()
+    second = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert first["id"] != second["id"]
+
+
+def test_run_now_on_an_unrunnable_workflow_409s(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = c.post("/api/workflows", json={"name": "Empty", "steps": []}).json()["id"]
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *"}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").status_code == 409
+
+
+def test_run_now_is_scoped_to_the_owner(tmp_path):
+    c = _client(_app(tmp_path))
+    assert c.post("/api/schedules/9999/run").status_code == 404

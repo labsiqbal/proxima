@@ -467,7 +467,7 @@ export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedCon
   const modeNav = <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow type"><button className={mode === 'sequential' ? 'active' : ''} role="tab" aria-selected={mode === 'sequential'} onClick={() => onModeChange?.('sequential')}>Sequential</button>{advancedContent && <button className={mode === 'advanced' ? 'active' : ''} role="tab" aria-selected={mode === 'advanced'} onClick={() => onModeChange?.('advanced')}>Advanced</button>}<button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button></div>
 
   if (mode === 'advanced' && advancedContent) return <section className="workflow-advanced-view">{modeNav}{advancedContent}</section>
-  if (mode === 'scheduled') return <section className="tasks-view scheduled-view">{modeNav}<ScheduleManager token={token} workflows={workflows} /></section>
+  if (mode === 'scheduled') return <section className="tasks-view scheduled-view">{modeNav}<ScheduleManager token={token} workflows={workflows} onOpenJob={onOpenJob} /></section>
 
   if (editor) return <section className="tasks-view"><WorkflowEditor token={token} init={editor} projectSlug={slug || null}
     onBack={() => setEditor(null)}

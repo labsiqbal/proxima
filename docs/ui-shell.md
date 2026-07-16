@@ -18,7 +18,9 @@ Ops is for orchestration and deliverables. Its sidebar contains:
 - Workflows
 - Artifacts
 - feature-gated Design
-- an Advanced group for feature-gated Workflow Graphs and Video
+- an Advanced group for feature-gated Video
+
+Workflow Graphs are **not** a sidebar destination — they are the Advanced mode inside Workflows (see below). The sidebar's Advanced group holds Video alone.
 
 Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work. Ops Home and workflow runs open the same task workspace rather than a generic Activity subview.
 
@@ -44,6 +46,8 @@ Workflows appears once in Ops navigation. Its screen owns three modes:
 - **Scheduled** manages real schedule rows for Sequential workflows.
 
 Schedule inputs mirror each workflow's declared definitions, validate required values, and serialize values by declared input ID. Workflows without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
+
+Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same workflow, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, so running at 09:00 cannot swallow a real 09:00 tick, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
 
 ## Global account surfaces
 

@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from ..auth import iso_now
+from .. import scheduler
 from .. import workflows as wf
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRunLinkRequest, ScheduleCreateRequest,
@@ -495,6 +496,32 @@ def register(app, deps):
                 (payload.cron, payload.overlap_policy, enabled, schedule_input, schedule_id),
             )
         return _schedule_payload(_schedule_or_404(schedule_id, user))
+
+    @app.post("/api/schedules/{schedule_id}/run")
+    def run_schedule(schedule_id: int, user: dict[str, Any] = Depends(current_user)):
+        """Fire a schedule now, without waiting for its cron.
+
+        Goes through the scheduler's own spawn, so what runs is what the cron would
+        have run — same workflow, project, profile and stored input. A disabled
+        schedule still runs: 'enabled' governs the tick, and the whole point here is
+        to try a schedule before trusting it to fire on its own.
+        """
+        row = _schedule_or_404(schedule_id, user)
+        sched = dict(row)
+        # Honour the stored overlap policy, but say so. Silently doing nothing is the
+        # one thing a "run now" button must never do.
+        if sched["overlap_policy"] == "skip" and scheduler.schedule_has_active_job(app, schedule_id):
+            raise HTTPException(
+                status_code=409,
+                detail="this schedule already has a run in flight and its overlap policy is 'skip' — wait for it to finish, or set overlap to 'allow'",
+            )
+        job_id = scheduler.run_schedule_now(app, sched)
+        if job_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="schedule could not run — its workflow is archived, has no steps, or has no agent profile",
+            )
+        return _job_payload(_job_or_404(job_id, user))
 
     @app.delete("/api/schedules/{schedule_id}")
     def delete_schedule(schedule_id: int, user: dict[str, Any] = Depends(current_user)):

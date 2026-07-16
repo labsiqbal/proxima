@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-156 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+158 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -19,7 +19,7 @@
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 16 endpoints
+- [`routes/work.py`](#routes-work-py) — 18 endpoints
 - [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
 
 
@@ -235,11 +235,13 @@
 | DELETE | `/api/jobs/{job_id}` | `delete_job` |  |
 | GET | `/api/jobs/{job_id}` | `get_job` |  |
 | POST | `/api/jobs/{job_id}/approve` | `approve_job` |  |
+| POST | `/api/jobs/{job_id}/link-run` | `link_job_run` | Attach a project-scoped media run to a queued ad-hoc task. |
 | POST | `/api/jobs/{job_id}/start` | `start_job` |  |
 | GET | `/api/schedules` | `list_schedules` |  |
 | POST | `/api/schedules` | `create_schedule` |  |
 | DELETE | `/api/schedules/{schedule_id}` | `delete_schedule` |  |
 | PATCH | `/api/schedules/{schedule_id}` | `update_schedule` |  |
+| POST | `/api/schedules/{schedule_id}/run` | `run_schedule` | Fire a schedule now, without waiting for its cron. |
 | GET | `/api/workflows` | `list_workflows` |  |
 | POST | `/api/workflows` | `create_workflow` |  |
 | DELETE | `/api/workflows/{workflow_id}` | `delete_workflow` |  |
@@ -258,4 +260,4 @@
 
 
 ---
-_Generated 2026-07-14 18:31 UTC._
+_Generated 2026-07-16 01:54 UTC._
