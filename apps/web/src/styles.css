@@ -412,14 +412,6 @@ button:disabled {
 	font-size: var(--text-base);
 	font-weight: 500;
 }
-.project-row small,
-.user-card small,
-.project-card small {
-	display: block;
-	color: var(--ui-text-tertiary);
-	font-size: var(--text-2xs);
-	margin-top: 2px;
-}
 .status-dot {
 	width: 8px;
 	height: 8px;
@@ -854,12 +846,29 @@ button:disabled {
 	color: var(--ui-text-primary);
 }
 
-.projects-view {
-	display: grid;
-	grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
-	gap: 16px;
-	padding: 20px;
+/* Projects is a card grid like Workflows, not a master/detail pair: it reuses
+   .tasks-view + .tasks-head + .wf-grid, so there is no layout of its own here. */
+.projects-view .wf-grid {
+	align-content: start;
+}
+/* The search is the bar's flexible half; the primary action keeps its own width
+   from `.tasks-head .primary-button { margin-left: auto }`. */
+.projects-view .tasks-head .destination-search {
+	max-width: 22rem;
+}
+/* Which project the rest of the app is pointed at — the one thing a project card
+   has to say that its name does not. */
+.project-tile.active {
+	border-color: color-mix(in srgb, var(--ui-accent) 45%, var(--ui-stroke-secondary));
+}
+.project-add-card {
+	width: min(34rem, 92vw);
+	max-height: 86vh;
 	overflow: auto;
+}
+.project-add-hint {
+	margin: 0 0 var(--space-2);
+	font-size: var(--text-sm);
 }
 .panel {
 	border: 1px solid var(--ui-stroke-secondary);
@@ -884,29 +893,6 @@ button:disabled {
 .stack-form {
 	display: grid;
 	gap: 10px;
-}
-.project-card {
-	width: 100%;
-	border: 1px solid var(--ui-stroke-tertiary);
-	border-radius: var(--radius-md);
-	background: var(--ui-surface);
-	color: var(--ui-text-primary);
-	padding: 12px;
-	text-align: left;
-}
-.project-card.active {
-	border-color: color-mix(
-		in srgb,
-		var(--ui-accent) 45%,
-		var(--ui-stroke-secondary)
-	);
-	background: var(--ui-row-active-background);
-}
-.project-card span {
-	display: block;
-	margin-top: 7px;
-	color: var(--ui-text-secondary);
-	font-size: var(--text-sm);
 }
 .stack-form label {
 	display: grid;
@@ -1883,10 +1869,6 @@ button:disabled {
 		width: calc(100% - 18px);
 		margin-bottom: 9px;
 		border-radius: var(--radius-lg);
-	}
-	.projects-view {
-		grid-template-columns: 1fr;
-		padding: 12px;
 	}
 }
 .chat-line.error {
@@ -3116,18 +3098,6 @@ button:disabled {
 	padding: 4px 8px;
 	font-size: var(--text-sm);
 }
-.danger-zone {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	flex-wrap: wrap;
-	padding: 10px 12px;
-	border: 1px solid
-		color-mix(in srgb, var(--ui-danger) 35%, var(--ui-stroke-secondary));
-	border-radius: var(--radius-md);
-	background: color-mix(in srgb, var(--ui-danger) 5%, transparent);
-}
 .ghost-button.danger {
 	color: var(--ui-danger);
 	border-color: color-mix(in srgb, var(--ui-danger) 40%, transparent);
@@ -4178,35 +4148,8 @@ button:disabled {
 	max-height: 50vh;
 	overflow: auto;
 }
-
-/* Projects screen cards: more breathing room */
-.project-card {
-	padding: 18px 20px;
-	display: grid;
-	gap: 10px;
-	line-height: 1.4;
-}
-.project-card strong {
-	font-size: var(--text-md);
-}
-.project-card small {
-	margin-top: 0;
-}
-.project-card span {
-	margin-top: 0;
-}
 .project-list {
 	gap: 16px;
-}
-
-/* Cards are direct children of the panel — give the panel the gap */
-.project-list-panel {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-.project-list-panel .panel-head {
-	margin-bottom: 4px;
 }
 
 /* Invite link box */
@@ -5479,7 +5422,10 @@ div.result-media {
 .wf-card .kanban-del {
 	opacity: 0;
 }
-.wf-card:hover .kanban-del {
+/* Focus reveals it too, not just hover: it is reachable by Tab either way, and on a
+   project card it is the only way to remove one — invisible-but-focused is a trap. */
+.wf-card:hover .kanban-del,
+.wf-card .kanban-del:focus-visible {
 	opacity: 1;
 }
 
@@ -6826,35 +6772,6 @@ div.result-media {
 /* Manage-project panel — visually distinct from the Add panel */
 .project-manage-panel {
 	border-color: var(--ui-accent);
-}
-.manage-target {
-	font-weight: 600;
-	color: var(--ui-accent);
-}
-
-/* Add-project button in the projects sidebar */
-.project-add-btn {
-	width: 100%;
-	text-align: left;
-	padding: 10px 12px;
-	margin-bottom: 8px;
-	border: 1px dashed var(--ui-stroke-secondary);
-	border-radius: var(--radius-md);
-	background: transparent;
-	color: var(--ui-text-secondary);
-	cursor: pointer;
-	font-weight: 600;
-	font-size: var(--text-base);
-}
-.project-add-btn:hover {
-	border-color: var(--ui-accent);
-	color: var(--ui-accent);
-}
-.project-add-btn.active {
-	border-style: solid;
-	border-color: var(--ui-accent);
-	color: var(--ui-accent);
-	background: var(--ui-row-hover-background);
 }
 
 /* Terminal dark mode (follows app theme) */

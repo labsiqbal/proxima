@@ -63,6 +63,22 @@ Agents and Settings live in the profile/account menu rather than either workspac
 
 Projects remain shared application entities. The current implementation still uses one active project across Ops and Code; independent per-workspace project contexts are a separate product decision. Artifacts and Designs remain owned by their Project, not by an Ops or Code mode.
 
+## Projects
+
+Projects is a **card grid**, not a master/detail pair — a project carries a name and a slug,
+which is not enough to earn a permanent detail panel. It reuses the same shell as
+Workflows' Sequential mode (`.tasks-view` + `.tasks-head` + `.wf-grid`/`.wf-card`): search
+on the left of the bar, **Add project** on the right, one card per project.
+
+A card shows the name and slug, marks the **active** project (the one the rest of the app
+is pointed at), and carries its own actions: the card body selects it, **Rename** opens a
+prompt dialog, and the hover/focus **×** removes it. Add opens a modal holding both ways in:
+create a new project, or link a folder you already work in.
+
+Removal copy must distinguish the two cases, because the API does: a folder outside the
+workspace root is only *unlinked* and its real files survive, while a project Proxima
+created is deleted from disk. Chats and tasks go in both cases.
+
 ## Artifacts and Design
 
 Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available. The same separation applies to gated Video and Workflow Graph destinations.
