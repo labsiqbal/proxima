@@ -124,9 +124,22 @@ or edit the queued frozen plan before explicitly starting it.
 
 **Why:** Codify a repeatable multi-step process; refine it live on a stage.
 **How:** `workflows` table stores steps as a JSON array (edited/snapshotted as one
-unit) + typed `{{inputs}}`. The **Iterate** stage ("Panggung") runs a dry-run and
-shows a universal Result view (designs / live apps / articles / files); "Save to
-workflow" folds the conversation back into the recipe. Per-step **rules** (injected)
+unit) + typed `{{inputs}}`. The editor is an **authoring chat** (`WorkflowChat`, left) +
+the recipe **form** (right). The chat steers the form the way Design Studio's chat steers
+a canvas — a purely client-side move, no server mode: `buildRecipePrompt` sends the fat
+prompt (⟦MODE: WORKFLOW AUTHORING⟧ + schema + live recipe) as the run's `message` while
+`display_message` shows only the user's short text; the agent replies with a
+`<workflow-recipe>` block, `parseRecipeDraft` reads it (full fidelity — rules, skills,
+review gates included), and it lands in the *form*, not the DB (a background write behind
+the on-screen form would let the next Save undo it). `stripRecipeBlock` keeps the JSON out
+of the visible thread. The session is the get-or-create `/iterate` thread, so reopening
+resumes it; the reopen adopts existing replies as already-applied so it can't clobber
+later edits. A blank draft is seeded (name + placeholder step) so the chat can bootstrap
+an empty recipe. **Run test** persists the form then sends a plain "run it" message (no
+authoring wrapper), so the agent executes and the reply — carrying no recipe block —
+leaves the form untouched. It composes ChatThread + Composer + useRunStream rather than
+mounting ChatScreen, whose collaboration modes, review sidecar and header do not belong
+beside a form. Per-step **rules** (injected)
 
 + **skills** hints + mid-workflow **review gates** (pause → approve / edit-&-continue).
 **Endpoints:** `POST/GET/PATCH/DELETE /api/workflows[...]`, `/workflows/{id}/iterate`.

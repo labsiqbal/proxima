@@ -15,7 +15,6 @@ import {
 	setSessionProfile,
 } from "../api/sessions";
 import { draftWikiNote, commitWikiNote } from "../api/wiki";
-import { updateWorkflow } from "../api/workflows";
 import { useRunStream } from "../hooks/useRunStream";
 import type {
 	ChatMessage,
@@ -171,32 +170,6 @@ export function ChatScreen(props: {
 	}, [events, savingWiki]);
 
 	// For a workflow iterate/test chat: fold this conversation back into the recipe.
-	async function saveToWorkflow(draft: WorkflowDraft) {
-		const wid = activeSession?.workflow_id;
-		if (!wid) return;
-		const seq = ++auxActionSeq.current;
-		try {
-			await updateWorkflow(props.token, wid, {
-				name: draft.name,
-				description: draft.description,
-				category: draft.category,
-				steps: draft.steps,
-			});
-			if (!mountedRef.current || seq !== auxActionSeq.current) return;
-			setMessages((c) => [
-				...c,
-				{
-					role: "system",
-					content:
-						"✓ Saved to workflow — the recipe was updated from this conversation.",
-				},
-			]);
-		} catch (e) {
-			if (mountedRef.current && seq === auxActionSeq.current)
-				setError(String(e));
-		}
-	}
-
 	async function startWikiDraft() {
 		if (!activeSession) return;
 		const seq = ++auxActionSeq.current;
@@ -726,57 +699,34 @@ export function ChatScreen(props: {
 					</button>
 				</>
 			)}
-			{activeSession &&
-				(activeSession.workflow_id ? (
-					<ConvertToWorkflowButton
-						token={props.token}
-						sessionId={activeSession.id}
-						profileId={props.activeProfile?.id ?? null}
-						label="Save to workflow"
-						busyLabel="Saving…"
-						engine="linear"
-						onDraft={draft => {
-							if ("graph" in draft) setError("Expected a linear workflow draft.");
-							else void saveToWorkflow(draft);
-						}}
-						onError={setError}
-					/>
-				) : (
-					(props.onWorkflowDraft || props.onGraphDraft) && (
-						<ConvertToWorkflowButton
-							token={props.token}
-							sessionId={activeSession.id}
-							profileId={props.activeProfile?.id ?? null}
-							engine={props.features.workflowGraph ? "graph" : "linear"}
-							label={props.features.workflowGraph ? "To graph" : "To workflow"}
-							busyLabel={props.features.workflowGraph ? "Building graph…" : "Building workflow…"}
-							onDraft={draft => {
-								if ("graph" in draft) props.onGraphDraft?.(draft);
-								else props.onWorkflowDraft?.(draft);
-							}}
-							onError={setError}
-						/>
-					)
-				))}
+			{/* Workflow-iteration sessions never reach Code: the API keeps them out of the
+			    session list and the recipe editor owns its own test bench. So there is no
+			    "Save to workflow" arm here — only the promote path out of an ordinary chat. */}
+			{activeSession && (props.onWorkflowDraft || props.onGraphDraft) && (
+				<ConvertToWorkflowButton
+					token={props.token}
+					sessionId={activeSession.id}
+					profileId={props.activeProfile?.id ?? null}
+					engine={props.features.workflowGraph ? "graph" : "linear"}
+					label={props.features.workflowGraph ? "To graph" : "To workflow"}
+					busyLabel={props.features.workflowGraph ? "Building graph…" : "Building workflow…"}
+					onDraft={draft => {
+						if ("graph" in draft) props.onGraphDraft?.(draft);
+						else props.onWorkflowDraft?.(draft);
+					}}
+					onError={setError}
+				/>
+			)}
 		</div>
 	);
 	const projSlug =
 		activeSession?.project_slug || props.activeProject?.slug || undefined;
-	const buildBanner = activeSession?.workflow_id ? (
-		<div className="wf-iterate-banner">
-			<span>
-				⚙ Iterating workflow — dry-test &amp; refine here, then{" "}
-				<strong>Save to workflow</strong>.
-			</span>
-		</div>
-	) : null;
 	return (
 		<section className="chat-stage code-view">
 			<header className="code-header">
 				<div><p className="eyebrow">Code</p><strong>{activeSession?.title || "New session"}</strong></div>
 				<div className="code-context"><span>{props.activeProject ? cleanName(props.activeProject.name) : "No project"}</span><span>{props.activeProfile?.name || "No profile"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New session" title="Start a new Code session"><IconNewChat size={15} /><span>New session</span></button></div>
 			</header>
-			{buildBanner}
 			{goalBanner}
 			<ChatThread
 				messages={messages}

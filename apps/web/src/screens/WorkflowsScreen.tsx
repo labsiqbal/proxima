@@ -1,6 +1,8 @@
 import React from 'react'
-import type { ChatSession, Project, Schedule, Workflow, WorkflowDraft, WorkflowInput } from '../types'
-import { listWorkflows, createWorkflow, updateWorkflow, archiveWorkflow, deleteWorkflow, iterateWorkflow, type StepInput } from '../api/workflows'
+import type { AppFeatures, Profile, Project, Schedule, Workflow, WorkflowDraft, WorkflowInput } from '../types'
+import { listWorkflows, createWorkflow, updateWorkflow, archiveWorkflow, deleteWorkflow, type StepInput } from '../api/workflows'
+import { WorkflowChat, type WorkflowChatHandle } from '../components/workflows/WorkflowChat'
+import type { RecipePatch } from '../components/workflows/recipePrompt'
 import { createJob, startJob } from '../api/jobs'
 import { listSchedules, createSchedule, updateSchedule, deleteSchedule } from '../api/schedules'
 import { Dropdown } from '../components/ui/Dropdown'
@@ -19,16 +21,29 @@ const INPUT_KINDS: WorkflowInput['kind'][] = ['text', 'url', 'number', 'file']
 // both a brand-new recipe, an existing workflow, and a promoted-chat draft share one form.
 type EditorState = { id: number | null; name: string; description: string; category: string; inputs: WorkflowInput[]; steps: StepDraft[] }
 
-function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }: {
+function WorkflowEditor({ token, init, projectSlug, features, profiles, activeProfile, onBack, onSaved, onDeleted }: {
   token: string; init: EditorState; projectSlug: string | null
+  features: AppFeatures; profiles: Profile[]; activeProfile: Profile | null
   onBack: () => void; onSaved: (w: Workflow) => void; onDeleted: () => void
 }) {
   const [form, setForm] = React.useState<EditorState>(init)
   const [saving, setSaving] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [highlightStep, setHighlightStep] = React.useState<number | null>(null)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
+  const chatRef = React.useRef<WorkflowChatHandle>(null)
+  const highlightTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // The outline is a map for a form that gets long: jump the form to a step and flash it,
+  // so a click on "step 3" lands you on step 3 rather than scrolling to hunt for it.
+  const jumpToStep = (i: number) => {
+    document.getElementById(`wf-step-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setHighlightStep(i)
+    if (highlightTimer.current) clearTimeout(highlightTimer.current)
+    highlightTimer.current = setTimeout(() => { if (mountedRef.current) setHighlightStep(null) }, 1400)
+  }
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -39,6 +54,22 @@ function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }
   }, [])
 
   const setStep = (i: number, patch: Partial<StepDraft>) => setForm(f => ({ ...f, steps: f.steps.map((s, j) => j === i ? { ...s, ...patch } : s) }))
+  // Fold a recipe the chat produced into the form. Full-fidelity (rules/skills/gates
+  // included) and per-field: fields the agent left out keep their current value rather
+  // than blanking, so "rename step 2" can't wipe the description.
+  const applyRecipe = (patch: RecipePatch) => setForm(f => ({
+    ...f,
+    name: patch.name ?? f.name,
+    description: patch.description ?? f.description,
+    category: patch.category ?? f.category,
+    inputs: patch.inputs ?? f.inputs,
+    steps: patch.steps
+      ? patch.steps.map(s => ({
+          name: s.name, instruction: s.instruction, expected_output: s.expected_output ?? '',
+          type: s.type || 'task', rules: s.rules ?? '', skill_ids: s.skill_ids ?? [], review_required: !!s.review_required,
+        }))
+      : f.steps,
+  }))
   const addStep = () => setForm(f => ({ ...f, steps: [...f.steps, blankStep()] }))
   const removeStep = (i: number) => setForm(f => ({ ...f, steps: f.steps.filter((_, j) => j !== i) }))
   const setInput = (i: number, patch: Partial<WorkflowInput>) => setForm(f => ({ ...f, inputs: f.inputs.map((x, j) => j === i ? { ...x, ...patch } : x) }))
@@ -51,23 +82,43 @@ function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }
     return { ...f, steps }
   })
 
-  async function save() {
-    if (saving || deleting) return
-    if (!form.name.trim()) { setError('Name is required.'); return }
-    const steps: StepInput[] = form.steps.filter(s => s.name.trim() || s.instruction.trim())
+  /** Save without leaving the editor, so the test bench can persist a draft in place.
+   *  Returns the saved workflow, or null when validation or the request failed (the
+   *  reason is already in the error bar). */
+  async function persist(fallbackName?: string): Promise<Workflow | null> {
+    if (saving || deleting) return null
+    // fallbackName is the chat's "seed a blank draft so it can open" path; it also
+    // relaxes the ≥1-step rule with a placeholder, since the chat exists to write the
+    // real steps. A manual Save (no fallback) stays strict.
+    const seeding = !!fallbackName
+    const name = form.name.trim() || (fallbackName || '').trim()
+    if (!name) { setError('Name is required.'); return null }
+    let steps: StepInput[] = form.steps.filter(s => s.name.trim() || s.instruction.trim())
       .map(s => ({ name: s.name.trim(), instruction: s.instruction.trim(), expected_output: s.expected_output?.trim() || undefined, type: s.type || undefined, rules: s.rules?.trim() || null, skill_ids: (s.skill_ids && s.skill_ids.length) ? s.skill_ids : null, review_required: !!s.review_required }))
-    if (steps.length === 0) { setError('Add at least one step.'); return }
+    if (steps.length === 0) {
+      if (!seeding) { setError('Add at least one step.'); return null }
+      steps = [{ name: 'Step 1', instruction: 'Describe this step, or ask the chat to write it.' }]
+    }
     // Drop blank input rows; derive id from label if the user left it empty.
     const inputs: WorkflowInput[] = form.inputs.filter(x => x.label.trim() || x.id.trim())
       .map(x => ({ id: (x.id.trim() || slugify(x.label)), label: x.label.trim() || x.id.trim(), kind: x.kind, required: !!x.required }))
     const seq = ++actionSeq.current
     setSaving(true); setError('')
     try {
-      const body = { name: form.name.trim(), description: form.description.trim() || undefined, category: form.category.trim() || undefined, inputs, steps }
+      const body = { name, description: form.description.trim() || undefined, category: form.category.trim() || undefined, inputs, steps }
       const w = form.id != null ? await updateWorkflow(token, form.id, body) : await createWorkflow(token, { ...body, project_slug: projectSlug })
-      if (!mountedRef.current || seq !== actionSeq.current) return
-      onSaved(w)
-    } catch (e) { if (mountedRef.current && seq === actionSeq.current) setError(String(e)) } finally { if (mountedRef.current && seq === actionSeq.current) setSaving(false) }
+      if (!mountedRef.current || seq !== actionSeq.current) return null
+      // Adopt the new id, or a save after "Start test" would fork a second copy of the
+      // same recipe instead of updating this one.
+      setForm(f => ({ ...f, id: w.id }))
+      return w
+    } catch (e) { if (mountedRef.current && seq === actionSeq.current) setError(String(e)); return null }
+    finally { if (mountedRef.current && seq === actionSeq.current) setSaving(false) }
+  }
+
+  async function save() {
+    const w = await persist()
+    if (w && mountedRef.current) onSaved(w)
   }
 
   async function del() {
@@ -93,6 +144,24 @@ function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }
       <button className="primary-button" onClick={() => void save()} disabled={saving || deleting}>{saving ? 'Saving…' : 'Save workflow'}</button>
     </div>
     {error && <div className="error-bar">{error}</div>}
+    <div className="wf-editor-split">
+    <WorkflowChat
+      ref={chatRef}
+      token={token}
+      features={features}
+      profiles={profiles}
+      activeProfile={activeProfile}
+      projectSlug={projectSlug}
+      workflowId={form.id}
+      recipe={{ name: form.name, description: form.description, category: form.category, inputs: form.inputs, steps: form.steps }}
+      // The chat exists partly to fill in a blank recipe, but saving needs a name. Seed a
+      // placeholder so the first turn can open — the agent's first reply renames it.
+      onEnsureSaved={async () => {
+        if (!form.name.trim()) setForm(f => ({ ...f, name: 'Untitled workflow' }))
+        return (await persist('Untitled workflow'))?.id ?? null
+      }}
+      onApplyRecipe={applyRecipe}
+    />
     <div className="wf-editor-body">
       <div className="wf-meta">
         <label>Name<input autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Ship a feature" /></label>
@@ -117,7 +186,7 @@ function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }
       </div>
       <div className="wf-steps-head"><p className="eyebrow">Steps</p><span className="kanban-count">{form.steps.length}</span></div>
       <div className="wf-steps">
-        {form.steps.map((s, i) => <div className="wf-step" key={i}>
+        {form.steps.map((s, i) => <div className={`wf-step${highlightStep === i ? ' wf-step-flash' : ''}`} id={`wf-step-${i}`} key={i}>
           <div className="wf-step-head">
             <span className="wf-step-num">{i + 1}</span>
             <input className="wf-step-name" value={s.name} onChange={e => setStep(i, { name: e.target.value })} placeholder="Step name" />
@@ -135,6 +204,21 @@ function WorkflowEditor({ token, init, projectSlug, onBack, onSaved, onDeleted }
         </div>)}
         <button className="ghost-button wf-add-step" onClick={addStep}>+ Add step</button>
       </div>
+    </div>
+    <aside className="wf-outline">
+      <div className="wf-outline-head"><p className="eyebrow">Steps</p><span className="kanban-count">{form.steps.length}</span></div>
+      <div className="wf-outline-list">
+        {form.steps.map((s, i) => <div className={`wf-outline-row${highlightStep === i ? ' active' : ''}`} key={i}>
+          <button className="wf-outline-jump" onClick={() => jumpToStep(i)} title="Jump to this step">
+            <span className="wf-outline-num">{i + 1}</span>
+            <span className="wf-outline-name">{s.name.trim() || <span className="muted">Untitled step</span>}</span>
+            {s.review_required && <span className="wf-outline-gate" title="Pauses for review">gate</span>}
+          </button>
+          <button className="ghost-button wf-outline-test" onClick={() => chatRef.current?.runThrough(i, s.name.trim() || undefined)} title={`Run steps 1–${i + 1} and show step ${i + 1}'s result in the chat`}>Run test</button>
+        </div>)}
+        {form.steps.length === 0 && <p className="muted">No steps yet.</p>}
+      </div>
+    </aside>
     </div>
   </div>
 }
@@ -348,9 +432,11 @@ function ScheduleModal({ token, workflow, onClose }: { token: string; workflow: 
   </div></div>
 }
 
-export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedContent, token, projects, activeProject, onActiveProject, onOpenJob, onIterate, draft, onDraftConsumed }: {
+export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedContent, token, projects, activeProject, onActiveProject, features, profiles, activeProfile, onOpenJob, draft, onDraftConsumed }: {
   mode?: 'sequential' | 'advanced' | 'scheduled'; onModeChange?: (mode: 'sequential' | 'advanced' | 'scheduled') => void; advancedContent?: React.ReactNode; token: string; projects: Project[]; activeProject: Project | null; onActiveProject?: (p: Project) => void
-  onOpenJob: (jobId: number) => void; onIterate: (s: ChatSession) => void
+  // The editor's test bench is a real agent chat, so it needs the same context Code's is given.
+  features: AppFeatures; profiles: Profile[]; activeProfile: Profile | null
+  onOpenJob: (jobId: number) => void
   draft?: WorkflowDraft | null; onDraftConsumed?: () => void
 }) {
   const [slug, setSlug] = React.useState(activeProject?.slug || projects[0]?.slug || '')
@@ -449,27 +535,13 @@ export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedCon
     }
   }
 
-  async function iterate(w: Workflow) {
-    const key = `iterate:${w.id}`
-    if (!beginAction(key)) return
-    const seq = ++actionSeq.current
-    try {
-      const session = await iterateWorkflow(token, w.id)
-      if (!mountedRef.current || seq !== actionSeq.current) return
-      onIterate(session)
-    } catch (e) {
-      if (mountedRef.current && seq === actionSeq.current) setError(String(e))
-    } finally {
-      endAction(key)
-    }
-  }
-
   const modeNav = <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow type"><button className={mode === 'sequential' ? 'active' : ''} role="tab" aria-selected={mode === 'sequential'} onClick={() => onModeChange?.('sequential')}>Sequential</button>{advancedContent && <button className={mode === 'advanced' ? 'active' : ''} role="tab" aria-selected={mode === 'advanced'} onClick={() => onModeChange?.('advanced')}>Advanced</button>}<button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button></div>
 
   if (mode === 'advanced' && advancedContent) return <section className="workflow-advanced-view">{modeNav}{advancedContent}</section>
   if (mode === 'scheduled') return <section className="tasks-view scheduled-view">{modeNav}<ScheduleManager token={token} workflows={workflows} onOpenJob={onOpenJob} /></section>
 
   if (editor) return <section className="tasks-view"><WorkflowEditor token={token} init={editor} projectSlug={slug || null}
+    features={features} profiles={profiles} activeProfile={activeProfile}
     onBack={() => setEditor(null)}
     onSaved={async w => { setEditor(null); await reload(); void w }}
     onDeleted={() => { setEditor(null); void reload() }} /></section>
@@ -490,7 +562,9 @@ export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedCon
             {w.description && <small className="wf-card-desc">{w.description}</small>}
             <span className="wf-card-meta">{w.category && <span className="pill">{w.category}</span>}<span className="muted">{w.steps.length} step{w.steps.length !== 1 ? 's' : ''}</span></span>
           </button>
-          <div className="wf-card-foot"><button className="ghost-button" onClick={() => void iterate(w)} disabled={!!actionKey} title="Open a sandbox chat to test & refine this workflow">{actionKey === `iterate:${w.id}` ? 'Opening…' : 'Iterate'}</button><button className="ghost-button" onClick={() => setScheduling(w)} disabled={!!actionKey}>Schedule</button><button className="ghost-button" onClick={() => setRunning(w)} disabled={!!actionKey}>Run</button></div>
+          {/* No Iterate here: opening a workflow opens the editor, which has the test
+              bench built in. One window to write it and try it. */}
+          <div className="wf-card-foot"><button className="ghost-button" onClick={() => setScheduling(w)} disabled={!!actionKey}>Schedule</button><button className="ghost-button" onClick={() => setRunning(w)} disabled={!!actionKey}>Run</button></div>
         </div>)}</div>}
     {running && <RunModal workflow={running} onCancel={() => setRunning(null)} onRun={input => run(running, input)} />}
     {scheduling && <ScheduleModal token={token} workflow={scheduling} onClose={() => setScheduling(null)} />}

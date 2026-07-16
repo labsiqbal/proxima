@@ -41,7 +41,11 @@ Terminal belongs only to Code and remains mounted after its first visit so PTY p
 
 Workflows appears once in Ops navigation. Its screen owns three modes:
 
-- **Sequential** authors, iterates, and runs ordered recipes.
+- **Sequential** authors, iterates, and runs ordered recipes. The editor is one window with an **authoring chat on the left** (like Design Studio's chat to a canvas) and the recipe **form on the right**. The chat is a conversation *about* the workflow, pinned to it and kept out of Code (the session list excludes workflow-linked sessions). It does two jobs, disambiguated by prompt mode the way Design does it, not a second box:
+  - **Authoring** — typing drives the form. The run carries a fat prompt (mode + recipe schema + the live recipe JSON) while the thread shows only the short text; any `<workflow-recipe>` block the agent returns is parsed straight into the form (full fidelity — steps, rules, skills, review gates), which the owner then Saves. Applied to the *form*, never the database directly: the recipe is on screen, so a background write would leave the editor stale and let the next Save undo the agent's work. A blank draft is seeded (name + one placeholder step) so the chat can open and fill it in. Reopening does not re-apply an old reply over edits made since.
+  - **Testing** — a **step outline on the right** (`.wf-outline`) lists the steps with a count and gate markers, and is the workflow's table of contents for a form that gets long: clicking a step jumps the form to it and flashes it. Each outline row carries its own **Run test**, which runs the recipe *through* that step (steps 1..N, inlining the live form so unsaved edits count) and shows the result in the chat. Testing step N runs 1..N because a step's output only means anything with its upstream context; the reply carries no recipe block, so the form is left alone.
+
+  There is no separate Iterate action — opening a recipe *is* opening its authoring chat.
 - **Advanced** opens the feature-gated dependency graph for parallel, reviewable orchestration.
 - **Scheduled** manages real schedule rows for Sequential workflows.
 
