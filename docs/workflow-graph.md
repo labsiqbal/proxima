@@ -279,8 +279,12 @@ and a rerun re-executes only the node itself plus its stale descendants.)
 Every panel — workflow chat, the Plans/Templates rail, and the node inspector — has a
 **draggable width** (persisted per panel), so the owner can widen whichever pane they
 are working in; the inspector most of all. Plan statuses are phrased as what the owner
-can do next ("Draft — editable", "Done — frozen"), and the rail's section headers say
-what each list *is* (plans: one run each; templates: reusable).
+can do next ("Draft — editable", "Needs your review"). The rail partitions the way n8n
+does — what you *build* versus what *ran*: **Drafts** (queued, editable) on top,
+**Templates** (reusable) next, and **Runs** (execution history, frozen) at the bottom,
+with running/review runs always visible and finished ones behind a collapsed
+"Finished (n)" toggle. Panel toggles sit together at the header's left (plan list,
+workflow chat); plan actions stay on the right.
 
 The inspector's instruction / expected output / rules fields and the workflow chat all
 support **@-mentions**: typing `@` offers the project's artifacts and inserts the picked

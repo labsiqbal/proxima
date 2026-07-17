@@ -6243,6 +6243,22 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* Collapsed run history: finished runs are reference, not workspace. */
+.graph-runs-toggle {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	border: 0;
+	background: transparent;
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-sm);
+	cursor: pointer;
+	text-align: left;
+}
+.graph-runs-toggle:hover {
+	color: var(--ui-text-primary);
+}
 /* @-mention: textarea plus a file picker anchored to it. */
 .mention-wrap {
 	position: relative;
