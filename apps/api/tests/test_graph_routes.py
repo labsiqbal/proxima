@@ -395,3 +395,19 @@ def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
 
     resumed = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
     assert resumed.json()["status"] == "active"
+
+
+def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
+    """Found live: a cyclic graph in PATCH /graph crashed with an unhandled
+    GraphValidationError. An invalid graph is the client's error."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
+    cyclic = {"nodes": [{"id": "a", "depends_on": ["b"]}, {"id": "b", "depends_on": ["a"]}]}
+
+    patched = client.patch(f"/api/graph/jobs/{job['id']}/graph", json={"graph": cyclic})
+    created = client.post("/api/graph/jobs", json={"title": "C", "graph": cyclic})
+
+    assert patched.status_code == 422
+    assert "acyclic" in patched.json()["detail"]
+    assert created.status_code == 422

@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, status
 
 from .. import features, state
-from ..graph import descendant_node_ids, normalize_graph
+from ..graph import GraphValidationError, descendant_node_ids, normalize_graph
 from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: ignore[reportMissingImports]
 from ..schemas import (
     GraphDefinitionUpdateRequest,
@@ -203,7 +203,10 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         require_graph()
-        graph = normalize_graph(payload.graph)
+        try:
+            graph = normalize_graph(payload.graph)
+        except GraphValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         project_id = _member_project_id(payload.project_id, payload.project_slug, user)
         profile = profile_for_user(payload.profile_id, user)
         workflow_id = None
@@ -395,7 +398,10 @@ def register(app, deps):
         job = graph_job_or_404(job_id, user)
         if job["status"] != "queued":
             raise HTTPException(status_code=409, detail="only queued graph plans are editable")
-        graph = normalize_graph(payload.graph)
+        try:
+            graph = normalize_graph(payload.graph)
+        except GraphValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
