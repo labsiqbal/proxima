@@ -158,6 +158,8 @@ describe('buildNodeTestPrompt', () => {
     expect(prompt).toContain('← the node under test')
     expect(prompt).toContain('{{brief}} = Launch plan')
     expect(prompt).not.toContain('<workflow-graph>')  // a test reply must never redraw the canvas
+    // A rehearsal must not leave real deliverables behind.
+    expect(prompt).toContain('Do NOT write or modify project files')
   })
 
   it('asks for sample values when no input is known', () => {

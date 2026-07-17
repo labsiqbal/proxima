@@ -260,7 +260,11 @@ node's output only makes sense with its upstream context), in dependency order,
 skipping triggers and unrelated branches. Known job input fills `{{id}}` values;
 otherwise the agent is told to use sensible samples. The reply carries no graph block,
 so a test can never redraw the canvas, and no job state is touched — approval stays a
-deliberate, separate act.
+deliberate, separate act. The prompt also declares the run a **rehearsal**: results are
+presented in the thread, and the agent is told not to write project files or create
+artifacts — the approved run produces the real deliverables, and a test that mutated
+the workspace would leave the real run stacking on top of a practice one. A step whose
+whole purpose is a file shows its full intended content in the chat instead.
 
 ### Screen layout
 
