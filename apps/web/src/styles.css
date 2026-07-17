@@ -3045,9 +3045,9 @@ button:disabled {
 .top-bar {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	height: 42px;
-	padding: 0 8px 0 14px;
+	gap: var(--space-1);
+	height: 52px;
+	padding: 0 var(--space-2) 0 var(--space-4);
 	border-bottom: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-bg-sidebar);
 	z-index: 26;
