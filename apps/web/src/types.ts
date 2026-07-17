@@ -205,6 +205,9 @@ export type GraphNodeDefinition = {
 	// stay the enforced contract. Absent when blank: blank is not a constraint.
 	expected_output?: string;
 	rules?: string;
+	// Skill hints for the runner — suggestions in the prompt, not a capability grant;
+	// the node's agent profile still decides what is actually enabled.
+	skill_ids?: string[];
 	output_kind: GraphOutputKind;
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;

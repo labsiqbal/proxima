@@ -108,6 +108,7 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | `trigger_kind` | Trigger nodes only. `manual` is the only kind today. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
 | `rules` | Agent nodes only. Prose constraints on *how* to do it. Omitted from the prompt entirely when unset. |
+| `skill_ids` | Agent nodes only. Skill/tool hints listed in the prompt as suggestions — the node's agent profile still decides what is actually enabled. Deduped; absent when empty. |
 | `profile_id` | Agent nodes only. The agent this node runs as; absent/null = the job's agent. |
 | `x`, `y` | Canvas position. Absent until the node is dragged, which is what lets un-placed nodes stay auto-laid-out. |
 
@@ -272,6 +273,23 @@ the agent to reuse an upstream step's result from earlier in the conversation wh
 step's instruction is unchanged — testing the join node doesn't re-pay for branches
 tested moments ago. (Real runs already have this: node outputs persist in `node_states`,
 and a rerun re-executes only the node itself plus its stale descendants.)
+
+### Panels, labels and @-mentions
+
+Every panel — workflow chat, the Plans/Templates rail, and the node inspector — has a
+**draggable width** (persisted per panel), so the owner can widen whichever pane they
+are working in; the inspector most of all. Plan statuses are phrased as what the owner
+can do next ("Draft — editable", "Done — frozen"), and the rail's section headers say
+what each list *is* (plans: one run each; templates: reusable).
+
+The inspector's instruction / expected output / rules fields and the workflow chat all
+support **@-mentions**: typing `@` offers the project's artifacts and inserts the picked
+file's project-relative path — pointing a node at a real deliverable instead of
+describing it. The inspector also carries a per-node **Skills** picker fed by the
+effective agent's runner capabilities; picks land in `skill_ids` and reach the runner as
+a SUGGESTED SKILLS/TOOLS line. (This revisits the earlier decision to skip per-node
+skills: the owner wanted the hint surface back, and as *suggestions* it does not
+conflict with the profile owning the real capability grant.)
 
 ### Screen layout
 

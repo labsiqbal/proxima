@@ -664,3 +664,19 @@ def test_linear_orphan_reaper_ignores_running_graph_jobs(tmp_path):
         "SELECT status FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()["status"]
     assert status == "running"
+
+
+def test_node_prompt_suggests_the_node_skills(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph({
+        "nodes": [{"id": "only", "name": "Only", "instruction": "Do it", "skill_ids": ["research", "seo"]}]
+    })
+    job_id = _create_graph_job(app, graph)
+
+    run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+
+    prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["prompt"]
+    assert "SUGGESTED SKILLS/TOOLS for this node: research, seo" in prompt

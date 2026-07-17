@@ -266,3 +266,17 @@ def test_output_contract_parse_and_validation():
             {"output_kind": "json", "output_schema": {"type": "not-a-json-type"}}
         ),
     )
+
+
+def test_skill_ids_are_deduped_and_dropped_when_empty():
+    graph = normalize_graph({
+        "nodes": [
+            {"id": "a", "name": "A", "skill_ids": [" research ", "research", "", "write"]},
+            {"id": "b", "name": "B", "skill_ids": []},
+        ]
+    })
+    a, b = graph["nodes"]
+
+    assert a["skill_ids"] == ["research", "write"]
+    # Absent, not empty — same rule as the prose fields.
+    assert "skill_ids" not in b

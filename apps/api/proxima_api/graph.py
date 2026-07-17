@@ -105,6 +105,22 @@ def _parse_prose(raw: Mapping[str, Any], node_id: str, field: str) -> str:
     return value.strip()
 
 
+def _parse_skill_ids(raw: Mapping[str, Any], node_id: str) -> list[str]:
+    """Skill hints for the node's runner — suggestions in the prompt, not a
+    capability grant; the agent's profile still decides what is actually enabled."""
+    value = raw.get("skill_ids")
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise GraphValidationError(f"node '{node_id}' skill_ids must be a list of strings")
+    seen: list[str] = []
+    for item in value:
+        text = item.strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen
+
+
 def _parse_profile_id(raw: Mapping[str, Any], node_id: str) -> int | None:
     """Parse the optional per-node execution agent.
 
@@ -215,6 +231,7 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             node.pop("review_required", None)
             node.pop("expected_output", None)
             node.pop("rules", None)
+            node.pop("skill_ids", None)
         else:
             contract = parse_output_contract(raw_node)
             node["output_kind"] = contract.kind
@@ -236,6 +253,11 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
                     node[field] = text
                 else:
                     node.pop(field, None)
+            skills = _parse_skill_ids(raw_node, node_id)
+            if skills:
+                node["skill_ids"] = skills
+            else:
+                node.pop("skill_ids", None)
 
         for axis in ("x", "y"):
             coordinate = _parse_coordinate(raw_node, node_id, axis)

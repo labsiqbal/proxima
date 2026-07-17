@@ -102,6 +102,12 @@ def build_node_prompt(
     # invent constraints of its own.
     rules = substitute(node.get("rules") or "", job_input)
     rules_block = f"RULES (constraints on how to do it):\n{rules}\n\n" if rules else ""
+    # Suggestions, not grants: the profile decides what is actually enabled. Same
+    # contract the linear step prompt carried.
+    skill_ids = node.get("skill_ids") or []
+    skills_block = (
+        f"SUGGESTED SKILLS/TOOLS for this node: {', '.join(skill_ids)}\n\n" if skill_ids else ""
+    )
     return (
         "⟦MODE: GRAPH WORKFLOW NODE⟧ Execute this node autonomously. Do not ask the "
         "user or emit a <question-form>; if essential access or information is missing, "
@@ -110,6 +116,7 @@ def build_node_prompt(
         f"INSTRUCTION:\n{instruction}\n\n"
         f"EXPECTED OUTPUT:\n{expected}\n\n"
         f"{rules_block}"
+        f"{skills_block}"
         "WORKFLOW INPUT (user-approved data):\n"
         f"<workflow_input>\n{json.dumps(inputs.get('job_input', {}), ensure_ascii=False, indent=2)}\n"
         "</workflow_input>\n\n"

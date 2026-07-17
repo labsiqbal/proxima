@@ -6243,6 +6243,83 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* @-mention: textarea plus a file picker anchored to it. */
+.mention-wrap {
+	position: relative;
+	display: grid;
+}
+.mention-popover {
+	position: absolute;
+	bottom: calc(100% + var(--space-1));
+	left: 0;
+	right: 0;
+	z-index: 30;
+	display: grid;
+	max-height: 14rem;
+	overflow: auto;
+	background: var(--ui-surface);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-composer);
+}
+.mention-popover button {
+	display: grid;
+	gap: 2px;
+	padding: var(--space-2) var(--space-3);
+	text-align: left;
+	border: 0;
+	background: transparent;
+	color: var(--ui-text-primary);
+	cursor: pointer;
+}
+.mention-popover button.active,
+.mention-popover button:hover {
+	background: var(--ui-row-active-background);
+}
+.mention-popover button span {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Per-node skill hints, collapsed by default — most nodes need none. */
+.graph-skills summary {
+	cursor: pointer;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	padding-block: var(--space-1);
+}
+.graph-skills[open] {
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+	padding-bottom: var(--space-2);
+}
+.graph-skill-unknown {
+	color: var(--ui-text-tertiary);
+}
+/* Draggable divider between graph panels. Wider hit area than its visible line. */
+.graph-resize-handle {
+	flex: none;
+	width: 6px;
+	margin-inline: -2px;
+	cursor: col-resize;
+	touch-action: none;
+	border-inline-start: 1px solid transparent;
+	transition: border-color var(--t) var(--ease);
+}
+.graph-resize-handle:hover,
+.graph-resize-handle:active {
+	border-inline-start-color: var(--ui-accent);
+}
+.graph-list-title {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.graph-list-title small {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+}
 /* Wide enough for the inputs table, which is a row of five columns. */
 .graph-template-card {
 	width: min(44rem, 94vw);

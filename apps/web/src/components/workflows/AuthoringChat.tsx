@@ -50,7 +50,9 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   buildTestPrompt?: (stepIndex: number) => string
   idleHint: React.ReactNode
   placeholder: string
-}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder }, ref) {
+  /** Files the owner can @-mention in the composer. */
+  mentionItems?: import('../ui/MentionTextarea').MentionItem[]
+}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder, mentionItems }, ref) {
   const [session, setSession] = React.useState<number | null>(null)
   const sessionRef = React.useRef<number | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
@@ -205,6 +207,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
     </div>
     <Composer
       token={token}
+      mentionItems={mentionItems}
       slug={projectSlug || undefined}
       features={features}
       placeholder={placeholder}

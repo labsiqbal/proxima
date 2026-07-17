@@ -1,5 +1,6 @@
 import React from "react";
 import { getCommandCatalog, type CatalogCommand } from "../../api/commands";
+import { applyMention, filterMentions, matchMention, type MentionItem } from "../ui/MentionTextarea";
 import { uploadFile } from "../../api/files";
 import type { PromptMode } from "../../api/runs";
 import type { AppFeatures } from "../../types";
@@ -60,6 +61,7 @@ export function Composer({
 	submitLabel = "Send",
 	submittingLabel = "Sending…",
 	textareaLabel,
+	mentionItems,
 	draftSeed,
 	draftSeedNonce,
 	onSubmit,
@@ -80,6 +82,8 @@ export function Composer({
 	submitLabel?: string;
 	submittingLabel?: string;
 	textareaLabel?: string;
+	/** Files the owner can @-mention; typing @ offers them and inserts the path. */
+	mentionItems?: MentionItem[];
 	draftSeed?: string;
 	draftSeedNonce?: number;
 	onSubmit: (text: string, promptMode?: PromptMode) => Promise<void>;
@@ -267,6 +271,26 @@ export function Composer({
 				}
 			}}
 		>
+			{(() => {
+				const found = mentionItems?.length ? matchMention(draft) : null
+				const files = found ? filterMentions(mentionItems ?? [], found.query) : []
+				if (!found || files.length === 0) return null
+				return <div className="slash-popover">
+					{files.map((item) => (
+						<button
+							type="button"
+							key={item.path}
+							onMouseDown={(e) => {
+								e.preventDefault();
+								setDraft(applyMention(draft, draft.length, found.at, item.path).text);
+							}}
+						>
+							<strong>{item.title || item.path.split("/").pop()}</strong>
+							<span>{item.path}</span>
+						</button>
+					))}
+				</div>
+			})()}
 			{matches.length > 0 && (
 				<div className="slash-popover">
 					{matches.map((c) => (

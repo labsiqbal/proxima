@@ -16,6 +16,9 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
+import { runnerCapabilities } from '../api/profiles'
+import { listArtifacts } from '../api/files'
+import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
@@ -28,6 +31,7 @@ import type {
   GraphOutputKind,
   GraphTemplate,
   GraphWorkflowDraft,
+  DetectedSkill,
   Profile,
   Project,
   WorkflowGraph,
@@ -48,6 +52,59 @@ function outputText(state?: GraphNodeState): string {
 
 function statusLabel(status: GraphJob['status'] | GraphNodeState['status']): string {
   return status.replaceAll('_', ' ')
+}
+
+/** Plan statuses phrased as what the owner can do next — "kok gak bisa diedit?" should
+ *  be answered by the label itself, not by trial and error. */
+function planStatusLabel(status: GraphJob['status']): string {
+  switch (status) {
+    case 'queued': return 'Draft — editable'
+    case 'running': return 'Running…'
+    case 'review': return 'Needs your review'
+    case 'done': return 'Done — frozen'
+    case 'failed': return 'Failed'
+    default: return statusLabel(status)
+  }
+}
+
+const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
+
+/** A draggable panel width, persisted per panel — so the owner can widen whichever
+ *  pane they are focused on (the node inspector, most of all) and keep it. */
+function useDragWidth(key: string, fallback: number, min: number, max: number): [number, (event: React.PointerEvent) => void] {
+  const [width, setWidth] = React.useState(() => {
+    const raw = typeof localStorage !== 'undefined' ? Number(localStorage.getItem(key)) : NaN
+    return Number.isFinite(raw) && raw > 0 ? clampWidth(raw, min, max) : fallback
+  })
+  React.useEffect(() => { localStorage.setItem(key, String(width)) }, [key, width])
+  const start = React.useCallback((event: React.PointerEvent) => {
+    event.preventDefault()
+    const pointerId = event.pointerId
+    const startX = event.clientX
+    // Handles sit on the panel's right edge except the inspector's, which sits on its
+    // left — the handle says which way growth goes.
+    const direction = (event.currentTarget as HTMLElement).dataset.grow === 'left' ? -1 : 1
+    let base = 0
+    setWidth(current => { base = current; return current })
+    const onMove = (move: PointerEvent) => {
+      if (move.pointerId !== pointerId) return
+      setWidth(clampWidth(base + direction * (move.clientX - startX), min, max))
+    }
+    const onUp = (up: PointerEvent) => {
+      if (up.pointerId !== pointerId) return
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }, [min, max])
+  return [width, start]
 }
 
 const ZOOM_MIN = 0.35
@@ -423,11 +480,24 @@ export function GraphScreen({
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [railOpen, setRailOpen] = React.useState(true)
+  const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
+  const [listWidth, dragList] = useDragWidth('proxima.graph.listWidth', 240, 180, 480)
+  const [inspectorWidth, dragInspector] = useDragWidth('proxima.graph.inspectorWidth', 336, 260, 720)
   const [chatOpen, setChatOpen] = React.useState(false)
   const chatRef = React.useRef<WorkflowChatHandle>(null)
   // A test asked for while the chat panel is closed: the panel must mount before the
   // ref exists, so the request waits one render here.
   const [pendingTest, setPendingTest] = React.useState<string | null>(null)
+  const [mentionItems, setMentionItems] = React.useState<MentionItem[]>([])
+  const [skillsByRunner, setSkillsByRunner] = React.useState<Record<string, DetectedSkill[]>>({})
+  const skillFetches = React.useRef(new Set<string>())
+  const loadSkills = React.useCallback((runnerId: string | undefined) => {
+    if (!runnerId || skillFetches.current.has(runnerId)) return
+    skillFetches.current.add(runnerId)
+    runnerCapabilities(token, runnerId)
+      .then(caps => { if (mounted.current) setSkillsByRunner(current => ({ ...current, [runnerId]: caps.skills })) })
+      .catch(() => { skillFetches.current.delete(runnerId) })
+  }, [token])
   const [savingTemplate, setSavingTemplate] = React.useState(false)
   // A template whose declared inputs must be answered before its run is created.
   const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
@@ -619,6 +689,18 @@ export function GraphScreen({
     setSelectedId(node.id)
     setDirty(true)
   }
+
+  const mentionSlug = job?.project_slug ?? activeProject?.slug ?? null
+  React.useEffect(() => {
+    if (!mentionSlug) { setMentionItems([]); return }
+    let alive = true
+    // A generous window: mentions are for pointing at existing deliverables, and an
+    // old but real file beats an empty picker.
+    listArtifacts(token, mentionSlug, 60 * 24 * 365)
+      .then(body => { if (alive) setMentionItems(body.artifacts.map(a => ({ path: a.path, title: a.title, type: a.type }))) })
+      .catch(() => { if (alive) setMentionItems([]) })
+    return () => { alive = false }
+  }, [token, mentionSlug])
 
   React.useEffect(() => {
     if (!pendingTest || !chatOpen || !plan) return
@@ -886,7 +968,7 @@ export function GraphScreen({
       />}
       <h1>{job?.title ?? 'Graph workflows'}</h1>
       {job && <>
-        <span className={`graph-status st-${job.status}`}>{statusLabel(job.status)}</span>
+        <span className={`graph-status st-${job.status}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job.status)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
       </>}
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
@@ -923,7 +1005,11 @@ export function GraphScreen({
     {notice && <div className="graph-notice">{notice}</div>}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
-    <div className="graph-workspace">
+    <div className="graph-workspace" style={{
+      ['--graph-chat-width' as string]: `${chatWidth}px`,
+      ['--graph-list-width' as string]: `${listWidth}px`,
+      ['--graph-inspector-width' as string]: `${inspectorWidth}px`,
+    }}>
       {/* Chat left, artifact right — the house idiom (Design Studio does the same),
           and the standing rule: the agent edits the plan on screen, never the DB. */}
       {chatOpen && job && plan && <aside className="graph-chat-panel">
@@ -962,21 +1048,23 @@ export function GraphScreen({
             plan.nodes[index]?.id ?? '',
             job.input as Record<string, unknown> | undefined,
           )}
+          mentionItems={mentionItems}
           idleHint="Describe the workflow and the agent draws the graph; ask for changes and it redraws it. Branches run at once. Separate from Code, scoped to this plan."
           placeholder="Describe or change the workflow…"
         />
       </aside>}
+      {chatOpen && job && plan && <div className="graph-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" onPointerDown={dragChat} />}
       {railOpen && <aside className="graph-job-list">
-        <div className="graph-list-head first"><strong>Plans</strong><span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New plan">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></span></div>
+        <div className="graph-list-head first"><span className="graph-list-title"><strong>Plans</strong><small>one run each — draft, then frozen</small></span><span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New plan">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></span></div>
         {jobs.length === 0
           ? <p className="muted graph-empty-list">No plans yet. Start one with ＋, or promote a chat.</p>
           : jobs.map(item => <div key={item.id} className={`graph-row-wrap${job?.id === item.id ? ' selected' : ''}`}>
               <button className="graph-job-row" onClick={() => void loadJob(item.id)}>
-                <span>{item.title}</span><small>{statusLabel(item.status)}</small>
+                <span>{item.title}</span><small>{planStatusLabel(item.status)}</small>
               </button>
               <button className="row-action danger graph-row-delete" title="Delete plan" aria-label={`Delete plan ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
             </div>)}
-        <div className="graph-list-head"><strong>Templates</strong></div>
+        <div className="graph-list-head"><span className="graph-list-title"><strong>Templates</strong><small>reusable — run, schedule, pause</small></span></div>
         {templates.length === 0
           ? <p className="muted graph-empty-list">No saved graph templates.</p>
           : templates.map(template => <div key={template.id} className="graph-row-wrap">
@@ -1002,6 +1090,7 @@ export function GraphScreen({
               <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}>×</button>
             </div>)}
       </aside>}
+      {railOpen && <div className="graph-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize plan list" onPointerDown={dragList} />}
 
       <main className="graph-main">
         {!job || !plan
@@ -1026,6 +1115,7 @@ export function GraphScreen({
 
       {/* Only when there is something to inspect. An empty 294px column that says
           "select a node" is furniture the canvas could be using. */}
+      {job && plan && definition && <div className="graph-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize node detail" data-grow="left" onPointerDown={dragInspector} />}
       {job && plan && definition && <aside className="graph-inspector">
             <div className="graph-inspector-head">
               <div><p className="graph-eyebrow">Node</p><h2>{definition.name}</h2></div>
@@ -1043,18 +1133,22 @@ export function GraphScreen({
                   webhooks become further options here.
                 </p>
               </> : <>
-                <label>Instruction<textarea rows={5} value={definition.instruction} onChange={event => updateSelected({ instruction: event.target.value })} /></label>
-                <label>Expected output<textarea
+                <label>Instruction<MentionTextarea rows={5} items={mentionItems} value={definition.instruction} onChange={value => updateSelected({ instruction: value })} ariaLabel="Node instruction" /></label>
+                <label>Expected output<MentionTextarea
                   rows={2}
+                  items={mentionItems}
                   value={definition.expected_output ?? ''}
-                  placeholder="What a good result looks like"
-                  onChange={event => updateSelected({ expected_output: event.target.value })}
+                  placeholder="What a good result looks like — @ mentions a project file"
+                  onChange={value => updateSelected({ expected_output: value })}
+                  ariaLabel="Expected output"
                 /></label>
-                <label>Rules <span className="muted">(optional)</span><textarea
+                <label>Rules <span className="muted">(optional)</span><MentionTextarea
                   rows={3}
+                  items={mentionItems}
                   value={definition.rules ?? ''}
-                  placeholder="Constraints on how to do it"
-                  onChange={event => updateSelected({ rules: event.target.value })}
+                  placeholder="Constraints on how to do it — @ mentions a project file"
+                  onChange={value => updateSelected({ rules: value })}
+                  ariaLabel="Node rules"
                 /></label>
                 <label>Agent<select
                   value={definition.profile_id ?? ''}
@@ -1065,6 +1159,35 @@ export function GraphScreen({
                   <option value="">Default — this run’s agent</option>
                   {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
                 </select></label>
+                {(() => {
+                  const effectiveProfile = profiles.find(profile => profile.id === (definition.profile_id ?? profileId))
+                    ?? profiles.find(profile => profile.id === profileId)
+                  const runnerId = effectiveProfile?.runner_id
+                  const detected = runnerId ? skillsByRunner[runnerId] : undefined
+                  const chosen = definition.skill_ids ?? []
+                  // Hints from the chat may name skills this runner does not detect —
+                  // keep them visible so they can be unchecked, not silently kept.
+                  const unknown = chosen.filter(id => !(detected ?? []).some(skill => skill.id === id))
+                  const toggle = (id: string, on: boolean) => updateSelected({
+                    skill_ids: on ? [...chosen, id] : chosen.filter(item => item !== id),
+                  })
+                  return <details className="graph-skills" onToggle={event => { if ((event.target as HTMLDetailsElement).open) loadSkills(runnerId) }}>
+                    <summary>Skills <span className="muted">({chosen.length ? `${chosen.length} suggested` : 'optional'})</span></summary>
+                    <p className="muted graph-field-note">Suggested to the agent in its prompt. What is actually enabled comes from the agent profile.</p>
+                    {detected == null
+                      ? <p className="muted">{runnerId ? 'Loading detected skills…' : 'Pick an agent first.'}</p>
+                      : detected.length === 0 && unknown.length === 0
+                        ? <p className="muted">No skills detected for this runner.</p>
+                        : <>
+                          {detected.map(skill => <label className="graph-check" key={skill.id} title={skill.description || undefined}>
+                            <input type="checkbox" checked={chosen.includes(skill.id)} onChange={event => toggle(skill.id, event.target.checked)} />{skill.name || skill.id}
+                          </label>)}
+                          {unknown.map(id => <label className="graph-check graph-skill-unknown" key={id} title="Not detected for this runner">
+                            <input type="checkbox" checked onChange={() => toggle(id, false)} />{id} <span className="muted">(not detected)</span>
+                          </label>)}
+                        </>}
+                  </details>
+                })()}
                 <label>Output contract<select value={definition.output_kind} onChange={event => updateSelected({ output_kind: event.target.value as GraphOutputKind })}>
                   {OUTPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
                 </select></label>
