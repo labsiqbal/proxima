@@ -59,3 +59,13 @@ export const saveGraphTemplate = (
   method: 'POST',
   body: JSON.stringify(body),
 })
+
+// Deleting a plan is deleting its job row: node states cascade, and every session the
+// job owns (the main thread plus one per executed node) is swept server-side.
+export const deleteGraphJob = (token: string, jobId: number) =>
+  api<{ ok: boolean }>(`/api/jobs/${jobId}`, token, { method: 'DELETE' })
+
+// A template is a workflows row; the shared delete takes either engine. Schedules
+// referencing it go with it — a schedule for a deleted workflow could never run.
+export const deleteGraphTemplate = (token: string, templateId: number) =>
+  api<{ ok: boolean }>(`/api/workflows/${templateId}`, token, { method: 'DELETE' })

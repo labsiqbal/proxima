@@ -987,7 +987,7 @@ def register(app, deps):
             })
         review_count = d.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'review' AND archived_at IS NULL").fetchone()["c"]
         review_jobs = [dict(r) for r in d.execute(
-            "SELECT j.id, j.title, j.updated_at, j.workflow_id, p.slug AS project_slug, w.name AS workflow_name "
+            "SELECT j.id, j.title, j.updated_at, j.workflow_id, j.engine, p.slug AS project_slug, w.name AS workflow_name "
             "FROM jobs j LEFT JOIN projects p ON p.id = j.project_id LEFT JOIN workflows w ON w.id = j.workflow_id "
             "WHERE j.status = 'review' AND j.archived_at IS NULL ORDER BY j.updated_at DESC, j.id DESC LIMIT 5"
         ).fetchall()]

@@ -279,6 +279,17 @@ description, declared inputs — rides along client-side and pre-fills the Save-
 modal, because a job has nowhere to persist it and dropping it silently would make the
 owner re-declare what the agent already wrote.
 
+Rail rows carry a hover-revealed **delete**: a plan delete removes the job, its node
+states and every session the job owns (the main thread plus one per executed node — the
+`sessions.job_id` FK is SET NULL, so the server sweeps them rather than leaving orphan
+threads in the sidebar); a template delete removes the workflows row and its schedules
+(a schedule for a deleted workflow could never run). Produced artifacts stay — they are
+deliverables, not run records.
+
+A job's **review opens where it can be acted on**: the Home attention strip and a
+schedule's "Run now" pass the job's `engine` up, and a graph job routes to this canvas
+instead of the linear TaskWorkspace, which has no way to approve a graph gate.
+
 Selecting a plan opens it showing the whole graph with nothing selected. The live poll
 keeps an existing selection but drops one whose node has disappeared.
 

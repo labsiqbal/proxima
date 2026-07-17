@@ -31,7 +31,7 @@ export function HomeScreen({
 	onActiveProject: (project: Project | null) => void;
 	onActiveProfile: (profile: Profile) => void;
 	onCreateTask: (request: OpsTaskRequest) => Promise<number>;
-	onOpenJob: (jobId: number) => void;
+	onOpenJob: (jobId: number, engine?: string) => void;
 	onSelectView: (view: View) => void;
 }) {
 	const [data, setData] = React.useState<Dashboard | null>(null);
@@ -125,7 +125,7 @@ export function HomeScreen({
 							className="ops-attention-main"
 							onClick={() =>
 								firstReview
-									? onOpenJob(firstReview.id)
+									? onOpenJob(firstReview.id, firstReview.engine)
 									: onSelectView("activity")
 							}
 						>

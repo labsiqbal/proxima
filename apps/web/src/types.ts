@@ -322,6 +322,9 @@ export type Job = {
 	session_id: number;
 	title: string;
 	status: JobStatus;
+	// 'linear' (classic steps) or 'graph' — decides which surface can act on the job,
+	// e.g. a review opens on the canvas rather than in TaskWorkspace.
+	engine?: string;
 	current_step_idx: number;
 	input: any;
 	steps_state: JobStep[];

@@ -3,6 +3,8 @@ import {
   approveGraphJob,
   approveGraphNode,
   createGraphJob,
+  deleteGraphJob,
+  deleteGraphTemplate,
   editGraphNodeOutput,
   getGraphJob,
   listGraphJobs,
@@ -13,6 +15,7 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
+import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat } from '../components/workflows/AuthoringChat'
 import { buildGraphPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
@@ -612,6 +615,48 @@ export function GraphScreen({
     setDirty(true)
   }
 
+  async function deletePlan(item: { id: number; title: string }) {
+    const ok = await confirmDialog({
+      title: 'Delete this plan?',
+      message: `“${item.title}” and its run threads will be permanently deleted. Anything it already produced (artifacts, project files) stays.`,
+      confirmLabel: 'Delete plan',
+      danger: true,
+    })
+    if (!ok || busy) return
+    setBusy('delete')
+    setError('')
+    try {
+      await deleteGraphJob(token, item.id)
+      if (!mounted.current) return
+      setJobs(current => current.filter(row => row.id !== item.id))
+      if (job?.id === item.id) { setJob(null); setPlan(null); setSelectedId(null); setChatOpen(false) }
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  async function deleteTemplate(template: GraphTemplate) {
+    const ok = await confirmDialog({
+      title: 'Delete this template?',
+      message: `“${template.name}” will be permanently deleted, along with any schedules that run it. Past runs keep their frozen copy of the graph.`,
+      confirmLabel: 'Delete template',
+      danger: true,
+    })
+    if (!ok || busy) return
+    setBusy('delete')
+    setError('')
+    try {
+      await deleteGraphTemplate(token, template.id)
+      if (mounted.current) setTemplates(current => current.filter(row => row.id !== template.id))
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
   // The blank-plan entry point. Sequential's "New workflow" retired with it, and chat
   // promotion cannot be the only door into the editor — a starter trigger + first step
   // gives the canvas (or the authoring chat) something to build on.
@@ -858,25 +903,30 @@ export function GraphScreen({
         <div className="graph-list-head first"><strong>Plans</strong><span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New plan">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></span></div>
         {jobs.length === 0
           ? <p className="muted graph-empty-list">No plans yet. Start one with ＋, or promote a chat.</p>
-          : jobs.map(item => <button key={item.id} className={`graph-job-row${job?.id === item.id ? ' selected' : ''}`} onClick={() => void loadJob(item.id)}>
-              <span>{item.title}</span><small>{statusLabel(item.status)}</small>
-            </button>)}
+          : jobs.map(item => <div key={item.id} className={`graph-row-wrap${job?.id === item.id ? ' selected' : ''}`}>
+              <button className="graph-job-row" onClick={() => void loadJob(item.id)}>
+                <span>{item.title}</span><small>{statusLabel(item.status)}</small>
+              </button>
+              <button className="row-action danger graph-row-delete" title="Delete plan" aria-label={`Delete plan ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
+            </div>)}
         <div className="graph-list-head"><strong>Templates</strong></div>
         {templates.length === 0
           ? <p className="muted graph-empty-list">No saved graph templates.</p>
-          : templates.map(template => <button
-              key={template.id}
-              className="graph-job-row"
-              disabled={!!busy}
-              onClick={() => {
-                // Ask for the declared inputs first: without them a node's {{var}}
-                // would reach the runner unfilled.
-                if (template.inputs?.length) setRunningTemplate(template)
-                else void createFromTemplate(template)
-              }}
-            >
-              <span>{template.name}</span><small>New queued run</small>
-            </button>)}
+          : templates.map(template => <div key={template.id} className="graph-row-wrap">
+              <button
+                className="graph-job-row"
+                disabled={!!busy}
+                onClick={() => {
+                  // Ask for the declared inputs first: without them a node's {{var}}
+                  // would reach the runner unfilled.
+                  if (template.inputs?.length) setRunningTemplate(template)
+                  else void createFromTemplate(template)
+                }}
+              >
+                <span>{template.name}</span><small>New queued run</small>
+              </button>
+              <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}>×</button>
+            </div>)}
       </aside>}
 
       <main className="graph-main">

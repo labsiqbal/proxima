@@ -291,3 +291,50 @@ def test_graph_routes_are_inert_while_feature_is_off(tmp_path):
         "SELECT COUNT(*) AS c FROM jobs WHERE engine='graph'"
     ).fetchone()["c"]
     assert after == before
+
+
+def test_deleting_a_graph_template_works_and_takes_its_schedules(tmp_path):
+    """DELETE /api/workflows/{id} used to 404 for graph rows — the linear-only guard
+    predates graph templates being deletable at all."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
+    template = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template", json={"name": "Reusable"}
+    ).json()
+    schedule = client.post(
+        "/api/schedules", json={"workflow_id": template["id"], "cron": "0 9 * * *"}
+    ).json()
+
+    response = client.delete(f"/api/workflows/{template['id']}")
+
+    assert response.status_code == 200, response.text
+    assert client.get("/api/graph/templates").json()["items"] == []
+    # The schedule went with it: a schedule for a deleted workflow could never run.
+    remaining = [s["id"] for s in client.get("/api/schedules").json()]
+    assert schedule["id"] not in remaining
+
+
+def test_deleting_a_graph_job_sweeps_its_node_sessions(tmp_path):
+    """Every node runs in its own session tied to the job by sessions.job_id, and that
+    FK is ON DELETE SET NULL — an unswept delete leaves orphan threads in the sidebar."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = client.post("/api/graph/jobs", json={"title": "D", "graph": _chain_graph()}).json()
+    client.post(f"/api/graph/jobs/{job['id']}/start")
+    db = app.state.db
+    before = db.execute(
+        "SELECT COUNT(*) AS c FROM sessions WHERE job_id = ? OR id = ?",
+        (job["id"], job["session_id"]),
+    ).fetchone()["c"]
+    assert before >= 2, "expected the job session plus at least one node session"
+
+    response = client.delete(f"/api/jobs/{job['id']}")
+
+    assert response.status_code == 200, response.text
+    left = db.execute(
+        "SELECT COUNT(*) AS c FROM sessions WHERE job_id = ? OR id = ?",
+        (job["id"], job["session_id"]),
+    ).fetchone()["c"]
+    assert left == 0
+    assert db.execute("SELECT COUNT(*) AS c FROM node_states WHERE job_id = ?", (job["id"],)).fetchone()["c"] == 0

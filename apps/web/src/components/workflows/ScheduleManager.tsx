@@ -56,7 +56,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   onClose?: () => void
   // Given, "Run now" hands the owner straight to the task it spawned — a schedule you
   // cannot watch is a schedule you cannot trust.
-  onOpenJob?: (jobId: number) => void
+  onOpenJob?: (jobId: number, engine?: string) => void
 }) {
   const available = workflowId ? workflows.filter(w => w.id === workflowId) : workflows
   const [selectedId, setSelectedId] = React.useState(workflowId || available[0]?.id || 0)
@@ -119,7 +119,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     const job = await runScheduleNow(token, schedule.id)
     // Only navigate once the job really exists; a 409 (overlap skip / unrunnable
     // workflow) throws above and surfaces in the error bar instead.
-    if (mounted.current) onOpenJob?.(job.id)
+    if (mounted.current) onOpenJob?.(job.id, job.engine)
   })
   const remove = async (schedule: Schedule) => {
     const name = workflows.find(w => w.id === schedule.workflow_id)?.name || 'this workflow'

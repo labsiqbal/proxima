@@ -39,6 +39,10 @@ Terminal belongs only to Code and remains mounted after its first visit so PTY p
 
 ## Workflows and schedules
 
+The **top bar** owns the brand mark and the Ops/Code workspace switcher (brand at the
+far left), so collapsing the sidebar never takes away who you are or where you can go.
+The mobile drawer keeps its own copy — the top bar hides below the tablet breakpoint.
+
 Workflows appears once in Ops navigation. Its screen owns two modes:
 
 - **Editor** is the workflow graph canvas (feature-gated behind

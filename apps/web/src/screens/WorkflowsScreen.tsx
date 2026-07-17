@@ -13,7 +13,7 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   /** The feature-gated graph canvas. Absent when the graph engine is disabled. */
   graphContent?: React.ReactNode
   token: string
-  onOpenJob?: (jobId: number) => void
+  onOpenJob?: (jobId: number, engine?: string) => void
 }) {
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   const [error, setError] = React.useState('')

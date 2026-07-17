@@ -63,9 +63,9 @@ def register(app, deps):
             raise HTTPException(status_code=404, detail="workflow not found")
         return row
 
-    def _schedulable_workflow_or_404(workflow_id: int, user: dict[str, Any]) -> sqlite3.Row:
-        """Either engine: the scheduler spawns whichever the row declares, so a
-        schedule may target a graph template as well as a linear recipe."""
+    def _any_workflow_or_404(workflow_id: int, user: dict[str, Any]) -> sqlite3.Row:
+        """Either engine — for operations that treat the workflows row as a whole
+        (scheduling it, deleting it), where linear-vs-graph makes no difference."""
         row = db().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         if not row or not _can_access(row["created_by"], row["project_id"], user):
             raise HTTPException(status_code=404, detail="workflow not found")
@@ -129,7 +129,10 @@ def register(app, deps):
 
     @app.delete("/api/workflows/{workflow_id}")
     def delete_workflow(workflow_id: int, user: dict[str, Any] = Depends(current_user)):
-        _workflow_or_404(workflow_id, user)
+        # Either engine: deleting a graph template is the same row-level operation as
+        # deleting a linear recipe — schedules go with it, past jobs keep their frozen
+        # snapshot.
+        _any_workflow_or_404(workflow_id, user)
         # Permanent delete. FKs cascade: schedules are removed (ON DELETE CASCADE) and
         # past jobs keep their frozen step snapshot (jobs.workflow_id -> NULL).
         db().execute("DELETE FROM schedules WHERE workflow_id = ?", (workflow_id,))
@@ -425,23 +428,30 @@ def register(app, deps):
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
-        # Remove the run record + its thread (messages/runs/events cascade). Produced
+        # Remove the run record + its threads (messages/runs/events cascade). Produced
         # artifacts (Design Studio designs, project files) are deliverables and are
-        # deliberately left in place.
-        if job["session_id"]:
+        # deliberately left in place. "Threads" is plural for a graph job: every node
+        # runs in its own session tied to the job by sessions.job_id, and that FK is
+        # ON DELETE SET NULL — without sweeping them here they would linger as orphans.
+        session_rows = db().execute(
+            "SELECT id FROM sessions WHERE job_id = ? OR id = ?",
+            (job_id, job["session_id"] or 0),
+        ).fetchall()
+        session_ids = [_as_int(r["id"]) for r in session_rows]
+        for session_id in session_ids:
             active = db().execute(
                 "SELECT id, project_id FROM runs WHERE session_id = ? AND status IN ('queued','running')",
-                (job["session_id"],),
+                (session_id,),
             ).fetchall()
             db().execute(
                 "UPDATE runs SET status='cancelled', finished_at=CURRENT_TIMESTAMP "
                 "WHERE session_id = ? AND status IN ('queued','running')",
-                (job["session_id"],),
+                (session_id,),
             )
             for r in active:
-                app.state.worker.add_event(_as_int(r["id"]), job["session_id"], r["project_id"], "run.cancelled", {})
+                app.state.worker.add_event(_as_int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
                 app.state.worker.cancel(_as_int(r["id"]))
-            db().execute("DELETE FROM sessions WHERE id = ?", (job["session_id"],))
+            db().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         db().execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         return {"ok": True, "id": job_id}
 
@@ -465,7 +475,7 @@ def register(app, deps):
     def create_schedule(payload: ScheduleCreateRequest, user: dict[str, Any] = Depends(current_user)):
         if not wf.cron_valid(payload.cron):
             raise HTTPException(status_code=422, detail="invalid cron — need 5 valid fields (min hour dom mon dow)")
-        wfrow = _schedulable_workflow_or_404(payload.workflow_id, user)
+        wfrow = _any_workflow_or_404(payload.workflow_id, user)
         sched_project = _member_project_id(payload.project_id, None, user) if payload.project_id is not None else wfrow["project_id"]
         cur = db().execute(
             "INSERT INTO schedules(workflow_id, project_id, cron, input, overlap_policy, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",

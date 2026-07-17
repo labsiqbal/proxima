@@ -3,7 +3,8 @@ import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../
 import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
-import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
+import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout, IconHome, IconTerminal } from './icons'
+import { ProximaMark } from '../brand/ProximaMark'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -94,6 +95,14 @@ export function AppShell(props: {
   return (
     <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''}`} style={shellStyle}>
       <header className="top-bar">
+        {/* Brand and workspace switcher live up here, not in the sidebar, so collapsing
+            the sidebar never takes away who you are (the mark) or where you can go
+            (Ops/Code). The drawer keeps its own copy for mobile, where this bar hides. */}
+        <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
+        <div className="workspace-switch top-bar-switch" role="group" aria-label="Workspace">
+          <button className={props.workspaceMode === 'ops' ? 'active' : ''} aria-pressed={props.workspaceMode === 'ops'} onClick={() => props.onSelectWorkspace('ops')}><IconHome size={14} /><span>Ops</span></button>
+          <button className={props.workspaceMode === 'code' ? 'active' : ''} aria-pressed={props.workspaceMode === 'code'} onClick={() => props.onSelectWorkspace('code')}><IconTerminal size={14} /><span>Code</span></button>
+        </div>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         <button className="tool-btn" onClick={() => setSearchOpen(true)} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         <span className="top-bar-spacer" />

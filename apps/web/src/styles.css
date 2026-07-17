@@ -3052,6 +3052,33 @@ button:disabled {
 	background: var(--ui-bg-sidebar);
 	z-index: 26;
 }
+.top-bar-brand {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding-right: var(--space-2);
+}
+.top-bar-brand .proxima-mark svg {
+	width: 22px;
+	height: 22px;
+}
+/* Compact inline variant of the sidebar switcher — same classes, so active/focus
+   styling stays shared; only the geometry changes up here. */
+.top-bar .workspace-switch.top-bar-switch {
+	display: inline-flex;
+	margin-right: var(--space-2);
+}
+.top-bar .workspace-switch.top-bar-switch button {
+	height: 26px;
+	padding-inline: var(--space-3);
+}
+/* Desktop owns the top-bar copy; the drawer keeps these for mobile. */
+@media (min-width: 768px) {
+	.sidebar-inner > .sidebar-head,
+	.sidebar-inner > .workspace-switch {
+		display: none;
+	}
+}
 .top-bar-spacer {
 	flex: 1;
 }
@@ -5934,6 +5961,33 @@ div.result-media {
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--ui-text-tertiary);
+}
+/* A rail row and its delete affordance side by side — the row itself is a button, so
+   the × must be a sibling, not a child. The wrap carries the selected look the row
+   used to. */
+.graph-row-wrap {
+	display: flex;
+	align-items: stretch;
+	gap: var(--space-1);
+}
+.graph-row-wrap > .graph-job-row {
+	flex: 1;
+	min-width: 0;
+}
+.graph-row-wrap.selected > .graph-job-row {
+	border-color: var(--ui-accent);
+	background: var(--ui-accent-soft);
+}
+.graph-row-delete {
+	align-self: center;
+	flex: none;
+	/* Quiet until the row is under the pointer: deletion is a rare act and a rail of
+	   permanent × marks reads as clutter. Focus reveals it for keyboard users. */
+	opacity: 0;
+}
+.graph-row-wrap:hover .graph-row-delete,
+.graph-row-delete:focus-visible {
+	opacity: 1;
 }
 .graph-job-row {
 	display: grid;
