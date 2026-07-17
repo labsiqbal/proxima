@@ -360,3 +360,22 @@ def test_scheduling_a_linear_workflow_is_unchanged(tmp_path):
     job = dict(app.state.worker_db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
     assert job["engine"] == "linear"
     assert job["steps_state"] != "[]"
+
+
+def test_a_paused_workflow_does_not_fire_its_schedule(tmp_path):
+    """The owner's rule: only active workflows run on a schedule. Pausing (draft) takes
+    the template out of rotation; the minute is still claimed so it does not retry."""
+    app = _graph_app(tmp_path)
+    _client(app)
+    workflow_id = _graph_workflow(app)
+    sched = _schedule_for(app, workflow_id)
+    app.state.worker_db.execute("UPDATE workflows SET status='draft' WHERE id=?", (workflow_id,))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T11:00")
+
+    assert job_id is None
+    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"] == 0
+    claimed = app.state.worker_db.execute(
+        "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
+    ).fetchone()["last_run_minute"]
+    assert claimed == "2026-07-17T11:00"

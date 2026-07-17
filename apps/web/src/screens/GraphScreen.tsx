@@ -6,6 +6,7 @@ import {
   deleteGraphJob,
   deleteGraphTemplate,
   editGraphNodeOutput,
+  setGraphTemplateStatus,
   getGraphJob,
   listGraphJobs,
   listGraphTemplates,
@@ -648,6 +649,22 @@ export function GraphScreen({
     }
   }
 
+  // Pause ⇄ resume: the owner's rule is that only active templates run on a schedule,
+  // so "this workflow needs fixing" is one click out of rotation, not a deletion.
+  async function toggleTemplatePaused(template: GraphTemplate) {
+    if (busy) return
+    setBusy('template-status')
+    setError('')
+    try {
+      const next = await setGraphTemplateStatus(token, template.id, template.status === 'active' ? 'draft' : 'active')
+      if (mounted.current) setTemplates(current => current.map(row => row.id === template.id ? { ...row, status: next.status } : row))
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
   async function deleteTemplate(template: GraphTemplate) {
     const ok = await confirmDialog({
       title: 'Delete this template?',
@@ -973,8 +990,15 @@ export function GraphScreen({
                   else void createFromTemplate(template)
                 }}
               >
-                <span>{template.name}</span><small>New queued run</small>
+                <span>{template.name}</span><small>{template.status === 'active' ? 'New queued run' : 'Paused — schedules skip it'}</small>
               </button>
+              <button
+                className="row-action graph-row-delete"
+                title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'}
+                aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} template ${template.name}`}
+                disabled={!!busy}
+                onClick={() => void toggleTemplatePaused(template)}
+              >{template.status === 'active' ? '⏸' : '▶'}</button>
               <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}>×</button>
             </div>)}
       </aside>}

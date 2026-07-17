@@ -70,7 +70,7 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | 
         prof = db.execute(
             "SELECT * FROM profiles WHERE user_id = ? ORDER BY is_default DESC, id LIMIT 1", (uid,)
         ).fetchone() if uid else None
-        if not wfrow or wfrow["status"] == "archived" or not prof:
+        if not wfrow or wfrow["status"] != "active" or not prof:
             _claim_minute()
             return None
         inp = json.loads(sched["input"]) if sched["input"] else {}

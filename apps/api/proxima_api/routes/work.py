@@ -109,7 +109,21 @@ def register(app, deps):
 
     @app.patch("/api/workflows/{workflow_id}")
     def update_workflow(workflow_id: int, payload: WorkflowUpdateRequest, user: dict[str, Any] = Depends(current_user)):
-        _workflow_or_404(workflow_id, user)
+        row = _any_workflow_or_404(workflow_id, user)
+        if row["graph"] is not None:
+            # Lifecycle only for graph templates: pause (draft) ⇄ resume (active) ⇄
+            # archive. The scheduler fires none but 'active', so pausing a template is
+            # how its schedules stop while it is being revised.
+            if any(value is not None for value in (
+                payload.name, payload.description, payload.category, payload.steps, payload.inputs
+            )):
+                raise HTTPException(status_code=422, detail="graph templates are authored on the canvas; only status can be changed here")
+            if payload.status is not None:
+                db().execute(
+                    "UPDATE workflows SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (payload.status, workflow_id),
+                )
+            return _workflow_payload(_any_workflow_or_404(workflow_id, user))
         steps = json.dumps(wf.normalize_steps(payload.steps)) if payload.steps is not None else None
         inputs = json.dumps(payload.inputs) if payload.inputs is not None else None
         if any(value is not None for value in (
@@ -540,7 +554,7 @@ def register(app, deps):
         if job_id is None:
             raise HTTPException(
                 status_code=409,
-                detail="schedule could not run — its workflow is archived, has no steps, or has no agent profile",
+                detail="schedule could not run — its workflow is not active, has no steps, or has no agent profile",
             )
         return _job_payload(_job_or_404(job_id, user))
 

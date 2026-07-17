@@ -160,6 +160,8 @@ describe('buildNodeTestPrompt', () => {
     expect(prompt).not.toContain('<workflow-graph>')  // a test reply must never redraw the canvas
     // A rehearsal must not leave real deliverables behind.
     expect(prompt).toContain('Do NOT write or modify project files')
+    // Testing the join node must not re-pay for upstream nodes tested moments ago.
+    expect(prompt).toContain('REUSE earlier rehearsals')
   })
 
   it('asks for sample values when no input is known', () => {

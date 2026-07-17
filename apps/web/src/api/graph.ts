@@ -69,3 +69,8 @@ export const deleteGraphJob = (token: string, jobId: number) =>
 // referencing it go with it — a schedule for a deleted workflow could never run.
 export const deleteGraphTemplate = (token: string, templateId: number) =>
   api<{ ok: boolean }>(`/api/workflows/${templateId}`, token, { method: 'DELETE' })
+
+// Lifecycle only: pausing (draft) takes a template out of the scheduler's rotation —
+// it fires none but 'active' — and resuming puts it back. Authoring stays on the canvas.
+export const setGraphTemplateStatus = (token: string, templateId: number, status: 'active' | 'draft' | 'archived') =>
+  api<GraphTemplate>(`/api/workflows/${templateId}`, token, { method: 'PATCH', body: JSON.stringify({ status }) })

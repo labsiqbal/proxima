@@ -264,7 +264,12 @@ deliberate, separate act. The prompt also declares the run a **rehearsal**: resu
 presented in the thread, and the agent is told not to write project files or create
 artifacts — the approved run produces the real deliverables, and a test that mutated
 the workspace would leave the real run stacking on top of a practice one. A step whose
-whole purpose is a file shows its full intended content in the chat instead.
+whole purpose is a file shows its full intended content in the chat instead. Rehearsals
+also **reuse each other**: tests run in the plan's one chat session, so the prompt tells
+the agent to reuse an upstream step's result from earlier in the conversation when that
+step's instruction is unchanged — testing the join node doesn't re-pay for branches
+tested moments ago. (Real runs already have this: node outputs persist in `node_states`,
+and a rerun re-executes only the node itself plus its stale descendants.)
 
 ### Screen layout
 
@@ -377,6 +382,13 @@ are:
 | Typed client | `apps/web/src/api/graph.ts`, `types.ts` |
 
 ## Scheduling a graph
+
+Schedules fire only for **`status='active'`** workflows — the tick and Run-now both go
+through the same spawn, so a paused workflow runs nowhere. Template rail rows carry a
+**pause ⏸ / resume ▶** toggle (`status` draft ⇄ active over `PATCH /api/workflows`,
+which is lifecycle-only for graph rows — authoring fields 422). "This workflow needs
+fixing" is therefore one click out of rotation and one click back, with its schedules
+kept; deleting remains the destructive path and takes schedules with it.
 
 `POST /api/schedules` accepts a workflow of **either engine** (the linear-only
 `_workflow_or_404` guard still protects the linear editor/iterate/job routes, so a graph

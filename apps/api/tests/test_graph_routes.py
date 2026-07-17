@@ -369,3 +369,29 @@ def test_rerun_and_output_edit_still_work_after_final_approval(tmp_path):
     )
     assert corrected.status_code == 200, corrected.text
     assert corrected.json()["status"] == "running"
+
+
+def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
+    """PATCH /api/workflows is lifecycle-only for graph rows: pause/resume/archive.
+    Steps and inputs are authored on the canvas, not through the linear editor route."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
+    template = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template", json={"name": "Pausable"}
+    ).json()
+
+    paused = client.patch(f"/api/workflows/{template['id']}", json={"status": "draft"})
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["status"] == "draft"
+    # Still listed (only archived templates hide), so it can be resumed from the rail.
+    listed = client.get("/api/graph/templates").json()["items"]
+    assert [t["status"] for t in listed if t["id"] == template["id"]] == ["draft"]
+
+    rejected = client.patch(
+        f"/api/workflows/{template['id']}", json={"steps": [{"name": "X", "instruction": "x"}]}
+    )
+    assert rejected.status_code == 422
+
+    resumed = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
+    assert resumed.json()["status"] == "active"
