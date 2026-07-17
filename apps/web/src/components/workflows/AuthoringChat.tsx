@@ -159,14 +159,14 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   // triggers this; it saves first so the run reflects unsaved edits, and opens the chat if
   // needed. No authoring wrapper, so the reply carries no recipe block and the form stands.
   React.useImperativeHandle(ref, () => ({
-    runThrough: (stepIndex, _stepName) => { void (async () => {
+    runThrough: (stepIndex, stepName) => { void (async () => {
       const build = live.current.buildTestPrompt
       if (!build) return
       const s = await ensureSession()
       if (s == null) return
       // The prompt inlines whatever is live on screen, so a test reflects unsaved edits
       // rather than the saved copy or whatever the session last saw.
-      await fire(s, build(stepIndex), `Run through step ${stepIndex + 1}`)
+      await fire(s, build(stepIndex), stepName ? `Test “${stepName}”` : `Run through step ${stepIndex + 1}`)
     })() },
   }), [token, activeProfile, projectSlug])
 

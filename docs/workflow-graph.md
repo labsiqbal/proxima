@@ -251,6 +251,17 @@ returns null, so an ordinary conversational turn never disturbs the canvas. Hand
 `x`/`y` survive a redraw by node id, so asking for a change does not scatter a canvas the
 owner has already arranged.
 
+### Testing a node before approval
+
+While a plan is still **queued**, every agent node's inspector has **Test in chat**: a
+dry run in the workflow chat, the same move the linear editor's "run through step N"
+made. The prompt inlines the node *and its upstream ancestors* (`testChainFor` — a
+node's output only makes sense with its upstream context), in dependency order,
+skipping triggers and unrelated branches. Known job input fills `{{id}}` values;
+otherwise the agent is told to use sensible samples. The reply carries no graph block,
+so a test can never redraw the canvas, and no job state is touched — approval stays a
+deliberate, separate act.
+
 ### Screen layout
 
 The canvas is the workspace; the chrome yields to it.

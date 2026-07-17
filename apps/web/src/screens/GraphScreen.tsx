@@ -17,8 +17,8 @@ import {
 import { Dropdown } from '../components/ui/Dropdown'
 import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
-import { AuthoringChat } from '../components/workflows/AuthoringChat'
-import { buildGraphPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
+import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
+import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
 import type {
   AppFeatures,
   GraphJob,
@@ -423,6 +423,10 @@ export function GraphScreen({
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [railOpen, setRailOpen] = React.useState(true)
   const [chatOpen, setChatOpen] = React.useState(false)
+  const chatRef = React.useRef<WorkflowChatHandle>(null)
+  // A test asked for while the chat panel is closed: the panel must mount before the
+  // ref exists, so the request waits one render here.
+  const [pendingTest, setPendingTest] = React.useState<string | null>(null)
   const [savingTemplate, setSavingTemplate] = React.useState(false)
   // A template whose declared inputs must be answered before its run is created.
   const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
@@ -614,6 +618,13 @@ export function GraphScreen({
     setSelectedId(node.id)
     setDirty(true)
   }
+
+  React.useEffect(() => {
+    if (!pendingTest || !chatOpen || !plan) return
+    const index = plan.nodes.findIndex(node => node.id === pendingTest)
+    if (index >= 0) chatRef.current?.runThrough(index, plan.nodes[index].name || pendingTest)
+    setPendingTest(null)
+  }, [pendingTest, chatOpen, plan])
 
   async function deletePlan(item: { id: number; title: string }) {
     const ok = await confirmDialog({
@@ -900,6 +911,7 @@ export function GraphScreen({
           and the standing rule: the agent edits the plan on screen, never the DB. */}
       {chatOpen && job && plan && <aside className="graph-chat-panel">
         <AuthoringChat
+          ref={chatRef}
           token={token}
           features={features}
           profiles={profiles}
@@ -928,6 +940,11 @@ export function GraphScreen({
             return true
           }}
           stripBlock={stripGraphBlock}
+          buildTestPrompt={index => buildNodeTestPrompt(
+            { name: job.title, description: '', category: '', inputs: draftMeta.inputs ?? [], graph: plan },
+            plan.nodes[index]?.id ?? '',
+            job.input as Record<string, unknown> | undefined,
+          )}
           idleHint="Describe the workflow and the agent draws the graph; ask for changes and it redraws it. Branches run at once. Separate from Code, scoped to this plan."
           placeholder="Describe or change the workflow…"
         />
@@ -1038,6 +1055,15 @@ export function GraphScreen({
                 </label>)}
               </fieldset>}
               <div className="graph-form-actions">
+                {/* A dry run in the chat: the agent executes this node and its upstream
+                    chain conversationally, so the instruction can be judged before
+                    Approve & start. No job state is touched. */}
+                {definition.type !== 'trigger' && <button
+                  className="ghost-button"
+                  disabled={!definition.instruction.trim()}
+                  title={definition.instruction.trim() ? undefined : 'Write an instruction first'}
+                  onClick={() => { setChatOpen(true); setPendingTest(definition.id) }}
+                >Test in chat</button>}
                 <button className="ghost-button danger" onClick={removeNode} disabled={plan.nodes.length <= 1}>Remove node</button>
               </div>
             </div> : <div className="graph-run-detail">

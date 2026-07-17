@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGraphPrompt, parseGraphDraft, stripGraphBlock, type GraphSnapshot } from './graphPrompt'
+import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock, testChainFor, type GraphSnapshot } from './graphPrompt'
 
 const snapshot: GraphSnapshot = {
   name: 'Repurpose',
@@ -111,5 +111,58 @@ describe('stripGraphBlock', () => {
 
   it('never renders an empty bubble when the reply is only the block', () => {
     expect(stripGraphBlock('<workflow-graph>{"nodes":[]}</workflow-graph>')).toBe('Updated the graph.')
+  })
+})
+
+describe('testChainFor', () => {
+  const diamond: GraphSnapshot['graph'] = {
+    nodes: [
+      { id: 'start', type: 'trigger', name: 'Start', instruction: '', output_kind: 'json' },
+      { id: 'riset', type: 'agent', name: 'Riset', instruction: 'r', output_kind: 'text' },
+      { id: 'x', type: 'agent', name: 'Post X', instruction: 'x', output_kind: 'text' },
+      { id: 'li', type: 'agent', name: 'Post LI', instruction: 'l', output_kind: 'text' },
+      { id: 'bundle', type: 'agent', name: 'Bundle', instruction: 'b', output_kind: 'text' },
+    ],
+    edges: [
+      { from: 'start', to: 'riset' },
+      { from: 'riset', to: 'x' }, { from: 'riset', to: 'li' },
+      { from: 'x', to: 'bundle' }, { from: 'li', to: 'bundle' },
+    ],
+  }
+
+  it('collects only the ancestors of the node under test, in dependency order', () => {
+    const chain = testChainFor(diamond, 'x').map(node => node.id)
+
+    expect(chain).toEqual(['riset', 'x'])   // no li, no bundle, no trigger
+  })
+
+  it('runs the whole upstream diamond for the join node', () => {
+    const chain = testChainFor(diamond, 'bundle').map(node => node.id)
+
+    expect(chain[chain.length - 1]).toBe('bundle')
+    expect(chain.indexOf('riset')).toBeLessThan(chain.indexOf('x'))
+    expect(chain.indexOf('riset')).toBeLessThan(chain.indexOf('li'))
+    expect(chain).toHaveLength(4)
+  })
+
+  it('is just the node itself when nothing feeds it', () => {
+    expect(testChainFor(diamond, 'riset').map(node => node.id)).toEqual(['riset'])
+  })
+})
+
+describe('buildNodeTestPrompt', () => {
+  it('marks the node under test and fills known input values', () => {
+    const prompt = buildNodeTestPrompt(snapshot, 'research', { brief: 'Launch plan' })
+
+    expect(prompt).toContain('WORKFLOW TEST RUN')
+    expect(prompt).toContain('← the node under test')
+    expect(prompt).toContain('{{brief}} = Launch plan')
+    expect(prompt).not.toContain('<workflow-graph>')  // a test reply must never redraw the canvas
+  })
+
+  it('asks for sample values when no input is known', () => {
+    const prompt = buildNodeTestPrompt(snapshot, 'research')
+
+    expect(prompt).toContain('sensible sample values')
   })
 })
