@@ -480,7 +480,14 @@ export function GraphScreen({
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [railOpen, setRailOpen] = React.useState(true)
-  // Run history is reference, not workspace — open only while something needs eyes.
+  // Accordion sections: hide what is not in focus, remember the choice.
+  const [draftsOpen, setDraftsOpen] = React.useState(() => localStorage.getItem('proxima.graph.sec.drafts') !== '0')
+  const [templatesOpen, setTemplatesOpen] = React.useState(() => localStorage.getItem('proxima.graph.sec.templates') !== '0')
+  const [runsSectionOpen, setRunsSectionOpen] = React.useState(() => localStorage.getItem('proxima.graph.sec.runs') === '1')
+  React.useEffect(() => { localStorage.setItem('proxima.graph.sec.drafts', draftsOpen ? '1' : '0') }, [draftsOpen])
+  React.useEffect(() => { localStorage.setItem('proxima.graph.sec.templates', templatesOpen ? '1' : '0') }, [templatesOpen])
+  React.useEffect(() => { localStorage.setItem('proxima.graph.sec.runs', runsSectionOpen ? '1' : '0') }, [runsSectionOpen])
+  // Within Runs, finished stays behind its own toggle — history inside history.
   const [runsOpen, setRunsOpen] = React.useState(false)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
   const [listWidth, dragList] = useDragWidth('proxima.graph.listWidth', 240, 180, 480)
@@ -958,12 +965,10 @@ export function GraphScreen({
         aria-expanded={railOpen}
       >☰</button>
       {job?.status === 'queued' && <button
-        className={`row-action graph-rail-toggle${chatOpen ? ' active' : ''}`}
+        className={`ghost-button graph-chat-toggle${chatOpen ? ' active' : ''}`}
         onClick={() => setChatOpen(open => !open)}
         aria-pressed={chatOpen}
-        aria-label={chatOpen ? 'Hide workflow chat' : 'Show workflow chat'}
-        title={chatOpen ? 'Hide workflow chat' : 'Show workflow chat'}
-      >💬</button>}
+      >Chat</button>}
       {/* The shared Dropdown, in the bar — it used to be a raw <select> in the rail,
           which is the very thing the shared component exists to replace. */}
       {projects.length > 0 && <Dropdown
@@ -1064,19 +1069,30 @@ export function GraphScreen({
           // execution history. Mixing them was the confusion.
           const drafts = jobs.filter(item => item.status === 'queued')
           return <>
-            <div className="graph-list-head first"><span className="graph-list-title"><strong>Drafts</strong><small>being built — editable</small></span><span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New draft">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh">↻</button></span></div>
-            {drafts.length === 0
+            <div className="graph-list-head first">
+              <button className="graph-accordion-toggle" onClick={() => setDraftsOpen(open => !open)} aria-expanded={draftsOpen}>
+                <span className={`chevron ${draftsOpen ? 'open' : ''}`}>▸</span>
+                <span className="graph-list-title"><strong>Drafts ({drafts.length})</strong><small>being built — editable</small></span>
+              </button>
+              <span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New draft">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh">↻</button></span>
+            </div>
+            {draftsOpen && (drafts.length === 0
               ? <p className="muted graph-empty-list">Nothing in progress. Start with ＋, use a template, or promote a chat.</p>
               : drafts.map(item => <div key={item.id} className={`graph-row-wrap${job?.id === item.id ? ' selected' : ''}`}>
               <button className="graph-job-row" onClick={() => void loadJob(item.id)}>
                 <span>{item.title}</span><small>{planStatusLabel(item.status)}</small>
               </button>
               <button className="row-action danger graph-row-delete" title="Delete plan" aria-label={`Delete plan ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
-            </div>)}
+            </div>))}
           </>
         })()}
-        <div className="graph-list-head"><span className="graph-list-title"><strong>Templates</strong><small>reusable — run, schedule, pause</small></span></div>
-        {templates.length === 0
+        <div className="graph-list-head">
+          <button className="graph-accordion-toggle" onClick={() => setTemplatesOpen(open => !open)} aria-expanded={templatesOpen}>
+            <span className={`chevron ${templatesOpen ? 'open' : ''}`}>▸</span>
+            <span className="graph-list-title"><strong>Templates ({templates.length})</strong><small>reusable — run, schedule, pause</small></span>
+          </button>
+        </div>
+        {templatesOpen && (templates.length === 0
           ? <p className="muted graph-empty-list">No saved graph templates.</p>
           : templates.map(template => <div key={template.id} className="graph-row-wrap">
               <button
@@ -1099,7 +1115,7 @@ export function GraphScreen({
                 onClick={() => void toggleTemplatePaused(template)}
               >{template.status === 'active' ? '⏸' : '▶'}</button>
               <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}>×</button>
-            </div>)}
+            </div>))}
         {(() => {
           const runs = jobs.filter(item => item.status !== 'queued')
           const attention = runs.filter(item => item.status === 'review' || item.status === 'running')
@@ -1111,15 +1127,25 @@ export function GraphScreen({
             <button className="row-action danger graph-row-delete" title="Delete run" aria-label={`Delete run ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
           </div>
           return <>
-            <div className="graph-list-head"><span className="graph-list-title"><strong>Runs</strong><small>execution history — frozen</small></span></div>
-            {runs.length === 0 && <p className="muted graph-empty-list">No runs yet.</p>}
-            {/* Needing eyes is never buried behind a toggle. */}
-            {attention.map(runRow)}
-            {history.length > 0 && <>
-              <button className="graph-runs-toggle" onClick={() => setRunsOpen(open => !open)} aria-expanded={runsOpen}>
-                {runsOpen ? '▾' : '▸'} Finished ({history.length})
+            <div className="graph-list-head">
+              <button className="graph-accordion-toggle" onClick={() => setRunsSectionOpen(open => !open)} aria-expanded={runsSectionOpen}>
+                <span className={`chevron ${runsSectionOpen ? 'open' : ''}`}>▸</span>
+                <span className="graph-list-title">
+                  <strong>Runs ({runs.length})</strong>
+                  {/* Even collapsed, the header says when something needs eyes. */}
+                  <small>{attention.length > 0 ? `${attention.length} need${attention.length === 1 ? 's' : ''} attention` : 'execution history — frozen'}</small>
+                </span>
               </button>
-              {runsOpen && history.map(runRow)}
+            </div>
+            {runsSectionOpen && <>
+              {runs.length === 0 && <p className="muted graph-empty-list">No runs yet.</p>}
+              {attention.map(runRow)}
+              {history.length > 0 && <>
+                <button className="graph-runs-toggle" onClick={() => setRunsOpen(open => !open)} aria-expanded={runsOpen}>
+                  {runsOpen ? '▾' : '▸'} Finished ({history.length})
+                </button>
+                {runsOpen && history.map(runRow)}
+              </>}
             </>}
           </>
         })()}

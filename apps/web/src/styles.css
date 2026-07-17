@@ -6243,6 +6243,29 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* Accordion headers for the rail sections: the title is the toggle; row actions
+   (＋, ↻) stay outside it so a button never nests a button. */
+.graph-accordion-toggle {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.graph-accordion-toggle .chevron {
+	flex: none;
+	color: var(--ui-text-tertiary);
+	transition: transform var(--t) var(--ease);
+}
+.graph-accordion-toggle .chevron.open {
+	transform: rotate(90deg);
+}
 /* Collapsed run history: finished runs are reference, not workspace. */
 .graph-runs-toggle {
 	display: flex;

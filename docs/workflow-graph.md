@@ -281,9 +281,10 @@ Every panel — workflow chat, the Plans/Templates rail, and the node inspector 
 are working in; the inspector most of all. Plan statuses are phrased as what the owner
 can do next ("Draft — editable", "Needs your review"). The rail partitions the way n8n
 does — what you *build* versus what *ran*: **Drafts** (queued, editable) on top,
-**Templates** (reusable) next, and **Runs** (execution history, frozen) at the bottom,
-with running/review runs always visible and finished ones behind a collapsed
-"Finished (n)" toggle. Panel toggles sit together at the header's left (plan list,
+**Templates** (reusable) next, and **Runs** (execution history, frozen) at the bottom.
+Each section is an **accordion** (state persisted) so what is not in focus can be
+hidden; the Runs header still says "*n need attention*" while collapsed, and finished
+runs sit behind a further "Finished (n)" toggle inside it. Panel toggles sit together at the header's left (plan list,
 workflow chat); plan actions stay on the right.
 
 The inspector's instruction / expected output / rules fields and the workflow chat all
