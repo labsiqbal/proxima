@@ -1,8 +1,8 @@
 import React from 'react'
 import type { AppFeatures, Profile, Project, Schedule, Workflow, WorkflowDraft, WorkflowInput } from '../types'
-import { listWorkflows, createWorkflow, updateWorkflow, archiveWorkflow, deleteWorkflow, type StepInput } from '../api/workflows'
-import { WorkflowChat, type WorkflowChatHandle } from '../components/workflows/WorkflowChat'
-import type { RecipePatch } from '../components/workflows/recipePrompt'
+import { listWorkflows, createWorkflow, updateWorkflow, archiveWorkflow, deleteWorkflow, iterateWorkflow, type StepInput } from '../api/workflows'
+import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
+import { buildRecipePrompt, buildRunThroughPrompt, parseRecipeDraft, stripRecipeBlock, type RecipePatch } from '../components/workflows/recipePrompt'
 import { createJob, startJob } from '../api/jobs'
 import { listSchedules, createSchedule, updateSchedule, deleteSchedule } from '../api/schedules'
 import { Dropdown } from '../components/ui/Dropdown'
@@ -146,22 +146,37 @@ function WorkflowEditor({ token, init, projectSlug, features, profiles, activePr
     </div>
     {error && <div className="error-bar">{error}</div>}
     <div className="wf-editor-split">
-    <WorkflowChat
+    <AuthoringChat
       ref={chatRef}
       token={token}
       features={features}
       profiles={profiles}
       activeProfile={activeProfile}
       projectSlug={projectSlug}
-      workflowId={form.id}
-      recipe={{ name: form.name, description: form.description, category: form.category, inputs: form.inputs, steps: form.steps }}
       // The chat exists partly to fill in a blank recipe, but saving needs a name. Seed a
       // placeholder so the first turn can open — the agent's first reply renames it.
-      onEnsureSaved={async () => {
+      ensureSession={async () => {
+        if (form.id != null) return (await iterateWorkflow(token, form.id)).id
         if (!form.name.trim()) setForm(f => ({ ...f, name: 'Untitled workflow' }))
-        return (await persist('Untitled workflow'))?.id ?? null
+        const saved = await persist('Untitled workflow')
+        return saved ? (await iterateWorkflow(token, saved.id)).id : null
       }}
-      onApplyRecipe={applyRecipe}
+      buildPrompt={text => buildRecipePrompt(
+        { name: form.name, description: form.description, category: form.category, inputs: form.inputs, steps: form.steps },
+        text,
+      )}
+      applyReply={raw => {
+        const patch = parseRecipeDraft(raw)
+        if (patch) applyRecipe(patch)
+        return !!patch
+      }}
+      stripBlock={stripRecipeBlock}
+      buildTestPrompt={index => buildRunThroughPrompt(
+        { name: form.name, description: form.description, category: form.category, inputs: form.inputs, steps: form.steps },
+        index,
+      )}
+      idleHint="Describe the workflow and the agent fills in the steps; ask for changes and it edits them. Separate from Code, scoped to this recipe."
+      placeholder="Describe or change the workflow…"
     />
     <div className="wf-editor-body">
       <div className="wf-meta">

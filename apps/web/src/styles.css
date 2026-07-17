@@ -37,6 +37,7 @@
 	--space-8: 32px;
 	--graph-list-width: 15rem;
 	--graph-inspector-width: 21rem;
+	--graph-chat-width: 22rem;
 	--graph-canvas-min-width: 46rem;
 	--graph-canvas-min-height: 28rem;
 	--graph-inspector-max-height: 24rem;
@@ -6158,6 +6159,24 @@ div.result-media {
 }
 .graph-node-status {
 	fill: var(--ui-text-tertiary);
+}
+/* The authoring chat, left of the canvas — the side Sequential puts its chat on, so the
+   two modes read the same way. Sized like the inspector, and it comes and go the same
+   way, which is why the workspace is flex. */
+.graph-chat-panel {
+	display: flex;
+	width: var(--graph-chat-width);
+	flex: none;
+	min-height: 0;
+	border-right: 1px solid var(--ui-stroke-secondary);
+}
+.graph-chat-panel > .wf-chat {
+	flex: 1;
+	min-width: 0;
+}
+.ghost-button.active {
+	border-color: var(--ui-accent);
+	color: var(--ui-text-primary);
 }
 /* Wide enough for the inputs table, which is a row of five columns. */
 .graph-template-card {

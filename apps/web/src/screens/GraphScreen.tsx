@@ -14,7 +14,10 @@ import {
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
 import { RunModal } from '../components/workflows/RunModal'
+import { AuthoringChat } from '../components/workflows/AuthoringChat'
+import { buildGraphPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
 import type {
+  AppFeatures,
   GraphJob,
   GraphNodeDefinition,
   GraphNodeState,
@@ -391,6 +394,8 @@ export function GraphScreen({
   onActiveProject,
   profiles,
   profileId,
+  features,
+  activeProfile,
   pendingDraft,
   onDraftConsumed,
   pendingJobId,
@@ -402,6 +407,8 @@ export function GraphScreen({
   onActiveProject?: (project: Project) => void
   profiles: Profile[]
   profileId?: number | null
+  features: AppFeatures
+  activeProfile: Profile | null
   pendingDraft?: GraphWorkflowDraft | null
   onDraftConsumed?: () => void
   pendingJobId?: number | null
@@ -412,6 +419,7 @@ export function GraphScreen({
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [railOpen, setRailOpen] = React.useState(true)
+  const [chatOpen, setChatOpen] = React.useState(false)
   const [savingTemplate, setSavingTemplate] = React.useState(false)
   // A template whose declared inputs must be answered before its run is created.
   const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
@@ -544,6 +552,27 @@ export function GraphScreen({
       edges: plan.edges.filter(edge => !(edge.from === from && edge.to === to)),
     })
     setDirty(true)
+  }
+
+  /** Fold an agent-authored graph into the plan on screen — never the database: the plan
+   *  is on screen, so a background write would leave it stale and let the next Save undo
+   *  the agent's work. Hand-placed positions survive by node id, so a redraw does not
+   *  scatter the canvas the owner already arranged. */
+  function applyGraphPatch(next: WorkflowGraph) {
+    setPlan(current => {
+      const placed = new Map((current?.nodes ?? []).map(node => [node.id, node]))
+      return {
+        ...next,
+        nodes: next.nodes.map(node => {
+          const previous = placed.get(node.id)
+          return previous && typeof previous.x === 'number'
+            ? { ...node, x: previous.x, y: previous.y }
+            : node
+        }),
+      }
+    })
+    setDirty(true)
+    setSelectedId(current => current && next.nodes.some(node => node.id === current) ? current : null)
   }
 
   function moveNode(nodeId: string, x: number, y: number) {
@@ -725,6 +754,11 @@ export function GraphScreen({
       </>}
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
       <div className="graph-header-actions">
+        {job?.status === 'queued' && <button
+          className={`ghost-button${chatOpen ? ' active' : ''}`}
+          onClick={() => setChatOpen(open => !open)}
+          aria-pressed={chatOpen}
+        >Chat</button>}
         {job?.status === 'queued' && <>
           <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save template</button>
           {/* Plan-level actions belong to the plan, not to whichever node happens
@@ -747,6 +781,36 @@ export function GraphScreen({
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace">
+      {/* Chat left, artifact right — the same idiom Sequential uses, and the same
+          standing rule: the agent edits the plan on screen, never the database. */}
+      {chatOpen && job && plan && <aside className="graph-chat-panel">
+        <AuthoringChat
+          token={token}
+          features={features}
+          profiles={profiles}
+          activeProfile={activeProfile}
+          projectSlug={job.project_slug ?? activeProject?.slug ?? null}
+          // A graph job already owns a chat session — the one it was created with — so
+          // the conversation is pinned to the plan without inventing a second thread.
+          ensureSession={async () => job.session_id}
+          buildPrompt={text => buildGraphPrompt({
+            name: job.title,
+            description: '',
+            category: '',
+            inputs: [],
+            graph: plan,
+          }, text)}
+          applyReply={raw => {
+            const patch = parseGraphDraft(raw)
+            if (!patch?.graph) return false
+            applyGraphPatch(patch.graph)
+            return true
+          }}
+          stripBlock={stripGraphBlock}
+          idleHint="Describe the workflow and the agent draws the graph; ask for changes and it redraws it. Branches run at once. Separate from Code, scoped to this plan."
+          placeholder="Describe or change the workflow…"
+        />
+      </aside>}
       {railOpen && <aside className="graph-job-list">
         <div className="graph-list-head first"><strong>Plans</strong><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></div>
         {jobs.length === 0

@@ -1,88 +1,91 @@
 import React from 'react'
-import type { AppFeatures, ChatMessage, ChatSession, Profile } from '../../types'
-import { iterateWorkflow } from '../../api/workflows'
+import type { AppFeatures, ChatMessage, Profile } from '../../types'
 import { listMessages } from '../../api/sessions'
 import { createRun } from '../../api/runs'
 import { useRunStream } from '../../hooks/useRunStream'
 import { ChatThread } from '../chat/ChatThread'
 import { Composer } from '../chat/Composer'
-import { buildRecipePrompt, buildRunThroughPrompt, parseRecipeDraft, stripRecipeBlock, type RecipePatch, type RecipeSnapshot } from './recipePrompt'
 
-// What the step outline can drive on the chat: run the recipe up to a given step and
-// show the result in the thread. The outline owns the buttons; the chat owns the session.
+// What an outline can drive on the chat: run the artifact up to a given step and show the
+// result in the thread. The outline owns the buttons; the chat owns the session.
 export type WorkflowChatHandle = { runThrough: (stepIndex: number, stepName?: string) => void }
 
-/** The recipe editor's authoring chat: a conversation *about* the workflow, pinned to
- *  it and kept out of Code — the same relationship Design Studio's chat has to a canvas.
+/** An authoring chat: a conversation *about* one workflow artifact, pinned to it and kept
+ *  out of Code — the same relationship Design Studio's chat has to a canvas. It drives
+ *  either a linear recipe form or a graph canvas; what differs between them is only the
+ *  prompt schema and where the reply lands, so those arrive as props rather than forking
+ *  the session/stream plumbing twice.
  *
  *  It does two jobs in one thread, disambiguated the way Design does it (mode in the
  *  prompt, not a second box):
- *   - Authoring — typing drives the form. The run carries a fat prompt (mode + schema +
- *     the live recipe), the thread shows only the short text, and any `<workflow-recipe>`
- *     the agent returns is parsed straight into the form beside it.
- *   - Testing — "Run test" saves the form, then asks the agent to run the recipe. That
- *     reply carries no recipe block, so the form is left alone.
+ *   - Authoring — typing drives the artifact. The run carries a fat prompt (mode + schema
+ *     + the live artifact), the thread shows only the short text, and any block the agent
+ *     returns is parsed straight into what is on screen beside it.
+ *   - Testing — an optional per-step test prompt. Its reply carries no artifact block, so
+ *     the artifact is left alone.
  *
- *  Get-or-create `/iterate` means reopening the editor resumes the same conversation.
- *  It composes ChatThread + Composer + useRunStream rather than mounting ChatScreen,
- *  whose collaboration modes, review sidecar and header do not belong beside a form.
+ *  `ensureSession` is get-or-create, so reopening resumes the same conversation. It
+ *  composes ChatThread + Composer + useRunStream rather than mounting ChatScreen, whose
+ *  collaboration modes, review sidecar and header do not belong beside an editor.
  */
-export const WorkflowChat = React.forwardRef<WorkflowChatHandle, {
+export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   token: string
   features: AppFeatures
   profiles: Profile[]
   activeProfile: Profile | null
   projectSlug: string | null
-  /** null while the recipe is still an unsaved draft. */
-  workflowId: number | null
-  /** The live form, injected into every authoring prompt so the agent edits what is on screen. */
-  recipe: RecipeSnapshot
-  /** Saves the draft and resolves its id, so the chat works before a first manual save. */
-  onEnsureSaved: () => Promise<number | null>
-  /** Folds an agent-returned recipe into the form beside the chat. The form, never the
-   *  database directly: the recipe is on screen, so a background write would leave the
-   *  editor stale and let the next Save undo the agent's work. */
-  onApplyRecipe: (patch: RecipePatch) => void
-}>(function WorkflowChat({ token, features, profiles, activeProfile, projectSlug, workflowId, recipe, onEnsureSaved, onApplyRecipe }, ref) {
-  const [session, setSession] = React.useState<ChatSession | null>(null)
-  const sessionRef = React.useRef<ChatSession | null>(null)
+  /** Get-or-create the chat this artifact is pinned to, resolving its session id. Null
+   *  means it could not be opened — the caller reports why. */
+  ensureSession: () => Promise<number | null>
+  /** Wraps the owner's text in the artifact's authoring prompt, closing over whatever is
+   *  live on screen so the agent edits that rather than a stale copy. */
+  buildPrompt: (instruction: string) => string
+  /** Folds an agent reply into the artifact on screen and reports whether it did. The
+   *  screen, never the database directly: the artifact is on screen, so a background
+   *  write would leave the editor stale and let the next Save undo the agent's work. */
+  applyReply: (raw: string) => boolean
+  /** Hides the artifact JSON from the thread, keeping the summary sentence. */
+  stripBlock: (raw: string) => string
+  /** Optional per-step test prompt; without it the chat only authors. */
+  buildTestPrompt?: (stepIndex: number) => string
+  idleHint: React.ReactNode
+  placeholder: string
+}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder }, ref) {
+  const [session, setSession] = React.useState<number | null>(null)
+  const sessionRef = React.useRef<number | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [opening, setOpening] = React.useState(false)
   const [applied, setApplied] = React.useState('')
   const [error, setError] = React.useState('')
   const mounted = React.useRef(true)
   const openSeq = React.useRef(0)
-  // Newest assistant message already scanned for a recipe, so we apply each reply once.
+  // Newest assistant message already scanned, so we apply each reply exactly once.
   const appliedMsgId = React.useRef(0)
-  // Keep the live recipe reachable from callbacks without resubscribing them.
-  const recipeRef = React.useRef(recipe)
-  React.useEffect(() => { recipeRef.current = recipe }, [recipe])
+  // Keep the newest callbacks reachable without resubscribing the stream to them.
+  const live = React.useRef({ buildPrompt, applyReply, stripBlock, buildTestPrompt })
+  live.current = { buildPrompt, applyReply, stripBlock, buildTestPrompt }
   React.useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false; openSeq.current += 1 }
   }, [])
 
-  const { events, busyRun, setBusyRun } = useRunStream(token, session?.id ?? null)
+  const { events, busyRun, setBusyRun } = useRunStream(token, session)
 
   const absorb = React.useCallback((rows: ChatMessage[]) => {
-    // Apply the newest assistant reply, once. A test reply has no recipe block, so
-    // parseRecipeDraft returns null and the form is untouched. Parse the raw content,
-    // but display it with the recipe JSON stripped so the chat stays readable.
+    // Apply the newest assistant reply, once. A conversational or test reply carries no
+    // artifact block, so applyReply reports false and nothing on screen moves. Parse the
+    // raw content but display it stripped, so the chat stays readable.
     for (let i = rows.length - 1; i >= 0; i--) {
       const m = rows[i]
       if (m.role !== 'assistant') continue
       if ((m.id ?? 0) <= appliedMsgId.current) break
       appliedMsgId.current = m.id ?? 0
-      const patch = parseRecipeDraft(m.content || '')
-      if (patch) {
-        onApplyRecipe(patch)
-        setApplied('Applied the agent’s changes to the recipe.')
-      }
+      if (live.current.applyReply(m.content || '')) setApplied('Applied the agent’s changes.')
       break
     }
     setMessages(rows.map(m => m.role === 'assistant' && m.content
-      ? { ...m, content: stripRecipeBlock(m.content) } : m))
-  }, [onApplyRecipe])
+      ? { ...m, content: live.current.stripBlock(m.content) } : m))
+  }, [])
 
   const reload = React.useCallback(async (sessionId: number) => {
     const body = await listMessages(token, sessionId)
@@ -99,28 +102,27 @@ export const WorkflowChat = React.forwardRef<WorkflowChatHandle, {
       (e.type === 'run.completed' || e.type === 'run.failed' || e.type === 'run.cancelled')
       && e.run_id === busyRun)
     if (!done) return
-    void reload(session.id).then(() => { if (mounted.current) setBusyRun(null) })
+    void reload(session).then(() => { if (mounted.current) setBusyRun(null) })
   }, [events, session, busyRun, reload, setBusyRun])
 
-  // Open the iterate session if it isn't open yet, and return it. Both the idle
-  // "Start chat" and an outline-driven Run test go through here, so a test can open the
-  // chat on demand rather than making the owner start it first.
-  async function ensureSession(): Promise<ChatSession | null> {
+  // Open the chat if it isn't open yet, and return it. Both the idle "Start chat" and an
+  // outline-driven test go through here, so a test can open the chat on demand rather
+  // than making the owner start it first.
+  async function ensureSession(): Promise<number | null> {
     if (sessionRef.current) return sessionRef.current
     if (opening) return null
     const seq = ++openSeq.current
     setOpening(true); setError('')
     try {
-      const id = workflowId ?? await onEnsureSaved()
-      if (id == null) return null          // save failed; the editor reports why
-      const s = await iterateWorkflow(token, id)
+      const s = await ensure()
+      if (s == null) return null           // the caller reports why
       if (!mounted.current || seq !== openSeq.current) return null
       sessionRef.current = s
       setSession(s)
-      const body = await listMessages(token, s.id)
+      const body = await listMessages(token, s)
       if (mounted.current && seq === openSeq.current) {
         // Adopt existing replies as already-applied — reopening must not re-apply an
-        // old recipe over edits made since.
+        // old artifact over edits made since.
         appliedMsgId.current = body.messages.reduce((m, x) => Math.max(m, x.id ?? 0), 0)
         setMessages(body.messages)
       }
@@ -146,10 +148,10 @@ export const WorkflowChat = React.forwardRef<WorkflowChatHandle, {
     await reload(sessionId)
   }
 
-  // Typing edits the recipe: fat authoring prompt in, short text on screen.
+  // Typing edits the artifact: fat authoring prompt in, short text on screen.
   const author = async (text: string) => {
     const s = sessionRef.current
-    if (s) await fire(s.id, buildRecipePrompt(recipeRef.current, text), text)
+    if (s != null) await fire(s, live.current.buildPrompt(text), text)
   }
 
   // Run the recipe up to and including a step and show its result — a step's output only
@@ -158,26 +160,20 @@ export const WorkflowChat = React.forwardRef<WorkflowChatHandle, {
   // needed. No authoring wrapper, so the reply carries no recipe block and the form stands.
   React.useImperativeHandle(ref, () => ({
     runThrough: (stepIndex, _stepName) => { void (async () => {
+      const build = live.current.buildTestPrompt
+      if (!build) return
       const s = await ensureSession()
-      if (!s) return
-      // Inline the live recipe so the test reflects the form on screen, not the saved
-      // copy or whatever the session last saw.
-      await fire(
-        s.id,
-        buildRunThroughPrompt(recipeRef.current, stepIndex),
-        `Run through step ${stepIndex + 1}`,
-      )
+      if (s == null) return
+      // The prompt inlines whatever is live on screen, so a test reflects unsaved edits
+      // rather than the saved copy or whatever the session last saw.
+      await fire(s, build(stepIndex), `Run through step ${stepIndex + 1}`)
     })() },
   }), [token, activeProfile, projectSlug])
 
-  if (!session) {
+  if (session == null) {
     return <aside className="wf-chat wf-chat-idle">
       <p className="eyebrow">Workflow chat</p>
-      <p className="muted">
-        Describe the workflow and the agent fills in the steps; ask for changes and it edits
-        them. {workflowId == null ? 'Starting saves the draft first. ' : ''}
-        Separate from Code, scoped to this recipe.
-      </p>
+      <p className="muted">{idleHint}</p>
       {error && <div className="error-bar" role="alert">{error}</div>}
       <button className="primary-button" onClick={() => void ensureSession()} disabled={opening}>
         {opening ? 'Opening…' : 'Start chat'}
@@ -204,14 +200,14 @@ export const WorkflowChat = React.forwardRef<WorkflowChatHandle, {
         profiles={profiles}
         features={features}
         onQuickReply={text => void author(text)}
-        onMessageUpdated={() => { if (session) void reload(session.id) }}
+        onMessageUpdated={() => { if (session != null) void reload(session) }}
       />
     </div>
     <Composer
       token={token}
       slug={projectSlug || undefined}
       features={features}
-      placeholder="Describe or change the workflow…"
+      placeholder={placeholder}
       textareaLabel="Author the workflow"
       promptModes={false}
       submitIconOnly

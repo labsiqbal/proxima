@@ -228,6 +228,29 @@ Modelled on n8n so the gestures do not have to be guessed:
 | Drag from a node's right handle onto another node | Creates a connection |
 | Click a connection, then **×** | Removes it |
 
+### Authoring by chat
+
+The canvas has the same authoring chat the linear editor has, and it obeys the same
+standing rule: **the agent edits the plan on screen, never the database.** The plan is in
+front of the owner, so a background write would leave it stale and let the next Save undo
+the agent's work.
+
+What differs from the recipe chat is only the schema and where the reply lands, so both
+share one `AuthoringChat` component and inject their own prompt/parse/apply. The graph
+prompt asks for `<workflow-graph>` — `{name, description, category, inputs[],
+graph:{nodes[], edges[]}}` — and tells the agent that nodes with no edge between them run
+at the same time, which is the whole reason to leave an ordered list behind.
+
+The chat is pinned to the graph job's **own session** (`jobs.session_id`, created with the
+job) rather than a second thread, so reopening a plan resumes its conversation.
+
+`parseGraphDraft` drops what the server would reject anyway — nodes with no id, duplicate
+ids, agent nodes with no instruction, self-edges, dangling and duplicate edges — rather
+than letting one bad entry cost the whole reply. A reply with no graph block at all
+returns null, so an ordinary conversational turn never disturbs the canvas. Hand-placed
+`x`/`y` survive a redraw by node id, so asking for a change does not scatter a canvas the
+owner has already arranged.
+
 ### Screen layout
 
 The canvas is the workspace; the chrome yields to it.
