@@ -158,8 +158,10 @@ describe('buildNodeTestPrompt', () => {
     expect(prompt).toContain('← the node under test')
     expect(prompt).toContain('{{brief}} = Launch plan')
     expect(prompt).not.toContain('<workflow-graph>')  // a test reply must never redraw the canvas
-    // A rehearsal must not leave real deliverables behind.
-    expect(prompt).toContain('Do NOT write or modify project files')
+    // A rehearsal produces the real output, but never touches existing files and
+    // names everything it creates as a test.
+    expect(prompt).toContain('NEVER modify or overwrite any existing project file')
+    expect(prompt).toContain('-test')
     // Testing the join node must not re-pay for upstream nodes tested moments ago.
     expect(prompt).toContain('REUSE earlier rehearsals')
   })

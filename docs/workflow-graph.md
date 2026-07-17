@@ -260,11 +260,13 @@ node's output only makes sense with its upstream context), in dependency order,
 skipping triggers and unrelated branches. Known job input fills `{{id}}` values;
 otherwise the agent is told to use sensible samples. The reply carries no graph block,
 so a test can never redraw the canvas, and no job state is touched — approval stays a
-deliberate, separate act. The prompt also declares the run a **rehearsal**: results are
-presented in the thread, and the agent is told not to write project files or create
-artifacts — the approved run produces the real deliverables, and a test that mutated
-the workspace would leave the real run stacking on top of a practice one. A step whose
-whole purpose is a file shows its full intended content in the chat instead. Rehearsals
+deliberate, separate act. The prompt also declares the run a **rehearsal that produces the
+real end result** — the owner judges actual output, not a description of it — under two
+hard rules: the agent must **never modify or overwrite an existing project file** (that
+is the unrecoverable case), and every file it creates must be **named as a test**
+(`-test` before the extension, e.g. `design-test.html`), with a closing list of created
+files so they are easy to find and delete. Test artifacts therefore do appear in
+Artifacts, clearly labeled; the approved run still produces the real deliverables. Rehearsals
 also **reuse each other**: tests run in the plan's one chat session, so the prompt tells
 the agent to reuse an upstream step's result from earlier in the conversation when that
 step's instruction is unchanged — testing the join node doesn't re-pay for branches
