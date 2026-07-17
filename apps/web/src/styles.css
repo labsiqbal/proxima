@@ -13777,10 +13777,12 @@ div.result-media {
   outline: 2px solid var(--ui-accent); outline-offset: 2px;
 }
 @media (min-width: 768px) {
-  .app-shell.left-rail .workspace-switch span,
+  /* Scoped to the sidebar's copy: the top-bar switcher shares these classes and must
+     keep its labels when the rail collapses — the whole point of moving it up there. */
+  .app-shell.left-rail .sidebar .workspace-switch span,
   .app-shell.left-rail .advanced-toggle span,
   .app-shell.left-rail .recent-groups { display: none; }
-  .app-shell.left-rail .workspace-switch { grid-template-columns: 1fr; background: transparent; }
+  .app-shell.left-rail .sidebar .workspace-switch { grid-template-columns: 1fr; background: transparent; }
 }
 
 /* Ops task launcher */
