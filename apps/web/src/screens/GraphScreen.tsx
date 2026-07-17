@@ -657,6 +657,33 @@ export function GraphScreen({
     }
   }
 
+  async function duplicatePlan() {
+    if (!job || busy) return
+    setBusy('duplicate')
+    setError('')
+    try {
+      const created = await createGraphJob(token, {
+        title: job.title,
+        // The frozen snapshot, positions included — the copy starts as exactly what
+        // ran, which is the whole point of revising rather than rebuilding.
+        graph: job.graph,
+        input: job.input,
+        project_slug: job.project_slug ?? activeProject?.slug,
+        profile_id: profileId,
+      })
+      if (!mounted.current) return
+      setJob(created)
+      setPlan(created.graph)
+      setSelectedId(null)
+      setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
+      setNotice('Editable copy created — the original stays as the run record.')
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
   // The blank-plan entry point. Sequential's "New workflow" retired with it, and chat
   // promotion cannot be the only door into the editor — a starter trigger + first step
   // gives the canvas (or the authoring chat) something to build on.
@@ -841,6 +868,12 @@ export function GraphScreen({
           onClick={() => setChatOpen(open => !open)}
           aria-pressed={chatOpen}
         >Chat</button>}
+        {job && plan && job.status !== 'queued' && <>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save template</button>
+          <button className="ghost-button" onClick={() => void duplicatePlan()} disabled={!!busy}>
+            {busy === 'duplicate' ? 'Copying…' : 'Duplicate to edit'}
+          </button>
+        </>}
         {job?.status === 'queued' && <>
           <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save template</button>
           {/* Plan-level actions belong to the plan, not to whichever node happens

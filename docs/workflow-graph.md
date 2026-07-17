@@ -279,6 +279,12 @@ description, declared inputs — rides along client-side and pre-fills the Save-
 modal, because a job has nowhere to persist it and dropping it silently would make the
 owner re-declare what the agent already wrote.
 
+A plan that has started is **frozen** — the job is the record of what ran, so its graph
+cannot be redrawn after the fact. Editing it again is one click: **Duplicate to edit**
+creates a fresh queued copy of the frozen snapshot (positions and input included) and
+opens it; the original stays as the run record. **Save template** is available on frozen
+plans too — a proven run is exactly the thing worth templating.
+
 Rail rows carry a hover-revealed **delete**: a plan delete removes the job, its node
 states and every session the job owns (the main thread plus one per executed node — the
 `sessions.job_id` FK is SET NULL, so the server sweeps them rather than leaving orphan
