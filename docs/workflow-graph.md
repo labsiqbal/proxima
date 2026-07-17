@@ -106,8 +106,31 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | --- | --- |
 | `type` | `agent` (default) or `trigger`. Absent means `agent`, so graphs predating node types keep working. |
 | `trigger_kind` | Trigger nodes only. `manual` is the only kind today. |
+| `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
+| `rules` | Agent nodes only. Prose constraints on *how* to do it. Omitted from the prompt entirely when unset. |
 | `profile_id` | Agent nodes only. The agent this node runs as; absent/null = the job's agent. |
 | `x`, `y` | Canvas position. Absent until the node is dragged, which is what lets un-placed nodes stay auto-laid-out. |
+
+`expected_output` and `rules` are the per-step detail a linear recipe carried, and they
+are prose for the runner — `output_kind`/`output_schema` stay the enforced contract. Both
+are stored **absent rather than empty**: a blank field is not a constraint, and a bare
+`RULES:` heading reads as a real instruction that invites a runner to invent its own.
+
+`{{var}}` placeholders in `instruction`, `expected_output` and `rules` are filled from the
+job input by the same `workflows.substitute` a linear step uses. An undeclared placeholder
+is left visible rather than silently blanked, so a missing input shows up instead of
+vanishing. The whole input is still handed to the node as typed data in
+`<workflow_input>` — substitution is for writing readable instructions, not for hand-off.
+
+`skill_ids` is deliberately **not** ported from linear steps. A node names its own agent,
+and a profile already carries its skill/MCP selection — a second picker on the node would
+be a second answer to the same question. Choosing the agent is choosing the tool surface.
+
+A graph template carries declared **`inputs`** in the same shape a linear recipe does
+(`{id, label, kind, required}`), stored exactly as declared by the same rule the linear
+route uses. They are authored when a plan is saved as a template — the moment its reusable
+contract is defined — and a run created from that template asks for them first, because a
+node's `{{var}}` is useless if nothing filled it in.
 
 `profile_id` is only a reference. `graph.py` does no I/O, so whether the profile exists
 and belongs to the job's owner is checked by the executor at dispatch time — a node

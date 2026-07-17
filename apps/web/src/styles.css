@@ -6159,6 +6159,19 @@ div.result-media {
 .graph-node-status {
 	fill: var(--ui-text-tertiary);
 }
+/* Wide enough for the inputs table, which is a row of five columns. */
+.graph-template-card {
+	width: min(44rem, 94vw);
+	max-height: 88vh;
+	overflow: auto;
+}
+/* Read-only echo of a node's authoring detail once the plan is frozen. */
+.graph-node-detail p:last-child {
+	margin: 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	white-space: pre-wrap;
+}
 .graph-notice {
 	padding: var(--space-2) var(--space-4);
 	border-bottom: 1px solid var(--ui-stroke-secondary);

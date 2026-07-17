@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { GraphJob, GraphTemplate, WorkflowGraph } from '../types'
+import type { GraphJob, GraphTemplate, WorkflowGraph, WorkflowInput } from '../types'
 
 export type GraphJobCreate = {
   title: string
@@ -54,8 +54,8 @@ export const approveGraphJob = (token: string, jobId: number) =>
 export const saveGraphTemplate = (
   token: string,
   jobId: number,
-  body: { name?: string; description?: string; category?: string },
-) => api<{ id: number; name: string }>(`/api/graph/jobs/${jobId}/save-template`, token, {
+  body: { name?: string; description?: string; category?: string; inputs?: WorkflowInput[] },
+) => api<GraphTemplate>(`/api/graph/jobs/${jobId}/save-template`, token, {
   method: 'POST',
   body: JSON.stringify(body),
 })

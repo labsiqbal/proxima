@@ -222,12 +222,14 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
     assert rejected.status_code == 404
     job = _create(client)
 
+    declared = [{"id": "brief", "label": "Brief", "kind": "text", "required": True}]
     saved = client.post(
         f"/api/graph/jobs/{job['id']}/save-template",
         json={
             "name": "Research and publish",
             "description": "Reusable reviewed DAG",
             "category": "research",
+            "inputs": declared,
         },
     )
 
@@ -236,6 +238,10 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
     assert template["name"] == "Research and publish"
     assert template["steps"] == []
     assert template["graph"] == job["graph"]
+    # Declared inputs survive: a schedule renders its form from these, so a template
+    # that could not carry them could never be scheduled.
+    assert template["inputs"] == declared
+    assert client.get("/api/graph/templates").json()["items"][0]["inputs"] == declared
     stored = app.state.db.execute(
         "SELECT graph FROM workflows WHERE id = ?", (template["id"],)
     ).fetchone()

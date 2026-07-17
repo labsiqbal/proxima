@@ -13,6 +13,7 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
+import { RunModal } from '../components/workflows/RunModal'
 import type {
   GraphJob,
   GraphNodeDefinition,
@@ -23,6 +24,7 @@ import type {
   Profile,
   Project,
   WorkflowGraph,
+  WorkflowInput,
 } from '../types'
 import { layoutGraph } from './graphLayout'
 
@@ -410,6 +412,9 @@ export function GraphScreen({
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [railOpen, setRailOpen] = React.useState(true)
+  const [savingTemplate, setSavingTemplate] = React.useState(false)
+  // A template whose declared inputs must be answered before its run is created.
+  const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const [outputEdit, setOutputEdit] = React.useState('')
@@ -642,22 +647,15 @@ export function GraphScreen({
     await act('save-output', () => editGraphNodeOutput(token, job.id, definition.id, value), 'Output corrected; dependent nodes were marked stale.')
   }
 
-  async function saveTemplate() {
-    if (!job) return
-    if (busy) return
+  async function saveTemplate(meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) {
+    if (!job || busy) return
     setBusy('save-template')
     setError('')
     try {
-      const template = await saveGraphTemplate(token, job.id, { name: job.title })
+      const template = await saveGraphTemplate(token, job.id, meta)
       if (mounted.current) {
-        setTemplates(current => [{
-          id: template.id,
-          project_id: job.project_id,
-          project_slug: job.project_slug,
-          name: template.name,
-          status: 'active',
-          graph: job.graph,
-        }, ...current.filter(item => item.id !== template.id)])
+        setSavingTemplate(false)
+        setTemplates(current => [template, ...current.filter(item => item.id !== template.id)])
         setNotice(`Saved reusable workflow “${template.name}”.`)
       }
     } catch (cause) {
@@ -667,7 +665,7 @@ export function GraphScreen({
     }
   }
 
-  async function createFromTemplate(template: GraphTemplate) {
+  async function createFromTemplate(template: GraphTemplate, input?: Record<string, string>) {
     if (busy) return
     setBusy('use-template')
     setError('')
@@ -675,11 +673,13 @@ export function GraphScreen({
       const created = await createGraphJob(token, {
         title: template.name,
         graph: template.graph,
+        input,
         workflow_id: template.id,
         project_slug: activeProject?.slug ?? template.project_slug,
         profile_id: profileId,
       })
       if (!mounted.current) return
+      setRunningTemplate(null)
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -726,7 +726,7 @@ export function GraphScreen({
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
       <div className="graph-header-actions">
         {job?.status === 'queued' && <>
-          <button className="ghost-button" onClick={() => void saveTemplate()} disabled={!!busy || dirty}>Save template</button>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save template</button>
           {/* Plan-level actions belong to the plan, not to whichever node happens
               to be selected — which is also what lets the inspector close. */}
           <button className="ghost-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>
@@ -757,7 +757,17 @@ export function GraphScreen({
         <div className="graph-list-head"><strong>Templates</strong></div>
         {templates.length === 0
           ? <p className="muted graph-empty-list">No saved graph templates.</p>
-          : templates.map(template => <button key={template.id} className="graph-job-row" onClick={() => void createFromTemplate(template)} disabled={!!busy}>
+          : templates.map(template => <button
+              key={template.id}
+              className="graph-job-row"
+              disabled={!!busy}
+              onClick={() => {
+                // Ask for the declared inputs first: without them a node's {{var}}
+                // would reach the runner unfilled.
+                if (template.inputs?.length) setRunningTemplate(template)
+                else void createFromTemplate(template)
+              }}
+            >
               <span>{template.name}</span><small>New queued run</small>
             </button>)}
       </aside>}
@@ -802,7 +812,19 @@ export function GraphScreen({
                   webhooks become further options here.
                 </p>
               </> : <>
-                <label>Instruction<textarea rows={6} value={definition.instruction} onChange={event => updateSelected({ instruction: event.target.value })} /></label>
+                <label>Instruction<textarea rows={5} value={definition.instruction} onChange={event => updateSelected({ instruction: event.target.value })} /></label>
+                <label>Expected output<textarea
+                  rows={2}
+                  value={definition.expected_output ?? ''}
+                  placeholder="What a good result looks like"
+                  onChange={event => updateSelected({ expected_output: event.target.value })}
+                /></label>
+                <label>Rules <span className="muted">(optional)</span><textarea
+                  rows={3}
+                  value={definition.rules ?? ''}
+                  placeholder="Constraints on how to do it"
+                  onChange={event => updateSelected({ rules: event.target.value })}
+                /></label>
                 <label>Agent<select
                   value={definition.profile_id ?? ''}
                   onChange={event => updateSelected({
@@ -832,6 +854,12 @@ export function GraphScreen({
               <p>{definition.type === 'trigger'
                 ? 'Manual trigger — this workflow starts when you press start.'
                 : definition.instruction || 'No instruction.'}</p>
+              {definition.expected_output && <div className="graph-node-detail">
+                <p className="graph-eyebrow">Expected output</p><p>{definition.expected_output}</p>
+              </div>}
+              {definition.rules && <div className="graph-node-detail">
+                <p className="graph-eyebrow">Rules</p><p>{definition.rules}</p>
+              </div>}
               <dl>
                 <div><dt>Output</dt><dd>{definition.output_kind}</dd></div>
                 {definition.type !== 'trigger' && <div><dt>Agent</dt><dd>
@@ -853,5 +881,86 @@ export function GraphScreen({
             </div>}
       </aside>}
     </div>
+
+    {savingTemplate && job && <SaveTemplateModal
+      title={job.title}
+      busy={busy === 'save-template'}
+      onCancel={() => setSavingTemplate(false)}
+      onSave={meta => void saveTemplate(meta)}
+    />}
+    {runningTemplate && <RunModal
+      title={runningTemplate.name}
+      inputs={runningTemplate.inputs}
+      confirmLabel="Create run"
+      onCancel={() => setRunningTemplate(null)}
+      onRun={async input => { await createFromTemplate(runningTemplate, input) }}
+    />}
   </section>
+}
+
+const INPUT_KINDS: WorkflowInput['kind'][] = ['text', 'url', 'number', 'file']
+const slugifyId = (value: string) =>
+  value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+
+// Saving a plan as a template is the moment its reusable contract is defined, so it is
+// also where {{inputs}} are declared: a template is what a fresh run and a schedule are
+// both built from, and each needs to know what to ask for.
+function SaveTemplateModal({ title, busy, onCancel, onSave }: {
+  title: string
+  busy: boolean
+  onCancel: () => void
+  onSave: (meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) => void
+}) {
+  const [name, setName] = React.useState(title)
+  const [description, setDescription] = React.useState('')
+  const [category, setCategory] = React.useState('')
+  const [inputs, setInputs] = React.useState<WorkflowInput[]>([])
+
+  const patch = (index: number, next: Partial<WorkflowInput>) =>
+    setInputs(current => current.map((item, i) => i === index ? { ...item, ...next } : item))
+  const close = () => { if (!busy) onCancel() }
+
+  return <div className="modal-scrim" onClick={close}><div className="modal-card graph-template-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true">
+    <h3>Save as reusable workflow</h3>
+    <label>Name<input autoFocus value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
+    <label>Category <span className="muted">(optional)</span><input value={category} disabled={busy} placeholder="e.g. content" onChange={event => setCategory(event.target.value)} /></label>
+    <label>Description <span className="muted">(optional)</span><textarea rows={2} value={description} disabled={busy} placeholder="What this workflow does" onChange={event => setDescription(event.target.value)} /></label>
+
+    <p className="eyebrow">Inputs <span className="muted">(optional)</span></p>
+    <p className="muted graph-field-note">
+      What each run should be asked for. Refer to one from any node with <code>{'{{id}}'}</code>.
+    </p>
+    <div className="wf-inputs">
+      {inputs.length > 0 && <div className="wf-input-row wf-input-head">
+        <span>Label</span><span>ID</span><span>Kind</span><span>Required</span><span />
+      </div>}
+      {inputs.map((item, index) => <div className="wf-input-row" key={index}>
+        <input className="wf-input-cell" value={item.label} disabled={busy} placeholder="e.g. Topic"
+          onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} />
+        <input className="wf-input-cell" value={item.id} disabled={busy} placeholder="topic"
+          onChange={event => patch(index, { id: slugifyId(event.target.value) })} />
+        <select className="wf-input-cell" value={item.kind} disabled={busy}
+          onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
+          {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+        </select>
+        <label className="wf-input-req"><input type="checkbox" checked={item.required} disabled={busy}
+          onChange={event => patch(index, { required: event.target.checked })} /> required</label>
+        <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={busy}
+          onClick={() => setInputs(current => current.filter((_, i) => i !== index))}>×</button>
+      </div>)}
+      <button className="ghost-button wf-add-step" disabled={busy}
+        onClick={() => setInputs(current => [...current, { id: '', label: '', kind: 'text', required: false }])}>+ Add input</button>
+    </div>
+
+    <div className="modal-actions">
+      <button className="ghost-button" onClick={close} disabled={busy}>Cancel</button>
+      <button className="primary-button" disabled={busy || !name.trim()} onClick={() => onSave({
+        name: name.trim(),
+        description: description.trim(),
+        category: category.trim() || 'other',
+        // A half-typed row is noise, not a declaration.
+        inputs: inputs.filter(item => item.id.trim() && item.label.trim()),
+      })}>{busy ? 'Saving…' : 'Save template'}</button>
+    </div>
+  </div></div>
 }

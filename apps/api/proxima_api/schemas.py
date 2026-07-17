@@ -140,6 +140,9 @@ class GraphTemplateSaveRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     description: str = ""
     category: str = "other"
+    # Declared {{inputs}}, same shape as a linear recipe's. Schedules build their form
+    # from these, so a graph template that cannot carry them cannot be scheduled.
+    inputs: list[dict[str, Any]] = []
 
 
 class GraphNodeOutputEditRequest(BaseModel):

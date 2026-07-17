@@ -225,6 +225,71 @@ def test_node_concurrency_budget_caps_a_fan_out(tmp_path):
     assert executor.dispatch_ready(job_id) == []
 
 
+def test_node_prompt_carries_expected_output_and_rules(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph({
+        "nodes": [{
+            "id": "only",
+            "name": "Only",
+            "instruction": "Write the brief",
+            "expected_output": "A 200-word brief",
+            "rules": "Never invent a number",
+        }]
+    })
+    job_id = _create_graph_job(app, graph)
+
+    run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+
+    prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["prompt"]
+    assert "A 200-word brief" in prompt
+    assert "Never invent a number" in prompt
+
+
+def test_node_prompt_omits_the_rules_heading_when_there_are_none(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    job_id = _create_graph_job(app, _single_node_graph())
+
+    run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+
+    prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["prompt"]
+    # A bare "RULES:" heading reads as a real instruction and invites the runner to
+    # invent constraints of its own.
+    assert "RULES" not in prompt
+
+
+def test_node_prompt_fills_declared_placeholders_from_the_job_input(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    _client(app)
+    graph = normalize_graph({
+        "nodes": [{
+            "id": "only",
+            "name": "Only",
+            "instruction": "Research {{brief}} thoroughly",
+            "expected_output": "Notes on {{brief}}",
+            "rules": "Stay on {{brief}}; ignore {{missing}}",
+        }]
+    })
+    job_id = _create_graph_job(app, graph)  # job input is {"brief": "Launch plan"}
+
+    run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
+
+    prompt = app.state.worker_db.execute(
+        "SELECT prompt FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["prompt"]
+    assert "Research Launch plan thoroughly" in prompt
+    assert "Notes on Launch plan" in prompt
+    assert "Stay on Launch plan" in prompt
+    # An undeclared placeholder stays visible rather than being silently blanked —
+    # the same contract a linear step has.
+    assert "{{missing}}" in prompt
+
+
 def test_manual_trigger_resolves_to_job_input_without_a_run(tmp_path):
     app = _app(tmp_path, enabled=True)
     _client(app)

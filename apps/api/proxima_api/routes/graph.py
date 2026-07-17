@@ -346,7 +346,7 @@ def register(app, deps):
                     INSERT INTO workflows(
                       project_id, name, description, category, status,
                       steps, graph, inputs, created_by
-                    ) VALUES (?, ?, ?, ?, 'active', '[]', ?, '[]', ?)
+                    ) VALUES (?, ?, ?, ?, 'active', '[]', ?, ?, ?)
                     """,
                     (
                         job["project_id"],
@@ -354,6 +354,9 @@ def register(app, deps):
                         payload.description,
                         payload.category,
                         json.dumps(graph, ensure_ascii=False),
+                        # Stored as declared, exactly as the linear route does it: a
+                        # graph-only validator would let the two surfaces disagree.
+                        json.dumps(payload.inputs or [], ensure_ascii=False),
                         user["id"],
                     ),
                 )
@@ -375,7 +378,7 @@ def register(app, deps):
             "status": "active",
             "steps": [],
             "graph": graph,
-            "inputs": [],
+            "inputs": payload.inputs or [],
         }
 
     @app.patch("/api/graph/jobs/{job_id}/graph")

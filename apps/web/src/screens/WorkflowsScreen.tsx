@@ -9,6 +9,7 @@ import { Dropdown } from '../components/ui/Dropdown'
 import { confirmDialog } from '../components/ui/Dialog'
 import { BackButton } from '../components/ui/BackButton'
 import { ScheduleManager, isValidCron } from '../components/workflows/ScheduleManager'
+import { RunModal } from '../components/workflows/RunModal'
 
 const clean = (n: string) => n.replace(/\s*\(private\)\s*$/i, '')
 type StepDraft = StepInput
@@ -221,63 +222,6 @@ function WorkflowEditor({ token, init, projectSlug, features, profiles, activePr
     </aside>
     </div>
   </div>
-}
-
-function RunModal({ workflow, onCancel, onRun }: { workflow: Workflow; onCancel: () => void; onRun: (input: any) => Promise<void> }) {
-  const declared = workflow.inputs || []
-  const hasInputs = declared.length > 0
-  const [brief, setBrief] = React.useState('')
-  const [values, setValues] = React.useState<Record<string, string>>({})
-  const [busy, setBusy] = React.useState(false)
-  const [error, setError] = React.useState('')
-  const mountedRef = React.useRef(true)
-  const actionSeq = React.useRef(0)
-
-  React.useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      actionSeq.current += 1
-    }
-  }, [])
-
-  async function submit() {
-    if (busy) return
-    if (hasInputs) {
-      const missing = declared.find(x => x.required && !(values[x.id] || '').trim())
-      if (missing) { setError(`"${missing.label}" is required.`); return }
-      const input: Record<string, string> = {}
-      for (const x of declared) { const v = (values[x.id] || '').trim(); if (v) input[x.id] = v }
-      const seq = ++actionSeq.current
-      setBusy(true); setError('')
-      try { await onRun(Object.keys(input).length ? input : undefined) }
-      catch (e) { if (mountedRef.current && seq === actionSeq.current) setError(String(e)) }
-      finally { if (mountedRef.current && seq === actionSeq.current) setBusy(false) }
-    } else {
-      const b = brief.trim()
-      const seq = ++actionSeq.current
-      setBusy(true); setError('')
-      try { await onRun(b ? { brief: b } : undefined) }
-      catch (e) { if (mountedRef.current && seq === actionSeq.current) setError(String(e)) }
-      finally { if (mountedRef.current && seq === actionSeq.current) setBusy(false) }
-    }
-  }
-
-  const close = () => { if (!busy) onCancel() }
-
-  return <div className="modal-scrim" onClick={close}><div className="modal-card" onClick={e => e.stopPropagation()}>
-    <h3>Run “{workflow.name}”</h3>
-    {error && <div className="error-bar">{error}</div>}
-    {hasInputs
-      ? declared.map((x, i) => <label key={x.id}>{x.label}{x.required && <span className="muted"> (required)</span>}
-          <input autoFocus={i === 0} type={x.kind === 'number' ? 'number' : x.kind === 'url' ? 'url' : 'text'} value={values[x.id] || ''} onChange={e => setValues(v => ({ ...v, [x.id]: e.target.value }))} placeholder={x.kind === 'file' ? 'Path or URL' : x.label} />
-        </label>)
-      : <label>Brief <span className="muted">(context for this run)</span><textarea autoFocus rows={4} value={brief} onChange={e => setBrief(e.target.value)} placeholder="What should this run focus on?" /></label>}
-    <div className="modal-actions">
-      <button className="ghost-button" onClick={close} disabled={busy}>Cancel</button>
-      <button className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Starting…' : 'Run workflow'}</button>
-    </div>
-  </div></div>
 }
 
 // Friendly cadence presets → raw 5-field cron. "Custom" keeps whatever's typed.
@@ -566,7 +510,7 @@ export function WorkflowsScreen({ mode = 'sequential', onModeChange, advancedCon
               bench built in. One window to write it and try it. */}
           <div className="wf-card-foot"><button className="ghost-button" onClick={() => setScheduling(w)} disabled={!!actionKey}>Schedule</button><button className="ghost-button" onClick={() => setRunning(w)} disabled={!!actionKey}>Run</button></div>
         </div>)}</div>}
-    {running && <RunModal workflow={running} onCancel={() => setRunning(null)} onRun={input => run(running, input)} />}
+    {running && <RunModal title={running.name} inputs={running.inputs} onCancel={() => setRunning(null)} onRun={input => run(running, input)} />}
     {scheduling && <ScheduleModal token={token} workflow={scheduling} onClose={() => setScheduling(null)} />}
   </section>
 }

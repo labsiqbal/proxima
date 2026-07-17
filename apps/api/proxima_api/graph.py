@@ -89,6 +89,22 @@ def _parse_trigger_kind(raw: Mapping[str, Any], node_id: str) -> str:
     return kind
 
 
+def _parse_prose(raw: Mapping[str, Any], node_id: str, field: str) -> str:
+    """Parse one of a node's free-text authoring fields.
+
+    These carry the detail a linear recipe step used to hold: what a good result is
+    (``expected_output``) and the constraints on how to get there (``rules``). They
+    are prose for the runner, not machine contracts — ``output_kind``/``output_schema``
+    remain the enforced part.
+    """
+    value = raw.get(field, "")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise GraphValidationError(f"node '{node_id}' {field} must be a string")
+    return value.strip()
+
+
 def _parse_profile_id(raw: Mapping[str, Any], node_id: str) -> int | None:
     """Parse the optional per-node execution agent.
 
@@ -197,6 +213,8 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             node.pop("output_schema", None)
             node.pop("profile_id", None)
             node.pop("review_required", None)
+            node.pop("expected_output", None)
+            node.pop("rules", None)
         else:
             contract = parse_output_contract(raw_node)
             node["output_kind"] = contract.kind
@@ -210,6 +228,14 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
                 node.pop("profile_id", None)
             else:
                 node["profile_id"] = profile_id
+            # Absent rather than empty: a blank field is not a constraint, and the
+            # prompt builder treats a missing value as "no rules at all".
+            for field in ("expected_output", "rules"):
+                text = _parse_prose(raw_node, node_id, field)
+                if text:
+                    node[field] = text
+                else:
+                    node.pop(field, None)
 
         for axis in ("x", "y"):
             coordinate = _parse_coordinate(raw_node, node_id, axis)

@@ -159,6 +159,8 @@ def test_invalid_graph_shapes_are_rejected():
             },
             "must have no dependencies",
         ),
+        ({"nodes": [{"id": "a", "expected_output": 5}]}, "expected_output must be a string"),
+        ({"nodes": [{"id": "a", "rules": ["no"]}]}, "rules must be a string"),
         ({"nodes": [{"id": "a", "profile_id": "3"}]}, "profile_id must be"),
         ({"nodes": [{"id": "a", "profile_id": True}]}, "profile_id must be"),
         ({"nodes": [{"id": "a", "x": "12"}]}, "x must be a number"),
@@ -188,6 +190,29 @@ def test_canvas_and_agent_fields_survive_normalization():
     assert work["profile_id"] == 7
     # Positions are optional: a node the owner never dragged stays auto-laid-out.
     assert "x" not in work
+
+
+def test_step_detail_survives_normalization_and_blanks_are_dropped():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "write",
+                    "name": "Write",
+                    "expected_output": "  A 200-word brief  ",
+                    "rules": "  Never invent a number  ",
+                },
+                {"id": "quiet", "name": "Quiet", "expected_output": "   ", "rules": ""},
+            ]
+        }
+    )
+    write, quiet = graph["nodes"]
+
+    assert write["expected_output"] == "A 200-word brief"
+    assert write["rules"] == "Never invent a number"
+    # Absent, not empty: a blank field is not a constraint.
+    assert "expected_output" not in quiet
+    assert "rules" not in quiet
 
 
 def test_trigger_ignores_authored_execution_fields():

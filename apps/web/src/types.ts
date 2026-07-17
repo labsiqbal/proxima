@@ -200,6 +200,11 @@ export type GraphNodeDefinition = {
 	type?: GraphNodeType;
 	name: string;
 	instruction: string;
+	// What a good result is, and the constraints on how to get there — the detail a
+	// linear recipe step carried. Prose for the runner; output_kind/output_schema
+	// stay the enforced contract. Absent when blank: blank is not a constraint.
+	expected_output?: string;
+	rules?: string;
 	output_kind: GraphOutputKind;
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;
@@ -255,6 +260,9 @@ export type GraphTemplate = {
 	category?: string;
 	status: string;
 	graph: WorkflowGraph;
+	// Declared {{inputs}}, same shape as a linear recipe's. A run fills these in and
+	// the values reach each node's {{var}} through the job input.
+	inputs?: WorkflowInput[];
 };
 
 export type GraphJob = {

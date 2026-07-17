@@ -16,6 +16,7 @@ from typing import Any
 
 from . import features, state
 from .graph import dependency_map, normalize_graph, ready_node_ids
+from .workflows import substitute
 
 GRAPH_NODE_RUN_KIND = "wf_node"
 DEFAULT_NODE_CONCURRENCY = 4
@@ -80,18 +81,35 @@ def build_node_prompt(
     node: Mapping[str, Any],
     inputs: Mapping[str, Any],
 ) -> str:
-    """Build an isolated node prompt with explicit, typed data hand-off."""
+    """Build an isolated node prompt with explicit, typed data hand-off.
+
+    ``{{var}}`` placeholders in the authored text are filled from the job input the
+    same way a linear step fills them (``workflows.substitute``): a graph has to be
+    able to express any recipe a linear one could, and a declared input is useless if
+    the author cannot refer to it by name. The whole input is still handed over as
+    typed data below — substitution is for writing readable instructions, not hand-off.
+    """
+    job_input = dict(inputs.get("job_input", {}))
     contract: dict[str, Any] = {"kind": node.get("output_kind") or "text"}
     if node.get("output_schema") is not None:
         contract["schema"] = node["output_schema"]
-    expected = node.get("expected_output") or "Satisfy the declared output contract."
+    instruction = substitute(node.get("instruction") or "", job_input)
+    expected = substitute(
+        node.get("expected_output") or "Satisfy the declared output contract.", job_input
+    )
+    # The step-level constraints a linear recipe carried. Omitted entirely when unset:
+    # a bare "RULES:" heading reads as a real instruction and invites a runner to
+    # invent constraints of its own.
+    rules = substitute(node.get("rules") or "", job_input)
+    rules_block = f"RULES (constraints on how to do it):\n{rules}\n\n" if rules else ""
     return (
         "⟦MODE: GRAPH WORKFLOW NODE⟧ Execute this node autonomously. Do not ask the "
         "user or emit a <question-form>; if essential access or information is missing, "
         "reply starting with 'BLOCKED:'.\n\n"
         f"NODE: {node.get('name') or node.get('id')} ({node.get('id')})\n\n"
-        f"INSTRUCTION:\n{node.get('instruction') or ''}\n\n"
+        f"INSTRUCTION:\n{instruction}\n\n"
         f"EXPECTED OUTPUT:\n{expected}\n\n"
+        f"{rules_block}"
         "WORKFLOW INPUT (user-approved data):\n"
         f"<workflow_input>\n{json.dumps(inputs.get('job_input', {}), ensure_ascii=False, indent=2)}\n"
         "</workflow_input>\n\n"
