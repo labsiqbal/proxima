@@ -35,6 +35,7 @@
 	--space-5: 20px;
 	--space-6: 24px;
 	--space-8: 32px;
+	--topbar-h: 52px;
 	--graph-list-width: 15rem;
 	--graph-inspector-width: 21rem;
 	--graph-chat-width: 22rem;
@@ -179,7 +180,7 @@ button:disabled {
 	position: relative;
 	display: grid;
 	grid-template-columns: var(--left-w, 294px) minmax(0, 1fr);
-	grid-template-rows: 42px minmax(0, 1fr);
+	grid-template-rows: var(--topbar-h) minmax(0, 1fr);
 	height: 100vh;
 	min-height: 0;
 	background: var(--ui-chat-surface-background);
@@ -1982,8 +1983,8 @@ button:disabled {
 .resize-handle {
 	display: none;
 	position: absolute;
-	top: 42px;
-	height: calc(100% - 42px);
+	top: var(--topbar-h);
+	height: calc(100% - var(--topbar-h));
 	width: 9px;
 	z-index: 25;
 	cursor: col-resize;
@@ -3046,7 +3047,7 @@ button:disabled {
 	display: flex;
 	align-items: center;
 	gap: var(--space-1);
-	height: 52px;
+	height: var(--topbar-h);
 	padding: 0 var(--space-2) 0 var(--space-4);
 	border-bottom: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-bg-sidebar);
@@ -3078,6 +3079,11 @@ button:disabled {
 	.sidebar-inner > .sidebar-head,
 	.sidebar-inner > .workspace-switch {
 		display: none;
+	}
+	/* The brand head used to give the nav its headroom; without it the first menu
+	   item sat flush against the top bar. */
+	.sidebar-inner {
+		padding-top: var(--space-4);
 	}
 }
 .top-bar-spacer {
