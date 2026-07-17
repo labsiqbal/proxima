@@ -271,6 +271,14 @@ The canvas is the workspace; the chrome yields to it.
   holds node-level config and the one node-level action, Remove node. A permanent column
   saying "select a node" would be furniture spending width the canvas could use.
 
+A **new blank plan** starts from the rail's ＋ — a starter trigger wired to an empty
+first step, with the authoring chat opened, since describing the workflow is the fastest
+way to fill a blank canvas. (Sequential's "New workflow" retired with it; chat promotion
+must not be the only door into the editor.) Template metadata the chat proposes — name,
+description, declared inputs — rides along client-side and pre-fills the Save-template
+modal, because a job has nowhere to persist it and dropping it silently would make the
+owner re-declare what the agent already wrote.
+
 Selecting a plan opens it showing the whole graph with nothing selected. The live poll
 keeps an existing selection but drops one whose node has disappeared.
 
@@ -334,7 +342,10 @@ are:
 
 ## Scheduling a graph
 
-A schedule whose workflow row carries a `graph` spawns an **`engine='graph'` job** — the
+`POST /api/schedules` accepts a workflow of **either engine** (the linear-only
+`_workflow_or_404` guard still protects the linear editor/iterate/job routes, so a graph
+template cannot be edited or run as an ordered recipe). A schedule whose workflow row
+carries a `graph` spawns an **`engine='graph'` job** — the
 same frozen snapshot, `node_states` and executor a manual `POST /api/graph/jobs` +
 `/start` produces, so a cron run and a manual run cannot drift apart. It used to build
 `steps_state` from the template's `steps`, which is `'[]'` for a graph, and silently spawn

@@ -423,6 +423,10 @@ export function GraphScreen({
   const [savingTemplate, setSavingTemplate] = React.useState(false)
   // A template whose declared inputs must be answered before its run is created.
   const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
+  // Template metadata the authoring chat proposed (name, declared inputs, …). A job has
+  // nowhere to persist these — only a saved template does — so they ride along here and
+  // pre-fill the Save-template modal instead of being silently dropped.
+  const [draftMeta, setDraftMeta] = React.useState<{ name?: string; description?: string; category?: string; inputs?: WorkflowInput[] }>({})
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const [outputEdit, setOutputEdit] = React.useState('')
@@ -606,6 +610,40 @@ export function GraphScreen({
     setPlan({ ...plan, nodes: [...plan.nodes, node] })
     setSelectedId(node.id)
     setDirty(true)
+  }
+
+  // The blank-plan entry point. Sequential's "New workflow" retired with it, and chat
+  // promotion cannot be the only door into the editor — a starter trigger + first step
+  // gives the canvas (or the authoring chat) something to build on.
+  async function newPlan() {
+    if (busy) return
+    setBusy('create')
+    setError('')
+    try {
+      const created = await createGraphJob(token, {
+        title: 'Untitled workflow',
+        graph: {
+          nodes: [
+            { id: 'trigger', type: 'trigger', trigger_kind: 'manual', name: 'When I run it', instruction: '', output_kind: 'json' },
+            { id: 'step-1', type: 'agent', name: 'Step 1', instruction: '', output_kind: 'text' },
+          ],
+          edges: [{ from: 'trigger', to: 'step-1' }],
+        },
+        project_slug: activeProject?.slug,
+        profile_id: profileId,
+      })
+      if (!mounted.current) return
+      setJob(created)
+      setPlan(created.graph)
+      setSelectedId(null)
+      setChatOpen(true)
+      setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
+      setNotice('New plan. Describe it in the chat, or build it on the canvas.')
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
   }
 
   function addTrigger() {
@@ -803,6 +841,12 @@ export function GraphScreen({
             const patch = parseGraphDraft(raw)
             if (!patch?.graph) return false
             applyGraphPatch(patch.graph)
+            setDraftMeta(current => ({
+              name: patch.name ?? current.name,
+              description: patch.description ?? current.description,
+              category: patch.category ?? current.category,
+              inputs: patch.inputs ?? current.inputs,
+            }))
             return true
           }}
           stripBlock={stripGraphBlock}
@@ -811,9 +855,9 @@ export function GraphScreen({
         />
       </aside>}
       {railOpen && <aside className="graph-job-list">
-        <div className="graph-list-head first"><strong>Plans</strong><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></div>
+        <div className="graph-list-head first"><strong>Plans</strong><span className="graph-list-actions"><button className="row-action" onClick={() => void newPlan()} disabled={!!busy} aria-label="New plan">＋</button><button className="row-action" onClick={() => void refreshList()} aria-label="Refresh graph plans">↻</button></span></div>
         {jobs.length === 0
-          ? <p className="muted graph-empty-list">No graph plans yet. Promote a chat to create one.</p>
+          ? <p className="muted graph-empty-list">No plans yet. Start one with ＋, or promote a chat.</p>
           : jobs.map(item => <button key={item.id} className={`graph-job-row${job?.id === item.id ? ' selected' : ''}`} onClick={() => void loadJob(item.id)}>
               <span>{item.title}</span><small>{statusLabel(item.status)}</small>
             </button>)}
@@ -946,7 +990,8 @@ export function GraphScreen({
     </div>
 
     {savingTemplate && job && <SaveTemplateModal
-      title={job.title}
+      title={draftMeta.name ?? job.title}
+      initial={draftMeta}
       busy={busy === 'save-template'}
       onCancel={() => setSavingTemplate(false)}
       onSave={meta => void saveTemplate(meta)}
@@ -968,16 +1013,18 @@ const slugifyId = (value: string) =>
 // Saving a plan as a template is the moment its reusable contract is defined, so it is
 // also where {{inputs}} are declared: a template is what a fresh run and a schedule are
 // both built from, and each needs to know what to ask for.
-function SaveTemplateModal({ title, busy, onCancel, onSave }: {
+function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
   title: string
+  /** What the authoring chat proposed — a starting point, still fully editable here. */
+  initial?: { description?: string; category?: string; inputs?: WorkflowInput[] }
   busy: boolean
   onCancel: () => void
   onSave: (meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) => void
 }) {
   const [name, setName] = React.useState(title)
-  const [description, setDescription] = React.useState('')
-  const [category, setCategory] = React.useState('')
-  const [inputs, setInputs] = React.useState<WorkflowInput[]>([])
+  const [description, setDescription] = React.useState(initial?.description ?? '')
+  const [category, setCategory] = React.useState(initial?.category ?? '')
+  const [inputs, setInputs] = React.useState<WorkflowInput[]>(initial?.inputs ?? [])
 
   const patch = (index: number, next: Partial<WorkflowInput>) =>
     setInputs(current => current.map((item, i) => i === index ? { ...item, ...next } : item))

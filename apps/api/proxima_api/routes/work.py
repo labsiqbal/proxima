@@ -51,12 +51,23 @@ def register(app, deps):
         return d
 
     def _workflow_or_404(workflow_id: int, user: dict[str, Any]) -> sqlite3.Row:
+        """A LINEAR workflow, for the linear editor/iterate/job routes. Rejecting
+        graph-backed rows here is what stops a graph template being edited or run as
+        if it were an ordered recipe."""
         row = db().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
         if (
             not row
             or row["graph"] is not None
             or not _can_access(row["created_by"], row["project_id"], user)
         ):
+            raise HTTPException(status_code=404, detail="workflow not found")
+        return row
+
+    def _schedulable_workflow_or_404(workflow_id: int, user: dict[str, Any]) -> sqlite3.Row:
+        """Either engine: the scheduler spawns whichever the row declares, so a
+        schedule may target a graph template as well as a linear recipe."""
+        row = db().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        if not row or not _can_access(row["created_by"], row["project_id"], user):
             raise HTTPException(status_code=404, detail="workflow not found")
         return row
 
@@ -454,7 +465,7 @@ def register(app, deps):
     def create_schedule(payload: ScheduleCreateRequest, user: dict[str, Any] = Depends(current_user)):
         if not wf.cron_valid(payload.cron):
             raise HTTPException(status_code=422, detail="invalid cron — need 5 valid fields (min hour dom mon dow)")
-        wfrow = _workflow_or_404(payload.workflow_id, user)
+        wfrow = _schedulable_workflow_or_404(payload.workflow_id, user)
         sched_project = _member_project_id(payload.project_id, None, user) if payload.project_id is not None else wfrow["project_id"]
         cur = db().execute(
             "INSERT INTO schedules(workflow_id, project_id, cron, input, overlap_policy, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
