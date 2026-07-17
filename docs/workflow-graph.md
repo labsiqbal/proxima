@@ -332,6 +332,19 @@ are:
 | Canvas | `apps/web/src/screens/GraphScreen.tsx`, `graphLayout.ts` |
 | Typed client | `apps/web/src/api/graph.ts`, `types.ts` |
 
+## Scheduling a graph
+
+A schedule whose workflow row carries a `graph` spawns an **`engine='graph'` job** — the
+same frozen snapshot, `node_states` and executor a manual `POST /api/graph/jobs` +
+`/start` produces, so a cron run and a manual run cannot drift apart. It used to build
+`steps_state` from the template's `steps`, which is `'[]'` for a graph, and silently spawn
+nothing.
+
+With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged
+warning** and its minute is still claimed: the executor would never dispatch the job, so
+spawning one would leave a `running` job nothing advances, and not claiming the minute
+would retry the same dead schedule every tick.
+
 ## Compatibility boundary
 
 The classic engine remains `engine='linear'`, with `steps_state`, one shared ACP

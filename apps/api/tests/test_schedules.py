@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from proxima_api import main, workflows as wf
+from proxima_api.scheduler import _spawn_scheduled_job
 from proxima_api.main import create_app
 
 
@@ -261,3 +262,101 @@ def test_run_now_on_an_unrunnable_workflow_409s(tmp_path):
 def test_run_now_is_scoped_to_the_owner(tmp_path):
     c = _client(_app(tmp_path))
     assert c.post("/api/schedules/9999/run").status_code == 404
+
+
+def _graph_app(tmp_path, *, graph_enabled: bool = True):
+    return create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "feature_workflow_graph": graph_enabled,
+            "start_worker": False,
+        }
+    )
+
+
+def _graph_workflow(app, name: str = "Graph W") -> int:
+    """A saved graph template: a workflows row whose steps are '[]' and graph is a DAG."""
+    import json as _json
+
+    from proxima_api.graph import normalize_graph
+
+    db = app.state.worker_db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    graph = normalize_graph({
+        "nodes": [{"id": "only", "name": "Only", "instruction": "Do {{brief}}"}],
+    })
+    cur = db.execute(
+        "INSERT INTO workflows(name, description, category, status, steps, graph, inputs, created_by) "
+        "VALUES (?, '', 'other', 'active', '[]', ?, '[]', ?)",
+        (name, _json.dumps(graph), owner),
+    )
+    return int(cur.lastrowid)
+
+
+def _schedule_for(app, workflow_id: int, inp: str = '{"brief": "the launch"}') -> dict:
+    db = app.state.worker_db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    cur = db.execute(
+        "INSERT INTO schedules(workflow_id, cron, input, enabled, overlap_policy, created_by) "
+        "VALUES (?, '* * * * *', ?, 1, 'skip', ?)",
+        (workflow_id, inp, owner),
+    )
+    row = db.execute("SELECT * FROM schedules WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def test_scheduling_a_graph_workflow_spawns_a_graph_job(tmp_path):
+    """It used to build steps_state from a graph template's '[]' steps and return None —
+    a scheduled graph did nothing at all, with no error."""
+    app = _graph_app(tmp_path)
+    _client(app)
+    workflow_id = _graph_workflow(app)
+    sched = _schedule_for(app, workflow_id)
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    assert job_id is not None
+    job = dict(app.state.worker_db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["engine"] == "graph"
+    assert job["schedule_id"] == sched["id"]
+    assert job["status"] == "running"
+    # The node ran, and the schedule's stored input reached its {{brief}}.
+    run = app.state.worker_db.execute(
+        "SELECT r.prompt FROM runs r JOIN node_states n ON n.run_id = r.id WHERE n.job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert run is not None, "the graph job spawned but no node was dispatched"
+    assert "Do the launch" in run["prompt"]
+
+
+def test_scheduling_a_graph_is_skipped_when_the_feature_is_off(tmp_path):
+    """The master switch means the executor would never dispatch it — better to skip than
+    to leave a 'running' job nothing will advance."""
+    app = _graph_app(tmp_path, graph_enabled=False)
+    _client(app)
+    sched = _schedule_for(app, _graph_workflow(app))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    assert job_id is None
+    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"] == 0
+    # The minute is still claimed, so a skipped graph does not retry every tick.
+    claimed = app.state.worker_db.execute(
+        "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
+    ).fetchone()["last_run_minute"]
+    assert claimed == "2026-07-17T10:00"
+
+
+def test_scheduling_a_linear_workflow_is_unchanged(tmp_path):
+    app = _graph_app(tmp_path)
+    c = _client(app)
+    sched = _schedule_for(app, _wf(c))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    job = dict(app.state.worker_db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["engine"] == "linear"
+    assert job["steps_state"] != "[]"

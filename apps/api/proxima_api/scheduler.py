@@ -16,7 +16,8 @@ from typing import Any
 from fastapi import FastAPI
 
 from .auth import iso_now
-from . import workflows as wf
+from . import features, workflows as wf
+from .graph import normalize_graph
 
 
 def tailscale_base_url() -> str | None:
@@ -73,41 +74,118 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | 
             _claim_minute()
             return None
         inp = json.loads(sched["input"]) if sched["input"] else {}
-        steps_state = [wf.step_state_from(s, inp) for s in json.loads(wfrow["steps"] or "[]")]
-        if not steps_state:
+
+        # A graph template's `steps` is '[]', so the linear path below would build an
+        # empty steps_state and give up — scheduling a graph used to do nothing at all,
+        # silently. Spawn the engine the workflow actually declares.
+        graph_job_id: int | None = None
+        if wfrow['graph']:
+            graph_job_id = _insert_scheduled_graph_job(app, sched, dict(wfrow), dict(prof), uid, inp)
             _claim_minute()
-            return None
-        project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
-        title = wfrow["name"]
-        scur = db.execute(
-            "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
-            (title[:80], project_id, uid, prof["id"], prof["runner_id"], "project" if project_id else "private"),
-        )
-        session_id = int(scur.lastrowid)
-        status = "queued"
-        run_id = None
-        if steps_state:
-            prompt = wf.build_step_prompt(steps_state[0], 0, len(steps_state), inp)
-            rcur = db.execute(
-                "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home) "
-                "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                (session_id, project_id, uid, prof["id"], prof["runner_id"], prompt, prof["default_model"], prof["hermes_home"]),
+        else:
+            steps_state = [wf.step_state_from(s, inp) for s in json.loads(wfrow['steps'] or '[]')]
+            if not steps_state:
+                _claim_minute()
+                return None
+            project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
+            title = wfrow["name"]
+            scur = db.execute(
+                "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+                (title[:80], project_id, uid, prof["id"], prof["runner_id"], "project" if project_id else "private"),
             )
-            run_id = int(rcur.lastrowid)
-            steps_state[0]["status"] = "running"
-            steps_state[0]["run_id"] = run_id
-            steps_state[0]["started_at"] = iso_now()
-            status = "running"
-        jcur = db.execute(
-            "INSERT INTO jobs(project_id, workflow_id, session_id, title, status, current_step_idx, input, steps_state, schedule_id, created_by, started_at) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (project_id, wfrow["id"], session_id, title, status, json.dumps(inp), json.dumps(steps_state), sched["id"], uid),
-        )
-        job_id = int(jcur.lastrowid)
-        db.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
-        _claim_minute()
+            session_id = int(scur.lastrowid)
+            status = "queued"
+            run_id = None
+            if steps_state:
+                prompt = wf.build_step_prompt(steps_state[0], 0, len(steps_state), inp)
+                rcur = db.execute(
+                    "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home) "
+                    "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                    (session_id, project_id, uid, prof["id"], prof["runner_id"], prompt, prof["default_model"], prof["hermes_home"]),
+                )
+                run_id = int(rcur.lastrowid)
+                steps_state[0]["status"] = "running"
+                steps_state[0]["run_id"] = run_id
+                steps_state[0]["started_at"] = iso_now()
+                status = "running"
+            jcur = db.execute(
+                "INSERT INTO jobs(project_id, workflow_id, session_id, title, status, current_step_idx, input, steps_state, schedule_id, created_by, started_at) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (project_id, wfrow["id"], session_id, title, status, json.dumps(inp), json.dumps(steps_state), sched["id"], uid),
+            )
+            job_id = int(jcur.lastrowid)
+            db.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
+            _claim_minute()
+
+    if graph_job_id is not None:
+        # Outside the lock: dispatch_ready takes it itself and opens its own transaction.
+        app.state.worker.graph_executor.dispatch_ready(graph_job_id)
+        return graph_job_id
+    if wfrow["graph"]:
+        return None          # a graph the executor refused to spawn; it logged why
     if run_id is not None:
         app.state.worker.add_event(run_id, session_id, project_id, "run.queued", {"runner": prof["runner_id"], "job": job_id, "scheduled": True, "manual": minute_key is None})
+    return job_id
+
+
+def _insert_scheduled_graph_job(
+    app: FastAPI,
+    sched: dict[str, Any],
+    wfrow: dict[str, Any],
+    prof: dict[str, Any],
+    uid: Any,
+    inp: dict[str, Any],
+) -> int | None:
+    """Insert a queued->running graph job for a due schedule. Caller holds the db lock
+    and dispatches afterwards.
+
+    A scheduled graph is the same job `POST /api/graph/jobs` + `/start` would create —
+    same frozen snapshot, same node_states, same executor — so a cron run and a manual
+    run cannot drift apart.
+    """
+    db = app.state.worker_db
+    if not features.enabled(app.state.config, features.WORKFLOW_GRAPH):
+        # The master switch is off, so the executor would never dispatch this job. Skip
+        # rather than leave a 'running' job nothing will ever advance.
+        logging.getLogger("proxima.scheduler").warning(
+            "schedule %s targets a graph workflow while %s is off; skipped",
+            sched["id"], features.WORKFLOW_GRAPH,
+        )
+        return None
+    try:
+        graph = normalize_graph(wfrow["graph"] or "")
+    except Exception:
+        logging.getLogger("proxima.scheduler").exception(
+            "schedule %s targets an invalid graph workflow %s", sched["id"], wfrow["id"]
+        )
+        return None
+
+    project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
+    title = wfrow["name"]
+    scur = db.execute(
+        "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'chat')",
+        (title[:200], project_id, uid, prof["id"], prof["runner_id"], "project" if project_id else "private"),
+    )
+    session_id = int(scur.lastrowid)
+    jcur = db.execute(
+        "INSERT INTO jobs(project_id, workflow_id, session_id, title, status, input, steps_state, "
+        "engine, graph, schedule_id, created_by, started_at) "
+        "VALUES (?, ?, ?, ?, 'running', ?, '[]', 'graph', ?, ?, ?, CURRENT_TIMESTAMP)",
+        (
+            project_id, wfrow["id"], session_id, title,
+            json.dumps(inp, ensure_ascii=False),
+            json.dumps(graph, ensure_ascii=False),
+            sched["id"], uid,
+        ),
+    )
+    job_id = int(jcur.lastrowid)
+    db.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
+    for node in graph["nodes"]:
+        db.execute(
+            "INSERT INTO node_states(job_id, node_id, status, output_kind) VALUES (?, ?, 'pending', ?)",
+            (job_id, node["id"], node["output_kind"]),
+        )
     return job_id
 
 
