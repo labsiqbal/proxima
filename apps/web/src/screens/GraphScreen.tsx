@@ -17,6 +17,7 @@ import {
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
 import { runnerCapabilities } from '../api/profiles'
+import { IconTrash } from '../components/shell/icons'
 import { listArtifacts } from '../api/files'
 import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
@@ -1082,7 +1083,7 @@ export function GraphScreen({
               <button className="graph-job-row" onClick={() => void loadJob(item.id)}>
                 <span>{item.title}</span><small>{planStatusLabel(item.status)}</small>
               </button>
-              <button className="row-action danger graph-row-delete" title="Delete plan" aria-label={`Delete plan ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
+              <button className="row-action danger graph-row-delete" title="Delete plan" aria-label={`Delete plan ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
             </div>))}
           </>
         })()}
@@ -1114,7 +1115,7 @@ export function GraphScreen({
                 disabled={!!busy}
                 onClick={() => void toggleTemplatePaused(template)}
               >{template.status === 'active' ? '⏸' : '▶'}</button>
-              <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}>×</button>
+              <button className="row-action danger graph-row-delete" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
             </div>))}
         {(() => {
           const runs = jobs.filter(item => item.status !== 'queued')
@@ -1124,7 +1125,7 @@ export function GraphScreen({
             <button className="graph-job-row" onClick={() => void loadJob(item.id)}>
               <span>{item.title}</span><small>{planStatusLabel(item.status)}</small>
             </button>
-            <button className="row-action danger graph-row-delete" title="Delete run" aria-label={`Delete run ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}>×</button>
+            <button className="row-action danger graph-row-delete" title="Delete run" aria-label={`Delete run ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
           </div>
           return <>
             <div className="graph-list-head">
