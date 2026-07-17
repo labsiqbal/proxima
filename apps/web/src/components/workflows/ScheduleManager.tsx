@@ -1,5 +1,5 @@
 import React from 'react'
-import type { Schedule, Workflow } from '../../types'
+import type { Schedule, WorkflowInput } from '../../types'
 import { createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule } from '../../api/schedules'
 import { confirmDialog } from '../ui/Dialog'
 import { Dropdown } from '../ui/Dropdown'
@@ -43,9 +43,14 @@ export const isValidCron = (cron: string) => {
   })
 }
 
+// All a schedule needs to know about a workflow: which one, what to call it, and what
+// its runs must be asked for. Narrower than the full Workflow so graph templates — the
+// only authoring surface now — qualify without pretending to have steps.
+export type SchedulableWorkflow = { id: number; name: string; inputs?: WorkflowInput[] | null }
+
 export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onOpenJob }: {
   token: string
-  workflows: Workflow[]
+  workflows: SchedulableWorkflow[]
   workflowId?: number
   compact?: boolean
   onClose?: () => void
@@ -139,7 +144,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
       <label>Cron<input value={cron} onChange={e => { setCron(e.target.value); setPreset('custom') }} placeholder="0 9 * * *" spellCheck={false} /></label>
       <label>Overlap<div className="seg sched-seg"><button type="button" className={overlap === 'skip' ? 'active' : ''} onClick={() => setOverlap('skip')}>Skip</button><button type="button" className={overlap === 'allow' ? 'active' : ''} onClick={() => setOverlap('allow')}>Allow</button></div></label>
       {(selected?.inputs || []).length > 0
-        ? selected?.inputs.map(input => <label className="schedule-brief" key={input.id}>{input.label}{input.required && <span className="muted"> (required)</span>}<input type={input.kind === 'number' ? 'number' : input.kind === 'url' ? 'url' : 'text'} value={values[input.id] || ''} onChange={event => setValues(current => ({ ...current, [input.id]: event.target.value }))} placeholder={input.kind === 'file' ? 'Path or URL' : input.label} /></label>)
+        ? (selected?.inputs || []).map(input => <label className="schedule-brief" key={input.id}>{input.label}{input.required && <span className="muted"> (required)</span>}<input type={input.kind === 'number' ? 'number' : input.kind === 'url' ? 'url' : 'text'} value={values[input.id] || ''} onChange={event => setValues(current => ({ ...current, [input.id]: event.target.value }))} placeholder={input.kind === 'file' ? 'Path or URL' : input.label} /></label>)
         : <label className="schedule-brief">Input brief <span className="muted">(optional)</span><textarea rows={2} value={brief} onChange={e => setBrief(e.target.value)} placeholder="Context supplied to every run" /></label>}
       <label className="wf-step-check"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> Enabled</label>
       <button className="primary-button" disabled={busy || !selected} onClick={add}>{busy ? 'Saving…' : 'Add schedule'}</button>

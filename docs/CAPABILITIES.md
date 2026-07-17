@@ -120,55 +120,25 @@ normalized `{nodes,edges}` DAG with typed outputs and review gates; the user mus
 or edit the queued frozen plan before explicitly starting it.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
-## 7. Workflows (reusable recipes) + Iterate
+## 7. Workflows (graphs) + schedules
 
-**Why:** Codify a repeatable multi-step process; refine it live on a stage.
-**How:** `workflows` table stores steps as a JSON array (edited/snapshotted as one
-unit) + typed `{{inputs}}`. The editor is an **authoring chat** (`WorkflowChat`, left) +
-the recipe **form** (right). The chat steers the form the way Design Studio's chat steers
-a canvas — a purely client-side move, no server mode: `buildRecipePrompt` sends the fat
-prompt (⟦MODE: WORKFLOW AUTHORING⟧ + schema + live recipe) as the run's `message` while
-`display_message` shows only the user's short text; the agent replies with a
-`<workflow-recipe>` block, `parseRecipeDraft` reads it (full fidelity — rules, skills,
-review gates included), and it lands in the *form*, not the DB (a background write behind
-the on-screen form would let the next Save undo it). `stripRecipeBlock` keeps the JSON out
-of the visible thread. The session is the get-or-create `/iterate` thread, so reopening
-resumes it; the reopen adopts existing replies as already-applied so it can't clobber
-later edits. A blank draft is seeded (name + placeholder step) so the chat can bootstrap
-an empty recipe. **Run test** persists the form then sends a plain "run it" message (no
-authoring wrapper), so the agent executes and the reply — carrying no recipe block —
-leaves the form untouched. It composes ChatThread + Composer + useRunStream rather than
-mounting ChatScreen, whose collaboration modes, review sidecar and header do not belong
-beside a form. Per-step **rules** (injected)
-
-+ **skills** hints + mid-workflow **review gates** (pause → approve / edit-&-continue).
-**Endpoints:** `POST/GET/PATCH/DELETE /api/workflows[...]`, `/workflows/{id}/iterate`.
-
-### Graph workflow engine (gated foundation)
-
-**Status:** default-off behind `PROXIMA_FEATURE_WORKFLOW_GRAPH=0`. When explicitly
-enabled, **Workflow Graphs** provides a dedicated hand-rolled SVG canvas. Chat
-promotion can produce a typed DAG draft for human plan review, and graph jobs use a
-frozen `{nodes,edges}` DAG, fresh ACP session per node attempt, typed
-`text|json|artifact-ref` outputs, **parallel ready-set dispatch** bounded by
-`graph_node_concurrency` (then by `run_worker_concurrency`), an optional **manual
-trigger node** as the entry point, an optional **per-node agent** (`profile_id`), and
-durable version/run-id guarded `node_states`. The graph API supports
-create/inspect/edit-plan, start, edit-output, rerun-node with downstream dirty
-propagation, approve a review gate, final approval, and saving a reviewed graph as a
-reusable workflow template. Disabled routes return 503 before writes, and queued graph
-architect/`wf_node` runs are rejected before runner setup. The canvas is n8n-style:
-draggable nodes with persisted positions, pan/zoom/fit, drag-to-connect and
-click-to-remove connections, a node config panel (name, instruction, agent, output
-contract, review gate, dependencies), queued-plan-only editing, explicit
-approve-and-start, live node state, typed output correction, rerun, gate/final
-approval, and save-as-template.
-**Endpoints:** `POST/GET /api/graph/jobs`, `GET /api/graph/templates`,
-`GET /api/graph/jobs/{id}`,
-`PATCH /api/graph/jobs/{id}/graph`, `POST /save-template`, `POST /start`,
-`PATCH /nodes/{node}/output`, `POST /nodes/{node}/rerun`,
-`/nodes/{node}/approve`, `/approve`. See the
-[Workflow Graph Engine guide](workflow-graph.md).
+**Why:** Codify a repeatable multi-step process the agent can execute — with branches,
+per-node agents and review gates, not just a straight line.
+**How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
+`instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
+edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
+run time and substituted into node text. An **authoring chat** beside the canvas emits
+`<workflow-graph>` blocks that are applied to the plan on screen, never the database.
+The **Sequential recipe editor is retired** — a linear recipe is a graph with no
+branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
+reachable from an old session carrying `workflow_id`, but no new linear workflow can be
+authored.
+**Schedules** target saved graph templates: a due tick (or **Run now**) spawns the same
+`engine='graph'` job a manual create + start produces. With the graph feature flag off,
+a graph schedule is skipped with a logged warning rather than left as a job nothing will
+advance.
+**Endpoints:** graph routes (§Graph workflow engine), `GET/POST /api/schedules`,
+`POST /api/schedules/{id}/run`; legacy linear rows keep `GET/PATCH /api/workflows/{id}`.
 
 ## 8. Tasks / jobs (executions)
 

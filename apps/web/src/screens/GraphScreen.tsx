@@ -735,9 +735,8 @@ export function GraphScreen({
         aria-label={railOpen ? 'Hide plan list' : 'Show plan list'}
         aria-expanded={railOpen}
       >☰</button>
-      {/* Same control, same place, same component as Sequential's project picker —
-          it used to be a raw <select> in the rail, which is the very thing the
-          shared Dropdown exists to replace. */}
+      {/* The shared Dropdown, in the bar — it used to be a raw <select> in the rail,
+          which is the very thing the shared component exists to replace. */}
       {projects.length > 0 && <Dropdown
         value={activeProject?.slug ?? ''}
         minWidth={200}
@@ -781,8 +780,8 @@ export function GraphScreen({
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace">
-      {/* Chat left, artifact right — the same idiom Sequential uses, and the same
-          standing rule: the agent edits the plan on screen, never the database. */}
+      {/* Chat left, artifact right — the house idiom (Design Studio does the same),
+          and the standing rule: the agent edits the plan on screen, never the DB. */}
       {chatOpen && job && plan && <aside className="graph-chat-panel">
         <AuthoringChat
           token={token}

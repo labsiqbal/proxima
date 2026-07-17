@@ -347,13 +347,14 @@ would retry the same dead schedule every tick.
 
 ## Compatibility boundary
 
-The classic engine remains `engine='linear'`, with `steps_state`, one shared ACP
-session, classic Activity, schedules, and existing workflow iteration. Graph jobs and
-templates are listed only by the graph API and canvas; classic workflow lists,
-dashboards, direct job creation, iteration, and scheduling exclude graph templates.
-The Iterate screen explicitly requests a linear architect draft even when the graph
-feature is enabled, so saving changes to an existing linear recipe cannot accidentally
-convert it to a graph.
+The classic engine remains `engine='linear'` for **pre-existing** jobs and sessions, with
+`steps_state`, one shared ACP session and classic Activity. Its authoring surface — the
+Sequential mode, recipe form and recipe chat — is **retired**: new workflows are authored
+only on the canvas, and a linear recipe is expressed as a graph with no branches.
+`IterateStage` remains reachable from an old session that carries `workflow_id`. Graph
+jobs and templates are listed by the graph API; `GET /api/workflows` still lists only
+linear rows (`graph IS NULL`), which is why the Scheduled mode resolves names through
+`GET /api/graph/templates` instead.
 
 See [adding-workflow-node-type.md](adding-workflow-node-type.md) before extending node
 execution or output contracts.
