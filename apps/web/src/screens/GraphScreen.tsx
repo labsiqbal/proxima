@@ -1060,7 +1060,7 @@ export function GraphScreen({
               {selectedState?.inputs != null && <details><summary>Resolved inputs</summary><pre>{JSON.stringify(selectedState.inputs, null, 2)}</pre></details>}
               {selectedState?.error && <p className="error-text">{selectedState.error}</p>}
               {selectedState?.output != null ? <pre className="graph-output">{outputText(selectedState)}</pre> : <p className="muted">No validated output yet.</p>}
-              {job.status === 'review' && selectedState && ['done', 'review', 'failed'].includes(selectedState.status) && <>
+              {['review', 'done'].includes(job.status) && selectedState && ['done', 'review', 'failed'].includes(selectedState.status) && <>
                 <label>Correct output<textarea rows={8} value={outputEdit} onChange={event => setOutputEdit(event.target.value)} /></label>
                 <div className="graph-form-actions">
                   <button className="ghost-button" onClick={() => void act('rerun', () => rerunGraphNode(token, job.id, definition.id))} disabled={!!busy}>Rerun node</button>

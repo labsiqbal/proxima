@@ -127,11 +127,15 @@ def register(app, deps):
                 (job_id, node["id"], node["output_kind"]),
             )
 
-    def ensure_reviewable(job: sqlite3.Row) -> None:
-        if job["status"] != "review":
+    def ensure_correctable(job: sqlite3.Row) -> None:
+        """Corrections (edit a node's output, rerun a node) are allowed while the job
+        is paused in review AND after final approval: 'done' is just an approved
+        review, and a correction re-runs the affected slice the same way either way.
+        What stays frozen after start is the graph itself, not its outputs."""
+        if job["status"] not in ("review", "done"):
             raise HTTPException(
                 status_code=409,
-                detail="graph corrections require a job paused in review",
+                detail="graph corrections require a job paused in review or completed",
             )
         active = db().execute(
             "SELECT 1 FROM node_states WHERE job_id = ? AND status IN ('ready','running') LIMIT 1",
@@ -470,7 +474,7 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
-        ensure_reviewable(job)
+        ensure_correctable(job)
         graph = normalize_graph(job["graph"] or "")
         node, serialized = corrected_value(job, graph, node_id, payload.value)
         conn = db()
@@ -504,7 +508,7 @@ def register(app, deps):
                         "jobs",
                         job_id,
                         "running",
-                        ("review",),
+                        ("review", "done"),
                         set_extra="updated_at=CURRENT_TIMESTAMP, finished_at=NULL",
                     )
                     dispatch = resumed
@@ -524,7 +528,7 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
-        ensure_reviewable(job)
+        ensure_correctable(job)
         graph = normalize_graph(job["graph"] or "")
         _graph_node(graph, node_id)
         conn = db()
@@ -556,7 +560,7 @@ def register(app, deps):
                     "jobs",
                     job_id,
                     "running",
-                    ("review",),
+                    ("review", "done"),
                     set_extra="updated_at=CURRENT_TIMESTAMP, finished_at=NULL",
                 )
                 if not resumed:
@@ -576,7 +580,7 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
-        ensure_reviewable(job)
+        ensure_correctable(job)
         conn = db()
         dispatch = False
         with app.state.db_lock:
@@ -625,7 +629,7 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
-        ensure_reviewable(job)
+        ensure_correctable(job)
         incomplete = db().execute(
             "SELECT 1 FROM node_states WHERE job_id = ? AND status != 'done' LIMIT 1",
             (job_id,),

@@ -280,7 +280,11 @@ modal, because a job has nowhere to persist it and dropping it silently would ma
 owner re-declare what the agent already wrote.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
-cannot be redrawn after the fact. Editing it again is one click: **Duplicate to edit**
+cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and
+rerunning a node work while the job is paused in review *and after final approval* —
+'done' is just an approved review, and a correction re-runs the affected slice the same
+way either way (the job returns to running, descendants go stale, and it lands back in
+review). Editing it again is one click: **Duplicate to edit**
 creates a fresh queued copy of the frozen snapshot (positions and input included) and
 opens it; the original stays as the run record. **Save template** is available on frozen
 plans too — a proven run is exactly the thing worth templating.

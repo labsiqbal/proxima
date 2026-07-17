@@ -338,3 +338,34 @@ def test_deleting_a_graph_job_sweeps_its_node_sessions(tmp_path):
     ).fetchone()["c"]
     assert left == 0
     assert db.execute("SELECT COUNT(*) AS c FROM node_states WHERE job_id = ?", (job["id"],)).fetchone()["c"] == 0
+
+
+def test_rerun_and_output_edit_still_work_after_final_approval(tmp_path):
+    """'done' is just an approved review — a correction re-runs the affected slice the
+    same way. Only the graph itself stays frozen after start, not its outputs."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job_id = _create(client)["id"]
+    client.post(f"/api/graph/jobs/{job_id}/start")
+    _finish_chain(app, job_id)
+    client.post(f"/api/graph/jobs/{job_id}/approve")
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["status"] == "done"
+
+    rerun = client.post(f"/api/graph/jobs/{job_id}/nodes/b/rerun")
+
+    assert rerun.status_code == 200, rerun.text
+    payload = rerun.json()
+    assert payload["status"] == "running"
+    states = {node["node_id"]: node for node in payload["node_states"]}
+    assert states["b"]["status"] == "running"
+    assert states["c"]["status"] == "stale"
+
+    # Land the revived slice and approve again — then correct an output on the done job.
+    _complete_running_node(app, job_id, "B v2")
+    _complete_running_node(app, job_id, "C v2")
+    client.post(f"/api/graph/jobs/{job_id}/approve")
+    corrected = client.patch(
+        f"/api/graph/jobs/{job_id}/nodes/a/output", json={"value": "A corrected"}
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["status"] == "running"
