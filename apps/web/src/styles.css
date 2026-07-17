@@ -6243,6 +6243,15 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* Scheduled's empty state: say where templates come from. */
+.schedule-empty-hint {
+	padding: var(--space-3) var(--space-4);
+	border: 1px dashed var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+}
+.schedule-empty-hint p {
+	margin: var(--space-1) 0 0;
+}
 /* Accordion headers for the rail sections: the title is the toggle; row actions
    (＋, ↻) stay outside it so a button never nests a button. */
 .graph-accordion-toggle {

@@ -138,6 +138,12 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
       {onClose && <button className="ghost-button" onClick={onClose} disabled={busy}>Close</button>}
     </header>
     {error && <div className="error-bar" role="alert">{error}</div>}
+    {/* Only saved templates can be scheduled — a finished run is not schedulable until
+        it is saved as one. Saying so here beats an inexplicably thin picker. */}
+    {!workflowId && available.length === 0 && <div className="schedule-empty-hint">
+      <strong>No templates to schedule yet.</strong>
+      <p className="muted">Schedules run <em>saved templates</em>. Open a plan in the Editor — a finished run works too — press <em>Save template</em>, and it will appear here.</p>
+    </div>}
     <div className="schedule-create-card">
       {!workflowId && <label>Workflow<Dropdown value={selected?.id ? String(selected.id) : ''} onChange={v => setSelectedId(Number(v))} options={available.map(w => ({ value: String(w.id), label: w.name }))} /></label>}
       <label>Cadence<Dropdown value={preset} onChange={pickPreset} options={CRON_PRESETS.map(p => ({ value: p.value, label: p.label }))} /></label>
