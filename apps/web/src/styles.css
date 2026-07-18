@@ -6135,63 +6135,84 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
-/* Workflows home — Design Studio's shape: prompt-first hero, then card sections.
-   Browsing lives here; the editor is for one workflow at a time. */
-.graph-home-scroll {
+/* Workflows home — Design Studio's start-stage recipe: a centered column, the prompt
+   as an elevated card with a borderless textarea, quiet labeled dividers, then cards. */
+.graph-start {
 	flex: 1;
-	min-height: 0;
 	overflow: auto;
-	padding: var(--space-5) var(--space-6);
 	display: grid;
-	gap: var(--space-6);
-	align-content: start;
+	place-items: start center;
+	padding: clamp(24px, 5vh, 64px) 24px;
 }
-.graph-hero {
-	max-width: 46rem;
-	margin-inline: auto;
-	width: 100%;
+.graph-start-inner {
+	width: min(880px, 100%);
 	text-align: center;
-	display: grid;
-	gap: var(--space-2);
-	padding-top: var(--space-6);
 }
-.graph-hero h2 {
-	margin: 0;
-	font-size: var(--text-2xl);
+.graph-project-tag {
+	font-size: var(--text-xs);
+	margin: 0 0 var(--space-4);
 }
-.graph-hero-row {
-	display: grid;
-	gap: var(--space-2);
+.graph-start-inner h1 {
+	font-size: var(--text-xl);
+	letter-spacing: -0.02em;
+	margin: 0 0 6px;
+}
+.graph-sub {
+	margin: 0 auto var(--space-4);
+	max-width: 40rem;
+}
+.graph-prompt {
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-lg);
+	background: var(--ui-bg-editor);
+	padding: 14px;
+	box-shadow: 0 6px 28px rgba(0, 0, 0, 0.14);
 	text-align: left;
 }
-.graph-hero-row textarea {
-	resize: vertical;
-	min-height: 3.2rem;
+.graph-prompt:focus-within {
+	border-color: var(--ui-accent);
 }
-.graph-hero-actions {
-	display: flex;
-	gap: var(--space-2);
-	justify-content: flex-end;
-}
-.graph-home-section {
-	max-width: 64rem;
-	margin-inline: auto;
+.graph-prompt textarea {
 	width: 100%;
-	display: grid;
+	border: 0;
+	background: transparent;
+	resize: vertical;
+	min-height: 3.4rem;
+	outline: none;
+	color: var(--ui-text-primary);
+}
+.graph-prompt-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+.graph-or {
+	margin: var(--space-6) 0 var(--space-3);
+	font-size: var(--text-xs);
+	color: var(--ui-text-tertiary);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	display: flex;
+	align-items: center;
 	gap: var(--space-3);
 }
-.graph-home-section h3 {
-	margin: 0;
-	font-size: var(--text-base);
+.graph-or::before,
+.graph-or::after {
+	content: '';
+	flex: 1;
+	border-top: 1px solid var(--ui-stroke-tertiary);
 }
-.graph-home-section h3 .muted {
-	font-weight: 400;
-	font-size: var(--text-sm);
+.graph-none {
+	margin: 0;
+	text-align: left;
 }
 .graph-card-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
 	gap: var(--space-3);
+	text-align: left;
 }
 .graph-card {
 	display: flex;
@@ -6200,12 +6221,18 @@ div.result-media {
 	border-radius: var(--radius-md);
 	background: var(--ui-surface);
 	overflow: hidden;
+	transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+.graph-card:hover {
+	border-color: var(--ui-accent);
+	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
 }
 .graph-card-main {
 	flex: 1;
 	min-width: 0;
-	display: grid;
-	gap: var(--space-1);
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
 	padding: var(--space-3) var(--space-4);
 	border: 0;
 	background: transparent;
@@ -6213,13 +6240,46 @@ div.result-media {
 	text-align: left;
 	cursor: pointer;
 }
-.graph-card-main:hover {
-	background: var(--ui-row-active-background);
+/* A tiny three-node glyph, the same trick as Design's wireframe thumbnails: say what
+   the thing is with shape, not another icon font. */
+.graph-card-glyph {
+	flex: none;
+	display: grid;
+	grid-template-columns: repeat(3, 8px);
+	gap: 3px;
+	align-items: center;
 }
-.graph-card-main strong {
+.graph-card-glyph i {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--ui-accent) 55%, transparent);
+}
+.graph-card-glyph i:nth-child(2) {
+	background: var(--ui-accent);
+}
+.graph-card-glyph.tpl i {
+	border-radius: 2px;
+}
+.graph-card-meta {
+	min-width: 0;
+	display: grid;
+	gap: 2px;
+}
+.graph-card-meta strong {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.graph-card-status {
+	color: var(--ui-text-tertiary);
+}
+.graph-card-status.st-review {
+	color: var(--ui-accent);
+	font-weight: 600;
+}
+.graph-card-status.st-running {
+	color: var(--ui-accent);
 }
 .graph-card-actions {
 	display: flex;
@@ -6227,13 +6287,15 @@ div.result-media {
 	justify-content: center;
 	gap: var(--space-1);
 	padding: var(--space-2);
-	/* Quiet until the card is under the pointer — same rule as the old rail. */
 	opacity: 0;
 	transition: opacity var(--t) var(--ease);
 }
 .graph-card:hover .graph-card-actions,
 .graph-card-actions:focus-within {
 	opacity: 1;
+}
+.graph-finished {
+	text-align: left;
 }
 .graph-finished summary {
 	cursor: pointer;

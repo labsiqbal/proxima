@@ -955,19 +955,6 @@ export function GraphScreen({
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
 
   if (stage === 'home') {
-    const drafts = jobs.filter(item => item.status === 'queued')
-    const runs = jobs.filter(item => item.status !== 'queued')
-    const attention = runs.filter(item => item.status === 'review' || item.status === 'running')
-    const finished = runs.filter(item => item.status !== 'review' && item.status !== 'running')
-    const planCard = (item: GraphJob) => <div key={item.id} className={`graph-card st-${item.status}`}>
-      <button className="graph-card-main" onClick={() => void loadJob(item.id)}>
-        <strong>{item.title}</strong>
-        <span className={`graph-status st-${item.status}`}>{planStatusLabel(item.status)}</span>
-      </button>
-      <div className="graph-card-actions">
-        <button className="row-action danger" title="Delete" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
-      </div>
-    </div>
     return <section className="graph-screen graph-home">
       <header className="graph-header">
         {projects.length > 0 && <Dropdown
@@ -984,61 +971,78 @@ export function GraphScreen({
       {error && <div className="error-bar">{error}</div>}
       {notice && <div className="graph-notice">{notice}</div>}
 
-      <div className="graph-home-scroll">
-        {/* Prompt-first, like Design's start stage: describing the workflow is the
-            fastest way to get a canvas worth editing. */}
-        <div className="graph-hero">
-          <h2>What should this workflow do?</h2>
-          <p className="muted">Describe it and the agent draws the graph — branches run in parallel. Or start from a blank canvas.</p>
-          <div className="graph-hero-row">
+      <div className="graph-start">
+        <div className="graph-start-inner">
+          {activeProject && <p className="muted graph-project-tag">Building in <strong>{activeProject.name}</strong> · runs stay in this project</p>}
+          <h1>What should this workflow do?</h1>
+          <p className="muted graph-sub">Describe it and the agent draws the graph — independent branches run in parallel. Nothing's locked; you can rearrange everything on the canvas.</p>
+          <div className="graph-prompt">
             <textarea
-              rows={2}
+              rows={3}
               value={heroText}
-              placeholder="e.g. Riset topik dari {{brief}}, lalu tulis post X dan LinkedIn secara paralel, gabungkan jadi satu bundle…"
+              placeholder="Describe your workflow — e.g. riset topik dari {{brief}}, tulis post X dan LinkedIn secara paralel, gabungkan jadi satu bundle"
               onChange={event => setHeroText(event.target.value)}
-              onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && heroText.trim()) { event.preventDefault(); void newPlan(heroText); setHeroText('') } }}
+              onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && heroText.trim()) { void newPlan(heroText); setHeroText('') } }}
             />
-            <div className="graph-hero-actions">
-              <button className="primary-button" disabled={!!busy || !heroText.trim()} onClick={() => { void newPlan(heroText); setHeroText('') }}>{busy === 'create' ? 'Creating…' : 'Draw it'}</button>
+            <div className="graph-prompt-bar">
               <button className="ghost-button" disabled={!!busy} onClick={() => void newPlan()}>Blank canvas</button>
+              <button className="primary-button" disabled={!!busy || !heroText.trim()} onClick={() => { void newPlan(heroText); setHeroText('') }}>{busy === 'create' ? 'Creating…' : 'Draw it →'}</button>
             </div>
           </div>
-        </div>
 
-        <div className="graph-home-section">
-          <h3>Drafts <span className="muted">— being built, editable</span></h3>
-          {drafts.length === 0
-            ? <p className="muted">Nothing in progress.</p>
-            : <div className="graph-card-grid">{drafts.map(planCard)}</div>}
-        </div>
+          {(() => {
+            const drafts = jobs.filter(item => item.status === 'queued')
+            const runs = jobs.filter(item => item.status !== 'queued')
+            const attention = runs.filter(item => item.status === 'review' || item.status === 'running')
+            const finished = runs.filter(item => item.status !== 'review' && item.status !== 'running')
+            const planCard = (item: GraphJob) => <div key={item.id} className="graph-card">
+              <button className="graph-card-main" onClick={() => void loadJob(item.id)}>
+                <span className="graph-card-glyph" aria-hidden="true"><i /><i /><i /></span>
+                <span className="graph-card-meta">
+                  <strong>{item.title}</strong>
+                  <small className={`graph-card-status st-${item.status}`}>{planStatusLabel(item.status)}</small>
+                </span>
+              </button>
+              <div className="graph-card-actions">
+                <button className="row-action danger" title="Delete" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
+              </div>
+            </div>
+            return <>
+              {drafts.length > 0 && <>
+                <p className="graph-or"><span>Continue building</span></p>
+                <div className="graph-card-grid">{drafts.map(planCard)}</div>
+              </>}
 
-        <div className="graph-home-section">
-          <h3>Templates <span className="muted">— reusable: run, schedule, pause</span></h3>
-          {templates.length === 0
-            ? <p className="muted">None yet. Open a plan and press Save template.</p>
-            : <div className="graph-card-grid">{templates.map(template => <div key={template.id} className="graph-card">
-                <button className="graph-card-main" disabled={!!busy} onClick={() => {
-                  if (template.inputs?.length) setRunningTemplate(template)
-                  else void createFromTemplate(template)
-                }}>
-                  <strong>{template.name}</strong>
-                  <span className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</span>
-                </button>
-                <div className="graph-card-actions">
-                  <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
-                  <button className="row-action danger" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
-                </div>
-              </div>)}</div>}
-        </div>
+              <p className="graph-or"><span>Templates — run, schedule, pause</span></p>
+              {templates.length === 0
+                ? <p className="muted graph-none">None yet. Open a plan and press <em>Save template</em>.</p>
+                : <div className="graph-card-grid">{templates.map(template => <div key={template.id} className="graph-card">
+                    <button className="graph-card-main" disabled={!!busy} onClick={() => {
+                      if (template.inputs?.length) setRunningTemplate(template)
+                      else void createFromTemplate(template)
+                    }}>
+                      <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
+                      <span className="graph-card-meta">
+                        <strong>{template.name}</strong>
+                        <small className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</small>
+                      </span>
+                    </button>
+                    <div className="graph-card-actions">
+                      <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
+                      <button className="row-action danger" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
+                    </div>
+                  </div>)}</div>}
 
-        <div className="graph-home-section">
-          <h3>Runs <span className="muted">— execution history, frozen</span></h3>
-          {runs.length === 0 && <p className="muted">No runs yet.</p>}
-          {attention.length > 0 && <div className="graph-card-grid">{attention.map(planCard)}</div>}
-          {finished.length > 0 && <details className="graph-finished">
-            <summary>Finished ({finished.length})</summary>
-            <div className="graph-card-grid">{finished.map(planCard)}</div>
-          </details>}
+              {runs.length > 0 && <>
+                <p className="graph-or"><span>Runs — history, frozen</span></p>
+                {attention.length > 0 && <div className="graph-card-grid">{attention.map(planCard)}</div>}
+                {finished.length > 0 && <details className="graph-finished">
+                  <summary>Finished ({finished.length})</summary>
+                  <div className="graph-card-grid">{finished.map(planCard)}</div>
+                </details>}
+              </>}
+            </>
+          })()}
         </div>
       </div>
 
