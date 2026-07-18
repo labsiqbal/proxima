@@ -5882,17 +5882,28 @@ div.result-media {
 	color: var(--ui-text-tertiary);
 }
 .graph-header-actions,
+.graph-form-actions,
+.graph-inspector-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.graph-header-actions,
 .graph-form-actions {
 	flex-wrap: wrap;
 	justify-content: flex-end;
 }
 /* Pushes the actions to the far end regardless of how much status precedes them. */
 .graph-header-actions {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
 	margin-left: auto;
 	flex: none;
+}
+.graph-loading,
+.graph-empty {
+	padding: var(--space-4);
+}
+.graph-loading {
+	font-size: var(--text-xs);
 }
 /* Flex, not grid: the rail and the inspector each come and go, and flex simply
    drops their space when they do — a grid would need a template per combination. */
@@ -5904,6 +5915,8 @@ div.result-media {
 .graph-inspector {
 	width: var(--graph-inspector-width);
 	flex: none;
+	min-height: 0;
+	overflow: auto;
 	padding: var(--space-4);
 	border-left: 1px solid var(--ui-stroke-secondary);
 }
