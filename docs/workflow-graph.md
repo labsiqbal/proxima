@@ -276,16 +276,16 @@ and a rerun re-executes only the node itself plus its stale descendants.)
 
 ### Panels, labels and @-mentions
 
-Every panel — workflow chat, the Plans/Templates rail, and the node inspector — has a
-**draggable width** (persisted per panel), so the owner can widen whichever pane they
-are working in; the inspector most of all. Plan statuses are phrased as what the owner
-can do next ("Draft — editable", "Needs your review"). The rail partitions the way n8n
-does — what you *build* versus what *ran*: **Drafts** (queued, editable) on top,
-**Templates** (reusable) next, and **Runs** (execution history, frozen) at the bottom.
-Each section is an **accordion** (state persisted) so what is not in focus can be
-hidden; the Runs header still says "*n need attention*" while collapsed, and finished
-runs sit behind a further "Finished (n)" toggle inside it. Panel toggles sit together at the header's left (plan list,
-workflow chat); plan actions stay on the right.
+The screen has **two stages**, Design Studio's shape: a browsable **home** and a
+focused **editor** — browsing and editing are different modes of work. Home is
+prompt-first (describe the workflow → a draft is created and the chat speaks the
+description as its first message → the agent draws), with card sections beneath:
+**Drafts** (queued, editable), **Templates** (run / schedule / pause / delete on the
+card), and **Runs** (needs-attention cards first, finished behind a "Finished (n)"
+fold). Opening anything lands in the editor: full-width canvas + workflow chat + node
+inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
+Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
+stay phrased as what the owner can do next ("Draft — editable", "Needs your review").
 
 The inspector's instruction / expected output / rules fields and the workflow chat all
 support **@-mentions**: typing `@` offers the project's artifacts and inserts the picked

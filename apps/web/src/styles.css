@@ -36,7 +36,6 @@
 	--space-6: 24px;
 	--space-8: 32px;
 	--topbar-h: 52px;
-	--graph-list-width: 15rem;
 	--graph-inspector-width: 21rem;
 	--graph-chat-width: 22rem;
 	--graph-canvas-min-width: 46rem;
@@ -5883,14 +5882,6 @@ div.result-media {
 	color: var(--ui-text-tertiary);
 }
 .graph-header-actions,
-.graph-form-actions,
-.graph-list-head,
-.graph-inspector-head {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-}
-.graph-header-actions,
 .graph-form-actions {
 	flex-wrap: wrap;
 	justify-content: flex-end;
@@ -5906,20 +5897,6 @@ div.result-media {
 	display: flex;
 	flex: 1;
 	min-height: 0;
-}
-/* No background: `.main-pane`'s gradient is the app's backdrop and every other
-   destination lets it through — Sequential's card grid and even Tasks' `.job-list`
-   paint nothing. These panels are delineated by their border, not by a fill. */
-.graph-job-list,
-.graph-inspector {
-	min-height: 0;
-	overflow: auto;
-}
-.graph-job-list {
-	width: var(--graph-list-width);
-	flex: none;
-	padding: var(--space-3);
-	border-right: 1px solid var(--ui-stroke-secondary);
 }
 .graph-inspector {
 	width: var(--graph-inspector-width);
@@ -5945,91 +5922,6 @@ div.result-media {
 	border-radius: var(--radius-sm);
 	background: var(--ui-bg-editor);
 	color: var(--ui-text-primary);
-}
-.graph-list-actions {
-	display: inline-flex;
-	gap: var(--space-1);
-}
-.graph-list-head {
-	justify-content: space-between;
-	margin: var(--space-4) 0 var(--space-2);
-}
-/* The rail now starts with "Plans" (the project picker moved to the header), so
-   the first heading should not push itself off the top of the panel. */
-.graph-list-head.first {
-	margin-top: 0;
-}
-/* "Plans"/"Templates" are section labels, so they get the same eyebrow treatment
-   as "Node" in the inspector. Left as a bare <strong> they inherited 1rem and
-   rendered larger than the screen title itself. */
-.graph-list-head strong {
-	font-size: var(--text-2xs);
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--ui-text-tertiary);
-}
-/* A rail row and its delete affordance side by side — the row itself is a button, so
-   the × must be a sibling, not a child. The wrap carries the selected look the row
-   used to. */
-.graph-row-wrap {
-	display: flex;
-	align-items: stretch;
-	gap: var(--space-1);
-}
-.graph-row-wrap > .graph-job-row {
-	flex: 1;
-	min-width: 0;
-}
-.graph-row-wrap.selected > .graph-job-row {
-	border-color: var(--ui-accent);
-	background: var(--ui-accent-soft);
-}
-.graph-row-delete {
-	align-self: center;
-	flex: none;
-	/* Quiet until the row is under the pointer: deletion is a rare act and a rail of
-	   permanent × marks reads as clutter. Focus reveals it for keyboard users. */
-	opacity: 0;
-}
-.graph-row-wrap:hover .graph-row-delete,
-.graph-row-delete:focus-visible {
-	opacity: 1;
-}
-.graph-job-row {
-	display: grid;
-	width: 100%;
-	gap: var(--space-1);
-	padding: var(--space-2);
-	border: 0;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	text-align: left;
-	font-size: var(--text-sm);
-	color: var(--ui-text-primary);
-}
-.graph-job-row:hover {
-	background: var(--ui-row-hover-background);
-}
-.graph-job-row.selected {
-	background: var(--ui-row-active-background);
-}
-/* <small> is a browser-relative size (0.83em), so it never lands on the scale. */
-.graph-job-row small {
-	font-size: var(--text-xs);
-	color: var(--ui-text-tertiary);
-	text-transform: capitalize;
-}
-.graph-empty-list,
-.graph-loading,
-.graph-empty {
-	padding: var(--space-4);
-}
-/* Placeholder copy in the rail, sized like the rows it stands in for rather than
-   inheriting 1rem and shouting louder than them. */
-.graph-empty-list,
-.graph-loading {
-	font-size: var(--text-xs);
 }
 /* The canvas is the biggest surface on the screen, so painting it opaque is what
    actually hid the app's gradient here while every other page showed it. */
@@ -6243,6 +6135,115 @@ div.result-media {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
 }
+/* Workflows home — Design Studio's shape: prompt-first hero, then card sections.
+   Browsing lives here; the editor is for one workflow at a time. */
+.graph-home-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--space-5) var(--space-6);
+	display: grid;
+	gap: var(--space-6);
+	align-content: start;
+}
+.graph-hero {
+	max-width: 46rem;
+	margin-inline: auto;
+	width: 100%;
+	text-align: center;
+	display: grid;
+	gap: var(--space-2);
+	padding-top: var(--space-6);
+}
+.graph-hero h2 {
+	margin: 0;
+	font-size: var(--text-2xl);
+}
+.graph-hero-row {
+	display: grid;
+	gap: var(--space-2);
+	text-align: left;
+}
+.graph-hero-row textarea {
+	resize: vertical;
+	min-height: 3.2rem;
+}
+.graph-hero-actions {
+	display: flex;
+	gap: var(--space-2);
+	justify-content: flex-end;
+}
+.graph-home-section {
+	max-width: 64rem;
+	margin-inline: auto;
+	width: 100%;
+	display: grid;
+	gap: var(--space-3);
+}
+.graph-home-section h3 {
+	margin: 0;
+	font-size: var(--text-base);
+}
+.graph-home-section h3 .muted {
+	font-weight: 400;
+	font-size: var(--text-sm);
+}
+.graph-card-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+	gap: var(--space-3);
+}
+.graph-card {
+	display: flex;
+	align-items: stretch;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface);
+	overflow: hidden;
+}
+.graph-card-main {
+	flex: 1;
+	min-width: 0;
+	display: grid;
+	gap: var(--space-1);
+	padding: var(--space-3) var(--space-4);
+	border: 0;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.graph-card-main:hover {
+	background: var(--ui-row-active-background);
+}
+.graph-card-main strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.graph-card-actions {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: var(--space-1);
+	padding: var(--space-2);
+	/* Quiet until the card is under the pointer — same rule as the old rail. */
+	opacity: 0;
+	transition: opacity var(--t) var(--ease);
+}
+.graph-card:hover .graph-card-actions,
+.graph-card-actions:focus-within {
+	opacity: 1;
+}
+.graph-finished summary {
+	cursor: pointer;
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-sm);
+	padding-block: var(--space-1);
+}
+.graph-finished[open] summary {
+	margin-bottom: var(--space-2);
+}
 /* Scheduled's empty state: say where templates come from. */
 .schedule-empty-hint {
 	padding: var(--space-3) var(--space-4);
@@ -6251,45 +6252,6 @@ div.result-media {
 }
 .schedule-empty-hint p {
 	margin: var(--space-1) 0 0;
-}
-/* Accordion headers for the rail sections: the title is the toggle; row actions
-   (＋, ↻) stay outside it so a button never nests a button. */
-.graph-accordion-toggle {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	flex: 1;
-	min-width: 0;
-	padding: 0;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	text-align: left;
-	cursor: pointer;
-}
-.graph-accordion-toggle .chevron {
-	flex: none;
-	color: var(--ui-text-tertiary);
-	transition: transform var(--t) var(--ease);
-}
-.graph-accordion-toggle .chevron.open {
-	transform: rotate(90deg);
-}
-/* Collapsed run history: finished runs are reference, not workspace. */
-.graph-runs-toggle {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	padding: var(--space-1) var(--space-2);
-	border: 0;
-	background: transparent;
-	color: var(--ui-text-tertiary);
-	font-size: var(--text-sm);
-	cursor: pointer;
-	text-align: left;
-}
-.graph-runs-toggle:hover {
-	color: var(--ui-text-primary);
 }
 /* @-mention: textarea plus a file picker anchored to it. */
 .mention-wrap {
@@ -6358,15 +6320,6 @@ div.result-media {
 .graph-resize-handle:hover,
 .graph-resize-handle:active {
 	border-inline-start-color: var(--ui-accent);
-}
-.graph-list-title {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-.graph-list-title small {
-	color: var(--ui-text-tertiary);
-	font-size: var(--text-xs);
 }
 /* Wide enough for the inputs table, which is a row of five columns. */
 .graph-template-card {

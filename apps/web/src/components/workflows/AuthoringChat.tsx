@@ -52,7 +52,11 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   placeholder: string
   /** Files the owner can @-mention in the composer. */
   mentionItems?: import('../ui/MentionTextarea').MentionItem[]
-}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder, mentionItems }, ref) {
+  /** Fired once into a fresh thread on mount — the home hero's "describe it and the
+   *  agent draws it" hand-off. Ignored when the thread already has messages. */
+  initialMessage?: string
+  onInitialConsumed?: () => void
+}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder, mentionItems, initialMessage, onInitialConsumed }, ref) {
   const [session, setSession] = React.useState<number | null>(null)
   const sessionRef = React.useRef<number | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
@@ -106,6 +110,23 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
     if (!done) return
     void reload(session).then(() => { if (mounted.current) setBusyRun(null) })
   }, [events, session, busyRun, reload, setBusyRun])
+
+  // A hero hand-off opens the chat itself and speaks first — but never into a thread
+  // that already has history, where "my" first message would not be the first word.
+  const initialFired = React.useRef(false)
+  React.useEffect(() => {
+    if (!initialMessage || initialFired.current) return
+    initialFired.current = true
+    void (async () => {
+      const s = await ensureSession()
+      if (s == null || !mounted.current) return
+      if (appliedMsgId.current === 0 && messages.length === 0) {
+        await fire(s, live.current.buildPrompt(initialMessage), initialMessage)
+      }
+      onInitialConsumed?.()
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMessage])
 
   // Open the chat if it isn't open yet, and return it. Both the idle "Start chat" and an
   // outline-driven test go through here, so a test can open the chat on demand rather
