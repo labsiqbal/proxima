@@ -490,6 +490,12 @@ export function GraphScreen({
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
   const [inspectorWidth, dragInspector] = useDragWidth('proxima.graph.inspectorWidth', 336, 260, 720)
+  const [draftsOpen, setDraftsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.drafts') !== '0')
+  const [templatesOpen, setTemplatesOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.templates') !== '0')
+  const [runsOpen, setRunsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.runs') !== '0')
+  React.useEffect(() => { localStorage.setItem('proxima.graph.col.drafts', draftsOpen ? '1' : '0') }, [draftsOpen])
+  React.useEffect(() => { localStorage.setItem('proxima.graph.col.templates', templatesOpen ? '1' : '0') }, [templatesOpen])
+  React.useEffect(() => { localStorage.setItem('proxima.graph.col.runs', runsOpen ? '1' : '0') }, [runsOpen])
   // Two stages, Design Studio's shape: a browsable home, and an editor focused on
   // one workflow. Browsing and editing are different modes of work.
   const [stage, setStage] = React.useState<'home' | 'editor'>('home')
@@ -1042,41 +1048,55 @@ export function GraphScreen({
                 <button className="row-action danger" title="Delete" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
               </div>
             </div>
-            return <>
-              {drafts.length > 0 && <>
-                <p className="graph-or"><span>Continue building</span></p>
-                <div className="graph-card-grid">{drafts.map(planCard)}</div>
-              </>}
-
-              <p className="graph-or"><span>Templates — run, schedule, pause</span></p>
-              {templates.length === 0
-                ? <p className="muted graph-none">None yet. Open a plan and press <em>Save template</em>.</p>
-                : <div className="graph-card-grid">{templates.map(template => <div key={template.id} className="graph-card">
-                    <button className="graph-card-main" disabled={!!busy} onClick={() => {
-                      if (template.inputs?.length) setRunningTemplate(template)
-                      else void createFromTemplate(template)
-                    }}>
-                      <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
-                      <span className="graph-card-meta">
-                        <strong>{template.name}</strong>
-                        <small className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</small>
-                      </span>
-                    </button>
-                    <div className="graph-card-actions">
-                      <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
-                      <button className="row-action danger" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
-                    </div>
-                  </div>)}</div>}
-
-              {runs.length > 0 && <>
-                <p className="graph-or"><span>Runs — history, frozen</span></p>
-                {attention.length > 0 && <div className="graph-card-grid">{attention.map(planCard)}</div>}
-                {finished.length > 0 && <details className="graph-finished">
-                  <summary>Finished ({finished.length})</summary>
-                  <div className="graph-card-grid">{finished.map(planCard)}</div>
-                </details>}
-              </>}
-            </>
+            const column = (
+              key: 'drafts' | 'templates' | 'runs',
+              title: string,
+              count: number,
+              hint: string,
+              open: boolean,
+              toggle: () => void,
+              body: React.ReactNode,
+            ) => <div className={`graph-col${open ? ' open' : ''}`} key={key}>
+              <button className="graph-col-head" onClick={toggle} aria-expanded={open}>
+                <span className={`chevron ${open ? 'open' : ''}`}>▸</span>
+                <span className="graph-col-title"><strong>{title} ({count})</strong><small>{hint}</small></span>
+              </button>
+              {open && <div className="graph-col-body">{body}</div>}
+            </div>
+            return <div className="graph-columns">
+              {column('drafts', 'Drafts', drafts.length, 'being built — editable', draftsOpen, () => setDraftsOpen(v => !v),
+                drafts.length === 0
+                  ? <p className="muted graph-none">Nothing in progress.</p>
+                  : drafts.map(planCard))}
+              {column('templates', 'Templates', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
+                templates.length === 0
+                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save template</em>.</p>
+                  : templates.map(template => <div key={template.id} className="graph-card">
+                      <button className="graph-card-main" disabled={!!busy} onClick={() => {
+                        if (template.inputs?.length) setRunningTemplate(template)
+                        else void createFromTemplate(template)
+                      }}>
+                        <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
+                        <span className="graph-card-meta">
+                          <strong>{template.name}</strong>
+                          <small className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</small>
+                        </span>
+                      </button>
+                      <div className="graph-card-actions">
+                        <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
+                        <button className="row-action danger" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
+                      </div>
+                    </div>))}
+              {column('runs', 'Runs', runs.length, attention.length > 0 ? `${attention.length} need${attention.length === 1 ? 's' : ''} attention` : 'history — frozen', runsOpen, () => setRunsOpen(v => !v),
+                <>
+                  {runs.length === 0 && <p className="muted graph-none">No runs yet.</p>}
+                  {attention.map(planCard)}
+                  {finished.length > 0 && <details className="graph-finished">
+                    <summary>Finished ({finished.length})</summary>
+                    {finished.map(planCard)}
+                  </details>}
+                </>)}
+            </div>
           })()}
         </div>
       </div>

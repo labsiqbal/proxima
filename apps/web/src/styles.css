@@ -6210,30 +6210,63 @@ div.result-media {
 	gap: var(--space-2);
 	margin-top: var(--space-2);
 }
-.graph-or {
-	margin: var(--space-6) 0 var(--space-3);
-	font-size: var(--text-xs);
-	color: var(--ui-text-tertiary);
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
+/* Three accordion columns, aligned with the prompt card above — each header is a
+   button that says what its column holds, so a collapsed column still reads. */
+.graph-columns {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: var(--space-3);
+	align-items: start;
+	margin-top: var(--space-6);
+	text-align: left;
+}
+@media (max-width: 900px) {
+	.graph-columns {
+		grid-template-columns: 1fr;
+	}
+}
+.graph-col {
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-md);
+	background: color-mix(in srgb, var(--ui-surface) 55%, transparent);
+	overflow: hidden;
+}
+.graph-col-head {
 	display: flex;
 	align-items: center;
-	gap: var(--space-3);
+	gap: var(--space-2);
+	width: 100%;
+	padding: var(--space-3) var(--space-3);
+	border: 0;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
 }
-.graph-or::before,
-.graph-or::after {
-	content: '';
-	flex: 1;
-	border-top: 1px solid var(--ui-stroke-tertiary);
+.graph-col-head .chevron {
+	flex: none;
+	color: var(--ui-text-tertiary);
+	transition: transform var(--t) var(--ease);
+}
+.graph-col-head .chevron.open {
+	transform: rotate(90deg);
+}
+.graph-col-title {
+	display: grid;
+	gap: 1px;
+	min-width: 0;
+}
+.graph-col-title small {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+}
+.graph-col-body {
+	display: grid;
+	gap: var(--space-2);
+	padding: 0 var(--space-3) var(--space-3);
 }
 .graph-none {
 	margin: 0;
-	text-align: left;
-}
-.graph-card-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-	gap: var(--space-3);
 	text-align: left;
 }
 .graph-card {
