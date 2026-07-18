@@ -5888,6 +5888,9 @@ div.result-media {
 }
 /* Pushes the actions to the far end regardless of how much status precedes them. */
 .graph-header-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
 	margin-left: auto;
 	flex: none;
 }
@@ -6134,6 +6137,12 @@ div.result-media {
 .ghost-button.active {
 	border-color: var(--ui-accent);
 	color: var(--ui-text-primary);
+}
+/* Tab row: Back (while the editor is open) sits beside the mode tabs. */
+.workflow-mode-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
 }
 /* Workflows home — Design Studio's start-stage recipe: a centered column, the prompt
    as an elevated card with a borderless textarea, quiet labeled dividers, then cards. */
@@ -6406,7 +6415,22 @@ div.result-media {
 .graph-inspector-head {
 	justify-content: space-between;
 	align-items: flex-start;
+	gap: var(--space-2);
 	margin-bottom: var(--space-4);
+}
+/* A long node name must squeeze, never push the close button out of the panel. */
+.graph-inspector-head > div {
+	flex: 1;
+	min-width: 0;
+}
+.graph-inspector-head h2 {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.graph-inspector-head .graph-status,
+.graph-inspector-head .row-action {
+	flex: none;
 }
 .graph-plan-form,
 .graph-run-detail {

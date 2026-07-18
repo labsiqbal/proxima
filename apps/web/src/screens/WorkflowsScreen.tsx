@@ -1,19 +1,23 @@
 import React from 'react'
 import { listGraphTemplates } from '../api/graph'
 import { ScheduleManager } from '../components/workflows/ScheduleManager'
+import { BackButton } from '../components/ui/BackButton'
 import type { GraphTemplate } from '../types'
 
 // Workflows owns two modes: the graph editor, and the schedules that run its saved
 // templates. The Sequential recipe editor that used to live here is retired — a linear
 // recipe is just a graph with no branches, and the canvas authors those too. The linear
 // ENGINE remains for pre-existing jobs and sessions; what is gone is its authoring UI.
-export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob }: {
+export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob, graphEditorActive, onGraphBack }: {
   mode?: 'graph' | 'scheduled'
   onModeChange?: (mode: 'graph' | 'scheduled') => void
   /** The feature-gated graph canvas. Absent when the graph engine is disabled. */
   graphContent?: React.ReactNode
   token: string
   onOpenJob?: (jobId: number, engine?: string) => void
+  /** True while the graph editor has a workflow open — the tab row then shows Back. */
+  graphEditorActive?: boolean
+  onGraphBack?: () => void
 }) {
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   const [error, setError] = React.useState('')
@@ -36,9 +40,12 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
       .catch(cause => { if (mounted.current && seq === loadSeq.current) setError(String(cause)) })
   }, [mode, token])
 
-  const modeNav = <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow view">
+  const modeNav = <div className="workflow-mode-row">
+    {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label="Workflows" onClick={onGraphBack} />}
+    <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow view">
     <button className={mode === 'graph' ? 'active' : ''} role="tab" aria-selected={mode === 'graph'} onClick={() => onModeChange?.('graph')}>Editor</button>
     <button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button>
+    </div>
   </div>
 
   if (mode === 'scheduled') {

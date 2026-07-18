@@ -141,12 +141,14 @@ function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
   return false
 }
 
-function GraphCanvas({ job, plan, profiles, selectedId, onSelect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddTrigger, hasTrigger }: {
+function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDeselect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddTrigger, hasTrigger }: {
   job: GraphJob
   plan: WorkflowGraph
   profiles: Profile[]
   selectedId: string | null
   onSelect: (nodeId: string) => void
+  /** Fired when the background is clicked — closing the inspector by clicking away. */
+  onDeselect: () => void
   editable: boolean
   onMoveNode: (nodeId: string, x: number, y: number) => void
   onConnect: (from: string, to: string) => void
@@ -298,6 +300,7 @@ function GraphCanvas({ job, plan, profiles, selectedId, onSelect, editable, onMo
   function beginPan(event: React.PointerEvent<SVGSVGElement>) {
     if (event.button !== 0) return
     setSelectedEdge(null)
+    onDeselect()
     setGesture({ kind: 'pan', from: { x: event.clientX, y: event.clientY }, origin: { x: view.x, y: view.y } })
   }
 
@@ -462,6 +465,8 @@ export function GraphScreen({
   onDraftConsumed,
   pendingJobId,
   onPendingConsumed,
+  onStageChange,
+  backNonce,
 }: {
   token: string
   projects: Project[]
@@ -475,6 +480,9 @@ export function GraphScreen({
   onDraftConsumed?: () => void
   pendingJobId?: number | null
   onPendingConsumed?: () => void
+  /** Lets the shell place the back control in its own chrome (the tab row). */
+  onStageChange?: (stage: 'home' | 'editor') => void
+  backNonce?: number
 }) {
   const [jobs, setJobs] = React.useState<GraphJob[]>([])
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
@@ -560,6 +568,28 @@ export function GraphScreen({
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
     }
   }, [token])
+
+  React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
+  React.useEffect(() => {
+    if (!selectedId) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const target = event.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      setSelectedId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedId])
+  // The back control lives in the shell's tab row; it pokes this nonce.
+  const lastBack = React.useRef(backNonce ?? 0)
+  React.useEffect(() => {
+    if (backNonce == null || backNonce === lastBack.current) return
+    lastBack.current = backNonce
+    setStage('home')
+    setNotice('')
+    void refreshList()
+  }, [backNonce, refreshList])
 
   const openJob = React.useCallback((jobId: number) => {
     setStage('editor')
@@ -1065,12 +1095,6 @@ export function GraphScreen({
     {/* One bar, not two: the Advanced tab already says where you are, so the
         eyebrow and the never-changing subtitle were spending 91px to repeat it. */}
     <header className="graph-header">
-      <button
-        className="row-action graph-rail-toggle"
-        onClick={() => { setStage('home'); setNotice(''); void refreshList() }}
-        aria-label="Back to workflows"
-        title="Back to workflows"
-      >←</button>
       {job?.status === 'queued' && <button
         className={`ghost-button graph-chat-toggle${chatOpen ? ' active' : ''}`}
         onClick={() => setChatOpen(open => !open)}
@@ -1181,6 +1205,7 @@ export function GraphScreen({
               profiles={profiles}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              onDeselect={() => setSelectedId(null)}
               editable={job.status === 'queued'}
               onMoveNode={moveNode}
               onConnect={connect}
