@@ -561,13 +561,18 @@ export function GraphScreen({
     }
   }, [token])
 
+  const openJob = React.useCallback((jobId: number) => {
+    setStage('editor')
+    void loadJob(jobId)
+  }, [loadJob])
+
   React.useEffect(() => { void refreshList() }, [refreshList])
 
   React.useEffect(() => {
     if (!pendingJobId) return
-    void loadJob(pendingJobId)
+    openJob(pendingJobId)
     onPendingConsumed?.()
-  }, [pendingJobId, loadJob, onPendingConsumed])
+  }, [pendingJobId, openJob, onPendingConsumed])
 
   React.useEffect(() => {
     if (!pendingDraft) return
@@ -996,7 +1001,7 @@ export function GraphScreen({
             const attention = runs.filter(item => item.status === 'review' || item.status === 'running')
             const finished = runs.filter(item => item.status !== 'review' && item.status !== 'running')
             const planCard = (item: GraphJob) => <div key={item.id} className="graph-card">
-              <button className="graph-card-main" onClick={() => void loadJob(item.id)}>
+              <button className="graph-card-main" onClick={() => openJob(item.id)}>
                 <span className="graph-card-glyph" aria-hidden="true"><i /><i /><i /></span>
                 <span className="graph-card-meta">
                   <strong>{item.title}</strong>
@@ -1062,7 +1067,7 @@ export function GraphScreen({
     <header className="graph-header">
       <button
         className="row-action graph-rail-toggle"
-        onClick={() => { setStage('home'); setNotice('') }}
+        onClick={() => { setStage('home'); setNotice(''); void refreshList() }}
         aria-label="Back to workflows"
         title="Back to workflows"
       >←</button>
