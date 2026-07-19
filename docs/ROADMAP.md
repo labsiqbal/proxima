@@ -27,17 +27,18 @@ five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 Single-user cockpit · full-power chat (live agent config) · **Home dashboard** ·
 multi-agent **brainstorm / debate** + **validate** sidecar · **workflows + jobs /
-activity with cron schedules** · in-browser terminal · interactive approval/choice
+activity with cron schedules** · gated **reviewable workflow graphs** · in-browser terminal · interactive approval/choice
 cards · projects + **link existing folders** · agent profiles as personas
 (per-profile instructions) · files + live preview · wiki + graph · dark/light +
-design tokens · daily encrypted backup.
+design tokens · daily integrity-checked DB backup.
 
 ---
 
 ## Now — make daily use sharp (low/med effort, high DNA fit)
 
-- **MCP management UI** — add/enable/configure MCP servers per profile/project
-  from the app, no terminal round-trip. *(BYO-agent)*
+- **MCP config editing UI** — detection plus per-profile enable/disable is shipped for
+  Claude, Codex, and Hermes; add/edit/test server definitions still uses each runner's
+  native config and remains a future convenience. *(BYO-agent)*
 - **Skills / slash-command palette** — browse and invoke the skills your runner
   has, from chat. Surfaces capability you already own. *(BYO-agent)*
 - **Runner status panel** — which runners are installed/authed/ready, with a
@@ -46,6 +47,11 @@ design tokens · daily encrypted backup.
   finishes or needs approval, so you can leave and get pinged. *(Cockpit)*
 - **In-app Tailscale onboarding** — guided "serve + scan QR" for phone access.
   *(Self-hosted)*
+- **Relocate a project folder** — change a project's linked path from settings
+  (reuse the onboarding folder-picker) when you move/rename its folder on disk;
+  history stays since it's keyed by project id and Proxima reads the folder live —
+  only the stored path is stale. Bonus: detect a project whose folder has gone
+  missing and offer to re-point it instead of breaking silently. *(Cockpit, Self-hosted)*
 
 ## Next — the orchestration layer (the real differentiator)
 

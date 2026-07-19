@@ -43,6 +43,7 @@ apps/api/.dev/
 # Not for public repo
 .impeccable.md
 .claude/
+/reference/
 
 # Internal workflow docs (brainstorm specs / implementation plans) — not public
 docs/superpowers/
@@ -52,6 +53,7 @@ apps/api/proxima_api.egg-info/
 # Maintainer-local docs (operational logs + internal handoffs; not part of the public tree)
 docs/STATUS.md
 docs/DEVELOPING.md
+docs/CLAUDE-HANDOFF.md
 docs/bugfix-log.md
 docs/feature-debug-checklist.md
 docs/ui-adaptation-spec.md

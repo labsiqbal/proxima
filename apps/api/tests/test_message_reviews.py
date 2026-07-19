@@ -129,6 +129,44 @@ def test_complete_message_review_stores_structured_result_not_chat_message(tmp_p
     assert messages[0]["content"] == "Ship it"
 
 
+def test_cancelled_message_review_rejects_late_completion(tmp_path):
+    app, client, headers = _client(tmp_path)
+    source_profile = _profile(client, headers, "Source Claude", "claude-code")
+    _profile(client, headers, "Reviewer Codex", "codex")
+    session_id, message_id = _assistant_message(client, headers, source_profile)
+    review = client.post(
+        f"/api/messages/{message_id}/reviews",
+        headers=headers,
+        json={},
+    ).json()["review"]
+    run_id = int(review["run_id"])
+    app.state.db.execute(
+        "UPDATE runs SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (run_id,),
+    )
+    app.state.db.execute(
+        "UPDATE message_reviews SET status = 'running' WHERE id = ?",
+        (review["id"],),
+    )
+    run = dict(app.state.db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
+
+    cancelled = client.post(f"/api/runs/{run_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    assert app.state.worker._complete_message_review(run, '{"verdict":"pass"}', "stop") is True
+
+    stored = client.get(
+        f"/api/messages/{message_id}/reviews",
+        headers=headers,
+    ).json()["reviews"][0]
+    assert stored["status"] == "cancelled"
+    assert stored["verdict"] is None
+    events = client.get(
+        f"/api/sessions/{session_id}/events",
+        headers=headers,
+    ).json()["events"]
+    assert not any(e["type"] in {"message_review.completed", "run.completed"} for e in events)
+
+
 def test_ask_original_to_revise_creates_sidecar_merge_run(tmp_path):
     app, client, headers = _client(tmp_path)
     source_profile = _profile(client, headers, "Source Claude", "claude-code")

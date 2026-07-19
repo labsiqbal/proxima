@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bash scripts/dev",
     "build": "bash scripts/build",
-    "test": "cd apps/api && .venv/bin/python -m pytest -q tests && cd ../.. && npm --prefix apps/web run build",
+    "test": "cd apps/api && .venv/bin/ruff check proxima_api tests && .venv/bin/python -m pytest -q tests && cd ../.. && npm --prefix apps/web test && npm --prefix apps/web run build",
     "smoke:fresh": "bash scripts/smoke-fresh",
     "smoke": "node scripts/smoke",
     "qa": "npm test && npm run smoke:fresh && npm run smoke",

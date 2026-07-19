@@ -8,6 +8,7 @@ cookie-set + WS/SSE auth-acceptance without consuming the infinite SSE stream
 from __future__ import annotations
 
 import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
@@ -60,6 +61,34 @@ def test_terminal_ws_requires_session_even_passwordless(tmp_path):
     with pytest.raises(Exception):
         with c.websocket_connect("/api/ws/terminal"):
             pass
+
+
+def test_terminal_ws_rejects_unknown_project_instead_of_using_workspace_root(tmp_path):
+    c = TestClient(_app(tmp_path))
+    c.post("/auth/auto")
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with c.websocket_connect("/api/ws/terminal?project=does-not-exist"):
+            pass
+    assert exc.value.code == 4404
+
+
+@pytest.mark.parametrize("path", ["/api/ws/terminal", "/api/ws/sessions/{sid}"])
+def test_websockets_reject_expired_sessions(tmp_path, path):
+    c = TestClient(_app(tmp_path))
+    token = c.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    sid = c.post("/api/sessions", headers=headers, json={"title": "expired"}).json()["id"]
+    with c.app.state.db_lock:
+        c.app.state.db.execute(
+            "UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00+00:00'"
+        )
+    c.cookies.clear()
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with c.websocket_connect(path.format(sid=sid) + f"?token={token}"):
+            pass
+    assert exc.value.code == 4401
 
 
 def test_sse_rejects_without_any_token(tmp_path):

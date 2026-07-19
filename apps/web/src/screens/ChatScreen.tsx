@@ -15,11 +15,11 @@ import {
 	setSessionProfile,
 } from "../api/sessions";
 import { draftWikiNote, commitWikiNote } from "../api/wiki";
-import { updateWorkflow } from "../api/workflows";
 import { useRunStream } from "../hooks/useRunStream";
 import type {
 	ChatMessage,
 	ChatSession,
+	GraphWorkflowDraft,
 	AppFeatures,
 	OutputLink,
 	Profile,
@@ -33,7 +33,7 @@ import { WikiNotePreview } from "../components/wiki/WikiNotePreview";
 import { ConvertToWorkflowButton } from "../components/ConvertToWorkflowButton";
 import { Composer } from "../components/chat/Composer";
 import { Dropdown } from "../components/ui/Dropdown";
-import { IconAgents, IconClose, IconWiki } from "../components/shell/icons";
+import { IconAgents, IconClose, IconNewChat, IconWiki } from "../components/shell/icons";
 import { notify } from "../lib/notify";
 
 const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
@@ -63,11 +63,7 @@ function localCommandReply(
 }
 
 const defaultRunRecipePrompt = (features: AppFeatures) => {
-	const artifactKinds = features.designStudio
-		? "a design or file"
-		: features.video
-			? "an image, video, or file"
-			: "an image or file";
+	const artifactKinds = features.designStudio ? "a design or file" : "an image or file";
 	return `Run this entire recipe from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for ${artifactKinds}, create it instead of only describing it. Finish with a concise summary of each step result.`;
 };
 
@@ -85,6 +81,7 @@ export function ChatScreen(props: {
 	onRefresh: () => Promise<void>;
 	onNewSession: () => Promise<void>;
 	onWorkflowDraft?: (draft: WorkflowDraft) => void;
+	onGraphDraft?: (draft: GraphWorkflowDraft) => void;
 	onOpenOutput?: (link: OutputLink, origin: ChatSession | null) => void;
 	runRecipeNonce?: number;
 	runRecipePrompt?: string;
@@ -169,32 +166,6 @@ export function ChatScreen(props: {
 	}, [events, savingWiki]);
 
 	// For a workflow iterate/test chat: fold this conversation back into the recipe.
-	async function saveToWorkflow(draft: WorkflowDraft) {
-		const wid = activeSession?.workflow_id;
-		if (!wid) return;
-		const seq = ++auxActionSeq.current;
-		try {
-			await updateWorkflow(props.token, wid, {
-				name: draft.name,
-				description: draft.description,
-				category: draft.category,
-				steps: draft.steps,
-			});
-			if (!mountedRef.current || seq !== auxActionSeq.current) return;
-			setMessages((c) => [
-				...c,
-				{
-					role: "system",
-					content:
-						"✓ Saved to workflow — the recipe was updated from this conversation.",
-				},
-			]);
-		} catch (e) {
-			if (mountedRef.current && seq === auxActionSeq.current)
-				setError(String(e));
-		}
-	}
-
 	async function startWikiDraft() {
 		if (!activeSession) return;
 		const seq = ++auxActionSeq.current;
@@ -351,7 +322,6 @@ export function ChatScreen(props: {
 			// Media commands are real prompts — the backend routes them to the selected
 			// generation provider (create_run interception), so they must reach it.
 				const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
-					|| (props.features.video && /^\/(video-studio|video)\b/i.test(trimmed))
 					|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
@@ -496,7 +466,16 @@ export function ChatScreen(props: {
 				activeSessionIdRef.current !== session.id
 			)
 				return;
-			setBusyRun(run.run_id);
+			if (run.status === "completed") {
+				// A media command that finished synchronously — a /image or /design
+				// clarify form or a design draft. Its run.completed event already
+				// fired before we could subscribe to the stream, so waiting on the stream
+				// would leave the composer stuck "Simmering…". Don't set busy; just load
+				// the assistant reply (the form / artifact card) directly.
+				await loadMessages(session.id);
+			} else {
+				setBusyRun(run.run_id);
+			}
 			const eventBody = await listEvents(props.token, session.id);
 			if (
 				mountedRef.current &&
@@ -508,6 +487,7 @@ export function ChatScreen(props: {
 		} catch (err) {
 			if (mountedRef.current && seq === actionSeq.current)
 				setError(String(err));
+			throw err;
 		}
 	}
 
@@ -715,49 +695,39 @@ export function ChatScreen(props: {
 					</button>
 				</>
 			)}
-			{activeSession &&
-				(activeSession.workflow_id ? (
-					<ConvertToWorkflowButton
-						token={props.token}
-						sessionId={activeSession.id}
-						profileId={props.activeProfile?.id ?? null}
-						label="Save to workflow"
-						busyLabel="Saving…"
-						onDraft={saveToWorkflow}
-						onError={setError}
-					/>
-				) : (
-					props.onWorkflowDraft && (
-						<ConvertToWorkflowButton
-							token={props.token}
-							sessionId={activeSession.id}
-							profileId={props.activeProfile?.id ?? null}
-							onDraft={props.onWorkflowDraft}
-							onError={setError}
-						/>
-					)
-				))}
+			{/* Workflow-iteration sessions never reach Code: the API keeps them out of the
+			    session list and the recipe editor owns its own test bench. So there is no
+			    "Save to workflow" arm here — only the promote path out of an ordinary chat. */}
+			{activeSession && (props.onWorkflowDraft || props.onGraphDraft) && (
+				<ConvertToWorkflowButton
+					token={props.token}
+					sessionId={activeSession.id}
+					profileId={props.activeProfile?.id ?? null}
+					engine={props.features.workflowGraph ? "graph" : "linear"}
+					label={props.features.workflowGraph ? "To graph" : "To workflow"}
+					busyLabel={props.features.workflowGraph ? "Building graph…" : "Building workflow…"}
+					onDraft={draft => {
+						if ("graph" in draft) props.onGraphDraft?.(draft);
+						else props.onWorkflowDraft?.(draft);
+					}}
+					onError={setError}
+				/>
+			)}
 		</div>
 	);
 	const projSlug =
 		activeSession?.project_slug || props.activeProject?.slug || undefined;
-	const buildBanner = activeSession?.workflow_id ? (
-		<div className="wf-iterate-banner">
-			<span>
-				⚙ Iterating workflow — dry-test &amp; refine here, then{" "}
-				<strong>Save to workflow</strong>.
-			</span>
-		</div>
-	) : null;
 	return (
-		<section className="chat-stage">
-			{buildBanner}
+		<section className="chat-stage code-view">
+			<header className="code-header">
+				<div><p className="eyebrow">Code</p><strong>{activeSession?.title || "New session"}</strong></div>
+				<div className="code-context"><span>{props.activeProject ? cleanName(props.activeProject.name) : "No project"}</span><span>{props.activeProfile?.name || "No profile"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New session" title="Start a new Code session"><IconNewChat size={15} /><span>New session</span></button></div>
+			</header>
 			{goalBanner}
 			<ChatThread
 				messages={messages}
 				events={events}
 				pendingRunId={busyRun}
-				pendingText={busyRun ? "Working…" : ""}
 				token={props.token}
 				slug={projSlug}
 				agentName={

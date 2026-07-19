@@ -8,6 +8,7 @@
 #
 # Schedule it with cron or a systemd timer — see docs/backup.md.
 set -euo pipefail
+umask 077
 
 DB_PATH="${PROXIMA_DB_PATH:-$HOME/.local/share/proxima/proxima.db}"
 BACKUP_DIR="${PROXIMA_BACKUP_DIR:-$(dirname "$DB_PATH")/backups}"
@@ -30,8 +31,13 @@ bck = sqlite3.connect(dst)
 with bck:
     con.backup(bck)          # consistent online snapshot
 bck.execute("VACUUM")        # compact the copy
+result = bck.execute("PRAGMA integrity_check").fetchone()[0]
+if result != "ok":
+    raise SystemExit(f"backup integrity check failed: {result}")
 bck.close(); con.close()
 PY
+
+chmod 600 "$OUT"
 
 echo "backup: wrote $OUT"
 

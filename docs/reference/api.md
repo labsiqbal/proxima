@@ -3,22 +3,23 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-140 endpoints across 12 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+132 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
-- [`routes/auth.py`](#routes-auth-py) — 5 endpoints
+- [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
-- [`routes/design.py`](#routes-design-py) — 3 endpoints
-- [`routes/files.py`](#routes-files-py) — 54 endpoints
+- [`routes/design.py`](#routes-design-py) — 4 endpoints
+- [`routes/files.py`](#routes-files-py) — 28 endpoints
+- [`routes/graph.py`](#routes-graph-py) — 11 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 16 endpoints
+- [`routes/work.py`](#routes-work-py) — 18 endpoints
 - [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
 
 
@@ -35,10 +36,14 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| GET | `/api/me` | `me` |  |
+| GET | `/api/me` | `me` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
 | GET | `/api/setup/status` | `setup_status` |  |
-| POST | `/auth/auto` | `auth_auto` | Single-user cockpit auto-login: no credentials, returns the owner + a |
+| POST | `/auth/auto` | `auth_auto` | First-run passwordless session bootstrap. Disabled once the owner password |
+| POST | `/auth/change-password` | `change_password` | Change the password (from Settings): verify the current one, set the new, |
+| POST | `/auth/login` | `login_with_password` | Verify the owner's password and start a session (no expiry until logout). |
 | POST | `/auth/logout` | `logout` |  |
+| POST | `/auth/resume` | `resume` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
+| POST | `/auth/set-password` | `set_password` | First-run: set the owner's password. Only allowed while none is set (later |
 | GET | `/health` | `health` |  |
 
 
@@ -76,6 +81,7 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
+| POST | `/api/projects/{slug}/design/brand-guide` | `generate_brand_guide` | Kick off an agent run that synthesises a project's brand guideline into |
 | POST | `/api/projects/{slug}/design/image` | `design_image` | Generate (text→image) or edit (image+prompt→image) via the configured |
 | GET | `/api/projects/{slug}/design/image-models` | `design_image_models` | For the codex provider there's no static model list (login-based); for |
 | POST | `/api/projects/{slug}/designs/from-image` | `design_from_image` | Seed a new Design Studio scene containing an existing project image as a |
@@ -85,9 +91,8 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| API_ROUTE | `/api/appview/{token}/{slug}/{path:path}` | `app_view` |  |
-| GET | `/api/events` | `hyperframes_events` |  |
-| GET | `/api/preview/{token}/{slug}/{file_path:path}` | `project_preview` |  |
+| API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
+| GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
 | GET | `/api/projects/{slug}/app/status` | `app_status` |  |
 | POST | `/api/projects/{slug}/app/stop` | `app_stop` |  |
@@ -99,29 +104,9 @@
 | POST | `/api/projects/{slug}/fs/mkdir` | `project_mkdir` |  |
 | POST | `/api/projects/{slug}/fs/rename` | `project_rename` |  |
 | GET | `/api/projects/{slug}/raw` | `project_raw` |  |
+| GET | `/api/projects/{slug}/reference-files` | `project_reference_files` | Safe, path-only project file index for @-reference autocomplete. |
 | GET | `/api/projects/{slug}/tree` | `project_tree` |  |
 | POST | `/api/projects/{slug}/upload` | `project_upload` |  |
-| GET | `/api/projects/{slug}/videos` | `list_videos` |  |
-| POST | `/api/projects/{slug}/videos` | `create_video` |  |
-| DELETE | `/api/projects/{slug}/videos/{video_id}` | `delete_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/import-file` | `video_import_file` | Copy an existing project media file into the video project's assets/ so the |
-| POST | `/api/projects/{slug}/videos/{video_id}/lint` | `lint_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/render` | `render_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/studio/start` | `start_video_studio` |  |
-| API_ROUTE | `/api/projects/{studio_id}/duplicate-file` | `video_studio_duplicate_file_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/file-mutations/{mutation_path:path}` | `video_studio_file_mutations_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/files/{file_path:path}` | `video_studio_files_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/gsap-mutations/{mutation_path:path}` | `video_studio_gsap_mutations_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/lint` | `video_studio_lint_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/preview` | `video_studio_preview_root_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/preview/{preview_path:path}` | `video_studio_preview_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/registry/install` | `video_studio_registry_install_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/render` | `video_studio_render_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/renders` | `video_studio_renders_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/renders/file/{filename:path}` | `video_studio_render_file_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/storyboard` | `video_studio_storyboard_api` |  |
-| API_ROUTE | `/api/render/{job_id}` | `video_studio_render_job_api` |  |
-| GET | `/api/render/{job_id}/progress` | `video_studio_render_progress_api` |  |
 | DELETE | `/api/sessions/{session_id}/artifacts` | `delete_session_artifact` |  |
 | GET | `/api/sessions/{session_id}/artifacts` | `session_artifacts` | Artifacts produced BY this session's runs (accumulated) — scopes the iterate |
 | GET | `/api/settings/collaboration` | `get_collaboration_settings` |  |
@@ -134,11 +119,23 @@
 | POST | `/api/settings/image-gen/test` | `test_image_gen` | Test a provider. Codex/xAI → OAuth status; openai-compatible → endpoint probe. |
 | GET | `/api/settings/permissions` | `get_permission_settings` | Auto-approve toggle: when on, agent permission prompts are approved |
 | PUT | `/api/settings/permissions` | `set_permission_settings` |  |
-| GET | `/api/settings/video-gen` | `get_video_gen_settings` |  |
-| PUT | `/api/settings/video-gen` | `put_video_gen_settings` |  |
-| POST | `/api/settings/video-gen/test` | `test_video_gen_settings` |  |
-| API_ROUTE | `/api/video-studio/{token}/{slug}/{video_id}` | `video_studio_root` |  |
-| API_ROUTE | `/api/video-studio/{token}/{slug}/{video_id}/{path:path}` | `video_studio_view` |  |
+
+
+## routes/graph.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/graph/jobs` | `list_graph_jobs` |  |
+| POST | `/api/graph/jobs` | `create_graph_job` |  |
+| GET | `/api/graph/jobs/{job_id}` | `get_graph_job` |  |
+| POST | `/api/graph/jobs/{job_id}/approve` | `approve_graph_job` |  |
+| PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
+| PATCH | `/api/graph/jobs/{job_id}/nodes/{node_id}/output` | `edit_node_output` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/rerun` | `rerun_node` |  |
+| POST | `/api/graph/jobs/{job_id}/save-template` | `save_graph_template` |  |
+| POST | `/api/graph/jobs/{job_id}/start` | `start_graph_job` |  |
+| GET | `/api/graph/templates` | `list_graph_templates` |  |
 
 
 ## routes/profiles.py
@@ -212,11 +209,13 @@
 | DELETE | `/api/jobs/{job_id}` | `delete_job` |  |
 | GET | `/api/jobs/{job_id}` | `get_job` |  |
 | POST | `/api/jobs/{job_id}/approve` | `approve_job` |  |
+| POST | `/api/jobs/{job_id}/link-run` | `link_job_run` | Attach a project-scoped media run to a queued ad-hoc task. |
 | POST | `/api/jobs/{job_id}/start` | `start_job` |  |
 | GET | `/api/schedules` | `list_schedules` |  |
 | POST | `/api/schedules` | `create_schedule` |  |
 | DELETE | `/api/schedules/{schedule_id}` | `delete_schedule` |  |
 | PATCH | `/api/schedules/{schedule_id}` | `update_schedule` |  |
+| POST | `/api/schedules/{schedule_id}/run` | `run_schedule` | Fire a schedule now, without waiting for its cron. |
 | GET | `/api/workflows` | `list_workflows` |  |
 | POST | `/api/workflows` | `create_workflow` |  |
 | DELETE | `/api/workflows/{workflow_id}` | `delete_workflow` |  |
@@ -235,4 +234,4 @@
 
 
 ---
-_Generated 2026-07-12 23:28 UTC._
+_Generated 2026-07-18 13:55 UTC._

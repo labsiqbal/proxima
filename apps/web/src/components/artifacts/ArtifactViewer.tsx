@@ -115,7 +115,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path)} alt={name} onClick={() => setZoom(z => !z)} title={zoom ? 'Fit to screen' : 'Actual size'} />
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} />
-    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts allow-same-origin" />
+    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts" />
     if (err) return <div className="av-msg muted">{err}</div>
     if (text == null) return <div className="av-msg muted">Loading…</div>
     if (kind === 'markdown') return <div className="av-doc"><div className="md"><MessageContent content={text} /></div></div>

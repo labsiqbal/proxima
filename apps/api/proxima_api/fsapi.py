@@ -1,9 +1,58 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
 MAX_READ_BYTES = 1_000_000
+REFERENCE_MAX_SCANNED = 20_000
+REFERENCE_MAX_DEPTH = 12
+REFERENCE_MAX_RESULTS = 2_000
+
+# Autocomplete should surface owner-authored project files, not dependency trees,
+# generated caches, or credentials that happen to live beside the source.  These
+# names are deliberately conservative: a hidden/secret file can still be opened by
+# an explicitly typed path, but it is never advertised by the @-reference picker.
+_REFERENCE_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".cache",
+    ".turbo",
+    ".venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+    "vendor",
+    "venv",
+    "dist",
+    "build",
+    "out",
+    "target",
+    "coverage",
+    "__pycache__",
+}
+_REFERENCE_SECRET_NAMES = {
+    ".env",
+    ".envrc",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".git-credentials",
+    "auth.json",
+    ".credentials.json",
+    "credentials.json",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "id_rsa",
+    "id_ed25519",
+}
+_REFERENCE_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 
 
 class FsError(Exception):
@@ -48,6 +97,93 @@ def list_tree(root: Path, rel: str) -> list[dict]:
         })
     entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
     return entries
+
+
+def _is_reference_secret(name: str) -> bool:
+    lowered = name.casefold()
+    return (
+        lowered in _REFERENCE_SECRET_NAMES
+        or lowered.startswith(".env.")
+        or lowered.endswith(_REFERENCE_SECRET_SUFFIXES)
+    )
+
+
+def list_reference_files(
+    root: Path,
+    *,
+    limit: int = REFERENCE_MAX_RESULTS,
+    max_scanned: int = REFERENCE_MAX_SCANNED,
+    max_depth: int = REFERENCE_MAX_DEPTH,
+) -> tuple[list[dict[str, str]], bool]:
+    """Return safe, project-relative files for the @-reference autocomplete.
+
+    Only paths are exposed; file contents and metadata never leave this boundary.
+    Traversal is bounded independently by inspected entries, nesting depth, and
+    returned results.  Symlinks are skipped instead of followed so a linked project
+    cannot advertise files outside its authorized root.
+    """
+    base = Path(root).resolve()
+    if not base.is_dir():
+        return [], False
+
+    safe_limit = max(1, min(int(limit), REFERENCE_MAX_RESULTS))
+    safe_scanned = max(1, min(int(max_scanned), REFERENCE_MAX_SCANNED))
+    safe_depth = max(0, min(int(max_depth), REFERENCE_MAX_DEPTH))
+    files: list[dict[str, str]] = []
+    scanned = 0
+    truncated = False
+    stopped = False
+
+    def visit(directory: Path, depth: int) -> None:
+        nonlocal scanned, truncated, stopped
+        if stopped:
+            return
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            return
+        with entries:
+            # os.scandir order is filesystem-dependent. Sort each directory before
+            # applying caps so the same project produces a stable autocomplete list.
+            ordered_entries = sorted(entries, key=lambda entry: entry.name.casefold())
+            for entry in ordered_entries:
+                if stopped:
+                    return
+                if scanned >= safe_scanned:
+                    truncated = True
+                    stopped = True
+                    return
+                scanned += 1
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        lowered = entry.name.casefold()
+                        if entry.name.startswith(".") or lowered in _REFERENCE_SKIP_DIRS:
+                            continue
+                        if depth >= safe_depth:
+                            truncated = True
+                            continue
+                        visit(Path(entry.path), depth + 1)
+                        continue
+                    if not entry.is_file(follow_symlinks=False) or _is_reference_secret(entry.name):
+                        continue
+                except OSError:
+                    continue
+                if len(files) >= safe_limit:
+                    truncated = True
+                    stopped = True
+                    return
+                try:
+                    rel = Path(entry.path).relative_to(base).as_posix()
+                except ValueError:
+                    # Defensive only: no-follow traversal should already guarantee it.
+                    continue
+                files.append({"path": rel})
+
+    visit(base, 0)
+    files.sort(key=lambda item: item["path"].casefold())
+    return files, truncated
 
 
 def walk_files(root: Path, rel: str = "", limit: int = MAX_READ_BYTES) -> list[dict]:

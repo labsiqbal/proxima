@@ -1,4 +1,3 @@
-import React from 'react'
 import { gradientStopList } from './scene'
 import type { Artboard, FillStyle, ImageLayer, Layer, LayerEffect, TextLayer } from './scene'
 

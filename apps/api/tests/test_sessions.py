@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 
@@ -78,6 +79,52 @@ def test_messages_return_output_links(tmp_path):
         "id": "launch",
         "project_slug": slug,
     }]
+
+
+def test_messages_batch_activity_and_duration_for_multiple_runs(tmp_path):
+    client, headers = authed(tmp_path)
+    sid = client.post("/api/sessions", headers=headers, json={"title": "batch"}).json()["id"]
+    session = client.app.state.db.execute(
+        "SELECT owner_user_id, profile_id, runner_id, project_id FROM sessions WHERE id = ?",
+        (sid,),
+    ).fetchone()
+    run_ids: list[int] = []
+    for index, seconds in enumerate((5, 8), start=1):
+        cur = client.app.state.db.execute(
+            "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, "
+            "started_at, finished_at) VALUES (?, ?, ?, ?, ?, 'completed', ?, '2026-01-01 00:00:00', ?)",
+            (
+                sid,
+                session["project_id"],
+                session["owner_user_id"],
+                session["profile_id"],
+                session["runner_id"],
+                f"run {index}",
+                f"2026-01-01 00:00:0{seconds}",
+            ),
+        )
+        run_id = int(cur.lastrowid)
+        run_ids.append(run_id)
+        client.app.state.db.execute(
+            "INSERT INTO messages(session_id, role, content, run_id) VALUES (?, 'assistant', ?, ?)",
+            (sid, f"answer {index}", run_id),
+        )
+        client.app.state.db.execute(
+            "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) VALUES (?, ?, ?, 1, 'tool.start', ?)",
+            (run_id, sid, session["project_id"], json.dumps({"id": f"tool-{index}", "title": f"Tool {index}"})),
+        )
+        client.app.state.db.execute(
+            "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) VALUES (?, ?, ?, 2, 'tool.complete', ?)",
+            (run_id, sid, session["project_id"], json.dumps({"id": f"tool-{index}", "status": "completed"})),
+        )
+
+    messages = client.get(f"/api/sessions/{sid}/messages", headers=headers).json()["messages"]
+    assistants = [message for message in messages if message["role"] == "assistant"]
+
+    assert [message["run_id"] for message in assistants] == run_ids
+    assert [message["duration_s"] for message in assistants] == [5, 8]
+    assert [message["activity"][0]["title"] for message in assistants] == ["Tool 1", "Tool 2"]
+    assert all(message["activity"][0]["status"] == "completed" for message in assistants)
 
 
 def test_session_rename_and_delete(tmp_path):

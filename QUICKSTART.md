@@ -31,14 +31,14 @@ The install script:
 - Writes a config file at `~/.config/proxima/proxima.env`.
 - Installs and enables a systemd **user** service (`proxima.service`) that starts automatically on login/boot and restarts on crash.
 - Installs a daily backup timer (`proxima-backup.timer`) that runs at 03:00.
-- Keeps Video and Design Studio disabled; image generation remains available.
+- Keeps Design Studio disabled; image generation and Workflow Graph remain available.
 
 ## 3. First run
 
 Open `http://127.0.0.1:8765` in your browser.
 
-Proxima is single-user. It auto-creates the owner on first request and the
-frontend signs in via `/auth/auto`; there is no bootstrap/login/invite flow.
+Proxima is single-user. It auto-creates the owner, asks you to set a password on
+first run, and uses that login/session afterward. There is no invite/team flow.
 
 ## 4. Managing the service
 
@@ -85,7 +85,6 @@ Key variables:
 | `PROXIMA_HERMES_BIN` | _(unset, uses PATH)_ | Explicit path to the `hermes` binary |
 | `PROXIMA_UPDATE_REPO` | `labsiqbal/proxima` | GitHub release source |
 | `PROXIMA_SERVICE_NAME` | `proxima` | Managed service selected by the CLI |
-| `PROXIMA_FEATURE_VIDEO` | `0` | Temporarily disables Video |
 | `PROXIMA_FEATURE_DESIGN_STUDIO` | `0` | Temporarily disables Design Studio |
 
 ## 6. Phone and other devices (Tailscale)

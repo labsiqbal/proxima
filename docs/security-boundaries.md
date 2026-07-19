@@ -1,8 +1,8 @@
 # Security Boundaries
 
 Proxima is currently a **single-user owner cockpit**. The app does not implement
-multi-user authorization. The access boundary is the network layer in front of
-Proxima.
+multi-user authorization. Its primary access boundary is the network layer in front
+of Proxima, with one owner password/session as defense-in-depth.
 
 ## Boundary Model
 
@@ -10,19 +10,20 @@ Proxima.
 Server/operator boundary: physical access, SSH, AnyDesk, sudo, filesystem access
 Network access gate: loopback, Tailscale, Cloudflare Access, or equivalent
 Proxima app boundary: one owner, projects, profiles, sessions, files, terminal
-Runner boundary: selected runner subprocess, selected profile home, project cwd
+Runner guardrails: filtered child env, selected profile home, project cwd, approvals
 ```
 
-Anyone who can reach the Proxima API should be treated as the owner. Do not
-expose it directly to the public internet.
+Any authenticated Proxima session has full owner authority. Do not expose the app
+directly to the public internet or treat its password gate as tenant isolation.
 
 ## Password gate (defense-in-depth)
 
 On first run the owner sets a password (`POST /auth/set-password`). Once set,
 every request must carry a valid session — a bearer token or the HttpOnly
 `proxima_session` cookie issued by `POST /auth/login` — and passwordless
-auto-login (`/auth/auto`) is refused. Sessions do not expire until logout
-(`POST /auth/logout`). This is a second layer *on top of* the network boundary,
+auto-login (`/auth/auto`) is refused. Database sessions expire after 14 days by
+default (configurable) or immediately on logout/password change. This is a second
+layer *on top of* the network boundary,
 not multi-user authorization: there is still exactly one owner. If the password
 is lost, recover locally with `scripts/reset-password` (clears the hash + revokes
 sessions; you have machine/DB access, which is the recovery path).
@@ -53,6 +54,13 @@ input. Prompt text cannot grant itself permission.
 
 Agents run with the same OS privileges as the Proxima service user. If the owner
 links `$HOME` or another broad root as a project, the runner can operate there.
+Agent subprocesses no longer inherit the entire service environment: platform basics
+and common provider credentials are passed, unrelated Proxima/Cloudflare/update secrets
+are omitted, and extra variables require `PROXIMA_RUNNER_ENV_ALLOWLIST`. This reduces
+credential leakage but does not prevent the process reading files available to its OS user.
+
+Tool permission requests ask the owner by default. Auto-approve remains available as
+an explicit trusted-owner setting and is recorded in run events.
 
 ## Filesystem Rules
 
@@ -80,23 +88,18 @@ clients should use the cookie because URL credentials can be observed by proxies
 and diagnostics. Proxima's Uvicorn configuration redacts `token` query values from
 both HTTP access logs and WebSocket/error logs before they reach the journal.
 
-## Command Policy
+## Project app preview
 
-The command policy classifier blocks obvious global/system install operations and
-remote-script patterns. Treat it as a guardrail, not a sandbox.
+Run & Preview remains an explicit owner-power action. Its subprocess receives a
+filtered environment (additional names require `PROXIMA_APP_ENV_ALLOWLIST`) but runs as
+the service OS user. Preview transport is isolated from owner credentials: local direct
+preview switches between `localhost` and `127.0.0.1`, remote preview uses a short-lived
+preview-only capability, reverse proxies strip Cookie/Authorization and upstream
+`Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
 
-Blocked examples:
-
-```text
-sudo apt install ...
-npm install -g ...
-pip install --user ...
-pip install --break-system-packages ...
-curl ... | bash
-```
-
-Project-local dependency commands may be allowed when cwd stays inside the
-project root.
+There is no command classifier presented as a security boundary. The owner confirmation,
+environment filtering, project cwd, preview credential isolation, and optional OS-level
+service separation are the current pragmatic controls.
 
 ## Remote Access
 
@@ -113,7 +116,7 @@ Unsafe:
 - letting untrusted people reach the API
 - claiming app-level isolation protects separate users
 
-## Future Secure Mode
+## If untrusted-user isolation is ever required
 
 If Proxima ever supports untrusted users, it needs a separate secure mode:
 
@@ -126,4 +129,6 @@ secret redaction
 audited break-glass workflows
 ```
 
-Until then, document deployments as single-owner only.
+Those controls are intentionally out of scope for the normal single-owner self-hosted
+path. Until then, document deployments as single-owner only and treat linked projects,
+runner skills, and MCP servers as owner-trusted inputs.

@@ -14,6 +14,23 @@ from typing import Any
 from .auth import iso_now
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
+def _json_array(value: Any) -> list[Any]:
+    try:
+        decoded = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("expected a JSON array") from exc
+    if not isinstance(decoded, list):
+        raise ValueError("expected a JSON array")
+    return decoded
+
+
 class RunReaper:
     def __init__(self, app: Any, fail_interrupted: Callable[[int, int, int | None, str], None]) -> None:
         self.app = app
@@ -35,10 +52,12 @@ class RunReaper:
         still actively executing so a busy event loop can't false-positive them."""
         db = self.app.state.worker_db
         alive = self._actively_running()
+        modifier = f"-{_as_int(stale_seconds)} seconds"
         with self.app.state.db_lock:
             stale = db.execute(
-                f"SELECT id, session_id, project_id FROM runs WHERE status = 'running' "
-                f"AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', '-{int(stale_seconds)} seconds'))"
+                "SELECT id, session_id, project_id FROM runs WHERE status = 'running' "
+                "AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?))",
+                (modifier,),
             ).fetchall()
             rows = [dict(r) for r in stale if r["id"] not in alive]
         for r in rows:
@@ -50,18 +69,20 @@ class RunReaper:
         rather than killing a live run."""
         db = self.app.state.worker_db
         alive = self._actively_running()
+        modifier = f"-{_as_int(stale_seconds)} seconds"
         with self.app.state.db_lock:
             stale = db.execute(
-                f"""
+                """
                 SELECT r.id, r.session_id, r.project_id FROM runs r
                 WHERE r.status = 'running'
-                  AND (r.heartbeat_at IS NULL OR r.heartbeat_at < datetime('now', '-{int(stale_seconds)} seconds'))
+                  AND (r.heartbeat_at IS NULL OR r.heartbeat_at < datetime('now', ?))
                   AND EXISTS (
                     SELECT 1 FROM runs q
                     WHERE q.session_id = r.session_id
                       AND q.status = 'queued'
                   )
-                """
+                """,
+                (modifier,),
             ).fetchall()
             rows = [dict(r) for r in stale if r["id"] not in alive]
         for r in rows:
@@ -71,8 +92,8 @@ class RunReaper:
     def mark_job_failed(self, job: sqlite3.Row | dict[str, Any], error: str) -> int:
         """Mark a running job and its current step failed. Caller holds db_lock."""
         db = self.app.state.worker_db
-        steps = json.loads(job["steps_state"] or "[]")
-        idx = int(job["current_step_idx"])
+        steps = _json_array(job["steps_state"])
+        idx = _as_int(job["current_step_idx"])
         if 0 <= idx < len(steps) and steps[idx].get("status") not in {"done", "failed"}:
             steps[idx]["status"] = "failed"
             steps[idx]["error"] = (error or "")[:500]
@@ -81,7 +102,7 @@ class RunReaper:
             "UPDATE jobs SET status='failed', steps_state=?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
             (json.dumps(steps), job["id"]),
         )
-        return int(cur.rowcount or 0)
+        return cur.rowcount or 0
 
     def reap_orphaned_jobs(self) -> int:
         """Fail running jobs that no longer have a queued/running run to advance them."""
@@ -91,6 +112,7 @@ class RunReaper:
                 """
                 SELECT * FROM jobs j
                 WHERE j.status = 'running'
+                  AND COALESCE(j.engine, 'linear') = 'linear'
                   AND NOT EXISTS (
                     SELECT 1 FROM runs r
                     WHERE r.session_id = j.session_id

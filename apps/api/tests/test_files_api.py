@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-from types import SimpleNamespace
-
-import httpx
 from fastapi.testclient import TestClient
 
 from proxima_api import app_settings
@@ -18,7 +14,6 @@ def client(tmp_path: Path) -> TestClient:
         "workspace_root": str(tmp_path / "ws"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_video": True,
         "feature_design_studio": True,
     })
     return TestClient(app)
@@ -59,22 +54,6 @@ def test_higgsfield_image_provider_is_selectable(tmp_path):
     assert saved.json()["provider"] == "higgsfield"
 
 
-def test_video_generation_backend_picker_defaults_and_saves(tmp_path):
-    c = client(tmp_path)
-    token = c.post("/auth/auto").json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    body = c.get("/api/settings/video-gen", headers=headers).json()
-    assert body["provider"] == "xai-oauth"
-    assert [p["id"] for p in body["providers"]] == ["xai-oauth", "higgsfield"]
-
-    saved = c.put("/api/settings/video-gen", headers=headers, json={"provider": "higgsfield", "model": "ray-2", "videoPolicy": "allow-with-limit", "maxVideoCredits": 12})
-    assert saved.status_code == 200
-    assert saved.json()["provider"] == "higgsfield"
-    assert saved.json()["model"] == "ray-2"
-    assert saved.json()["videoPolicy"] == "allow-with-limit"
-
-
 def test_tree_read_write_mkdir_rename_delete(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
@@ -89,6 +68,65 @@ def test_tree_read_write_mkdir_rename_delete(tmp_path):
     assert c.post("/api/projects/demo/fs/mkdir", headers=headers, json={"path": "newdir"}).status_code == 200
     assert c.post("/api/projects/demo/fs/rename", headers=headers, json={"from": "notes/a.txt", "to": "notes/b.txt"}).status_code == 200
     assert c.delete("/api/projects/demo/fs?path=notes/b.txt", headers=headers).status_code == 200
+
+
+def test_reference_files_endpoint_is_authenticated_and_project_scoped(tmp_path):
+    c = client(tmp_path)
+    headers = setup_project(c, tmp_path)
+    other = c.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": "other", "name": "Other"},
+    ).json()
+    projects = c.get("/api/projects", headers=headers).json()["projects"]
+    demo_root = Path(next(project["path"] for project in projects if project["slug"] == "demo"))
+    other_root = Path(other["path"])
+    other_root.mkdir(parents=True, exist_ok=True)
+    (demo_root / "src").mkdir()
+    (demo_root / "src" / "demo.py").write_text("demo", encoding="utf-8")
+    (other_root / "other.py").write_text("other", encoding="utf-8")
+
+    password = c.post(
+        "/auth/set-password",
+        json={"password": "correct horse battery"},
+    )
+    assert password.status_code == 200
+    authenticated = {"Authorization": f"Bearer {password.json()['token']}"}
+    fresh = TestClient(c.app)
+
+    assert fresh.get("/api/projects/demo/reference-files").status_code == 401
+    response = fresh.get("/api/projects/demo/reference-files", headers=authenticated)
+
+    assert response.status_code == 200
+    body = response.json()
+    paths = {item["path"] for item in body["files"]}
+    assert "src/demo.py" in paths
+    assert "other.py" not in paths
+    assert all(set(item) == {"path"} for item in body["files"])
+    assert body["truncated"] is False
+    assert fresh.get("/api/projects/missing/reference-files", headers=authenticated).status_code == 404
+
+
+def test_reference_files_endpoint_caps_results_and_hides_sensitive_paths(tmp_path):
+    c = client(tmp_path)
+    headers = setup_project(c, tmp_path)
+    projects = c.get("/api/projects", headers=headers).json()["projects"]
+    root = Path(next(project["path"] for project in projects if project["slug"] == "demo"))
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+    (root / ".env.local").write_text("TOKEN=secret", encoding="utf-8")
+    (root / "node_modules").mkdir()
+    (root / "node_modules" / "dependency.js").write_text("dependency", encoding="utf-8")
+
+    response = c.get("/api/projects/demo/reference-files?limit=2", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["files"]) == 2
+    assert body["truncated"] is True
+    assert all(set(item) == {"path"} for item in body["files"])
+    assert all(item["path"] not in {".env.local", "node_modules/dependency.js"} for item in body["files"])
+    assert c.get("/api/projects/demo/reference-files?limit=2001", headers=headers).status_code == 422
 
 
 def test_project_fs_collisions_return_400(tmp_path):
@@ -117,101 +155,52 @@ def test_upload_parent_collision_returns_400(tmp_path):
     assert res.status_code == 400
 
 
-def test_video_project_create_list_and_artifact_scan(tmp_path):
+def test_upload_streams_content_and_deduplicates_names(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
+    content = b"proxima" * 200_000  # larger than the one-megabyte copy chunk
 
-    res = c.post("/api/projects/demo/videos", headers=headers, json={"title": "Launch Reel", "brief": "Short promo"})
-    assert res.status_code == 200
-    body = res.json()
-    assert body["path"].startswith("artifacts/video/")
-
-    listed = c.get("/api/projects/demo/videos", headers=headers).json()["videos"]
-    assert any(v["id"] == body["id"] and v["title"] == "Launch Reel" for v in listed)
-    assert any(v["id"] == body["id"] and v["width"] == 1080 and v["height"] == 1920 for v in listed)
-
-    arts = c.get("/api/projects/demo/artifacts?since_minutes=1440", headers=headers).json()["artifacts"]
-    assert any(a["type"] == "video" and a["path"] == body["path"] for a in arts)
-
-    demo = next(p for p in c.get("/api/projects", headers=headers).json()["projects"] if p["slug"] == "demo")
-    render = Path(demo["path"]) / body["path"] / "renders" / "demo.mp4"
-    render.parent.mkdir(parents=True, exist_ok=True)
-    render.write_bytes(b"mp4")
-    arts = c.get("/api/projects/demo/artifacts?since_minutes=1440", headers=headers).json()["artifacts"]
-    assert any(a["type"] == "video-file" and a["path"].endswith("/renders/demo.mp4") for a in arts)
-
-    deleted = c.delete(f"/api/projects/demo/videos/{body['id']}", headers=headers)
-    assert deleted.status_code == 200
-    assert not (Path(demo["path"]) / body["path"]).exists()
-    listed = c.get("/api/projects/demo/videos", headers=headers).json()["videos"]
-    assert all(v["id"] != body["id"] for v in listed)
-
-
-def test_video_lint_and_render_settings_validation(tmp_path, monkeypatch):
-    c = client(tmp_path)
-    headers = setup_project(c, tmp_path)
-    body = c.post("/api/projects/demo/videos", headers=headers, json={"title": "Lintable Reel"}).json()
-    monkeypatch.setattr("proxima_api.routes.files.shutil.which", lambda _: "/usr/bin/npx")
-    monkeypatch.setattr(
-        "proxima_api.routes.files.subprocess.run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="lint ok", stderr=""),
+    first = c.post(
+        "/api/projects/demo/upload",
+        headers=headers,
+        files={"file": ("bundle.bin", content, "application/octet-stream")},
+    )
+    second = c.post(
+        "/api/projects/demo/upload",
+        headers=headers,
+        files={"file": ("bundle.bin", b"second", "application/octet-stream")},
     )
 
-    linted = c.post(f"/api/projects/demo/videos/{body['id']}/lint", headers=headers)
-    assert linted.status_code == 200
-    assert linted.json()["ok"] is True
-    assert "lint ok" in linted.json()["log"]
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["path"] == "uploads/bundle.bin"
+    assert second.json()["path"] == "uploads/bundle-1.bin"
+    project_root = Path(c.get("/api/projects", headers=headers).json()["projects"][0]["path"])
+    assert (project_root / first.json()["path"]).read_bytes() == content
+    assert (project_root / second.json()["path"]).read_bytes() == b"second"
 
-    bad = c.post(f"/api/projects/demo/videos/{body['id']}/render", headers=headers, json={"format": "avi"})
-    assert bad.status_code == 400
-    assert "format" in bad.json()["detail"]
 
-
-def test_video_studio_render_job_proxy_routes(tmp_path, monkeypatch):
-    c = client(tmp_path)
+def test_upload_limit_rejects_and_removes_partial_file(tmp_path):
+    app = create_app({
+        "database_path": str(tmp_path / "limit.db"),
+        "workspace_root": str(tmp_path / "limit-ws"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "max_upload_bytes": 4,
+    })
+    c = TestClient(app)
     headers = setup_project(c, tmp_path)
-    video = c.post("/api/projects/demo/videos", headers=headers, json={"title": "Render Proxy"}).json()
-    studio_id = f"proxima-video__demo__{video['id']}"
 
-    def upstream(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == f"/api/projects/{video['id']}/render":
-            return httpx.Response(200, json={"jobId": "job-proxy-1"})
-        if request.method == "GET" and request.url.path == "/api/render/job-proxy-1/progress":
-            return httpx.Response(200, content=b'event: progress\ndata: {"status":"complete","progress":100}\n\n', headers={"Content-Type": "text/event-stream"})
-        if request.method == "GET" and request.url.path == f"/api/projects/{video['id']}/renders/file/demo.mp4":
-            return httpx.Response(200, content=b"mp4", headers={"Content-Type": "video/mp4"})
-        if request.method == "DELETE" and request.url.path == "/api/render/job-proxy-1":
-            return httpx.Response(200, json={"ok": True})
-        return httpx.Response(404)
+    response = c.post(
+        "/api/projects/demo/upload",
+        headers=headers,
+        files={"file": ("large.bin", b"12345", "application/octet-stream")},
+    )
 
-    real_async_client = httpx.AsyncClient
-    transport = httpx.MockTransport(upstream)
-
-    def mock_async_client(*args, **kwargs):
-        return real_async_client(*args, **kwargs, transport=transport)
-
-    monkeypatch.setattr("proxima_api.routes.files.httpx.AsyncClient", mock_async_client)
-    c.app.state.app_manager._apps["demo"] = {
-        "proc": SimpleNamespace(returncode=None),
-        "port": 3999,
-        "command": "fake",
-        "log": [],
-    }
-
-    started = c.post(f"/api/projects/{studio_id}/render", headers=headers, json={"format": "mp4"})
-    assert started.status_code == 200
-    assert started.json()["jobId"] == "job-proxy-1"
-
-    progress = c.get("/api/render/job-proxy-1/progress", headers=headers)
-    assert progress.status_code == 200
-    assert '"status":"complete"' in progress.text
-
-    render_file = c.get(f"/api/projects/{studio_id}/renders/file/demo.mp4", headers=headers)
-    assert render_file.status_code == 200
-    assert render_file.content == b"mp4"
-
-    deleted = c.delete("/api/render/job-proxy-1", headers=headers)
-    assert deleted.status_code == 200
+    assert response.status_code == 413
+    projects = c.get("/api/projects", headers=headers).json()["projects"]
+    project_root = Path(next(p["path"] for p in projects if p["slug"] == "demo"))
+    assert not (project_root / "uploads" / "large.bin").exists()
 
 
 def test_traversal_is_rejected(tmp_path):
@@ -303,35 +292,6 @@ def test_design_from_image_missing_file_404(tmp_path):
     headers = setup_project(c, tmp_path)
     res = c.post("/api/projects/demo/designs/from-image", headers=headers, json={"path": "artifacts/nope.png"})
     assert res.status_code == 404
-
-
-def test_video_import_file_copies_into_assets(tmp_path):
-    c = client(tmp_path)
-    headers = setup_project(c, tmp_path)
-    root = _project_path(c, headers)
-    img = root / "artifacts/media/images/chat-2.png"
-    img.parent.mkdir(parents=True, exist_ok=True)
-    img.write_bytes(PNG_1x2)
-    vid = c.post("/api/projects/demo/videos", headers=headers, json={"title": "Promo"}).json()["id"]
-
-    res = c.post(f"/api/projects/demo/videos/{vid}/import-file", headers=headers, json={"path": "artifacts/media/images/chat-2.png"})
-
-    assert res.status_code == 200, res.text
-    assert res.json()["path"] == "assets/chat-2.png"
-    assert (root / f"artifacts/video/{vid}/assets/chat-2.png").read_bytes() == PNG_1x2
-    # second import of the same name gets a deduped filename
-    res2 = c.post(f"/api/projects/demo/videos/{vid}/import-file", headers=headers, json={"path": "artifacts/media/images/chat-2.png"})
-    assert res2.json()["path"] == "assets/chat-2-1.png"
-
-
-def test_video_import_file_rejects_missing_video_and_non_media(tmp_path):
-    c = client(tmp_path)
-    headers = setup_project(c, tmp_path)
-    root = _project_path(c, headers)
-    (root / "notes.txt").write_text("hi")
-    assert c.post("/api/projects/demo/videos/nope/import-file", headers=headers, json={"path": "notes.txt"}).status_code == 404
-    vid = c.post("/api/projects/demo/videos", headers=headers, json={"title": "Promo"}).json()["id"]
-    assert c.post(f"/api/projects/demo/videos/{vid}/import-file", headers=headers, json={"path": "notes.txt"}).status_code == 400
 
 
 def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):

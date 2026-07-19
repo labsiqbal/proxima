@@ -10,6 +10,16 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from .graph import normalize_graph
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
 # Reserved step fields land here with safe defaults. `rules`/`skill_ids` (M2),
 # `review_required` (M2), and `depends_on` (M3) are carried but dormant in M1.
 STEP_DEFAULTS: dict[str, Any] = {
@@ -90,7 +100,7 @@ constraints). Do NOT use a fixed form; choose questions and answer options for t
 If the brief is already clear or this is an autonomous workflow/job run, make sensible art-direction
 decisions and proceed.
 Schema:
-{ "id": "<id>", "type": "graphic|deck|mobile|video", "title": "...",
+{ "id": "<id>", "type": "graphic|deck|mobile", "title": "...",
   "artboards": [ { "id": "a1", "width": 1080, "height": 1080, "background": "#ffffff",
     "layers": [
       { "type":"text", "x":0,"y":0,"width":860,"text":"...","fontSize":78,"fontFamily":"Playfair Display","fontStyle":"bold","fill":"#0A0A0A","align":"center","lineHeight":1.05,"shadow":true,"shadowBlur":14,"shadowOpacity":0.25 },
@@ -131,18 +141,8 @@ otherwise produce the step's expected output as text.
 Files tab. **Wiki / memory** — consult the project wiki context provided above.
 """
 
-_VIDEO_CAPABILITY_PREAMBLE = """**Video** — for an editable video composition, create
-`artifacts/video/<id>/index.html` with a HyperFrames-compatible root composition. Keep text as real
-HTML and use deterministic CSS, WAAPI, or GSAP motion. Generated video files belong under
-`artifacts/media/videos/`.
-"""
-
-
-def build_capability_preamble(*, include_design_studio: bool = False, include_video: bool = False) -> str:
-    parts = [_DESIGN_CAPABILITY_PREAMBLE if include_design_studio else _BASE_CAPABILITY_PREAMBLE]
-    if include_video:
-        parts.append(_VIDEO_CAPABILITY_PREAMBLE)
-    return "\n\n".join(parts)
+def build_capability_preamble(*, include_design_studio: bool = False) -> str:
+    return _DESIGN_CAPABILITY_PREAMBLE if include_design_studio else _BASE_CAPABILITY_PREAMBLE
 
 
 def build_iteration_preamble(name: str, steps: list[dict[str, Any]], *, include_design_studio: bool = False) -> str:
@@ -218,6 +218,28 @@ ARCHITECT_SYSTEM = (
     "category is one of: content, seo, build, audit, research, other."
 )
 
+GRAPH_ARCHITECT_SYSTEM = (
+    "You are a workflow architect. Convert the conversation into a reusable, "
+    "reviewable DAG plan. Extract the repeatable process, not merely the last message. "
+    "Respond with ONLY one JSON object and no prose: "
+    '{"name": str, "description": str, "category": str, "graph": {'
+    '"nodes": [{"id": str, "name": str, "instruction": str, '
+    '"expected_output": str, "output_kind": "text|json|artifact-ref", '
+    '"output_schema": object|null, "review_required": bool, '
+    '"depends_on": [node_id]}], "edges": [{"from": node_id, "to": node_id}]}}. '
+    "Use stable short kebab-case node ids. Express every dependency; independent nodes "
+    "may share the same dependencies. Keep each instruction self-contained because every "
+    "node runs in a fresh agent session with only explicit job input and upstream outputs. "
+    "Use output_kind=json only when downstream nodes need structured data, with a valid "
+    "JSON Schema when useful. Use artifact-ref only for concrete files/directories created "
+    "inside the project. Set review_required only at meaningful human gates. The graph must "
+    "be acyclic. category is one of content, seo, build, audit, research, other."
+)
+
+
+def architect_system(*, graph: bool = False) -> str:
+    return GRAPH_ARCHITECT_SYSTEM if graph else ARCHITECT_SYSTEM
+
 
 def _cron_field_matches(field: str, value: int, lo: int, hi: int) -> bool:
     for part in field.split(","):
@@ -225,14 +247,14 @@ def _cron_field_matches(field: str, value: int, lo: int, hi: int) -> bool:
         body = part
         if "/" in part:
             body, step_s = part.split("/", 1)
-            step = int(step_s)
+            step = _as_int(step_s)
         if body in ("*", ""):
             rlo, rhi = lo, hi
         elif "-" in body:
             a, b = body.split("-", 1)
-            rlo, rhi = int(a), int(b)
+            rlo, rhi = _as_int(a), _as_int(b)
         else:
-            rlo = rhi = int(body)
+            rlo = rhi = _as_int(body)
         if rlo <= value <= rhi and (value - rlo) % step == 0:
             return True
     return False
@@ -249,7 +271,7 @@ def _cron_field_ok(field: str, lo: int, hi: int) -> bool:
         body = part
         if "/" in part:
             body, step_s = part.split("/", 1)
-            if not step_s.isdigit() or int(step_s) <= 0:
+            if not step_s.isdigit() or _as_int(step_s) <= 0:
                 return False
         if body in ("*", ""):
             continue
@@ -257,9 +279,9 @@ def _cron_field_ok(field: str, lo: int, hi: int) -> bool:
             a, b = body.split("-", 1)
             if not (a.lstrip("-").isdigit() and b.lstrip("-").isdigit()):
                 return False
-            if not (lo <= int(a) <= int(b) <= hi):
+            if not (lo <= _as_int(a) <= _as_int(b) <= hi):
                 return False
-        elif not (body.isdigit() and lo <= int(body) <= hi):
+        elif not (body.isdigit() and lo <= _as_int(body) <= hi):
             return False
     return True
 
@@ -313,11 +335,11 @@ def cadence_human(cron: str) -> str:
     if mn == "0" and (hr, dom, mon, dow) == ("*", "*", "*", "*"):
         return "Hourly"
     if mn.isdigit() and hr.isdigit():
-        at = f"{int(hr):02d}:{int(mn):02d}"
+        at = f"{_as_int(hr):02d}:{_as_int(mn):02d}"
         if (dom, mon, dow) == ("*", "*", "*"):
             return f"Daily · {at}"
         if dom == "*" and mon == "*" and dow != "*":
-            days = ", ".join(_WEEKDAYS[int(x) % 7] for x in dow.replace("-", ",").split(",") if x.isdigit())
+            days = ", ".join(_WEEKDAYS[_as_int(x) % 7] for x in dow.replace("-", ",").split(",") if x.isdigit())
             return f"{days or dow} · {at}"
     return cron
 
@@ -343,9 +365,17 @@ def parse_blueprint(text: str) -> dict[str, Any]:
     if start == -1 or end == -1 or end < start:
         raise ValueError("no JSON object found in architect reply")
     data = _json.loads(text[start : end + 1])
-    return {
+    draft = {
         "name": (data.get("name") or "Workflow").strip(),
         "description": data.get("description") or "",
         "category": data.get("category") or "other",
-        "steps": normalize_steps(data.get("steps") or []),
     }
+    graph_data = data.get("graph")
+    if graph_data is None and data.get("nodes") is not None:
+        graph_data = {"nodes": data.get("nodes"), "edges": data.get("edges") or []}
+    if graph_data is not None:
+        draft["graph"] = normalize_graph(graph_data)
+        draft["steps"] = []
+    else:
+        draft["steps"] = normalize_steps(data.get("steps") or [])
+    return draft

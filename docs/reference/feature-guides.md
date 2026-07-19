@@ -4,9 +4,9 @@
 > quality bar** baked into the runner preamble, so *any* runner (Claude / Codex / Hermes)
 > produces good output on the first try — even when the user gives minimal direction.
 
-> **Current release:** image generation remains active. Video and Design Studio are
-> disabled by default, so their guides are retained on disk but excluded from prompt
-> composition while their server-owned feature flags are false.
+> **Current release:** image generation remains active. Design Studio is disabled by
+> default, so its guide is retained on disk but excluded from prompt composition while
+> its server-owned feature flag is false. Video Studio is not a product surface.
 
 This doc defines **how those guides are written** (the authoring standard) and **how they
 are wired** (the registry). It is the source of truth for adding or upgrading a guide.
@@ -89,7 +89,7 @@ class FeatureGuide:
 
 FEATURE_GUIDES: list[FeatureGuide] = [
     FeatureGuide("qform",  "Asking the user questions", QFORM_GUIDE,  10),
-    # Design and Video entries are registered only when their server flags are enabled.
+    # Design entries are registered only when the server flag is enabled.
     FeatureGuide("app-ui", "Build & Preview app (UI)",  APP_UI_GUIDE, 40),
     # add the next feature here — one line.
 ]
@@ -171,7 +171,6 @@ Notice all five parts are present, it cites its reference, and the **default rec
 | `general` | How to operate (all sessions) | `GENERAL_GUIDE` | ✅ **wired 2026-07-05** — project awareness, toolkit/skills, output routing, evidence-first, ask-vs-act, reporting; profile instructions override. [feature-guides/general.md](feature-guides/general.md) |
 | `qform`  | Ask user questions      | `QFORM_GUIDE`  | ✅ solid (mechanical) |
 | `design` | Design Studio           | `DESIGN_GUIDE` | retained; disabled by default and not injected |
-| `video`  | Video Studio            | `VIDEO_GUIDE`  | retained; disabled by default and not injected |
 | `app-ui` | Build & Preview app     | —              | ❌ missing — biggest gap (example above) |
 | `wiki`   | Wiki / memory           | inline         | ✅ ok |
 

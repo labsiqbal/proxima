@@ -1,4 +1,4 @@
-Proxima has no login wall of its own — by design, whoever can reach this page is treated as the owner. The network layer is the lock. Keep the app bound to `127.0.0.1` and reach it through one of the two private paths below. Never bind it to a public interface and never put it behind an unauthenticated tunnel.
+Proxima asks the single owner to set a password on first run, and then requires a valid owner session. That password is defense-in-depth, not a substitute for a network gate: keep the app bound to `127.0.0.1` and reach it through one of the two private paths below. Never bind it directly to a public interface or put it behind an unauthenticated tunnel.
 
 All commands below assume the default port `8765` — adjust if you changed `PROXIMA_PORT`.
 
@@ -80,4 +80,4 @@ To stop: `sudo systemctl disable --now cloudflared`
 
 ## Why is there no free public-tunnel option?
 
-Free quick tunnels (`https://…trycloudflare.com`) are unauthenticated: anyone who has the URL gets full owner access — terminal, files, agents — because Proxima deliberately has no second login wall behind the network gate. The free-and-safe option is Tailscale above.
+Free quick tunnels (`https://…trycloudflare.com`) expose the login endpoint to anyone who has the URL and provide no stable external access policy. Proxima's owner password does not turn it into a hardened multi-tenant public service. The free-and-safe option is Tailscale above.

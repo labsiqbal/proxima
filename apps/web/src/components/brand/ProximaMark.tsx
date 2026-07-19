@@ -1,5 +1,3 @@
-import type React from 'react'
-
 // Proxima = the nearest star. The mark is a guiding 4-point star with an orbit
 // sweeping behind it and a small satellite spark — a navigation/beacon motif,
 // no letterform. Colours/strokes come from the --brand-mark-* tokens via the

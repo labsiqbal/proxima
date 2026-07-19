@@ -18,10 +18,7 @@ release line.
 
 ## Brand Personality
 
-**Powerful and characterful — a mission-control cockpit, not a quiet utility.** (The user explicitly rejected "premium-minimal" as too plain.) Two registers, on purpose:
-
-- **Signature surfaces (the Home / dashboard):** the brand moment. Bold and dramatic — a dark "command center" with the accent colour as **neon glow**, glowing data viz, mono readouts, console panels. It should feel *powerful, alive, and a little cinematic* — like an operator's bridge.
-- **Working tools (Workflows, Activity, Chat, Files, Wiki):** focused and uncluttered so the task stays in front. Clean, fast, confident — but never sterile or flat.
+**Powerful through real work, not theater.** Proxima uses one calm, compact product register with separate Ops and Code workspaces. Ops leads with project-scoped orchestration; Code focuses on direct sessions and Terminal. Workflows, Activity, Artifacts, and project knowledge stay focused and uncluttered. Character comes from precise hierarchy, truthful live state, and responsive interaction—not synthetic mission-control visuals.
 
 Voice: plain and direct, with operator energy (uppercase mono labels, status lines), never hypey marketing.
 
@@ -31,11 +28,11 @@ Voice: plain and direct, with operator energy (uppercase mono labels, status lin
 
 Bold is welcome; *cheap* and *generic* are not. Do NOT look like:
 
-- **Generic "AI 2026"** — cream/sand/beige body backgrounds with a purple/violet accent; the warm-neutral monoculture. (Default accent stays blue; signature surfaces go dark.)
+- **Generic "AI 2026"** — cream/sand/beige body backgrounds with a purple/violet accent; the warm-neutral monoculture. Default accent stays blue.
 - **Stiff corporate/enterprise** — navy-and-gold, cold formal admin panels, "legacy IBM dashboard" chrome.
 - **Cheap-SaaS clichés** — the hero-metric template, identical icon-heading-text card grids, eyebrow kickers on every section, gradient text. Expressive ≠ these tired patterns.
-- **Thoughtless clutter** — density only where the task needs it; the bold surfaces still breathe (glow and space, not cramming).
-- **Too plain / sterile** — a flat, all-white, no-character dashboard. The Home must have presence.
+- **Thoughtless clutter** — density only where the task needs it; supporting information must not crowd out the task.
+- **Too plain / sterile** — hierarchy and interaction should still make Ops feel deliberate, while the task remains the focus.
 
 ## Design Principles
 
@@ -52,3 +49,7 @@ Bold is welcome; *cheap* and *generic* are not. Do NOT look like:
 - Keyboard-operable controls; visible focus rings.
 - **Low-end hardware is a first-class constraint** (typical host: i5-7200U class). Transform/opacity-only motion, no heavy effects by default.
 - Light + dark themes (plus accent themes) must both pass contrast.
+
+### A calmer task-first Ops home
+
+The default Home register is Ops: a focused task brief and project picker backed by a real ad-hoc job, followed by compact views of attention, running/recent work, schedules, outputs, and projects. This keeps Proxima powerful, alive, owned, and runner-agnostic without presenting a decorative command center or synthetic activity. Code remains the persistent conversational workspace and never loses its current session merely because the owner visits Ops.

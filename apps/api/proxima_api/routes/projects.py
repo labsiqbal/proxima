@@ -13,10 +13,9 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import features
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
-from ..schemas import ProjectCreateRequest, ProjectLinkRequest, ProjectVisibilityRequest
+from ..schemas import ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
 
 
 def register(app, deps):
@@ -27,45 +26,6 @@ def register(app, deps):
     project_payload = deps["project_payload"]
     run_projectctl = deps["run_projectctl"]
     _purge_project = deps["_purge_project"]
-
-    def _parse_video_studio_id(studio_id: str) -> tuple[str, str] | None:
-        prefix = "proxima-video__"
-        if not studio_id.startswith(prefix):
-            return None
-        parts = studio_id[len(prefix):].split("__", 1)
-        if len(parts) != 2:
-            return None
-        slug, video_id = parts
-        if not slug or not video_id or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", slug):
-            return None
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,80}", video_id):
-            return None
-        return slug, video_id
-
-    def _video_studio_payload(studio_id: str, user: dict[str, Any]) -> dict[str, Any] | None:
-        parsed = _parse_video_studio_id(studio_id)
-        if not parsed:
-            return None
-        features.require(cfg, features.VIDEO)
-        slug, video_id = parsed
-        project = visible_project(slug, user)
-        root = Path(project["path"]).resolve()
-        video_dir = (root / "artifacts" / "video" / video_id).resolve()
-        if root not in video_dir.parents or not (video_dir / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        files: list[str] = []
-        for p in sorted(video_dir.rglob("*")):
-            if p.is_file():
-                files.append(str(p.relative_to(video_dir)))
-        compositions = [p for p in files if p == "index.html" or (p.endswith(".html") and p.startswith("compositions/"))]
-        return {
-            "id": studio_id,
-            "slug": studio_id,
-            "name": video_id,
-            "dir": str(video_dir),
-            "files": files,
-            "compositions": compositions or ["index.html"],
-        }
 
     @app.get("/api/projects")
     def list_projects(user: dict[str, Any] = Depends(current_user)):
@@ -150,13 +110,10 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}")
     def get_project(slug: str, user: dict[str, Any] = Depends(current_user)):
-        video_payload = _video_studio_payload(slug, user)
-        if video_payload:
-            return video_payload
         return project_payload(visible_project(slug, user))
 
     @app.patch("/api/projects/{slug}")
-    def update_project(slug: str, payload: ProjectVisibilityRequest, user: dict[str, Any] = Depends(current_user)):
+    def update_project(slug: str, payload: ProjectUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         project = visible_project(slug, user)
         if payload.name is not None:
             db().execute("UPDATE projects SET name = ? WHERE id = ?", (payload.name.strip(), project["id"]))

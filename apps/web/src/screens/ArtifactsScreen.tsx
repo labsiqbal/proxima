@@ -18,7 +18,7 @@ const VIDEO = /\.(mp4|webm|mov)$/i
 const RENDERED_MP4 = /\.mp4$/i
 const HTML = /\.html?$/i
 const MD = /\.(md|markdown)$/i
-const resolveArtifactSrc = (token: string, slug: string, src: string) =>
+const resolveArtifactSrc = (slug: string, src: string) =>
   /^gen:/i.test(src) ? '' : (/^(https?:|data:|blob:)/.test(src) ? src : previewUrl(slug, src))
 
 type Filter = 'all' | 'design' | 'video' | 'image' | 'document' | 'app' | 'data' | 'other'
@@ -69,14 +69,14 @@ const icon = (a: Artifact) =>
 
 type DesignThumb = { art?: Artboard }
 
-function ArtifactCard({ artifact, active, slug, token, designThumb, onOpen }: { artifact: Artifact; active: boolean; slug: string; token: string; designThumb?: DesignThumb; onOpen: () => void }) {
+function ArtifactCard({ artifact, active, slug, designThumb, onOpen }: { artifact: Artifact; active: boolean; slug: string; designThumb?: DesignThumb; onOpen: () => void }) {
   const cat = category(artifact)
   const visual = cat === 'design' || cat === 'image' || cat === 'video'
   const title = artifact.title || artifact.path
   return <button className={`art-card ${visual ? 'visual' : ''} ${active ? 'active' : ''}`} onClick={onOpen}>
     {visual ? <span className="art-thumb">
       {cat === 'design' && designThumb?.art
-        ? <MiniPreview art={designThumb.art} resolveSrc={s => resolveArtifactSrc(token, slug, s)} />
+        ? <MiniPreview art={designThumb.art} resolveSrc={s => resolveArtifactSrc(slug, s)} />
         : cat === 'image'
           ? <img src={previewUrl(slug, artifact.path)} alt={title} loading="lazy" />
           : cat === 'video'
@@ -155,12 +155,12 @@ function FileView({ token, slug, path, fs, onClose }: { token: string; slug: str
       <button className="ghost-button" onClick={onClose}>Close</button>
     </div>
     {HTML.test(path)
-      ? <iframe className="file-preview-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts allow-same-origin" />
+      ? <iframe className="file-preview-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts" />
       : <div className="file-preview md-doc"><div className="md">{md != null ? <MessageContent content={md} /> : <p className="muted">Loading…</p>}</div></div>}
   </div>
 }
 
-export function ArtifactsScreen({ token, projects, activeProject, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onBackToChat, designStudioEnabled = false, onOpenDesign }: {
+export function ArtifactsScreen({ token, projects, activeProject, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign }: {
   token: string
   projects: Project[]
   activeProject: Project | null
@@ -169,7 +169,8 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
   onPendingConsumed?: () => void
   onPendingArtifactConsumed?: () => void
   onActiveProject?: (p: Project) => void
-  onBackToChat?: () => void
+  onBack?: () => void
+  backLabel?: string
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
 }) {
@@ -186,6 +187,7 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
   const [viewer, setViewer] = React.useState<{ items: Artifact[]; index: number } | null>(null)
   const [listHidden, setListHidden] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
+  const [loadError, setLoadError] = React.useState('')
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
   const project = projects.find(p => p.slug === slug) || null
@@ -214,12 +216,19 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
     if (!slug) return
     const seq = ++loadSeq.current
     setLoading(true)
+    setLoadError('')
     try {
-      const [arts, apps] = await Promise.all([
-        listArtifacts(token, slug, 525600).catch(() => ({ artifacts: [] })),
-        detectApps(token, slug).catch(() => ({ apps: [] })),
+      const [artsResult, appsResult] = await Promise.allSettled([
+        listArtifacts(token, slug, 525600),
+        detectApps(token, slug),
       ])
+      if (artsResult.status === 'rejected' && appsResult.status === 'rejected') throw artsResult.reason
+      const arts = artsResult.status === 'fulfilled' ? artsResult.value : { artifacts: [] }
+      const apps = appsResult.status === 'fulfilled' ? appsResult.value : { apps: [] }
       if (!mountedRef.current || seq !== loadSeq.current) return
+      if (artsResult.status === 'rejected' || appsResult.status === 'rejected') {
+        setLoadError('Some project outputs could not be refreshed; available results are shown.')
+      }
       const appArtifacts: Artifact[] = apps.apps.map(a => ({ type: 'app', title: a.dir && a.dir !== '.' ? a.dir : clean(project?.name || 'App'), path: a.dir || '.', dir: a.dir, command: a.command }))
       const merged = new Map<string, Artifact>()
       for (const a of [...arts.artifacts, ...appArtifacts]) merged.set(`${a.type}:${a.path}:${a.command || ''}`, a)
@@ -236,6 +245,8 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
         } catch { /* thumbnail optional */ }
       }))
       if (mountedRef.current && seq === loadSeq.current) setDesignThumbs(thumbs)
+    } catch (cause) {
+      if (mountedRef.current && seq === loadSeq.current) setLoadError(String(cause))
     } finally {
       if (mountedRef.current && seq === loadSeq.current) setLoading(false)
     }
@@ -308,8 +319,9 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
   }
 
   return <section className="artifacts-view">
+    {loadError && <div className="error-bar">Could not refresh artifacts: {loadError}</div>}
     <div className="artifacts-head">
-      {onBackToChat && <BackButton label="Back to chat" onClick={onBackToChat} />}
+      {onBack && <BackButton label={backLabel} onClick={onBack} />}
       <div>
         <h2>Artifacts</h2>
         <p className="muted">Outputs and app previews for the active project.</p>
@@ -333,7 +345,7 @@ export function ArtifactsScreen({ token, projects, activeProject, pendingFile, p
             </div>}
           </div>
           {visualItems.length === 0 ? <div className="art-empty"><p className="muted">{loading ? 'Scanning project outputs…' : 'No visual artifacts found.'}</p></div>
-            : <div className="artifact-masonry">{pagedVisuals.map(a => <ArtifactCard key={`${a.type}:${a.path}:${a.command || ''}`} artifact={a} active={selected?.path === a.path} slug={slug} token={token} designThumb={designThumbs[a.path]} onOpen={() => openArtifact(a)} />)}</div>}
+            : <div className="artifact-masonry">{pagedVisuals.map(a => <ArtifactCard key={`${a.type}:${a.path}:${a.command || ''}`} artifact={a} active={selected?.path === a.path} slug={slug} designThumb={designThumbs[a.path]} onOpen={() => openArtifact(a)} />)}</div>}
         </section>}
         {showList && <section className="artifact-section">
           <div className="artifact-section-head"><div><h3>{filter === 'all' ? 'Files, apps, and documents' : FILTERS.find(f => f.key === filter)?.label || 'Artifacts'}</h3><p className="muted">{listItems.length} item{listItems.length === 1 ? '' : 's'}</p></div></div>

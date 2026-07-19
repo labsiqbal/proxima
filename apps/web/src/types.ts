@@ -39,8 +39,8 @@ export type Runner = {
 	notes?: string;
 };
 export type AppFeatures = {
-	video: boolean;
 	designStudio: boolean;
+	workflowGraph: boolean;
 };
 export type ChatSession = {
 	id: number;
@@ -61,7 +61,6 @@ export type ActivityItem = { title: string; status: string; subagent: boolean };
 export type OutputLink = {
 	type:
 		| "design"
-		| "video"
 		| "video-file"
 		| "app"
 		| "page"
@@ -185,6 +184,103 @@ export type WorkflowDraft = {
 		type?: string;
 	}[];
 };
+
+export type GraphOutputKind = "text" | "json" | "artifact-ref";
+
+export type GraphNodeType = "agent" | "trigger";
+// Only manual entry exists today; schedule/webhook/event become further kinds of
+// this same node rather than a separate execution path.
+export type GraphTriggerKind = "manual";
+
+export type GraphNodeDefinition = {
+	id: string;
+	// Absent on graphs authored before node types existed; those are agent nodes.
+	type?: GraphNodeType;
+	name: string;
+	instruction: string;
+	// What a good result is, and the constraints on how to get there — the detail a
+	// linear recipe step carried. Prose for the runner; output_kind/output_schema
+	// stay the enforced contract. Absent when blank: blank is not a constraint.
+	expected_output?: string;
+	rules?: string;
+	// Skill hints for the runner — suggestions in the prompt, not a capability grant;
+	// the node's agent profile still decides what is actually enabled.
+	skill_ids?: string[];
+	output_kind: GraphOutputKind;
+	output_schema?: Record<string, unknown>;
+	review_required?: boolean;
+	trigger_kind?: GraphTriggerKind;
+	// The agent this step runs as. Null/absent = the job's own agent.
+	profile_id?: number | null;
+	// Canvas position. Absent until the owner drags the node, which is what lets
+	// an un-dragged node stay auto-laid-out.
+	x?: number;
+	y?: number;
+};
+
+export type GraphEdge = { from: string; to: string };
+export type WorkflowGraph = { nodes: GraphNodeDefinition[]; edges: GraphEdge[] };
+
+export type GraphWorkflowDraft = {
+	name: string;
+	description?: string;
+	category?: string;
+	graph: WorkflowGraph;
+	steps?: [];
+};
+
+export type GraphNodeStatus =
+	| "pending"
+	| "ready"
+	| "running"
+	| "review"
+	| "done"
+	| "failed"
+	| "stale";
+
+export type GraphNodeState = {
+	id: number;
+	job_id: number;
+	node_id: string;
+	status: GraphNodeStatus;
+	output_kind: GraphOutputKind;
+	inputs?: unknown;
+	output?: unknown;
+	checkpoint?: unknown;
+	error?: string | null;
+	version: number;
+	run_id?: number | null;
+};
+
+export type GraphTemplate = {
+	id: number;
+	project_id?: number | null;
+	project_slug?: string | null;
+	name: string;
+	description?: string;
+	category?: string;
+	status: string;
+	graph: WorkflowGraph;
+	// Declared {{inputs}}, same shape as a linear recipe's. A run fills these in and
+	// the values reach each node's {{var}} through the job input.
+	inputs?: WorkflowInput[];
+};
+
+export type GraphJob = {
+	id: number;
+	project_id?: number | null;
+	project_slug?: string | null;
+	workflow_id?: number | null;
+	session_id: number;
+	title: string;
+	status: JobStatus;
+	input?: Record<string, unknown>;
+	engine: "graph";
+	graph: WorkflowGraph;
+	node_states: GraphNodeState[];
+	created_at?: string;
+	updated_at?: string;
+};
 // A cron schedule that fires a workflow on a cadence. `cron` is a standard
 // 5-field expression (min hour day-of-month month day-of-week).
 export type Schedule = {
@@ -227,6 +323,9 @@ export type Job = {
 	session_id: number;
 	title: string;
 	status: JobStatus;
+	// 'linear' (classic steps) or 'graph' — decides which surface can act on the job,
+	// e.g. a review opens on the canvas rather than in TaskWorkspace.
+	engine?: string;
 	current_step_idx: number;
 	input: any;
 	steps_state: JobStep[];
@@ -246,9 +345,10 @@ export type View =
 	| "artifacts"
 	| "workflows"
 	| "activity"
+	| "task"
+	| "graph"
 	| "terminal"
 	| "design"
-	| "video"
 	| "linc-projects"
 	| "profiles"
 	| "runners"

@@ -56,3 +56,16 @@ def test_cancelled_collaboration_is_not_flipped_back_to_done(tmp_path):
         "SELECT status FROM prompt_collaborations WHERE id = ?", (collab["id"],)
     ).fetchone()["status"] == "cancelled"
     assert client.get(f"/api/runs/{parent_id}", headers=headers).json()["status"] == "cancelled"
+    stored = app.state.db.execute(
+        "SELECT final_message_id FROM prompt_collaborations WHERE id = ?", (collab["id"],)
+    ).fetchone()
+    assert stored["final_message_id"] is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE run_id = ? AND role = 'assistant'",
+        (parent_id,),
+    ).fetchone()["n"] == 0
+    events = client.get(f"/api/sessions/{session_id}/events", headers=headers).json()["events"]
+    assert not any(
+        e["run_id"] == parent_id and e["type"] in {"message.complete", "run.completed"}
+        for e in events
+    )

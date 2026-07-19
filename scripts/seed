@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# Seed demo data into the dev instance (idempotent). Run while or before `scripts/dev`.
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-API_DIR="$ROOT/apps/api"
-DEV_ROOT="${PROXIMA_DEV_ROOT:-$HOME/.local/share/proxima-dev}"
-export PROXIMA_DB_PATH="${PROXIMA_DB_PATH:-$DEV_ROOT/proxima-dev.db}"
-export PROXIMA_WORKSPACE_ROOT="${PROXIMA_WORKSPACE_ROOT:-$DEV_ROOT}"
-( cd "$API_DIR" && uv run python scripts/seed_demo.py )

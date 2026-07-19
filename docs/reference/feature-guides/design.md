@@ -194,5 +194,4 @@ those fresh for every brief.
 
 ## Next guides in this folder (queue)
 
-- `video.md` — Video Studio bar (motion taste from motion-library; currently the thinnest guide)
 - `app-ui.md` — promote the worked example from `../feature-guides.md` into a real draft

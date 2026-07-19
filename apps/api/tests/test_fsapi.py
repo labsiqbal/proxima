@@ -36,6 +36,74 @@ def test_list_tree_returns_sorted_dirs_first(tmp_path):
     assert {"name": "a.txt", "type": "file", "size": 5} in entries
 
 
+def test_list_reference_files_returns_nested_path_only_entries(tmp_path):
+    root = tmp_path / "proj"
+    (root / "src" / "components").mkdir(parents=True)
+    (root / "README.md").write_text("readme", encoding="utf-8")
+    (root / "src" / "main.py").write_text("print('ok')", encoding="utf-8")
+    (root / "src" / "components" / "App.tsx").write_text("export {}", encoding="utf-8")
+
+    files, truncated = fsapi.list_reference_files(root)
+
+    assert files == [
+        {"path": "README.md"},
+        {"path": "src/components/App.tsx"},
+        {"path": "src/main.py"},
+    ]
+    assert truncated is False
+
+
+def test_list_reference_files_prunes_secrets_heavy_hidden_and_symlinks(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "public.md").write_text("safe", encoding="utf-8")
+    for rel in (
+        ".env",
+        ".env.production",
+        "auth.json",
+        "credentials.json",
+        "signing.key",
+    ):
+        (root / rel).write_text("secret", encoding="utf-8")
+    for directory in ("node_modules", "build", ".hidden"):
+        target = root / directory
+        target.mkdir()
+        (target / "ignored.js").write_text("ignored", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "outside.txt").write_text("outside", encoding="utf-8")
+    os.symlink(outside / "outside.txt", root / "linked-file.txt")
+    os.symlink(outside, root / "linked-dir")
+
+    files, truncated = fsapi.list_reference_files(root)
+
+    assert files == [{"path": "public.md"}]
+    assert truncated is False
+
+
+def test_list_reference_files_enforces_result_scan_and_depth_caps(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+
+    limited, result_truncated = fsapi.list_reference_files(root, limit=2)
+    scanned, scan_truncated = fsapi.list_reference_files(root, max_scanned=1)
+
+    deep = root
+    for index in range(3):
+        deep = deep / f"level-{index}"
+        deep.mkdir()
+    (deep / "too-deep.txt").write_text("deep", encoding="utf-8")
+    shallow_depth, depth_truncated = fsapi.list_reference_files(root, max_depth=1)
+
+    assert len(limited) == 2 and result_truncated is True
+    assert len(scanned) <= 1 and scan_truncated is True
+    assert all(item["path"] != "level-0/level-1/level-2/too-deep.txt" for item in shallow_depth)
+    assert depth_truncated is True
+
+
 def test_read_and_write_file(tmp_path):
     root = _project(tmp_path)
     assert fsapi.read_file(root, "a.txt") == "hello"

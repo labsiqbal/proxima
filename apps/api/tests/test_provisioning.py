@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from proxima_api import db as dbmod
 from proxima_api import provisioning
 from proxima_api.auth import hash_password, iso_now
@@ -17,7 +15,6 @@ def make_cfg(tmp_path):
     return {
         "workspace_root": str(tmp_path),
         "provision_starter_dirs": ["wiki", "tasks", "artifacts"],
-        "default_team_name": "Team",
         "auto_provision": True,
     }
 
@@ -34,14 +31,6 @@ def add_user(conn, username, role="member"):
 def test_fresh_schema_has_no_project_members_table():
     conn = make_db()
     assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_members'").fetchone() is None
-
-def test_team_name_round_trip_and_fallback(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    assert provisioning.get_team_name(conn, cfg) == "Team"  # fallback to cfg
-    provisioning.set_team_name(conn, "Linc")
-    assert provisioning.get_team_name(conn, cfg) == "Linc"
-
 
 def test_scaffold_project_dir_creates_folders_and_readme(tmp_path):
     cfg = make_cfg(tmp_path)
@@ -96,41 +85,6 @@ def test_provision_private_slug_collision_uses_home_suffix(tmp_path):
     assert project["slug"] == "team-home"
 
 
-def test_provision_shared_records_owner_without_membership_rows(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "admin", role="environment_admin")
-    add_user(conn, "bob")
-    project = provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
-    assert project["visibility"] == "shared"
-    assert project["owner_user_id"] == admin["id"]
-    assert (tmp_path / "projects" / "linc" / "wiki").is_dir()
-    actions = [r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()]
-    assert "workspace.provision.shared" in actions
-
-
-def test_provision_shared_idempotent(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "admin", role="environment_admin")
-    provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
-    provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
-    count = conn.execute("SELECT COUNT(*) AS c FROM projects WHERE slug = 'linc'").fetchone()["c"]
-    assert count == 1
-
-
-def test_user_workspace_provisions_private_only_with_existing_shared(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "admin", role="environment_admin")
-    provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
-    bob = add_user(conn, "bob")
-    provisioning.provision_user_workspace(conn, cfg, bob)
-    assert conn.execute("SELECT COUNT(*) AS c FROM projects WHERE slug = 'bob'").fetchone()["c"] == 1
-    shared = conn.execute("SELECT owner_user_id FROM projects WHERE slug = 'linc'").fetchone()
-    assert shared["owner_user_id"] == admin["id"]
-
-
 def test_user_workspace_error_is_isolated(tmp_path, monkeypatch):
     conn = make_db()
     cfg = make_cfg(tmp_path)
@@ -157,14 +111,12 @@ def test_auto_provision_disabled_is_noop(tmp_path):
 def test_backfill_all_users(tmp_path):
     conn = make_db()
     cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "admin", role="environment_admin")
+    add_user(conn, "admin", role="environment_admin")
     add_user(conn, "bob")
     add_user(conn, "carol")
-    provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
     summary = provisioning.backfill(conn, cfg)
     assert summary["users"] == 3
     assert conn.execute("SELECT COUNT(*) AS c FROM projects WHERE visibility = 'private'").fetchone()["c"] == 3
-    assert conn.execute("SELECT COUNT(*) AS c FROM projects WHERE slug = 'linc' AND visibility = 'shared'").fetchone()["c"] == 1
 
 
 def test_backfill_idempotent(tmp_path):
@@ -180,7 +132,6 @@ def test_default_config_has_provisioning_keys():
     from proxima_api.settings import normalize_config
 
     cfg = normalize_config()
-    assert cfg["default_team_name"] == "Team"
     assert cfg["provision_starter_dirs"] == ["wiki", "tasks", "artifacts"]
     assert cfg["auto_provision"] is True
 
@@ -199,26 +150,6 @@ def _client(tmp_path):
         }
     )
     return TestClient(app)
-
-
-def test_provision_private_when_owns_shared_same_slug_uses_home(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "linc", role="environment_admin")
-    provisioning.provision_shared_project(conn, cfg, "linc", "Linc", admin)
-    project = provisioning.provision_private_project(conn, cfg, admin)
-    assert project["slug"] == "linc-home"
-    assert project["visibility"] == "private"
-
-
-def test_provision_shared_rejects_non_shared_slug(tmp_path):
-    conn = make_db()
-    cfg = make_cfg(tmp_path)
-    alice = add_user(conn, "alice")
-    provisioning.provision_private_project(conn, cfg, alice)  # owns private slug 'alice'
-    import pytest
-    with pytest.raises(ValueError):
-        provisioning.provision_shared_project(conn, cfg, "alice", "Alice", alice)
 
 
 # ---------------------------------------------------------------------------
@@ -255,10 +186,6 @@ def test_private_project_never_joins_another_users_project(tmp_path):
     assert proj_b["owner_user_id"] == user_b["id"]
     assert proj_b["visibility"] == "private"
 
-
-# ---------------------------------------------------------------------------
-# FIX 2 — bootstrap shared-project failure is non-fatal
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # FIX 4 — validate project name length / emptiness

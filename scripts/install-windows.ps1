@@ -54,7 +54,6 @@ if (-not (Test-Path $ConfigFile)) {
     "PROXIMA_HOST=127.0.0.1"
     "PROXIMA_PORT=8765"
     "PROXIMA_UPDATE_REPO=labsiqbal/proxima"
-    "PROXIMA_FEATURE_VIDEO=0"
     "PROXIMA_FEATURE_DESIGN_STUDIO=0"
   ) | Set-Content -Encoding ASCII $ConfigFile
 }

@@ -1,7 +1,7 @@
 """Project artifact scanning.
 
 The typed list of artifacts a run leaves behind (design / app / page / doc / file /
-video), for chat result cards and the Artifacts view. Pure + best-effort: prunes
+video-file), for chat result cards and the Artifacts view. Pure + best-effort: prunes
 heavy dirs, absorbs files inside a produced app dir, and caps the result.
 """
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable
@@ -32,7 +31,6 @@ def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]
             return 0.0
 
     designs: list[dict[str, Any]] = []
-    videos: list[dict[str, Any]] = []
     apps: list[dict[str, Any]] = []
     misc: list[dict[str, Any]] = []
     app_dirs: set[str] = set()
@@ -54,18 +52,6 @@ def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]
                     except Exception:
                         pass
                 continue
-            if fn == "index.html" and rel.startswith("artifacts/video/"):
-                if mtime(f) >= start_ts:
-                    try:
-                        title = dp.name
-                        text = f.read_text(encoding="utf-8", errors="ignore")
-                        m = re.search(r"<title>(.*?)</title>", text, re.I | re.S)
-                        if m:
-                            title = re.sub(r"\s+", " ", m.group(1)).strip() or title
-                        videos.append({"type": "video", "id": dp.name, "title": title, "path": str(dp.relative_to(root)), "_m": mtime(f)})
-                    except Exception:
-                        videos.append({"type": "video", "id": dp.name, "title": dp.name, "path": str(dp.relative_to(root)), "_m": mtime(f)})
-                continue
             if fn == "package.json" and mtime(f) >= start_ts:
                 try:
                     scripts = (json.loads(f.read_text()) or {}).get("scripts", {}) or {}
@@ -80,6 +66,12 @@ def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]
             if mtime(f) < start_ts or rel.startswith("artifacts/design/") or fn in _ARTIFACT_SKIP_NAMES:
                 continue
             ext = f.suffix.lower()
+            # Video Studio used to persist an editable shell (index.html, brief.json,
+            # thumbnails, etc.) below artifacts/video/.  The studio is no longer a
+            # product surface, so those legacy support files are not standalone
+            # artifacts.  Keep rendered video files discoverable for playback.
+            if rel.startswith("artifacts/video/") and ext not in (".mp4", ".webm", ".mov"):
+                continue
             if ext in (".html", ".htm"):
                 misc.append({"type": "page", "title": fn, "path": rel, "_m": mtime(f)})
             elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif") and parts and parts[0] in ("artifacts", "reports", "exports"):
@@ -95,7 +87,7 @@ def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]
     misc = [m for m in misc if not any(d != "." and (m["path"] == d or m["path"].startswith(d + "/")) for d in app_dirs)]
     # Sort newest-first BEFORE the cap so the result is deterministic + most-relevant
     # (os.walk order is unstable; without this the capped subset flickers between polls).
-    allitems = sorted(designs + videos + apps + misc, key=lambda a: (-a.get("_m", 0.0), a.get("path") or ""))
+    allitems = sorted(designs + apps + misc, key=lambda a: (-a.get("_m", 0.0), a.get("path") or ""))
     seen: set[Any] = set()
     out: list[dict[str, Any]] = []
     for a in allitems:

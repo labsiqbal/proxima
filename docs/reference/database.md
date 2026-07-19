@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 18 tables. Applied migration version: **17**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`profiles`](#profiles), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -82,6 +82,8 @@ SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exa
 | `current_step_idx` | INTEGER | NO | `0` |  |
 | `input` | TEXT | yes |  |  |
 | `steps_state` | TEXT | NO | `'[]'` |  |
+| `engine` | TEXT | NO | `'linear'` |  |
+| `graph` | TEXT | yes |  |  |
 | `schedule_id` | INTEGER | yes |  |  |
 | `created_by` | INTEGER | yes |  | → `users.id` |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -135,6 +137,29 @@ SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exa
 | `run_id` | INTEGER | yes |  | → `runs.id` (ON DELETE SET NULL) |
 | `output_links` | TEXT | NO | `'[]'` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
+### node_states
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `node_id` | TEXT | NO |  |  |
+| `status` | TEXT | NO | `'pending'` |  |
+| `run_id` | INTEGER | yes |  | → `runs.id` (ON DELETE SET NULL) |
+| `inputs` | TEXT | yes |  |  |
+| `output_kind` | TEXT | yes |  |  |
+| `output` | TEXT | yes |  |  |
+| `checkpoint` | TEXT | yes |  |  |
+| `error` | TEXT | yes |  |  |
+| `version` | INTEGER | NO | `0` |  |
+| `started_at` | TEXT | yes |  |  |
+| `finished_at` | TEXT | yes |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_node_states_job` — (job_id, status)
 
 
 ### profiles
@@ -299,6 +324,7 @@ SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exa
 | `category` | TEXT | NO | `'other'` |  |
 | `status` | TEXT | NO | `'active'` |  |
 | `steps` | TEXT | NO | `'[]'` |  |
+| `graph` | TEXT | yes |  |  |
 | `inputs` | TEXT | NO | `'[]'` |  |
 | `created_by` | INTEGER | yes |  | → `users.id` |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -308,4 +334,4 @@ SQLite (WAL mode). 17 tables. Applied migration version: **17**. This is the exa
 
 
 ---
-_Generated 2026-07-12 23:28 UTC._
+_Generated 2026-07-18 13:55 UTC._

@@ -12,11 +12,6 @@ from pydantic import BaseModel, Field, field_validator
 from .runner_specs import default_runner
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str = "password123"
-
-
 class PasswordRequest(BaseModel):
     password: str
 
@@ -24,53 +19,6 @@ class PasswordRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
-
-
-class SharedProjectSpec(BaseModel):
-    # Pattern enforced at the request layer so an invalid slug fails as 422 BEFORE
-    # setup_bootstrap performs any DB writes (prevents a half-bootstrapped admin).
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$")
-    name: str | None = Field(default=None, max_length=120)
-
-
-class BootstrapRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=8)
-    profile_name: str = "Default"
-    profile_slug: str = "default"
-    runner_id: str = Field(default_factory=default_runner)
-    team_name: str | None = Field(default=None, max_length=80)
-    shared_project: SharedProjectSpec | None = None
-
-
-class UserCreateRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=8)
-    role: str = "member"
-    profile_name: str = "Default"
-    profile_slug: str = "default"
-
-
-class UserUpdateRequest(BaseModel):
-    role: str | None = Field(default=None, pattern=r"^(environment_admin|member)$")
-    password: str | None = Field(default=None, min_length=8)
-
-
-class PasswordChangeRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8)
-
-
-class InviteCreateRequest(BaseModel):
-    role: str = Field(default="member", pattern="^(member|admin)$")
-    expires_in_hours: int = Field(default=168, ge=1, le=24 * 90)
-
-
-class InviteRedeemRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=8)
-    profile_name: str = "Default"
-    profile_slug: str = "default"
 
 
 class AppStartRequest(BaseModel):
@@ -107,14 +55,46 @@ class JobCreateRequest(BaseModel):
     workflow_id: int | None = None
     project_id: int | None = None
     project_slug: str | None = None
+    profile_id: int | None = None
     input: dict[str, Any] | None = None
     title: str | None = None
+
+
+class JobRunLinkRequest(BaseModel):
+    run_id: int = Field(gt=0)
 
 
 class JobApproveRequest(BaseModel):
     # Optional edited output to replace the just-finished step's result before the
     # workflow resumes (the "edit & continue" review action).
     edited_output: str | None = None
+
+
+class GraphJobCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    graph: dict[str, Any]
+    input: dict[str, Any] | None = None
+    project_id: int | None = None
+    project_slug: str | None = None
+    profile_id: int | None = None
+    workflow_id: int | None = None
+
+
+class GraphDefinitionUpdateRequest(BaseModel):
+    graph: dict[str, Any]
+
+
+class GraphTemplateSaveRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str = ""
+    category: str = "other"
+    # Declared {{inputs}}, same shape as a linear recipe's. Schedules build their form
+    # from these, so a graph template that cannot carry them cannot be scheduled.
+    inputs: list[dict[str, Any]] = []
+
+
+class GraphNodeOutputEditRequest(BaseModel):
+    value: Any
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -135,17 +115,16 @@ class ScheduleUpdateRequest(BaseModel):
 
 class PromoteWorkflowRequest(BaseModel):
     profile_id: int | None = None
+    engine: str = Field(default="auto", pattern="^(auto|linear|graph)$")
 
 
-class ProjectVisibilityRequest(BaseModel):
+class ProjectUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    visibility: str | None = Field(default=None, pattern="^(private|shared)$")
 
 
 class ProjectCreateRequest(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$")
     name: str = Field(min_length=1, max_length=120)
-    visibility: str = Field(default="private", pattern="^(private|shared)$")
 
     @field_validator("name")
     @classmethod
@@ -160,10 +139,6 @@ class ProjectLinkRequest(BaseModel):
     path: str = Field(min_length=1)
     name: str | None = Field(default=None, max_length=120)
     slug: str | None = None
-
-
-class MemberRequest(BaseModel):
-    username: str = Field(min_length=1)
 
 
 class CommandRequest(BaseModel):
@@ -222,7 +197,7 @@ class RunCreateRequest(BaseModel):
     participant_profile_ids: list[int] | None = None
     model: str | None = None
     prompt_mode: str = Field(default="chat", pattern="^(chat|brainstorm|debate)$")
-    # Media-prompt routing (/image, /video) resolves the project from the session;
+    # Media-prompt routing (/image, /design) resolves the project from the session;
     # this override covers brand-new sessions relayed from /api/chat/send.
     project_slug: str | None = None
 

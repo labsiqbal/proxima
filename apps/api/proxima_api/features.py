@@ -5,22 +5,20 @@ from typing import Any
 
 from fastapi import HTTPException
 
-VIDEO = "video"
 DESIGN_STUDIO = "design_studio"
+WORKFLOW_GRAPH = "workflow_graph"
 
 _CONFIG_KEYS = {
-    VIDEO: "feature_video",
     DESIGN_STUDIO: "feature_design_studio",
+    WORKFLOW_GRAPH: "feature_workflow_graph",
 }
 
 _DISPLAY_NAMES = {
-    VIDEO: "Video",
     DESIGN_STUDIO: "Design Studio",
+    WORKFLOW_GRAPH: "Workflow Graph",
 }
 
 _COMMAND_FEATURES = {
-    "/video": VIDEO,
-    "/video-studio": VIDEO,
     "/design": DESIGN_STUDIO,
     "/image-studio": DESIGN_STUDIO,  # back-compat aliases for /design
     "/design-studio": DESIGN_STUDIO,
@@ -37,8 +35,8 @@ def enabled(config: Mapping[str, Any] | None, feature: str) -> bool:
 
 def public_flags(config: Mapping[str, Any] | None) -> dict[str, bool]:
     return {
-        VIDEO: enabled(config, VIDEO),
         DESIGN_STUDIO: enabled(config, DESIGN_STUDIO),
+        WORKFLOW_GRAPH: enabled(config, WORKFLOW_GRAPH),
     }
 
 
@@ -75,8 +73,8 @@ def queued_run_feature(run: Mapping[str, Any], session_mode: str) -> str | None:
     if session_mode == "design":
         return DESIGN_STUDIO
     kind = str(run.get("kind") or "")
-    if kind in {"media_video", "media_video-studio"}:
-        return VIDEO
+    if kind in {"wf_node", "workflow_graph_draft"}:
+        return WORKFLOW_GRAPH
     if kind == "media_image-studio":
         return DESIGN_STUDIO
     return command_feature(str(run.get("prompt") or ""))

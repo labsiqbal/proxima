@@ -2,8 +2,9 @@
 
 Proxima stores everything in a single SQLite database (plus project files on
 disk). `scripts/backup` makes a **consistent online snapshot** using SQLite's
-backup API (safe to run while the server is up, WAL and all), compacts it, and
-rotates old copies.
+backup API (safe to run while the server is up, WAL and all), compacts it, verifies
+`PRAGMA integrity_check`, writes it mode `0600`, and rotates old copies. It is a local
+plaintext DB snapshot, not an encrypted or off-host backup.
 
 ## Manual backup
 

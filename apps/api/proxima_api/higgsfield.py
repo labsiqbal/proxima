@@ -25,7 +25,6 @@ class HiggsfieldError(RuntimeError):
 
 
 DEFAULT_IMAGE_MODEL = "nano_banana_2"
-DEFAULT_VIDEO_MODEL = ""
 
 
 def binary(path_env: str | None = None) -> str | None:
@@ -167,22 +166,6 @@ def status() -> dict[str, Any]:
     }
 
 
-def list_models(kind: str = "image") -> list[dict[str, Any]]:
-    flag = "--video" if kind == "video" else "--image"
-    proc = _run(["model", "list", flag, "--json"], timeout=30)
-    if proc.returncode != 0:
-        raise HiggsfieldError(((proc.stderr or proc.stdout or "").strip() or "Could not list Higgsfield models.")[:300])
-    payload = _json_or_text(proc)
-    if isinstance(payload, list):
-        return [m for m in payload if isinstance(m, dict)]
-    if isinstance(payload, dict):
-        for key in ("models", "data", "items"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [m for m in value if isinstance(m, dict)]
-    return []
-
-
 def _append_param(args: list[str], name: str, value: Any) -> None:
     if value is None or value == "":
         return
@@ -306,40 +289,6 @@ def _download(url: str, *, timeout: float) -> bytes:
             return res.content
     except httpx.HTTPError as exc:
         raise HiggsfieldError(f"Higgsfield result download failed: {exc}") from exc
-
-
-def generate_video(
-    *,
-    prompt: str,
-    model: str | None = None,
-    duration: int | None = None,
-    aspect_ratio: str | None = None,
-    resolution: str | None = None,
-    timeout: float = 1200.0,
-) -> bytes:
-    job_type = model or DEFAULT_VIDEO_MODEL
-    if not job_type:
-        raise HiggsfieldError("No Higgsfield video model configured. Choose a video model in Settings → Video generation.")
-    params: dict[str, Any] = {"prompt": prompt}
-    if duration:
-        params["duration"] = duration
-    if aspect_ratio:
-        params["aspect_ratio"] = aspect_ratio
-    if resolution:
-        params["resolution"] = resolution
-    args = ["generate", "create", job_type]
-    for key, value in params.items():
-        _append_param(args, key, value)
-    args.extend(["--wait", "--wait-timeout", f"{max(1, int(timeout // 60))}m", "--wait-interval", "5s", "--json"])
-    proc = _run(args, timeout=timeout + 30)
-    payload = _json_or_text(proc)
-    if proc.returncode != 0:
-        detail = ((proc.stderr or proc.stdout or "").strip() or "Higgsfield video generation failed.")[:500]
-        raise HiggsfieldError(detail)
-    url = _extract_url(payload)
-    if not url:
-        raise HiggsfieldError("Higgsfield video generation completed but returned no result URL.")
-    return _download(url, timeout=timeout)
 
 
 def generate_image(

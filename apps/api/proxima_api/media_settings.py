@@ -1,7 +1,7 @@
 """Shared media-provider settings resolution.
 
 The active image / higgsfield provider config (from app_settings, with defaults)
-is needed by both the files routes (video + image-gen settings) and the design
+is needed by both the files routes and the design
 routes. Keep the resolution in one place so the defaults can't drift between them.
 """
 from __future__ import annotations
@@ -29,7 +29,4 @@ def resolve_higgsfield_settings(conn: sqlite3.Connection) -> dict[str, Any]:
     return {
         "imagePolicy": cfg.get("imagePolicy") or "zero-credit-only",
         "imageModel": cfg.get("imageModel") or higgsfield.DEFAULT_IMAGE_MODEL,
-        "videoPolicy": cfg.get("videoPolicy") or "confirm-credits",
-        "videoModel": cfg.get("videoModel") or higgsfield.DEFAULT_VIDEO_MODEL,
-        "maxVideoCredits": cfg.get("maxVideoCredits") if isinstance(cfg.get("maxVideoCredits"), (int, float)) else 50,
     }

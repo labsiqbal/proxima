@@ -10,7 +10,8 @@
 
 <!-- How did you verify this works? Check all that apply. -->
 
-- [ ] `cd apps/api && uv run pytest -q` passes
+- [ ] `cd apps/api && uv run ruff check proxima_api tests` passes
+- [ ] `cd apps/api && uv run python -m pytest -q` passes
 - [ ] `cd apps/web && npx tsc --noEmit` passes
 - [ ] Manually tested in the dev server (`bash scripts/dev`)
 - [ ] No secrets, runtime data, or personal paths committed

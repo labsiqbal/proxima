@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api import image_providers, video_providers
+from proxima_api import image_providers
+from proxima_api.run_prompting import extract_vision_images
 from proxima_api.main import create_app
+from proxima_api.routes import chat as chat_routes
 
 
 def wait_media_run(app, run_id: int, timeout: float = 8.0) -> str:
@@ -119,88 +122,60 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
     assert links[0]["actions"] == ["use-as-reference"]
 
 
-def test_main_chat_video_request_uses_video_generation_provider(tmp_path, monkeypatch):
-    app = create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "workspace"),
-            "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
-            "start_worker": False,
-            "feature_video": True,
-        }
-    )
+def test_thin_image_brief_asks_question_form_instead_of_generating(tmp_path, monkeypatch):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+    })
     client = TestClient(app)
-    token = client.post("/auth/auto").json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
     client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
-    calls: list[dict[str, object]] = []
 
-    def fake_generate(provider_id, *, prompt, model=None, **kwargs):
-        calls.append({"provider_id": provider_id, "prompt": prompt, "model": model, **kwargs})
-        return video_providers.VideoResult(filename="ugc.mp4", content=b"mp4", content_type="video/mp4")
+    def boom(*a, **k):
+        raise AssertionError("generate must not run on a thin brief")
 
-    monkeypatch.setattr(video_providers, "generate", fake_generate)
-    res = client.post(
-        "/api/chat/send",
-        headers=headers,
-        json={"project_slug": "demo", "message": "/video ugc product demo 15 detik"},
-    )
-
+    monkeypatch.setattr(image_providers, "generate", boom)
+    # Bare /image (no subject) — should clarify, not generate.
+    res = client.post("/api/chat/send", headers=headers, json={"project_slug": "demo", "message": "/image"})
     assert res.status_code == 202, res.text
     body = res.json()
-    assert body["status"] == "queued"  # visible run; generation finishes in background
-    assert body["media_action"] == "video"
-    assert wait_media_run(app, body["run_id"]) == "completed"
-    assert calls and calls[0]["prompt"] == "ugc product demo 15 detik"
+    assert body["media_action"] == "image_ask"
+    messages = client.get(f"/api/sessions/{body['session_id']}/messages", headers=headers).json()["messages"]
+    content = messages[-1]["content"]
+    assert "<question-form" in content and 'submit-as="/image"' in content
+    # No artifact/output links on a clarify turn.
     events = client.get(f"/api/sessions/{body['session_id']}/events", headers=headers).json()["events"]
     complete = [e for e in events if e["type"] == "message.complete"][-1]
-    links = complete["payload"]["output_links"]
-    assert links[0]["type"] == "video-file"
-    assert links[0]["path"].startswith("artifacts/media/videos/")
-    project_path = Path(app.state.db.execute("SELECT path FROM projects WHERE slug = ?", ("demo",)).fetchone()["path"])
-    assert (project_path / links[0]["path"]).read_bytes() == b"mp4"
-    messages = client.get(f"/api/sessions/{body['session_id']}/messages", headers=headers).json()["messages"]
-    assert "Open/Edit in Video Studio" not in messages[-1]["content"]
+    assert complete["payload"]["output_links"] == []
 
 
-def test_main_chat_video_studio_request_creates_video_studio_artifact_shell(tmp_path):
-    app = create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "workspace"),
-            "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
-            "start_worker": False,
-            "feature_video": True,
-        }
-    )
+def test_thin_design_brief_asks_form_but_rich_brief_creates_draft(tmp_path):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "feature_design_studio": True,
+    })
     client = TestClient(app)
-    token = client.post("/auth/auto").json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
     client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
-    slug = "demo"
 
-    res = client.post(
-        "/api/chat/send",
-        headers=headers,
-        json={"project_slug": slug, "message": "/video-studio cinematic launch teaser with kinetic type"},
-    )
+    # Thin /design → clarify form (submit-as re-issues /design).
+    thin = client.post("/api/chat/send", headers=headers, json={"project_slug": "demo", "message": "/design"}).json()
+    assert thin["media_action"] == "image-studio_ask"
+    ask_msg = client.get(f"/api/sessions/{thin['session_id']}/messages", headers=headers).json()["messages"][-1]["content"]
+    assert "<question-form" in ask_msg and 'submit-as="/design"' in ask_msg
 
-    assert res.status_code == 202, res.text
-    body = res.json()
-    assert body["status"] == "completed"
-    assert body["media_action"] == "video-studio"
-    events = client.get(f"/api/sessions/{body['session_id']}/events", headers=headers).json()["events"]
-    complete = [e for e in events if e["type"] == "message.complete"][-1]
-    links = complete["payload"]["output_links"]
-    assert links[0]["type"] == "video"
-    assert links[0]["path"].startswith("artifacts/video/")
-    project_path = Path(app.state.db.execute("SELECT path FROM projects WHERE slug = ?", (slug,)).fetchone()["path"])
-    index_path = project_path / links[0]["path"] / "index.html"
-    assert index_path.exists()
-    messages = client.get(f"/api/sessions/{body['session_id']}/messages", headers=headers).json()["messages"]
-    assert "Open/Edit in Video Studio" in messages[-1]["content"]
+    # A rich brief (what the answered form re-issues) creates the draft + design session.
+    rich = client.post("/api/chat/send", headers=headers, json={
+        "project_slug": "demo",
+        "message": "/design promo 20% off new coffee menu, IG post, clean minimal",
+    }).json()
+    assert rich["media_action"] == "image-studio"
+    assert rich["artifact"]["type"] == "design"
 
 
 def test_run_can_store_display_message_separate_from_prompt(tmp_path):
@@ -721,7 +696,6 @@ def _media_app(tmp_path):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
             "start_worker": False,
-            "feature_video": True,
             "feature_design_studio": True,
         }
     )
@@ -739,26 +713,67 @@ def test_session_runs_endpoint_intercepts_media_prompts(tmp_path, monkeypatch):
     sid = client.post("/api/sessions", headers=headers, json={"title": "ugc", "project_slug": "demo"}).json()["id"]
     calls: list[str] = []
 
-    def fake_generate(provider_id, *, prompt, model=None, **kwargs):
+    def fake_generate(provider_id, key, *, prompt, model=None, **kwargs):
         calls.append(prompt)
-        return video_providers.VideoResult(filename="ugc.mp4", content=b"mp4", content_type="video/mp4")
+        return b"png"
 
-    monkeypatch.setattr(video_providers, "generate", fake_generate)
-    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/video ugc durasi 12 detik"})
+    monkeypatch.setattr(image_providers, "generate", fake_generate)
+    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/image ugc product teaser cinematic"})
 
     assert res.status_code == 202, res.text
     body = res.json()
-    assert body["status"] == "queued" and body["media_action"] == "video"
+    assert body["status"] == "queued" and body["media_action"] == "image"
     assert wait_media_run(app, body["run_id"]) == "completed"
     assert calls  # provider was called, no ACP run queued
     with app.state.db_lock:
         kind = app.state.db.execute("SELECT kind FROM runs WHERE id = ?", (body["run_id"],)).fetchone()["kind"]
         msgs = [r["role"] for r in app.state.db.execute("SELECT role FROM messages WHERE session_id = ? ORDER BY id", (sid,)).fetchall()]
-    assert kind == "media_video"
+    assert kind == "media_image"
     assert msgs == ["user", "assistant"]  # the user prompt stays in the thread
     messages = client.get(f"/api/sessions/{sid}/messages", headers=headers).json()["messages"]
     links = messages[-1]["output_links"]
-    assert links and links[0]["type"] == "video-file"  # clickable result card in chat
+    assert links and links[0]["type"] == "image"  # clickable result card in chat
+
+
+def test_image_file_mention_reaches_generation_provider_as_pixels(tmp_path, monkeypatch):
+    app = _media_app(tmp_path)
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    project = client.post(
+        "/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}
+    ).json()
+    root = Path(project["path"])
+    (root / "assets").mkdir(parents=True, exist_ok=True)
+    (root / "assets/logo.png").write_bytes(b"reference-pixels")
+    sid = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "image ref", "project_slug": "demo"},
+    ).json()["id"]
+    captured: dict[str, object] = {}
+
+    def fake_generate(provider_id, key, *, prompt, image_bytes=None, image_mime=None, **kwargs):
+        captured.update(prompt=prompt, image_bytes=image_bytes, image_mime=image_mime)
+        return b"generated"
+
+    monkeypatch.setattr(image_providers, "generate", fake_generate)
+    response = client.post(
+        f"/api/sessions/{sid}/runs",
+        headers=headers,
+        json={
+            "message": (
+                "/image make a polished launch poster using "
+                "![logo.png](assets/logo.png)"
+            )
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert wait_media_run(app, response.json()["run_id"]) == "completed"
+    assert captured["image_bytes"] == b"reference-pixels"
+    assert captured["image_mime"] == "image/png"
+    assert "![logo.png]" not in str(captured["prompt"])
 
 
 def test_media_run_failure_lands_in_thread(tmp_path, monkeypatch):
@@ -772,17 +787,121 @@ def test_media_run_failure_lands_in_thread(tmp_path, monkeypatch):
     sid = client.post("/api/sessions", headers=headers, json={"title": "ugc", "project_slug": "demo"}).json()["id"]
 
     def boom(*a, **k):
-        raise video_providers.VideoProviderError("Higgsfield CLI not found. Install `@higgsfield/cli`.")
+        raise image_providers.ImageProviderError("Image provider unavailable.")
 
-    monkeypatch.setattr(video_providers, "generate", boom)
-    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/video tes"})
+    monkeypatch.setattr(image_providers, "generate", boom)
+    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/image sufficiently rich brief"})
     assert res.status_code == 202
     body = res.json()
     assert wait_media_run(app, body["run_id"]) == "failed"
     messages = client.get(f"/api/sessions/{sid}/messages", headers=headers).json()["messages"]
-    assert "Higgsfield CLI not found" in messages[-1]["content"]
+    assert "Image provider unavailable" in messages[-1]["content"]
     events = client.get(f"/api/sessions/{sid}/events", headers=headers).json()["events"]
     assert any(e["type"] == "run.failed" for e in events)
+
+
+def test_cancelled_media_run_stays_cancelled_when_provider_finishes(tmp_path, monkeypatch):
+    app = _media_app(tmp_path)
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+    sid = client.post("/api/sessions", headers=headers, json={"title": "image", "project_slug": "demo"}).json()["id"]
+    started = threading.Event()
+    release = threading.Event()
+
+    def delayed_generate(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(image_providers, "generate", delayed_generate)
+    created = client.post(
+        f"/api/sessions/{sid}/runs",
+        headers=headers,
+        json={"message": "/image cinematic orange product launch"},
+    ).json()
+    assert started.wait(2)
+    cancelled = client.post(f"/api/runs/{created['run_id']}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    release.set()
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        row = app.state.db.execute("SELECT status FROM runs WHERE id = ?", (created["run_id"],)).fetchone()
+        if row["status"] == "cancelled":
+            break
+        time.sleep(0.02)
+    time.sleep(0.1)
+    row = app.state.db.execute("SELECT status FROM runs WHERE id = ?", (created["run_id"],)).fetchone()
+    generated_replies = app.state.db.execute(
+        "SELECT COUNT(*) AS n FROM messages WHERE run_id = ? AND role = 'assistant'",
+        (created["run_id"],),
+    ).fetchone()["n"]
+    assert row["status"] == "cancelled"
+    assert generated_replies == 0
+
+
+def test_concurrent_same_second_media_runs_use_distinct_files(tmp_path, monkeypatch):
+    app = _media_app(tmp_path)
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+    first_session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "first", "project_slug": "demo"},
+    ).json()["id"]
+    second_session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "second", "project_slug": "demo"},
+    ).json()["id"]
+    barrier = threading.Barrier(2)
+    real_monotonic = time.monotonic
+
+    class FrozenClock:
+        @staticmethod
+        def time() -> float:
+            return 1_700_000_000.0
+
+        monotonic = staticmethod(real_monotonic)
+
+    def simultaneous_generate(*args, prompt: str, **kwargs):
+        barrier.wait(timeout=3)
+        return prompt.encode("utf-8")
+
+    monkeypatch.setattr(chat_routes, "time", FrozenClock)
+    monkeypatch.setattr(image_providers, "generate", simultaneous_generate)
+    first = client.post(
+        f"/api/sessions/{first_session}/runs",
+        headers=headers,
+        json={"message": "/image cinematic first product launch"},
+    ).json()
+    second = client.post(
+        f"/api/sessions/{second_session}/runs",
+        headers=headers,
+        json={"message": "/image cinematic second product launch"},
+    ).json()
+    assert wait_media_run(app, first["run_id"]) == "completed"
+    assert wait_media_run(app, second["run_id"]) == "completed"
+
+    first_message = client.get(
+        f"/api/sessions/{first_session}/messages", headers=headers
+    ).json()["messages"][-1]
+    second_message = client.get(
+        f"/api/sessions/{second_session}/messages", headers=headers
+    ).json()["messages"][-1]
+    first_path = first_message["output_links"][0]["path"]
+    second_path = second_message["output_links"][0]["path"]
+    assert first_path != second_path
+    project_root = Path(
+        app.state.db.execute(
+            "SELECT path FROM projects WHERE slug = 'demo'"
+        ).fetchone()["path"]
+    )
+    assert (project_root / first_path).read_bytes() != (project_root / second_path).read_bytes()
 
 
 def test_session_runs_media_skips_collab_and_instant(tmp_path, monkeypatch):
@@ -796,10 +915,9 @@ def test_session_runs_media_skips_collab_and_instant(tmp_path, monkeypatch):
     def explode(*a, **k):
         raise AssertionError("media provider must not be called")
 
-    monkeypatch.setattr(video_providers, "generate", explode)
     monkeypatch.setattr(image_providers, "generate", explode)
     # brainstorm mode goes to collaboration, never the media provider
-    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/video teaser", "prompt_mode": "brainstorm"})
+    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/image product teaser cinematic", "prompt_mode": "brainstorm"})
     assert res.status_code == 202
 
 
@@ -816,7 +934,6 @@ def test_natural_language_media_phrases_go_to_the_agent(tmp_path, monkeypatch):
     def explode(*a, **k):
         raise AssertionError("media provider must not fire on natural language")
 
-    monkeypatch.setattr(video_providers, "generate", explode)
     monkeypatch.setattr(image_providers, "generate", explode)
     for message in ("test generate video ugc durasi 12 detik", "buat gambar thumbnail buat launching"):
         res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": message})
@@ -834,8 +951,8 @@ def test_session_runs_without_project_falls_back_to_agent(tmp_path, monkeypatch)
     def explode(*a, **k):
         raise AssertionError("media provider must not be called without a project")
 
-    monkeypatch.setattr(video_providers, "generate", explode)
-    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/video ugc demo"})
+    monkeypatch.setattr(image_providers, "generate", explode)
+    res = client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "/image ugc product demo"})
     assert res.status_code == 202
     assert res.json()["status"] == "queued"  # normal agent run
 
@@ -865,3 +982,44 @@ def test_image_studio_command_creates_design_draft(tmp_path):
     assert drow and drow["mode"] == "design"
     assert rrow and rrow["status"] == "queued"
     assert "carousel promo snacktray lawson" in rrow["prompt"] and "Current scene" in rrow["prompt"]
+
+
+def test_image_mention_in_design_command_becomes_jailed_vision_input(tmp_path):
+    app = _media_app(tmp_path)
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    project = client.post(
+        "/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}
+    ).json()
+    root = Path(project["path"])
+    (root / "assets").mkdir(parents=True, exist_ok=True)
+    (root / "assets/hero.webp").write_bytes(b"hero-pixels")
+    sid = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "design ref", "project_slug": "demo"},
+    ).json()["id"]
+
+    response = client.post(
+        f"/api/sessions/{sid}/runs",
+        headers=headers,
+        json={
+            "message": (
+                "/design create a premium campaign poster around "
+                "![hero.webp](assets/hero.webp)"
+            )
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    scene_path = root / response.json()["artifact"]["path"] / "scene.json"
+    scene = json.loads(scene_path.read_text(encoding="utf-8"))
+    with app.state.db_lock:
+        prompt = app.state.db.execute(
+            "SELECT prompt FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            (scene["sessionId"],),
+        ).fetchone()["prompt"]
+    clean_prompt, images = extract_vision_images(prompt, str(root))
+    assert "Current scene" in clean_prompt
+    assert images == [(b"hero-pixels", "image/webp")]

@@ -1,7 +1,7 @@
 """Auth/readiness health checks surfaced on the Home dashboard.
 
 Checks whether the things the owner actually works with are ready *before* work
-starts: the selected image/video generation providers (OAuth tokens, CLI logins)
+starts: the selected image-generation provider (OAuth tokens, CLI logins)
 and every runner referenced by a profile. Checks shell out to CLIs and probe
 HTTP endpoints, so they never run on the request path — the dashboard returns
 the cached snapshot and kicks a background refresh when it is stale.
@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import app_settings, image_providers, video_providers
+from . import app_settings, image_providers
 from .db import connect
 from .runners import hermes_status, runner_readiness
 
@@ -48,7 +48,7 @@ def _check(check_id: str, area: str, label: str, ok: bool, detail: str) -> dict[
     return {"id": check_id, "area": area, "label": label, "ok": bool(ok), "detail": detail}
 
 
-def _media_checks(conn, *, include_video: bool = False) -> list[dict[str, Any]]:
+def _media_checks(conn) -> list[dict[str, Any]]:
     """Only the providers currently selected in Settings — unselected ones are noise."""
     checks: list[dict[str, Any]] = []
     icfg = app_settings.get_json(conn, app_settings.IMAGE_GEN_KEY) or {}
@@ -62,18 +62,6 @@ def _media_checks(conn, *, include_video: bool = False) -> list[dict[str, Any]]:
     iok = bool(result.get("ok", result.get("ready", False)))
     checks.append(_check(f"image:{iprovider.id}", "image", f"Image generation · {iprovider.display_name}",
                          iok, str(result.get("detail") or ("Ready." if iok else "Connection test failed."))))
-    if include_video:
-        vcfg = app_settings.get_json(conn, app_settings.VIDEO_GEN_KEY) or {}
-        if not isinstance(vcfg, dict):
-            vcfg = {}
-        vprovider = video_providers.get_provider(vcfg.get("provider"))
-        try:
-            vresult = video_providers.test_connection(vprovider.id)
-        except Exception as exc:
-            vresult = {"ok": False, "detail": f"Check failed: {exc}"}
-        vok = bool(vresult.get("ok"))
-        checks.append(_check(f"video:{vprovider.id}", "video", f"Video generation · {vprovider.display_name}",
-                             vok, str(vresult.get("detail") or ("Ready." if vok else "Connection test failed."))))
     return checks
 
 
@@ -108,12 +96,12 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
     return checks
 
 
-def _refresh(database_path: str, include_video: bool = False) -> None:
+def _refresh(database_path: str) -> None:
     global _snapshot, _refreshed_at, _refreshing
     try:
         conn = connect(database_path)
         try:
-            checks = _media_checks(conn, include_video=include_video) + _runner_checks(conn)
+            checks = _media_checks(conn) + _runner_checks(conn)
         finally:
             conn.close()
         snap = {
@@ -133,7 +121,7 @@ def _refresh(database_path: str, include_video: bool = False) -> None:
             _refreshing = False
 
 
-def snapshot(database_path: str, *, enabled: bool = True, include_video: bool = False) -> dict[str, Any]:
+def snapshot(database_path: str, *, enabled: bool = True) -> dict[str, Any]:
     """Latest cached snapshot, kicking a background refresh when stale.
 
     Never blocks: the first call returns {"status": "checking"} and the Home
@@ -148,5 +136,5 @@ def snapshot(database_path: str, *, enabled: bool = True, include_video: bool = 
         snap = _snapshot
     if kick:
         # Outside the lock: _refresh re-acquires it, and the lock is not reentrant.
-        threading.Thread(target=_refresh, args=(database_path, include_video), daemon=True, name="auth-health-refresh").start()
+        threading.Thread(target=_refresh, args=(database_path,), daemon=True, name="auth-health-refresh").start()
     return snap if snap is not None else {"status": "checking", "checks": []}

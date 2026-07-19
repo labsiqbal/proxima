@@ -26,23 +26,18 @@ def _conn() -> sqlite3.Connection:
 
 # ── media checks ─────────────────────────────────────────────────────────────
 
-def test_media_checks_only_selected_providers(monkeypatch):
+def test_media_checks_only_selected_provider(monkeypatch):
     conn = _conn()
     app_settings.set_json(conn, app_settings.IMAGE_GEN_KEY, {"provider": "xai-oauth", "apiKey": None, "baseUrl": None})
-    app_settings.set_json(conn, app_settings.VIDEO_GEN_KEY, {"provider": "higgsfield"})
-    image_calls, video_calls = [], []
+    image_calls = []
     monkeypatch.setattr("proxima_api.image_providers.test_connection",
                         lambda pid, key, base_url=None: (image_calls.append(pid), {"ok": False, "detail": "token expired"})[1])
-    monkeypatch.setattr("proxima_api.video_providers.test_connection",
-                        lambda pid: (video_calls.append(pid), {"ok": True, "detail": "ready"})[1])
+    checks = auth_health._media_checks(conn)
 
-    checks = auth_health._media_checks(conn, include_video=True)
-
-    assert image_calls == ["xai-oauth"] and video_calls == ["higgsfield"]  # selected only, once each
+    assert image_calls == ["xai-oauth"]
     by_id = {c["id"]: c for c in checks}
     assert by_id["image:xai-oauth"]["ok"] is False
     assert "token expired" in by_id["image:xai-oauth"]["detail"]
-    assert by_id["video:higgsfield"]["ok"] is True
 
 
 def test_media_checks_default_providers_when_unset(monkeypatch):
@@ -50,32 +45,17 @@ def test_media_checks_default_providers_when_unset(monkeypatch):
     seen = []
     monkeypatch.setattr("proxima_api.image_providers.test_connection",
                         lambda pid, key, base_url=None: (seen.append(pid), {"ok": True})[1])
-    monkeypatch.setattr("proxima_api.video_providers.test_connection",
-                        lambda pid: (seen.append(pid), {"ok": True})[1])
-    auth_health._media_checks(conn, include_video=True)
-    assert seen == ["codex", "xai-oauth"]  # registry defaults
+    auth_health._media_checks(conn)
+    assert seen == ["codex"]
 
 
 def test_media_check_exception_becomes_failed_check(monkeypatch):
     conn = _conn()
     monkeypatch.setattr("proxima_api.image_providers.test_connection",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr("proxima_api.video_providers.test_connection", lambda pid: {"ok": True})
     checks = auth_health._media_checks(conn)
     image = next(c for c in checks if c["area"] == "image")
     assert image["ok"] is False and "boom" in image["detail"]
-
-
-def test_media_checks_omit_video_when_feature_is_disabled(monkeypatch):
-    conn = _conn()
-    calls = []
-    monkeypatch.setattr("proxima_api.image_providers.test_connection", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr("proxima_api.video_providers.test_connection", lambda pid: calls.append(pid) or {"ok": True})
-
-    checks = auth_health._media_checks(conn, include_video=False)
-
-    assert calls == []
-    assert all(check["area"] != "video" for check in checks)
 
 
 # ── runner checks ────────────────────────────────────────────────────────────
@@ -113,18 +93,16 @@ def test_refresh_populates_snapshot_and_ttl_prevents_rerun(tmp_path, monkeypatch
         "CREATE TABLE profiles (id INTEGER PRIMARY KEY, runner_id TEXT);")
     conn.close()
     monkeypatch.setattr("proxima_api.image_providers.test_connection", lambda *a, **k: {"ok": True, "detail": "ok"})
-    monkeypatch.setattr("proxima_api.video_providers.test_connection", lambda pid: {"ok": False, "detail": "no cli"})
+    auth_health._refresh(str(db))
+    snap = auth_health.snapshot(str(db), enabled=True)
 
-    auth_health._refresh(str(db), include_video=True)
-    snap = auth_health.snapshot(str(db), enabled=True, include_video=True)
-
-    assert snap["status"] == "error" and snap["checkedAt"]
-    assert [c["ok"] for c in snap["checks"]] == [True, False]
+    assert snap["status"] == "ok" and snap["checkedAt"]
+    assert [c["ok"] for c in snap["checks"]] == [True]
 
     spawned = []
     monkeypatch.setattr(auth_health.threading, "Thread",
                         lambda *a, **k: spawned.append(1) or (_ for _ in ()).throw(AssertionError("thread spawned inside TTL")))
-    assert auth_health.snapshot(str(db), enabled=True, include_video=True) == snap  # cached, no refresh thread
+    assert auth_health.snapshot(str(db), enabled=True) == snap  # cached, no refresh thread
     assert not spawned
 
 
@@ -142,7 +120,6 @@ def test_stale_snapshot_kicks_background_refresh(tmp_path, monkeypatch):
         "CREATE TABLE profiles (id INTEGER PRIMARY KEY, runner_id TEXT);")
     conn.close()
     monkeypatch.setattr("proxima_api.image_providers.test_connection", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr("proxima_api.video_providers.test_connection", lambda pid: {"ok": True})
 
     first = auth_health.snapshot(str(db), enabled=True)  # stale → refresh runs (synchronously via FakeThread)
     assert first == {"status": "checking", "checks": []}  # returned the pre-refresh cache
@@ -157,7 +134,6 @@ def test_invalidate_marks_stale_but_keeps_snapshot(tmp_path, monkeypatch):
         "CREATE TABLE profiles (id INTEGER PRIMARY KEY, runner_id TEXT);")
     conn.close()
     monkeypatch.setattr("proxima_api.image_providers.test_connection", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr("proxima_api.video_providers.test_connection", lambda pid: {"ok": True})
     auth_health._refresh(str(db))
     old = auth_health.snapshot(str(db), enabled=True)
     assert old["status"] == "ok"

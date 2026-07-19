@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from proxima_api import main, workflows as wf
+from proxima_api.scheduler import _spawn_scheduled_job
 from proxima_api.main import create_app
 
 
@@ -181,3 +182,200 @@ def test_disabled_and_nonmatching_schedules_do_not_spawn(tmp_path):
     c.post("/api/schedules", json={"workflow_id": wid, "cron": "* * * * *", "enabled": False})
     c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 3 * * *"})  # 3am only
     assert main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 30)) == []
+
+
+def test_run_now_fires_the_schedule_through_the_scheduler_path(tmp_path):
+    # "Run now" must prove the stored cron target, so it goes through the same spawn
+    # the tick uses: same workflow, same project, same substituted input.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = c.post("/api/workflows", json={"name": "W", "steps": [{"name": "A", "instruction": "write {{topic}}"}]}).json()["id"]
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "input": {"topic": "weekly memo"}}).json()
+
+    job = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert job["schedule_id"] == sch["id"]
+    assert job["workflow_id"] == wid
+    assert job["status"] == "running"
+    assert job["steps_state"][0]["instruction"] == "write weekly memo"
+
+
+def test_run_now_does_not_swallow_the_real_tick_for_that_minute(tmp_path):
+    # The guard that matters: a manual run at 09:00 must not claim the 09:00 minute
+    # and leave the owner thinking the schedule fired on its own.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "allow"}).json()
+
+    manual = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert c.get("/api/schedules").json()[0]["last_run_minute"] is None
+
+    spawned = main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 0))
+    assert len(spawned) == 1 and spawned[0] != manual["id"]
+    assert c.get("/api/schedules").json()[0]["last_run_minute"] == "2026-06-22T09:00"
+
+
+def test_run_now_works_on_a_disabled_schedule(tmp_path):
+    # 'enabled' governs the tick. Trying a schedule before trusting it to fire on its
+    # own is exactly when it is still switched off.
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "enabled": False}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").json()["schedule_id"] == sch["id"]
+    assert main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 0)) == []
+
+
+def test_run_now_reports_an_overlap_skip_instead_of_doing_nothing(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "skip"}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").status_code == 200
+    blocked = c.post(f"/api/schedules/{sch['id']}/run")
+    assert blocked.status_code == 409
+    assert "overlap" in blocked.json()["detail"]
+
+
+def test_run_now_allows_a_second_run_when_overlap_is_allow(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *", "overlap_policy": "allow"}).json()
+
+    first = c.post(f"/api/schedules/{sch['id']}/run").json()
+    second = c.post(f"/api/schedules/{sch['id']}/run").json()
+    assert first["id"] != second["id"]
+
+
+def test_run_now_on_an_unrunnable_workflow_409s(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = c.post("/api/workflows", json={"name": "Empty", "steps": []}).json()["id"]
+    sch = c.post("/api/schedules", json={"workflow_id": wid, "cron": "0 9 * * *"}).json()
+
+    assert c.post(f"/api/schedules/{sch['id']}/run").status_code == 409
+
+
+def test_run_now_is_scoped_to_the_owner(tmp_path):
+    c = _client(_app(tmp_path))
+    assert c.post("/api/schedules/9999/run").status_code == 404
+
+
+def _graph_app(tmp_path, *, graph_enabled: bool = True):
+    return create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "feature_workflow_graph": graph_enabled,
+            "start_worker": False,
+        }
+    )
+
+
+def _graph_workflow(app, name: str = "Graph W") -> int:
+    """A saved graph template: a workflows row whose steps are '[]' and graph is a DAG."""
+    import json as _json
+
+    from proxima_api.graph import normalize_graph
+
+    db = app.state.worker_db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    graph = normalize_graph({
+        "nodes": [{"id": "only", "name": "Only", "instruction": "Do {{brief}}"}],
+    })
+    cur = db.execute(
+        "INSERT INTO workflows(name, description, category, status, steps, graph, inputs, created_by) "
+        "VALUES (?, '', 'other', 'active', '[]', ?, '[]', ?)",
+        (name, _json.dumps(graph), owner),
+    )
+    return int(cur.lastrowid)
+
+
+def _schedule_for(app, workflow_id: int, inp: str = '{"brief": "the launch"}') -> dict:
+    db = app.state.worker_db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    cur = db.execute(
+        "INSERT INTO schedules(workflow_id, cron, input, enabled, overlap_policy, created_by) "
+        "VALUES (?, '* * * * *', ?, 1, 'skip', ?)",
+        (workflow_id, inp, owner),
+    )
+    row = db.execute("SELECT * FROM schedules WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def test_scheduling_a_graph_workflow_spawns_a_graph_job(tmp_path):
+    """It used to build steps_state from a graph template's '[]' steps and return None —
+    a scheduled graph did nothing at all, with no error."""
+    app = _graph_app(tmp_path)
+    _client(app)
+    workflow_id = _graph_workflow(app)
+    sched = _schedule_for(app, workflow_id)
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    assert job_id is not None
+    job = dict(app.state.worker_db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["engine"] == "graph"
+    assert job["schedule_id"] == sched["id"]
+    assert job["status"] == "running"
+    # The node ran, and the schedule's stored input reached its {{brief}}.
+    run = app.state.worker_db.execute(
+        "SELECT r.prompt FROM runs r JOIN node_states n ON n.run_id = r.id WHERE n.job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert run is not None, "the graph job spawned but no node was dispatched"
+    assert "Do the launch" in run["prompt"]
+
+
+def test_scheduling_a_graph_is_skipped_when_the_feature_is_off(tmp_path):
+    """The master switch means the executor would never dispatch it — better to skip than
+    to leave a 'running' job nothing will advance."""
+    app = _graph_app(tmp_path, graph_enabled=False)
+    _client(app)
+    sched = _schedule_for(app, _graph_workflow(app))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    assert job_id is None
+    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"] == 0
+    # The minute is still claimed, so a skipped graph does not retry every tick.
+    claimed = app.state.worker_db.execute(
+        "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
+    ).fetchone()["last_run_minute"]
+    assert claimed == "2026-07-17T10:00"
+
+
+def test_scheduling_a_linear_workflow_is_unchanged(tmp_path):
+    app = _graph_app(tmp_path)
+    c = _client(app)
+    sched = _schedule_for(app, _wf(c))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
+
+    job = dict(app.state.worker_db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["engine"] == "linear"
+    assert job["steps_state"] != "[]"
+
+
+def test_a_paused_workflow_does_not_fire_its_schedule(tmp_path):
+    """The owner's rule: only active workflows run on a schedule. Pausing (draft) takes
+    the template out of rotation; the minute is still claimed so it does not retry."""
+    app = _graph_app(tmp_path)
+    _client(app)
+    workflow_id = _graph_workflow(app)
+    sched = _schedule_for(app, workflow_id)
+    app.state.worker_db.execute("UPDATE workflows SET status='draft' WHERE id=?", (workflow_id,))
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T11:00")
+
+    assert job_id is None
+    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"] == 0
+    claimed = app.state.worker_db.execute(
+        "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
+    ).fetchone()["last_run_minute"]
+    assert claimed == "2026-07-17T11:00"

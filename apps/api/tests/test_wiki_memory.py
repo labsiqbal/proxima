@@ -202,3 +202,21 @@ def test_note_summary_skips_frontmatter_without_description():
     # no frontmatter -> first real line, headings skipped
     note3 = "# Title\n\nFirst real line.\n"
     assert wiki_memory._note_summary(note3) == "First real line."
+
+
+def test_read_design_guidelines_reads_project_design_md(tmp_path: Path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    assert wiki_memory.read_design_guidelines(root) is None  # no file yet
+    (root / "design.md").write_text("# Brand\n- Primary #FF6A00\n- Font Space Grotesk")
+    got = wiki_memory.read_design_guidelines(root)
+    assert got is not None and "#FF6A00" in got
+
+
+def test_build_run_preamble_injects_design_guidelines_only_with_design_studio(tmp_path: Path):
+    g = "- Primary #FF6A00\n- Font Space Grotesk"
+    with_ds = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", include_design_studio=True, design_guidelines=g)
+    assert "design.md" in with_ds and "#FF6A00" in with_ds
+    # Guidelines are design-scoped: a non-design run must not carry them.
+    without_ds = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", include_design_studio=False, design_guidelines=g)
+    assert "#FF6A00" not in (without_ds or "")

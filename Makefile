@@ -7,7 +7,9 @@ build:
 	bash scripts/build
 
 test:
+	cd apps/api && .venv/bin/ruff check proxima_api tests
 	cd apps/api && .venv/bin/python -m pytest -q tests
+	npm --prefix apps/web test
 	npm --prefix apps/web run build
 
 doctor:

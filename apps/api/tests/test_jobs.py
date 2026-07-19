@@ -109,6 +109,33 @@ def test_jobs_list_filter_and_approve(tmp_path):
     assert approved["status"] == "done"
 
 
+def test_new_job_defaults_to_linear_engine(tmp_path):
+    # ADR-0001 coexistence: every classic job is engine='linear'; the graph
+    # engine is opt-in and never the default.
+    app = _app(tmp_path)
+    c = _client(app)
+    job = c.post("/api/jobs", json={"input": {"brief": "x"}}).json()
+    row = app.state.db.execute("SELECT engine, graph FROM jobs WHERE id = ?", (job["id"],)).fetchone()
+    assert row["engine"] == "linear"
+    assert row["graph"] is None
+
+
+def test_graph_jobs_are_hidden_from_the_linear_activity_list(tmp_path):
+    # S2 hardening: a engine='graph' job (no steps_state) must not surface in the
+    # classic Activity list, which hard-binds steps_state/current_step_idx.
+    app = _app(tmp_path)
+    c = _client(app)
+    linear = c.post("/api/jobs", json={"input": {"brief": "linear one"}}).json()
+    app.state.db.execute(
+        "INSERT INTO jobs(title, status, engine, graph, created_by) VALUES ('graph one','queued','graph','{\"nodes\":[],\"edges\":[]}',?)",
+        (linear["created_by"],),
+    )
+    ids = {it["id"] for it in c.get("/api/jobs").json()["items"]}
+    titles = {it["title"] for it in c.get("/api/jobs").json()["items"]}
+    assert linear["id"] in ids
+    assert "graph one" not in titles
+
+
 def test_jobs_list_filters_by_project_slug(tmp_path):
     app = _app(tmp_path)
     c = _client(app)

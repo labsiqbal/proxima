@@ -10,6 +10,13 @@ from . import workflows as wf
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
 class RunDrafts:
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -27,12 +34,12 @@ class RunDrafts:
         persistence should stop.
         """
         kind = run.get("kind", "chat")
-        if kind not in {"wiki_draft", "workflow_draft"}:
+        if kind not in {"wiki_draft", "workflow_draft", "workflow_graph_draft"}:
             return False
 
         db = self.app.state.worker_db
-        run_id = int(run["id"])
-        session_id = int(run["session_id"])
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
 
         if kind == "wiki_draft":
@@ -50,7 +57,13 @@ class RunDrafts:
             event_type = "workflow.draft"
 
         with self.app.state.db_lock:
+            updated = db.execute(
+                "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = 'running'",
+                (run_id,),
+            )
+            if updated.rowcount != 1:
+                return True
             add_event(run_id, session_id, project_id, event_type, draft)
             add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason})
-            db.execute("UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
         return True

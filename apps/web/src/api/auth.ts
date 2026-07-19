@@ -3,11 +3,6 @@ import type { User } from '../types'
 
 type Session = { token: string; user: User }
 
-// Single-user cockpit. Passwordless auto-login is only accepted before a password
-// is set (network-only mode); once set, use login().
-export const autoLogin = () => api<Session>('/auth/auto', undefined, { method: 'POST' })
-export const me = (token: string) => api<User>('/api/me', token)
-
 // Boot resume via the HttpOnly cookie; echoes the session token for in-memory use.
 export const resume = () => api<Session>('/auth/resume', undefined, { method: 'POST' })
 export const setupStatus = () => api<{ password_set: boolean; single_user: boolean }>('/api/setup/status')

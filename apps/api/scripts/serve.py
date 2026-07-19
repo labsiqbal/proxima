@@ -60,14 +60,23 @@ app = create_app(
         # deployment sets PROXIMA_MANAGE_OS_ACL=1 to enable ownership/ACL ops.
         "manage_os_acl": env_bool("PROXIMA_MANAGE_OS_ACL", False),
         "web_dist_path": str(web_dist),
-        "public_base_url": os.environ.get("PROXIMA_PUBLIC_BASE_URL") or None,
         "source_hermes_home": os.environ.get("PROXIMA_SOURCE_HERMES_HOME") or None,
         "hermes_bin": os.environ.get("PROXIMA_HERMES_BIN") or None,
         "refresh_credentials": env_bool("PROXIMA_REFRESH_CREDENTIALS", True),
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", 900),
+        "max_upload_bytes": env_int("PROXIMA_MAX_UPLOAD_MB", 100) * 1024 * 1024,
         "run_worker_poll_interval_ms": env_int("PROXIMA_RUN_WORKER_POLL_MS", 250),
+        # Graph fan-out is bounded by both of these: the graph budget decides how
+        # many nodes are dispatched, the worker decides how many actually execute.
+        "run_worker_concurrency": env_int(
+            "PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])
+        ),
+        "graph_node_concurrency": env_int(
+            "PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])
+        ),
         "seed_users": [],
-        # Single-user cockpit mode (no login wall / team mgmt; auto-auth as owner).
+        # Single-user owner identity. The password/session gate is established by
+        # first-run setup; this flag is retained for config compatibility.
         "single_user": env_bool("PROXIMA_SINGLE_USER", False),
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME") or "owner",
         # Point claude-code runner at live ~/.claude (full skills/plugins/rules/memory).
@@ -88,8 +97,8 @@ app = create_app(
         "update_check": env_bool("PROXIMA_UPDATE_CHECK", bool(DEFAULT_CONFIG["update_check"])),
         "update_repo": os.environ.get("PROXIMA_UPDATE_REPO") or DEFAULT_CONFIG["update_repo"],
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
-        "feature_video": env_bool("PROXIMA_FEATURE_VIDEO", False),
         "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", False),
+        "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
     }
 )
 

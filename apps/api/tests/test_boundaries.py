@@ -18,7 +18,6 @@ PKG = pathlib.Path(__file__).resolve().parents[1] / "proxima_api"
 FEATURE_MODULES = [
     "design_scenes.py",
     "image_providers.py",
-    "video_providers.py",
     "higgsfield.py",
 ]
 

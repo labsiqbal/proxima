@@ -66,6 +66,14 @@ Every layer has a UNIQUE `id`, plus `x`, `y`, and optional `rotation` (deg) + `o
 - **line** — `{ type:"line", x,y, x2,y2, stroke, strokeWidth }`
 - **path** — `{ type:"path", x,y, width, height, d:"<SVG path data>", fill }` — organic/blob shapes
 - **image** — `{ type:"image", x,y, width, height, src, cornerRadius? }`
+- **image frame (clip mask)** — any `rect`/`ellipse`/`triangle`/`star` can hold a clipped
+  image (Canva-style) by adding `imageSrc` (a real path or `"gen:<prompt>"`) plus optional
+  `imageCropX`/`imageCropY` (0–100 reposition) and `imageCropZoom` (1–4). The image is
+  masked to the shape's outline. On the canvas, **dragging an image layer onto a shape**
+  absorbs it into the shape as a frame; the inspector's *Image frame* section repositions,
+  detaches (pops the image back out as a standalone layer), or removes it. Rendered with a
+  Konva `Group clipFunc`; PNG export is automatic, HTML export uses `border-radius`
+  (rect/ellipse) or `clip-path` polygon (triangle/star). Blobs (`path`) can't be frames yet.
 
 No full-size background rectangle — the artboard's own `background` carries the colour.
 Fonts: Inter, Poppins, Nunito, Merriweather, Playfair Display, Roboto Slab, JetBrains Mono, Oswald, Caveat, Lobster.
@@ -89,8 +97,71 @@ with a sensible palette and type hierarchy — not a lone headline.
 
 ## In-studio AI contract
 
-The Design Studio's own chat sends the current scene + the selection, and the agent
+The Design Studio's own chat (and a `/design` draft from the main chat, which opens a
+linked **design session**) sends the current scene + the selection, and the agent
 replies with a `<design-scene>{...}</design-scene>` block that the canvas applies live.
+
+**Contract boundary — the client owns the file in a design session.** In a design
+session the agent must reply with the `<design-scene>` block *only*; it must NOT write
+`scene.json` to disk itself (the "create/edit from chat" path above is for the **main
+chat**, not design sessions). The server seeds the draft with a `runPendingId` marking
+the scene as awaiting exactly that run; the client (`applyDesignReply`) is the sole
+writer of the finished scene, clearing `runPendingId` and stamping `appliedRunId`. If
+the agent also writes the file, it strips `runPendingId` and the studio's
+recovery-on-open no longer auto-applies — the canvas hangs on "Designing…" until a
+manual refresh. This is enforced by `DESIGN_SESSION_GUARDRAIL` (which tells the agent to
+ignore the main-chat "write it to disk" phrasing) in `wiki_memory.py`.
+
+Live reconcile is defence-in-depth: the run-stream terminal event applies the reply
+instantly, and a watchdog (`DesignStudio.tsx`) polls the run's real status — immediately
+on attach, then every 5s — so a dropped SSE/WS event still lands the design in seconds
+without a refresh.
+
+## Per-project brand guidelines (`design.md`)
+
+Each project may carry a `design.md` at its **root** (`<project>/design.md`) — hand-written
+or generated brand guidelines / design preferences (palette, type, tone, do/don't,
+reference notes). On every design run (main-chat `/design`, in-studio chat, or the agent
+authoring a design from chat), the backend reads it and injects the content into the
+agent's first-turn preamble, right after the `DESIGN_GUIDE`, framed as the project's
+DEFAULT brand direction that wins over generic instincts but yields to the user's explicit
+request that turn. This makes the agent compose on-brand without a tool call — the same
+always-in-context mechanism the wiki memory catalog uses.
+
+- Reader + injection: `wiki_memory.read_design_guidelines()` (size-capped, best-effort) →
+  `build_run_preamble(..., design_guidelines=...)`; wired in `run_prompting.py`, gated on
+  `include_design_studio`.
+- Content is only injected for design-enabled runs, never for plain agent/chat runs.
+
+**Generate it** — the Design home has a *Brand guide (design.md)* action that opens a
+modal (`BrandGuideModal`): give any reference **URLs** (brand site, Pinterest, any page),
+upload reference **images**, and/or free-text **notes**. `POST
+/api/projects/{slug}/design/brand-guide` crawls the URLs server-side
+(`brand_extract.fetch_url_digest` — title/description/CSS colours/fonts/og-image/copy,
+best-effort, never raises), then queues an agent run (kind `brand_guide`) whose prompt
+carries those digests + the notes + the images as vision (`⟦VISION:…⟧`) and instructs the
+agent to write `design.md` at the project root. The client polls `design.md` until it
+lands and previews it. JS-rendered pages (Instagram) yield thin HTML — the digest says so
+and points the user to uploading a screenshot instead.
+
+## `/design` from the main chat
+
+Typing `/design <brief>` in the main chat (`routes/chat.py`) seeds a shell scene, creates
+a linked **design session**, kicks off the compose run, and returns a draft card.
+
+- **Thin brief → clarify first.** If the brief is almost empty (no attached image, < 3
+  words), the backend replies with a `<question-form>` in the main chat instead of drafting
+  something generic. The form's `submit-as="/design"` makes answering re-issue `/design`
+  with the answers as the brief, so the same path runs again — now on-brief. (Same
+  mechanism for `/image`.) See CAPABILITIES §14.
+- **Deep-open.** The draft card opens *that* design directly. `DesignStudio` defers
+  `onOpened()` until `openDesign()` resolves so clearing the pending prop can't let the
+  restore-last-design effect race in and drop the user on the start screen; a failed read
+  falls back to the gallery, never a bare "home".
+- **Chat continuity.** The design session's first user message is the brief (for the form
+  flow, the formatted answers), and the compose reply is its assistant turn — so opening
+  Design Studio shows the request context, mirroring the main-chat exchange rather than an
+  empty chat. `hydrateChat` loads these from the session on open.
 
 ## Export
 - graphic / mobile / deck-slide → PNG/JPG (`stage.toDataURL`).

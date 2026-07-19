@@ -14,7 +14,9 @@ Proxima app boundary: one owner, projects, sessions, profiles, and network-gated
 Runner boundary: runner subprocess gets selected profile home and project cwd
 ```
 
-Proxima does **not** currently provide OS-level isolation or multi-user app authorization. Treat anyone who can reach the API as the owner unless an external access gate blocks them.
+Proxima does **not** currently provide OS-level isolation or multi-user app authorization.
+The external network gate is primary; after first run, the single-owner password and
+session provide defense-in-depth. Treat an authenticated app session as full owner access.
 
 ## Useful commands
 
@@ -31,7 +33,9 @@ bash scripts/proxima serve
 Verification:
 
 ```bash
+cd apps/api && .venv/bin/ruff check proxima_api tests
 cd apps/api && .venv/bin/python -m pytest -q tests
+npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
 ```
 
@@ -42,7 +46,11 @@ cd apps/api && uv run python -m pytest -q
 npm --prefix apps/web run build
 ```
 
-Use `python -m pytest`; plain `uv run pytest` is known to fail to spawn in this environment.
+Ruff's `F` rules keep undefined names, unused imports, and unused locals from
+returning. Use `python -m pytest`; plain `uv run pytest` is known to fail to spawn
+in this environment.
+The root `pyrightconfig.json` points Python language servers at `apps/api` and its
+`.venv`, so the nested `proxima_api` package resolves when the repo root is opened.
 
 Packaged local serve:
 
@@ -106,6 +114,41 @@ When a future agent edits this repo:
 5. Keep Hermes/Codex/Claude runner adapters behind Proxima policy checks.
 6. Run API tests and web build after changes.
 7. Never print or commit secrets, tokens, `.env`, DB files, or Hermes profile contents.
+
+## Parallel AI development sessions
+
+Separate AI sessions are safe only when their write boundaries are isolated. Two
+agents editing or testing the same working tree can observe a file between patches;
+that produces misleading import errors, test hangs, or a valid change being
+overwritten even when both agents are individually correct.
+
+Use one Git worktree and branch per independent session:
+
+```bash
+git worktree add ../proxima-agent-a -b agent/a
+git worktree add ../proxima-agent-b -b agent/b
+```
+
+Give each worktree its own runtime config, database, workspace root, ports, and
+frontend dev-server port. Merge one reviewed branch at a time, regenerate docs when
+routes/schema changed, then run the complete lint/test/build gate from a stable tree.
+
+`scripts/dev` automates the runtime and port isolation when given a unique ID:
+
+```bash
+PROXIMA_DEV_ID=agent-a bash scripts/dev
+PROXIMA_DEV_ID=agent-b bash scripts/dev
+```
+
+An explicit `PROXIMA_DEV_ROOT`, `PROXIMA_PORT`, or `PROXIMA_WEB_PORT` still overrides
+the derived value. A worktree/branch remains required because the ID isolates runtime,
+not source-file writes.
+
+Several cooperating sub-agents may share one tree only when one coordinator assigns
+non-overlapping files and waits for all writers to stop before authoritative tests.
+Treat tests run during concurrent edits as advisory, not a release result. Never let
+multiple sessions share a production database or run automated Git cleanup/reset on
+another session's changes.
 
 ## Adding new features
 

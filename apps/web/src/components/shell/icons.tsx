@@ -38,14 +38,6 @@ export const IconDesign = ({ size }: IconProps) => (
 	</Svg>
 );
 
-export const IconVideo = ({ size }: IconProps) => (
-	<Svg size={size}>
-		<rect x="3.5" y="5" width="12.5" height="14" rx="2" />
-		<path d="M16 10l4.5-3v10L16 14" />
-		<path d="M7.5 9.5v5l4-2.5-4-2.5z" />
-	</Svg>
-);
-
 export const IconNewChat = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M20 11.5V17a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h5.5" />
@@ -81,13 +73,6 @@ export const IconGear = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<circle cx="12" cy="12" r="3.2" />
 		<path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.5z" />
-	</Svg>
-);
-
-export const IconPanelRight = ({ size }: IconProps) => (
-	<Svg size={size}>
-		<rect x="3" y="5" width="18" height="14" rx="2" />
-		<path d="M15 5v14" />
 	</Svg>
 );
 
@@ -254,13 +239,6 @@ export const IconAudit = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z" />
 		<path d="M9 12l2 2 4-4" />
-	</Svg>
-);
-
-export const IconTasks = ({ size }: IconProps) => (
-	<Svg size={size}>
-		<path d="M9 6h11M9 12h11M9 18h11" />
-		<path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
 	</Svg>
 );
 

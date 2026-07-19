@@ -9,6 +9,58 @@ from typing import Iterable
 from .runner_specs import RUNNER_SPECS, runner_binary_names, selectable_runner_specs
 
 
+# Keep child processes usable without handing them every secret carried by the
+# Proxima service. Provider credentials are intentionally allowed for agent
+# runners because some supported CLIs authenticate through environment variables;
+# app previews do not receive them. Owners can add names through the documented
+# allowlist or explicitly restore legacy inheritance when a trusted setup needs it.
+_SUBPROCESS_BASE_ENV = {
+    "APPDATA", "COLORTERM", "COMSPEC", "FORCE_COLOR", "HOME", "LANG",
+    "LC_ALL", "LC_CTYPE", "LOCALAPPDATA", "LOGNAME", "NO_COLOR", "PATH",
+    "PATHEXT", "SHELL", "SYSTEMROOT", "TEMP", "TERM", "TMP", "TMPDIR",
+    "USER", "USERPROFILE", "WINDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+}
+_RUNNER_PROVIDER_ENV = {
+    "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY", "XAI_API_KEY",
+}
+
+
+def _env_on(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def subprocess_env(
+    *,
+    provider_auth: bool = False,
+    allowlist_env: str | None = None,
+    inherit_env: str | None = None,
+) -> dict[str, str]:
+    """Build a least-surprise environment for an untrusted child process.
+
+    This is deliberately a lightweight self-hosted guardrail, not an OS sandbox:
+    it prevents accidental leakage of unrelated service credentials while keeping
+    PATH, locale, temp, and platform variables required by normal CLIs. An owner
+    may opt specific variables in, or restore the old full inheritance explicitly.
+    """
+    if inherit_env and _env_on(inherit_env):
+        env = os.environ.copy()
+    else:
+        names = set(_SUBPROCESS_BASE_ENV)
+        if provider_auth:
+            names.update(_RUNNER_PROVIDER_ENV)
+        if allowlist_env:
+            names.update(
+                part.strip()
+                for part in os.environ.get(allowlist_env, "").split(",")
+                if part.strip()
+            )
+        env = {name: value for name, value in os.environ.items() if name in names}
+    env["PATH"] = augmented_path(env.get("PATH"))
+    return env
+
+
 @dataclass(frozen=True)
 class RunnerDefinition:
     id: str

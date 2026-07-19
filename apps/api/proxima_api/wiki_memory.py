@@ -147,12 +147,10 @@ GENERAL_GUIDE = (
 )
 
 
-def _general_guide(*, include_design_studio: bool, include_video: bool) -> str:
+def _general_guide(*, include_design_studio: bool) -> str:
     outputs = ["documents/reports → a .md/.pdf/.html file under artifacts/", "runnable apps → their own folder with a package.json (auto-detected)"]
     if include_design_studio:
         outputs.insert(0, "designs → artifacts/design/<id>/scene.json")
-    if include_video:
-        outputs.insert(0, "videos → artifacts/video/<id>/index.html")
     guidance = (
         "- User-facing deliverables belong under artifacts/ (or reports/ / exports/) so "
         f"Proxima surfaces them as result cards: {', '.join(outputs)}."
@@ -305,7 +303,7 @@ DESIGN_GUIDE = (
     "writing a JSON scene to artifacts/design/<id>/scene.json (one folder per design; <id> is "
     "a short slug = the scene's \"id\"). It then appears in Design → Your designs for the user "
     "to refine on a canvas. Schema (everything you need — no external doc):\n"
-    '{ "id":"<id>", "type":"graphic|deck|mobile|video", "title":"…", "artboards":[ '
+    '{ "id":"<id>", "type":"graphic|deck|mobile", "title":"…", "artboards":[ '
     '{ "id":"a1", "width":1080, "height":1080, "background":"#ffffff", "layers":[ … ] } ] }\n'
     "The artboard background can be a gradient: add backgroundType(\"linear-gradient\"|\"radial-gradient\"), "
     "background2(hex) and backgroundAngle(deg) alongside \"background\" (the base colour) when a gradient "
@@ -317,6 +315,10 @@ DESIGN_GUIDE = (
     '- line: {type:"line",x,y,x2,y2,stroke,strokeWidth}\n'
     '- path: {type:"path",x,y,width,height,d:"<SVG path>",fill}  (organic/blob shapes)\n'
     '- image: {type:"image",x,y,width,height,src,cornerRadius?}\n'
+    'Image frame (Canva-style): any rect/ellipse/triangle/star can hold a clipped image by '
+    'adding imageSrc (a real path or "gen:<prompt>") + optional imageCropX/imageCropY(0..100)/'
+    'imageCropZoom(1..4) — the image is masked to the shape\'s outline (great for photos in '
+    "circles, stars, angled crops).\n"
     "No full-size background rect — the artboard's \"background\" carries the colour. Fonts: "
     "Inter, Poppins, Montserrat, Playfair Display, Oswald, Bebas Neue, Anton, Lora, Caveat, "
     "Pacifico (and more).\n"
@@ -326,23 +328,6 @@ DESIGN_GUIDE = (
     "(same id). Proxima will surface newly written designs as chat result cards that open "
     "Design Studio directly."
 )
-
-VIDEO_GUIDE = (
-    "## Videos (Video Studio)\n"
-    "This project has a Video Studio for editable HTML/HyperFrames-style video compositions. "
-    "When the user asks for a video, motion graphic, reel, short, promo video, animated title, "
-    "or timeline-ready video artifact, create a folder at artifacts/video/<id>/ where <id> is a "
-    "short slug. Write the main composition to artifacts/video/<id>/index.html and include "
-    "data-composition-id=\"root\", data-width, data-height, data-start=\"0\", and data-duration "
-    "on the root composition element. Default sizes: reel/short/story 1080×1920, landscape promo "
-    "1920×1080, square 1080×1080. Keep text as real HTML text, use CSS/WAAPI/GSAP-friendly "
-    "animations, and build a complete visual scene rather than a static poster. If the brief is "
-    "generic, ask a compact <question-form> for only high-impact video decisions: platform/aspect, "
-    "duration, goal, audience, copy, visual style, assets/source material, music/voiceover needs, "
-    "and CTA. If enough direction is provided, make sensible motion-direction decisions and proceed. "
-    "New video folders are surfaced as chat result cards that open Video Studio directly."
-)
-
 
 def list_project_designs(project_root: Path) -> list[dict[str, Any]]:
     """Scan the project's Design Studio designs (artifacts/design/*/scene.json) so the
@@ -375,8 +360,15 @@ def list_project_designs(project_root: Path) -> list[dict[str, Any]]:
 DESIGN_SESSION_GUARDRAIL = (
     "⟦DESIGN SESSION⟧ This chat edits a Design Studio scene (scene.json). Reply with a "
     "one-line summary, then the COMPLETE updated scene as "
-    "<design-scene>{ ...full scene json... }</design-scene>. Do NOT start workflows, spawn "
-    "sub-agents, or take unrelated actions — only edit the design.\n"
+    "<design-scene>{ ...full scene json... }</design-scene>. That reply IS how the design is "
+    "saved — the Design Studio parses it, applies it to the canvas, and owns the file.\n"
+    "Do NOT write, create, read, or edit scene.json on disk yourself, and do NOT use file-write "
+    "or shell tools for the design. Ignore any guidance below about \"writing a JSON scene to "
+    "artifacts/design/<id>/scene.json\" or \"read its scene.json … write it back\" — that is the "
+    "MAIN-chat contract, NOT this session; here the ONLY output is the <design-scene> block. "
+    "(Writing the file yourself strips the run marker the studio waits on and leaves the canvas "
+    "stuck on 'Designing…'.)\n"
+    "Do NOT start workflows, spawn sub-agents, or take unrelated actions — only edit the design.\n"
     "CRITICAL: the \"Current scene\" JSON in the user's message is the SINGLE source of truth for "
     "the design's present state — it already contains the user's manual canvas edits. Start from "
     "THAT exact scene and change ONLY what the user asks; preserve every other layer, position, "
@@ -385,18 +377,37 @@ DESIGN_SESSION_GUARDRAIL = (
 )
 
 
+DESIGN_BRIEF_FILENAME = "design.md"
+
+
+def read_design_guidelines(project_root: Path | None) -> str | None:
+    """The project's brand guidelines / design preferences, hand-written or generated
+    into ``<project>/design.md``. Injected into every design run so the agent composes
+    on-brand without a tool call. Best-effort + size-capped."""
+    if project_root is None:
+        return None
+    f = project_root / DESIGN_BRIEF_FILENAME
+    try:
+        if not f.is_file():
+            return None
+        text = f.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return None
+    return text or None
+
+
 def build_run_preamble(
     project_name: str | None,
     project_slug: str | None,
     wiki_root: Path | None,
     *,
     include_design_studio: bool = False,
-    include_video: bool = False,
+    design_guidelines: str | None = None,
 ) -> str | None:
     """Context block prepended to the FIRST prompt of an agent's ACP session,
     telling it it runs inside Proxima, how to ask interactive questions, and how to
     consult the project's wiki memory. Runner-agnostic plain text."""
-    general_guide = _general_guide(include_design_studio=include_design_studio, include_video=include_video)
+    general_guide = _general_guide(include_design_studio=include_design_studio)
     if not project_name:
         return PREAMBLE_MARKER + "\nYou are running inside Proxima.\n\n" + general_guide + "\n\n" + QFORM_GUIDE
     lines = [
@@ -410,8 +421,21 @@ def build_run_preamble(
     ]
     if include_design_studio:
         lines += ["", DESIGN_GUIDE]
-    if include_video:
-        lines += ["", VIDEO_GUIDE]
+        if design_guidelines:
+            # The project owner's brand direction — highest-priority design context,
+            # short of the user's explicit request this turn.
+            lines += [
+                "",
+                "### This project's brand guidelines (design.md)",
+                "The project owner wrote these design preferences. Treat them as the "
+                "DEFAULT brand direction for every design here — palette, type, tone, "
+                "do/don't — and follow them unless the user's request this turn overrides "
+                "a specific point. When they conflict with a generic instinct above, the "
+                "guidelines win.",
+                "```",
+                design_guidelines.strip()[:12000],
+                "```",
+            ]
     root = Path(wiki_root) if wiki_root is not None else None
     if root is not None and root.is_dir():
         lines += ["", "This project keeps durable memory as markdown notes in wiki/."]
