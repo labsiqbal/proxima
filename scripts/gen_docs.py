@@ -107,8 +107,9 @@ def _render_api(endpoints: dict[str, list[dict]]) -> str:
     o = ["# API Reference\n", STAMP,
          f"\n{total} endpoints across {len(endpoints)} route modules. "
          "All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). "
-         "Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, "
-         "then sends it as `Authorization: Bearer <token>`.\n"]
+         "Auth: single-user — first run uses `POST /auth/auto` only until the owner "
+         "sets a password; later sessions use `POST /auth/login`. Requests carry the "
+         "HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.\n"]
     # Quick index
     o.append("\n## Modules\n")
     for label in endpoints:

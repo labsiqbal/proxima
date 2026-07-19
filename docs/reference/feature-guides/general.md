@@ -22,7 +22,7 @@ Today the general layer of the run preamble is literally two lines ("You are run
 inside Proxima… working directory is this project"). Every work norm is unstated:
 no output routing (agents can scatter files in the project root), no evidence-first
 rule, no ask-vs-act boundary, no tool/skill awareness, no reporting style. Feature
-guides (design/video) cover their own lanes; nothing covers *being a good agent in
+guides (such as design) cover their own lanes; nothing covers *being a good agent in
 this workspace*.
 
 Deliberately NOT here: persona/character — that's the Profile instructions layer

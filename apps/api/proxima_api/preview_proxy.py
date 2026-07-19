@@ -14,7 +14,12 @@ as the main app), so requests arriving over the tunnel are already the owner.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
+import secrets
+import time
 from typing import Any
 
 import httpx
@@ -23,9 +28,41 @@ import websockets
 _LOG = logging.getLogger("proxima.preview_proxy")
 
 # Hop-by-hop headers must not be forwarded verbatim across a proxy.
-_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+_HOP = {"authorization", "cf-access-jwt-assertion", "connection", "cookie",
+        "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailers", "transfer-encoding", "upgrade", "content-length",
         "content-encoding", "host"}
+_RESPONSE_HOP = _HOP | {"set-cookie", "www-authenticate"}
+PREVIEW_COOKIE = "proxima_preview"
+PREVIEW_TOKEN_TTL_SECONDS = 60 * 60
+
+
+def mint_preview_token(secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS) -> str:
+    """Mint a short-lived capability that authorizes previews only.
+
+    It is intentionally unrelated to the owner's API session. Tokens are signed
+    in memory and expire quickly; restarting Proxima invalidates them all.
+    """
+    payload = f"{int(time.time()) + ttl_seconds}:{secrets.token_urlsafe(18)}".encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
+    signed = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded}.{signed}"
+
+
+def valid_preview_token(secret: bytes, token: str, now: int | None = None) -> bool:
+    try:
+        encoded, signed = token.split(".", 1)
+        expected = base64.urlsafe_b64encode(
+            hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        if not hmac.compare_digest(signed, expected):
+            return False
+        padding = "=" * (-len(encoded) % 4)
+        expires_raw, _nonce = base64.urlsafe_b64decode(encoded + padding).decode().split(":", 1)
+        return int(expires_raw) >= (int(time.time()) if now is None else now)
+    except (ValueError, UnicodeDecodeError):
+        return False
 
 
 class PreviewProxyMiddleware:
@@ -34,9 +71,8 @@ class PreviewProxyMiddleware:
         self.fastapi_app = fastapi_app  # for app.state.app_manager at request time
         self.suffix = ("." + apps_domain.lower()) if apps_domain else None
         # Preview subdomains have NO Cloudflare Access gate (so they can be iframed),
-        # so THIS is their only auth: require a valid app-session token in the
-        # `proxima_preview` cookie. validate_token(token) -> truthy if the token is a live
-        # session. Fail-closed: no validator or bad/absent cookie ⇒ 403.
+        # so THIS is their only auth: require a short-lived preview-only capability.
+        # It is never an owner API session and is never forwarded to project code.
         self.validate_token = validate_token
 
     def _authed(self, scope: dict[str, Any]) -> bool:
@@ -50,8 +86,8 @@ class PreviewProxyMiddleware:
         token = ""
         for part in cookie.split(";"):
             p = part.strip()
-            if p.startswith("proxima_preview="):
-                token = p[len("proxima_preview="):]
+            if p.startswith(PREVIEW_COOKIE + "="):
+                token = p[len(PREVIEW_COOKIE) + 1:]
                 break
         if not token:
             return False
@@ -120,7 +156,7 @@ class PreviewProxyMiddleware:
             async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
                 async with client.stream(scope["method"], url, content=body or None, headers=fwd) as resp:
                     out = [(k.encode("latin-1"), v.encode("latin-1"))
-                           for k, v in resp.headers.items() if k.lower() not in _HOP]
+                           for k, v in resp.headers.items() if k.lower() not in _RESPONSE_HOP]
                     await send({"type": "http.response.start", "status": resp.status_code, "headers": out})
                     async for chunk in resp.aiter_raw():
                         await send({"type": "http.response.body", "body": chunk, "more_body": True})

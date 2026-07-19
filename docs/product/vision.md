@@ -4,9 +4,9 @@ Updated: 2026-06-27
 
 Proxima is an opinionated agent harness and workspace OS. It gives AI agents full execution capacity inside a project, while keeping humans in control through visible actions, structured outputs, editable surfaces, memory, and project-scoped ownership.
 
-> **Release scope:** Design Studio and Video references below describe retained
-> future flows. Both are disabled by default in the current release; image
-> generation remains active.
+> **Release scope:** Design Studio references below describe a retained future flow
+> that is disabled by default. Image generation remains active; Video Studio is not
+> a current product surface.
 
 The product is not just a chat wrapper. Chat is the gateway. The real product is the workspace that turns conversations into editable work products: designs, files, wiki notes, workflows, apps, reports, and artifacts.
 

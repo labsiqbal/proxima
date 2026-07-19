@@ -7,6 +7,7 @@ import { IconTrash } from '../components/shell/icons'
 import { BackButton } from '../components/ui/BackButton'
 import type { Artifact } from '../api/files'
 import { stripQuestionForms } from '../components/chat/questionForm'
+import { usePolling } from '../hooks/usePolling'
 
 const ART_ICON: Record<string, string> = { design: '🎨', image: '🖼', app: '▶', page: '🌐', doc: '📄', file: '📎' }
 const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] }) => <span className={`job-pill ${status}`}>{status}</span>
@@ -53,11 +54,7 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
   React.useEffect(() => { void load() }, [load])
 
   // Live-update while the job is running.
-  React.useEffect(() => {
-    if (job?.status !== 'running') return
-    const t = window.setInterval(() => { void load() }, 1500)
-    return () => clearInterval(t)
-  }, [job?.status, load])
+  usePolling(load, 1500, { enabled: job?.status === 'running', immediate: false })
 
   // On first load of a job, focus the node that matters (the active / review step).
   React.useEffect(() => {

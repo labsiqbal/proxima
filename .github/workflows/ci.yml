@@ -8,7 +8,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (pytest)
+    name: Backend (Ruff + pytest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -18,12 +18,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Sync deps
-        run: uv sync
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check proxima_api tests
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run python -m pytest -q
 
   web:
-    name: Web (typecheck + build)
+    name: Web (typecheck + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,10 +36,23 @@ jobs:
         with:
           node-version: 20
       - name: Install deps
-        run: npm install
+        run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Unit tests
-        run: npx vitest run
+        run: npm test
       - name: Build
         run: npm run build
+
+  fresh-install:
+    name: Fresh-install smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - name: Sync API dependencies
+        working-directory: apps/api
+        run: uv sync --locked
+      - name: Verify isolated first boot
+        run: PROXIMA_SMOKE_IN_PROCESS=1 bash scripts/smoke-fresh

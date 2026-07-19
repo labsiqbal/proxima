@@ -3,10 +3,10 @@
 When a project app starts, we expose it at `<slug>.<apps_domain>` by (idempotently):
   1. adding a tunnel ingress rule  <hostname> → the main app service,
   2. creating a proxied DNS CNAME   <hostname> → <tunnel-id>.cfargotunnel.com,
-  3. creating a self-hosted Access app for <hostname> with the owner-email policy
-     (so the preview is NOT public — same gate as the main app).
-On app stop we remove all three. All calls are no-ops if `apps_domain`/`cf_*` config
-is missing, so a deployment without Cloudflare creds just skips remote previews.
+  3. removing any stale per-host Cloudflare Access app, because embedded previews
+     authenticate with Proxima's short-lived preview cookie instead.
+On app stop we remove the ingress rule and DNS record. All calls are no-ops if
+`apps_domain`/`cf_*` config is missing.
 """
 from __future__ import annotations
 
@@ -57,22 +57,6 @@ async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
         json={"config": config},
     )
     r.raise_for_status()
-
-
-async def _owner_emails(cfg, client) -> list[str]:
-    """Emails allowed on the existing (main-app) Access apps — so previews inherit
-    the same allow-list instead of hard-coding it."""
-    r = await client.get(f"{_API}/accounts/{cfg['cf_account_id']}/access/apps")
-    r.raise_for_status()
-    emails: list[str] = []
-    for app in (r.json().get("result") or []):
-        for pol in (app.get("policies") or []):
-            if pol.get("decision") == "allow":
-                for inc in (pol.get("include") or []):
-                    e = (inc.get("email") or {}).get("email")
-                    if e and e not in emails:
-                        emails.append(e)
-    return emails
 
 
 async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:

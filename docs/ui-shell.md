@@ -18,9 +18,9 @@ Ops is for orchestration and deliverables. Its sidebar contains:
 - Workflows
 - Artifacts
 - feature-gated Design
-- an Advanced group for feature-gated Video
 
-Workflow Graphs are **not** a sidebar destination — they are the Advanced mode inside Workflows (see below). The sidebar's Advanced group holds Video alone.
+Workflow Graphs are **not** a second sidebar destination: the graph canvas is the
+default Editor inside Workflows. Video Studio has been removed.
 
 Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work. Ops Home and workflow runs open the same task workspace rather than a generic Activity subview.
 
@@ -45,8 +45,8 @@ The mobile drawer keeps its own copy — the top bar hides below the tablet brea
 
 Workflows appears once in Ops navigation. Its screen owns two modes:
 
-- **Editor** is the workflow graph canvas (feature-gated behind
-  `PROXIMA_FEATURE_WORKFLOW_GRAPH`; with the flag off the mode explains how to enable it).
+- **Editor** is the workflow graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
+  with the recovery switch off the mode explains how to re-enable it.
   It has an **authoring chat** on the left under the standing rule — typing drives the
   plan on screen, never the database — which hands back a `<workflow-graph>` (nodes +
   edges), so the agent can propose branches rather than a straight line. The chat is
@@ -80,7 +80,7 @@ Projects remain shared application entities. The current implementation still us
 
 Projects is a **card grid**, not a master/detail pair — a project carries a name and a slug,
 which is not enough to earn a permanent detail panel. It reuses the same shell as
-Workflows' Sequential mode (`.tasks-view` + `.tasks-head` + `.wf-grid`/`.wf-card`): search
+the shared list shell (`.tasks-view` + `.tasks-head` + `.wf-grid`/`.wf-card`): search
 on the left of the bar, **Add project** on the right, one card per project.
 
 A card shows the name and slug, marks the **active** project (the one the rest of the app
@@ -94,7 +94,7 @@ created is deleted from disk. Chats and tasks go in both cases.
 
 ## Artifacts and Design
 
-Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available. The same separation applies to gated Video and Workflow Graph destinations.
+Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available. Workflow Graph is the default Workflows editor, with its server flag retained only as a recovery switch.
 
 ## Feature gates
 

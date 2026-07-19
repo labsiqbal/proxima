@@ -2,6 +2,7 @@ import React from 'react'
 import { appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
 import { IconMonitor, IconTablet, IconMobile } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
+import { usePolling } from '../../hooks/usePolling'
 
 const VIEWPORTS = [
   { key: 'desktop', label: 'Desktop', w: '100%', Icon: IconMonitor },
@@ -55,13 +56,14 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     ownerPowerAck.current = false
   }, [slug])
 
-  const poll = React.useCallback(() => {
+  const poll = React.useCallback(async () => {
     const seq = ++statusSeq.current
-    appStatus(token, slug)
-      .then(s => { if (mountedRef.current && seq === statusSeq.current) setStatus(s) })
-      .catch(() => {})
+    try {
+      const next = await appStatus(token, slug)
+      if (mountedRef.current && seq === statusSeq.current) setStatus(next)
+    } catch { /* a stopped or booting app is represented by the last known status */ }
   }, [token, slug])
-  React.useEffect(() => { poll(); const t = window.setInterval(poll, 2000); return () => clearInterval(t) }, [poll])
+  usePolling(poll, 2000, { restartKey: `${token}:${slug}` })
   // Reload the preview the moment a (new) server comes up — covers Stop → Run
   // another, even when both use the same port (the iframe URL wouldn't change).
   const prevReady = React.useRef(false)
@@ -129,10 +131,11 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     }
   }
 
-  // Remote (accessed via the public host): use the app's own subdomain, which rides
-  // the tunnel and serves root-relative so SPA absolute paths + HMR work. Local
-  // (localhost): hit the dev port directly (fast, no CF hairpin). Last resort: the
-  // sub-path proxy (rewrites paths; OK for simple/static apps).
+  // Remote: use the app's isolated preview subdomain. Local: use the *other*
+  // loopback hostname, because browser cookies are host-scoped but not port-scoped;
+  // this keeps Proxima's localhost cookie away from project code without a container.
+  // Non-loopback installs without an apps domain fall back to the credential-stripping
+  // same-origin proxy and an opaque iframe sandbox.
   const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
   const subdomainUrl = appsDomain && isRemote && status.running && status.ready ? `${location.protocol}//preview-${slug}.${appsDomain}/` : ''
   // A freshly-provisioned preview subdomain can lag on DNS for a few seconds. Retry
@@ -145,12 +148,14 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     const timers = [5000, 12000].map(ms => setTimeout(() => { if (!previewLoadedRef.current) setReloadKey(k => k + 1) }, ms))
     return () => timers.forEach(clearTimeout)
   }, [subdomainUrl])
-  const directUrl = status.running && status.port ? `${location.protocol}//${location.hostname}:${status.port}/` : ''
+  const isolatedLoopbackHost = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname === '127.0.0.1' ? 'localhost' : ''
+  const directUrl = isolatedLoopbackHost && status.running && status.port ? `${location.protocol}//${isolatedLoopbackHost}:${status.port}/` : ''
   const baseUrl = subdomainUrl || directUrl || appViewUrl(slug)
   // Cache-bust per (re)load so switching apps on the same port doesn't show a
   // cached page; static servers don't send no-cache headers.
   const previewUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}_proxima=${reloadKey}`
   const openUrl = subdomainUrl || directUrl || appViewUrl(slug)
+  const isolatedOrigin = Boolean(subdomainUrl || directUrl)
   const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
 
   return <div className="app-runner-dock">
@@ -187,7 +192,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
 
     {status.running && status.ready && <div className="app-preview-area">
       <div className="app-viewport" style={{ width, maxWidth: '100%' }}>
-        <iframe key={reloadKey} className="app-frame" title="App preview" src={previewUrl} onLoad={() => { previewLoadedRef.current = true }} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" />
+        <iframe key={reloadKey} className="app-frame" title="App preview" src={previewUrl} onLoad={() => { previewLoadedRef.current = true }} sandbox={isolatedOrigin ? 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals' : 'allow-scripts allow-forms allow-popups allow-modals'} />
       </div>
     </div>}
     {status.running && !status.ready && <div className="app-booting">

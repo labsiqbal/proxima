@@ -63,11 +63,7 @@ function localCommandReply(
 }
 
 const defaultRunRecipePrompt = (features: AppFeatures) => {
-	const artifactKinds = features.designStudio
-		? "a design or file"
-		: features.video
-			? "an image, video, or file"
-			: "an image or file";
+	const artifactKinds = features.designStudio ? "a design or file" : "an image or file";
 	return `Run this entire recipe from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for ${artifactKinds}, create it instead of only describing it. Finish with a concise summary of each step result.`;
 };
 
@@ -326,7 +322,6 @@ export function ChatScreen(props: {
 			// Media commands are real prompts — the backend routes them to the selected
 			// generation provider (create_run interception), so they must reach it.
 				const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
-					|| (props.features.video && /^\/(video-studio|video)\b/i.test(trimmed))
 					|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
@@ -473,7 +468,7 @@ export function ChatScreen(props: {
 				return;
 			if (run.status === "completed") {
 				// A media command that finished synchronously — a /image or /design
-				// clarify form, or a design/video draft. Its run.completed event already
+				// clarify form or a design draft. Its run.completed event already
 				// fired before we could subscribe to the stream, so waiting on the stream
 				// would leave the composer stuck "Simmering…". Don't set busy; just load
 				// the assistant reply (the form / artifact card) directly.
@@ -492,6 +487,7 @@ export function ChatScreen(props: {
 		} catch (err) {
 			if (mountedRef.current && seq === actionSeq.current)
 				setError(String(err));
+			throw err;
 		}
 	}
 
@@ -732,7 +728,6 @@ export function ChatScreen(props: {
 				messages={messages}
 				events={events}
 				pendingRunId={busyRun}
-				pendingText={busyRun ? "Working…" : ""}
 				token={props.token}
 				slug={projSlug}
 				agentName={

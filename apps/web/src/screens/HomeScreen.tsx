@@ -5,6 +5,7 @@ import {
 	type OpsTaskRequest,
 } from "../components/tasks/TaskComposer";
 import { IconActivity } from "../components/shell/icons";
+import { usePolling } from "../hooks/usePolling";
 import type { AppFeatures, Profile, Project, View } from "../types";
 
 export function HomeScreen({
@@ -35,27 +36,32 @@ export function HomeScreen({
 	onSelectView: (view: View) => void;
 }) {
 	const [data, setData] = React.useState<Dashboard | null>(null);
+	const [loadError, setLoadError] = React.useState("");
 	const loadSeq = React.useRef(0);
 	const mounted = React.useRef(true);
 
 	const load = React.useCallback(() => {
 		const seq = ++loadSeq.current;
 		getDashboard(token)
-			.then((next) => {
-				if (mounted.current && seq === loadSeq.current) setData(next);
-			})
-			.catch(() => undefined);
+				.then((next) => {
+					if (mounted.current && seq === loadSeq.current) {
+						setData(next);
+						setLoadError("");
+					}
+				})
+				.catch(() => {
+					if (mounted.current && seq === loadSeq.current)
+						setLoadError("Dashboard status could not be refreshed. Existing data is still shown.");
+				});
 	}, [token]);
 	React.useEffect(() => {
 		mounted.current = true;
-		load();
-		const timer = window.setInterval(load, 5000);
 		return () => {
 			mounted.current = false;
 			loadSeq.current += 1;
-			clearInterval(timer);
 		};
-	}, [load]);
+	}, []);
+	usePolling(load, 5000, { restartKey: token });
 
 	const reviewJobs = data?.reviewJobs || [];
 	const reviewCount = data?.reviewCount ?? reviewJobs.length;
@@ -68,7 +74,8 @@ export function HomeScreen({
 				: "Good evening";
 
 	return (
-		<section className="ops-view ops-launcher">
+			<section className="ops-view ops-launcher">
+				{loadError && <div className="error-bar">{loadError}</div>}
 			<div className="ops-dots" aria-hidden="true" />
 			<div className="ops-launcher-inner">
 				<header className="ops-hero">

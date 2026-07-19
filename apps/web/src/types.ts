@@ -39,7 +39,6 @@ export type Runner = {
 	notes?: string;
 };
 export type AppFeatures = {
-	video: boolean;
 	designStudio: boolean;
 	workflowGraph: boolean;
 };
@@ -62,7 +61,6 @@ export type ActivityItem = { title: string; status: string; subagent: boolean };
 export type OutputLink = {
 	type:
 		| "design"
-		| "video"
 		| "video-file"
 		| "app"
 		| "page"
@@ -351,7 +349,6 @@ export type View =
 	| "graph"
 	| "terminal"
 	| "design"
-	| "video"
 	| "linc-projects"
 	| "profiles"
 	| "runners"

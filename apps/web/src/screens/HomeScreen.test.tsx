@@ -4,10 +4,15 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeScreen } from "./HomeScreen";
 import { getDashboard } from "../api/dashboard";
+import { listReferenceFiles } from "../api/files";
 
 vi.mock("../api/dashboard", () => ({ getDashboard: vi.fn() }));
 vi.mock("../api/commands", () => ({
 	getCommandCatalog: vi.fn().mockResolvedValue({ groups: [] }),
+}));
+vi.mock("../api/files", () => ({
+	listReferenceFiles: vi.fn(),
+	uploadFile: vi.fn(),
 }));
 
 const project = {
@@ -48,7 +53,7 @@ const dashboard = {
 };
 const base = {
 	token: "token",
-	features: { video: false, designStudio: false, workflowGraph: false },
+	features: { designStudio: false, workflowGraph: false },
 	projects: [project],
 	activeProject: project,
 	activeProfile: profile,
@@ -64,6 +69,10 @@ describe("HomeScreen Ops task composer", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(getDashboard).mockResolvedValue(dashboard as never);
+		vi.mocked(listReferenceFiles).mockResolvedValue({
+			files: [{ path: "docs/release-brief.md" }],
+			truncated: false,
+		});
 	});
 
 	it("submits a guarded project-scoped task", async () => {
@@ -88,6 +97,27 @@ describe("HomeScreen Ops task composer", () => {
 			}),
 		);
 		expect(base.onOpenJob).toHaveBeenCalledWith(41);
+	});
+
+	it("submits a project file selected through @ as part of the task brief", async () => {
+		const user = userEvent.setup();
+		render(<HomeScreen {...base} />);
+		const brief = await screen.findByRole("textbox", { name: "Task brief" });
+		await user.type(brief, "Audit @release");
+		expect(await screen.findByText("docs/release-brief.md")).toBeInTheDocument();
+		await user.keyboard("{Enter}");
+		expect(base.onCreateTask).not.toHaveBeenCalled();
+		await user.type(brief, "for launch");
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+
+		await waitFor(() =>
+			expect(base.onCreateTask).toHaveBeenCalledWith({
+				brief: "Audit docs/release-brief.md for launch",
+				projectSlug: "alpha",
+				profileId: 7,
+				executionPolicy: "guarded",
+			}),
+		);
 	});
 
 	it("does not navigate when task creation resolves after Home unmounts", async () => {

@@ -57,7 +57,13 @@ class RunDrafts:
             event_type = "workflow.draft"
 
         with self.app.state.db_lock:
+            updated = db.execute(
+                "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = 'running'",
+                (run_id,),
+            )
+            if updated.rowcount != 1:
+                return True
             add_event(run_id, session_id, project_id, event_type, draft)
             add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason})
-            db.execute("UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
         return True

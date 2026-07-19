@@ -144,7 +144,6 @@ def test_v10_drops_project_members(tmp_path: Path):
 def test_migration_14_drops_dead_sessions_acp_session_id(tmp_path):
     """The legacy sessions.acp_session_id column is dropped; agent_sessions is the
     authoritative ACP-session store."""
-    import sqlite3
     from proxima_api.db import connect, init_db
     from proxima_api.migrations import run_migrations
 

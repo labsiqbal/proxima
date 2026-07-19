@@ -30,14 +30,15 @@ multi-agent **brainstorm / debate** + **validate** sidecar · **workflows + jobs
 activity with cron schedules** · gated **reviewable workflow graphs** · in-browser terminal · interactive approval/choice
 cards · projects + **link existing folders** · agent profiles as personas
 (per-profile instructions) · files + live preview · wiki + graph · dark/light +
-design tokens · daily encrypted backup.
+design tokens · daily integrity-checked DB backup.
 
 ---
 
 ## Now — make daily use sharp (low/med effort, high DNA fit)
 
-- **MCP management UI** — add/enable/configure MCP servers per profile/project
-  from the app, no terminal round-trip. *(BYO-agent)*
+- **MCP config editing UI** — detection plus per-profile enable/disable is shipped for
+  Claude, Codex, and Hermes; add/edit/test server definitions still uses each runner's
+  native config and remains a future convenience. *(BYO-agent)*
 - **Skills / slash-command palette** — browse and invoke the skills your runner
   has, from chat. Surfaces capability you already own. *(BYO-agent)*
 - **Runner status panel** — which runners are installed/authed/ready, with a

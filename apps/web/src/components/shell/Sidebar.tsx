@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconNewChat, IconHome, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconActivity, IconTerminal, IconGear, IconDesign, IconVideo, IconChevronRight, IconWorkflows, IconPlus, IconLogout } from './icons'
+import { IconNewChat, IconHome, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconActivity, IconTerminal, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconPlus, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
@@ -13,15 +13,12 @@ const opsPrimary: Destination[] = [
   { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
-const opsAdvanced: Destination[] = [
-  { id: 'video', label: 'Video', icon: IconVideo },
-]
 const codePrimary: Destination[] = [
   { id: 'projects', label: 'Projects', icon: IconProjects },
   { id: 'terminal', label: 'Terminal', icon: IconTerminal },
 ]
 const enabled = (item: Destination, features: AppFeatures) =>
-  (item.id !== 'design' || features.designStudio) && (item.id !== 'video' || features.video) && (item.id !== 'graph' || features.workflowGraph)
+  (item.id !== 'design' || features.designStudio) && (item.id !== 'graph' || features.workflowGraph)
 
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View
@@ -33,7 +30,6 @@ export function Sidebar(props: {
   profiles: Profile[]; projects: Project[]; sessions: ChatSession[]; seen: Record<number, string>; busySessions?: number[]; user: User
   updateVersion?: string | null; onUpdateClick?: () => void
 }) {
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [acctOpen, setAcctOpen] = useState(false)
   const go = (view: View) => { props.onSelectView(view); props.onClose() }
   const destination = (item: Destination) => {
@@ -41,7 +37,6 @@ export function Sidebar(props: {
     const active = props.currentView === item.id || (item.id === 'activity' && props.currentView === 'task') || (item.id === 'workflows' && props.currentView === 'chat' && !!props.activeSession?.workflow_id)
     return <button className={`nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} key={item.id} onClick={() => go(item.id)}><span className="nav-icon"><Icon /></span><strong>{item.label}</strong></button>
   }
-  const advanced = opsAdvanced.filter(item => enabled(item, props.features))
 
   return <div className="sidebar-inner">
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
@@ -55,10 +50,6 @@ export function Sidebar(props: {
         <button className={`nav-item ${props.currentView === 'home' ? 'active' : ''}`} aria-current={props.currentView === 'home' ? 'page' : undefined} onClick={() => go('home')}><span className="nav-icon"><IconPlus /></span><strong>New task</strong></button>
         {opsPrimary.filter(item => enabled(item, props.features)).map(destination)}
       </section>
-      {advanced.length > 0 && <section className="nav-group advanced-nav">
-        <button className="group-toggle advanced-toggle" onClick={() => setAdvancedOpen(value => !value)} aria-expanded={advancedOpen} aria-controls="ops-advanced-destinations"><span><span className={`chevron ${advancedOpen ? 'open' : ''}`}><IconChevronRight size={13} /></span>Advanced</span></button>
-        <div id="ops-advanced-destinations" hidden={!advancedOpen}>{advanced.map(destination)}</div>
-      </section>}
     </nav> : <>
       <nav className="shell-navigation" aria-label="Code navigation">
         <section className="nav-group primary-nav">
@@ -91,7 +82,7 @@ function SessionGroups(props: GroupProps) {
   const slug = props.activeProject?.slug
   const inProject = (session: ChatSession) => !slug || session.project_slug === slug
   const isDesign = (session: ChatSession) => session.mode === 'design' || (session.title || '').startsWith('Design: ')
-  const isSurfaceThread = (session: ChatSession) => /^(Video:|Design System:|Internal:)/.test(session.title || '')
+  const isSurfaceThread = (session: ChatSession) => /^(Design System:|Internal:)/.test(session.title || '')
   const chats = props.sessions.filter(session => !session.job_id && !session.workflow_id && !isDesign(session) && !isSurfaceThread(session) && inProject(session))
   const designs = props.sessions.filter(session => isDesign(session) && inProject(session))
   const [openChats, toggleChats] = usePersistedToggle('proxima.sb.chats', true)

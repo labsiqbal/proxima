@@ -59,7 +59,7 @@ export function SearchModal(props: {
   const messages = res.messages.filter(m => sessionEnabled(m.session_id, m.session_title))
   const total = res.projects.length + chats.length + messages.length
   return <div className="modal-scrim" onClick={props.onClose}><div className="modal-card search-modal" onClick={e => e.stopPropagation()}>
-    <input autoFocus className="ui-select search-input" placeholder="Search chats, tasks, projects, messages…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') props.onClose() }} />
+    <input autoFocus className="ui-select search-input" placeholder="Search chats, projects, messages…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') props.onClose() }} />
     <div className="search-results">
       {q.trim().length >= 2 && loading && <p className="muted">Searching…</p>}
       {q.trim().length >= 2 && !loading && total === 0 && <p className="muted">No matches.</p>}

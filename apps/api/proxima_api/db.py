@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from pathlib import Path
@@ -470,7 +469,3 @@ def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = 
                     "INSERT INTO profiles(user_id, slug, name, hermes_home, is_default) VALUES (?, 'default', 'Default', ?, 1)",
                     (row["id"], str(home)),
                 )
-
-
-def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
-    return dict(row) if row is not None else None

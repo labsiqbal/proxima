@@ -9,21 +9,16 @@ import { ApiError } from '../api/client'
 import {
   getCollaborationSettings,
   getImageGenSettings,
-  getVideoGenSettings,
   saveCollaborationSettings,
   saveImageGenSettings,
-  saveVideoGenSettings,
   testImageGenSettings,
-  testVideoGenSettings,
-  type HiggsfieldSettings,
   type ImageGenSettings,
-  type VideoGenSettings,
   getPermissionSettings,
   savePermissionSettings,
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
-import type { AppFeatures, Profile, Project, Runner, User } from '../types'
+import type { Profile, Project, Runner, User } from '../types'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
 
@@ -59,7 +54,7 @@ function CollaborationSettingsPanel({ token }: { token: string }) {
 }
 
 function PermissionsPanel({ token }: { token: string }) {
-  const [on, setOn] = React.useState(true)
+  const [on, setOn] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   React.useEffect(() => { getPermissionSettings(token).then(r => setOn(r.auto_approve)).catch(() => undefined) }, [token])
   const toggle = async () => {
@@ -88,7 +83,7 @@ const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string 
   { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
   { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
   { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
-  { key: 'media', label: 'Media & Integrations', hint: 'Image and video generation backends' },
+  { key: 'media', label: 'Media & Integrations', hint: 'Image generation backend' },
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
 ]
@@ -358,110 +353,6 @@ function ImageGenerationPanel({ token }: { token: string }) {
   </div>
 }
 
-function VideoGenerationPanel({ token }: { token: string }) {
-  const [cfg, setCfg] = React.useState<VideoGenSettings | null>(null)
-  const [provider, setProvider] = React.useState('xai-oauth')
-  const [model, setModel] = React.useState('')
-  const [videoPolicy, setVideoPolicy] = React.useState<HiggsfieldSettings['videoPolicy']>('confirm-credits')
-  const [maxVideoCredits, setMaxVideoCredits] = React.useState(50)
-  const [busy, setBusy] = React.useState<'load' | 'save' | 'test' | null>('load')
-  const [status, setStatus] = React.useState('')
-  const [err, setErr] = React.useState('')
-  const requestSeq = React.useRef(0)
-  const mountedRef = React.useRef(true)
-
-  React.useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      requestSeq.current += 1
-    }
-  }, [])
-
-  const load = React.useCallback(async () => {
-    const seq = ++requestSeq.current
-    setBusy('load'); setErr('')
-    try {
-      const next = await getVideoGenSettings(token)
-      if (!mountedRef.current || seq !== requestSeq.current) return
-      setCfg(next); setProvider(next.provider || next.defaultProvider || 'xai-oauth'); setModel(next.model || ''); setVideoPolicy(next.videoPolicy); setMaxVideoCredits(next.maxVideoCredits)
-      setStatus(next.status?.detail || '')
-    } catch (e) {
-      if (mountedRef.current && seq === requestSeq.current) setErr(String(e))
-    } finally {
-      if (mountedRef.current && seq === requestSeq.current) setBusy(null)
-    }
-  }, [token])
-
-  React.useEffect(() => { void load() }, [load])
-
-  const selected = cfg?.providers.find(p => p.id === provider)
-  const isHiggsfield = selected?.kind === 'higgsfield'
-
-  async function save() {
-    const seq = ++requestSeq.current
-    setBusy('save'); setErr('')
-    try {
-      const next = await saveVideoGenSettings(token, { provider, model: model.trim() || null, videoPolicy, maxVideoCredits })
-      if (!mountedRef.current || seq !== requestSeq.current) return
-      setStatus(next.status?.detail || 'Saved.'); await load()
-    } catch (e) {
-      if (mountedRef.current && seq === requestSeq.current) setErr(String(e))
-    } finally {
-      if (mountedRef.current && seq === requestSeq.current) setBusy(null)
-    }
-  }
-
-  async function test() {
-    const seq = ++requestSeq.current
-    setBusy('test'); setErr(''); setStatus('')
-    try {
-      const r = await testVideoGenSettings(token, { provider })
-      if (!mountedRef.current || seq !== requestSeq.current) return
-      const ok = r.ok ?? r.ready ?? false
-      setStatus(`${ok ? 'Ready' : 'Not ready'} — ${r.detail}`)
-    } catch (e) {
-      if (mountedRef.current && seq === requestSeq.current) setErr(String(e))
-    } finally {
-      if (mountedRef.current && seq === requestSeq.current) setBusy(null)
-    }
-  }
-
-  return <div className="panel">
-    <div className="panel-head"><h3>Video generation</h3><span>{selected?.displayName || provider}</span></div>
-    <p className="muted">Video generation now has its own backend picker. xAI uses Hermes OAuth; Higgsfield uses the local CLI plus Proxima's credit policy.</p>
-    {busy === 'load' && <p className="muted">Loading…</p>}
-    {cfg && <div className="settings-rows">
-      <span className="srow-label">Provider</span>
-      <Dropdown value={provider} onChange={v => { setProvider(v); const p = cfg.providers.find(x => x.id === v); setModel(v === 'xai-oauth' ? 'grok-imagine-video' : ''); setStatus(p?.note || '') }} minWidth={260} options={cfg.providers.map(p => ({ value: p.id, label: p.displayName }))} />
-      <span className="srow-label">Status</span>
-      <span className={status.startsWith('Ready') || status.includes('available') || status.includes('connected') ? 'ok-text' : 'muted'}>{status || 'Not tested yet.'}</span>
-      <span className="srow-label">Model</span>
-      <input className="ui-select" value={model} onChange={e => setModel(e.target.value)} placeholder={isHiggsfield ? 'Optional Higgsfield model id' : 'grok-imagine-video'} />
-      <span className="srow-label">Credit policy</span>
-      <Dropdown value={videoPolicy} onChange={v => setVideoPolicy(v as HiggsfieldSettings['videoPolicy'])} minWidth={220} options={[
-        { value: 'confirm-credits', label: 'Confirm credits' },
-        { value: 'allow-with-limit', label: 'Allow with limit' },
-        { value: 'disabled', label: 'Disabled' },
-      ]} />
-      <span className="srow-label">Credit cap</span>
-      <input className="ui-select" type="number" min={0} value={maxVideoCredits} onChange={e => setMaxVideoCredits(Number(e.target.value || 0))} />
-      {isHiggsfield && <>
-        <span className="srow-label">Server login</span>
-        <code>higgsfield auth login</code>
-        <span className="srow-label">Workspace</span>
-        <code>higgsfield workspace list && higgsfield workspace set &lt;workspace_id&gt;</code>
-      </>}
-    </div>}
-    {selected?.note && <p className="muted">{selected.note}</p>}
-    <div className="settings-actions">
-      <button className="ghost-button" onClick={() => void test()} disabled={!!busy}>{busy === 'test' ? 'Testing…' : 'Test connection'}</button>
-      <button className="primary-button" onClick={() => void save()} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save provider'}</button>
-    </div>
-    {err && <p className="error-text">{err}</p>}
-  </div>
-}
-
 function RemoteAccessGuide() {
   return <div className="panel remote-guide">
     <div className="panel-head"><h3>Remote access</h3><span>setup guide</span></div>
@@ -503,7 +394,7 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
@@ -536,9 +427,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   }
 
   const goalOptions = [3, 5, 8, 12, 20]
-  const settingsSections = SETTINGS_SECTIONS.map(section => section.key === 'media' && !features.video
-    ? { ...section, hint: 'Image generation backend' }
-    : section)
+  const settingsSections = SETTINGS_SECTIONS
   const activeMeta = settingsSections.find(s => s.key === activeSection) ?? settingsSections[0]
 
   const accountPanel = <div className="panel"><div className="panel-head"><h3>Account</h3></div><div className="settings-account"><strong>{user.username}</strong><span className="muted">{profiles.length} profile{profiles.length !== 1 ? 's' : ''} · {projects.length} project{projects.length !== 1 ? 's' : ''}</span></div></div>
@@ -564,7 +453,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       : activeSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : activeSection === 'media'
-        ? <><ImageGenerationPanel token={token} />{features.video && <VideoGenerationPanel token={token} />}</>
+        ? <ImageGenerationPanel token={token} />
         : activeSection === 'remote'
           ? <RemoteAccessGuide />
           : <>{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>

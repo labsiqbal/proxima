@@ -66,8 +66,8 @@ def _client(tmp_path, **overrides):
     return c, app
 
 
-def test_promote_enqueues_workflow_draft_run(tmp_path):
-    c, app = _client(tmp_path)
+def test_promote_enqueues_legacy_workflow_draft_when_graph_recovery_switch_is_off(tmp_path):
+    c, app = _client(tmp_path, feature_workflow_graph=False)
     # an ad-hoc job gives us a real session with a couple of messages
     job = c.post("/api/jobs", json={"input": {"brief": "let's make an SEO article pipeline"}}).json()
     sid = job["session_id"]
@@ -86,8 +86,8 @@ def test_promote_enqueues_workflow_draft_run(tmp_path):
     assert '"steps"' in prompt
 
 
-def test_promote_enqueues_graph_architect_run_when_enabled(tmp_path):
-    c, app = _client(tmp_path, feature_workflow_graph=True)
+def test_promote_enqueues_graph_architect_run_by_default(tmp_path):
+    c, app = _client(tmp_path)
     job = c.post("/api/jobs", json={"input": {"brief": "research then publish"}}).json()
     sid = job["session_id"]
     c.post(

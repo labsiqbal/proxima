@@ -10,7 +10,7 @@ A self-hosted, **single-user control plane for AI coding agents**. It provides a
 
 + backend for chat, projects, files, terminal, workflows, jobs, schedules, wiki,
 artifacts, and runner profiles. It does **not** run models itself — it drives agent
-CLIs you already own (Claude Code, Codex, Gemini CLI, Hermes) over the **Agent
+CLIs you already own (Claude Code, Codex, Hermes, Pi) over the **Agent
 Client Protocol (ACP)**.
 
 ### Non-goals
@@ -31,7 +31,7 @@ Owner ── Profile ── Runner ── Project / Workspace
   primary boundary, with application authentication as defense in depth.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
   model, and system instructions ("soul").
-+ **Runner** — the agent CLI a profile drives (Claude Code / Codex / Gemini / Hermes),
++ **Runner** — the agent CLI a profile drives (Claude Code / Codex / Hermes / Pi),
   resolved by a _runner spec_.
 + **Project** — a scaffolded or linked folder. Chat, terminal, files, wiki, and
   workflows all operate on the project path.
@@ -62,10 +62,11 @@ Owner ── Profile ── Runner ── Project / Workspace
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
-`apprunner.py` + `preview_proxy.py`, `image_providers.py` / `video_providers.py`
-(media backend registries), `auth_health.py` (cached background auth/readiness
+`apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
+`auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
-Uvicorn HTTP and WebSocket handlers), and `routes/` (the HTTP surface).
+Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
+bounded vision inputs), and `routes/` (the HTTP surface).
 
 ## Runtime / repo split
 
@@ -83,25 +84,24 @@ code never mixes with per-install state:
 ## Server-owned feature gates
 
 ```text
-PROXIMA_FEATURE_VIDEO=0 ───────────────┐
-PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┤
-PROXIMA_FEATURE_WORKFLOW_GRAPH=0 ──────┼─> GET /api/config ─> frontend capability map
+PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┐
+PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> frontend capability map
                                        └─> route/run guards before side effects
 ```
 
-Video and Design Studio are retained in source but disabled by default. The backend
+Design Studio is retained in source but disabled by default. The backend
 is authoritative: disabled requests return HTTP 503 with the consistent
 `feature_disabled` payload before creating messages, writing the database or files,
 calling providers, spawning processes, or dispatching collaboration. The frontend
 uses the published flags to omit navigation, deep links, commands, settings,
 provider health checks, bridge actions, and agent guidance. Image generation remains
-enabled, and existing media files remain readable as ordinary artifacts.
+enabled, and existing media files—including video files—remain readable as ordinary
+artifacts. Video Studio and video generation are not product surfaces.
 
-`PROXIMA_FEATURE_WORKFLOW_GRAPH` gates the new graph workflow engine (ADR-0001).
-It is the **master safety switch** for that engine: its schema (`jobs.engine`,
-`jobs.graph`, `workflows.graph`, the `node_states` table) and the flag exist, but the
-engine is **inert** until the flag is turned on — no graph routes, worker path, or UI
-run while it is off, so the classic linear job engine is unaffected. The pure
+`PROXIMA_FEATURE_WORKFLOW_GRAPH` gates the graph workflow engine (ADR-0001) and
+defaults to **on**, because the graph canvas is the shipped authoring path. It remains
+a master recovery switch: setting it to `0` makes graph routes, worker paths, schedules,
+and UI inert while leaving legacy linear jobs readable. The pure
 `graph.py` boundary already normalizes planner/UI input to canonical edges, rejects
 cycles and invalid references, computes deterministic topological/ready sets, validates
 node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
@@ -141,9 +141,9 @@ never return tokens to the frontend.
 
 Main-chat image generation is **artifact-first**: `/image` / `/gambar` results appear
 as chat result cards and are saved under `artifacts/media/images/`. Studio bridge
-actions are omitted while the corresponding feature is disabled. Video provider and
-Studio modules remain dormant behind the feature gates so they can return without
-source recovery.
+actions are omitted while the corresponding feature is disabled. Video Studio and
+video-provider modules were removed; rendered video files remain generic playable
+artifacts.
 
 ## Data model in one breath
 
@@ -162,8 +162,19 @@ Full column-level detail: [database.md](database.md).
 
 ### 1. Chat turn (the core loop)
 
+Before submission, every project-scoped composer can resolve `@query` through
+`GET /api/projects/{slug}/reference-files`. The endpoint returns relative paths only;
+it does not read or inline file content. Traversal is capped, skips symlinks and
+dependency/build/cache/hidden trees, and suppresses common secret/key filenames.
+The shared frontend loader rejects stale project responses and refreshes after file
+changes. A selected ordinary file is sent as its relative path. A selected image is
+sent as Markdown image-reference syntax: ordinary ACP agents can still open the path,
+while `/image` and design flows resolve it again inside the session project jail and
+attach bounded image bytes as visual input.
+
 ```text
-UI  POST /api/chat/send ─────────────► create session (if new) + user message
+UI  @file picker (path only) ─────────► relative path / explicit image reference
+    POST /api/chat/send ─────────────► create session (if new) + user message
     │                                  enqueue a run (status: queued)
     ▼
 RunWorker picks up the run (bounded concurrency)
@@ -183,7 +194,9 @@ run.completed → assistant message saved (linked via messages.run_id)
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a run timeout (configurable `run_timeout_seconds`, default
-600s) cancels stragglers.
+900s) cancels stragglers. Completion updates are guarded by the current run state, so
+cancel wins over late media, review, collaboration, draft, or graph finalizers. Failures
+during pre-ACP setup are finalized immediately rather than waiting for the reaper.
 
 ### 2. Per-prompt Brainstorm / Debate
 
@@ -208,7 +221,7 @@ raw child output does not land in the main transcript. The worker emits
 `collaboration.child.*` events for queued/started/delta/completed/failed/cancelled
 child states. The frontend reconstructs inline cards from those events, using
 agent names as card headers and Debate round labels as secondary metadata. Cards
-default expanded, can collapse per card, scroll horizontally on desktop, and stack
+default collapsed, can expand per card, scroll horizontally on desktop, and stack
 on mobile. Brainstorm collects parallel independent ideas and synthesizes overlap,
 unique angles, and next steps. Debate runs ordered rounds so later agents can read
 and rebut prior positions before a neutral synthesis. Collaboration defaults live
@@ -312,10 +325,14 @@ materializes a `job` for each — respecting `overlap_policy` (skip / allow).
 
 ### 8. Run & Preview app
 
-`POST /api/projects/{slug}/app/start` → `AppManager` launches one dev process for the
-project. `PreviewProxyMiddleware` reverse-proxies it — locally (authed) or, when
-`apps_domain` is configured, on a `<slug>.<apps_domain>` subdomain gated by the
-`proxima_preview` cookie so it can be iframed.
+`POST /api/projects/{slug}/app/start` → `AppManager` launches one owner-confirmed dev
+process for the project with a filtered environment. Locally the iframe uses the other
+loopback hostname, avoiding host-cookie reuse across ports. When `apps_domain` is
+configured, `PreviewProxyMiddleware` serves a `preview-<slug>.<apps_domain>` subdomain
+gated by a one-hour, signed `proxima_preview` capability that is unrelated to the owner
+API session. HTTP proxy paths remove Cookie/Authorization before forwarding and ignore
+upstream `Set-Cookie`; same-origin/generated HTML previews omit `allow-same-origin`.
+These are lightweight self-hosted mitigations, not OS isolation of the project process.
 
 ### 9. Update check & self-update
 
@@ -369,7 +386,7 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 + **Per-thread SQLite connections** in WAL mode — sync handlers run across FastAPI's
   threadpool, so each thread gets its own connection; writes serialize on SQLite's
   lock + `busy_timeout`.
-+ **Bounded run worker** — `max_concurrent_runs` caps parallel agent runs.
++ **Bounded run worker** — `run_worker_concurrency` caps parallel agent runs.
 + **Crash recovery** — on startup, runs left `running` by a previous shutdown are
   failed (their in-memory ACP state is gone); orphaned jobs are reaped.
 + **Backups** — versioned migrations `VACUUM INTO` a snapshot before applying; a
@@ -379,14 +396,21 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 
 Proxima relies primarily on **external** network access control and adds a single-owner
 password/session gate as defense in depth. Authenticated requests act as the owner;
-agents run with the OS privileges of the service user. Detail + threat model:
+agents run with the OS privileges of the service user. Child environments are filtered
+and permissions ask by default, but this is not a filesystem sandbox. Detail + threat model:
 [security-boundaries.md](../security-boundaries.md) and
 [prompt-injection-hardening.md](../prompt-injection-hardening.md).
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner. It also owns a Workflows mode (`sequential | advanced | scheduled`) without extending `View`; Advanced embeds the gated graph surface under the single Workflows destination. Ops Task Composer creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Ops project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
+`App.tsx` remains the single view owner. It owns the Workflows Editor/Scheduled modes and embeds the graph surface under the single Workflows destination. Ops Task Composer creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Ops project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
 
 `AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, account actions, and terminal-compatible content mounting. `App.tsx` tracks the selected workspace plus each workspace's last destination; `Sidebar` renders Ops-specific or Code-specific navigation. Global Projects/Agents/Settings preserve the selected workspace. Terminal is classified as Code-only and remains mount-once/hide; Tasks and task detail are Ops-owned destinations. The removed generic right panel does not affect destination-owned layouts: Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+
+Generic frontend refresh loops use one non-overlapping polling hook. It pauses while
+the document is hidden and refreshes once when the tab becomes visible, avoiding
+background request churn without making active run status stale. Home artifact recents
+reuse the bounded project-artifact scanner instead of recursively classifying the whole
+tree with a second implementation.
 
 Authentication boot checks setup state, requires set-password or login, and resumes from the HttpOnly `proxima_session` cookie into an in-memory bearer token.

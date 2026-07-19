@@ -147,12 +147,10 @@ GENERAL_GUIDE = (
 )
 
 
-def _general_guide(*, include_design_studio: bool, include_video: bool) -> str:
+def _general_guide(*, include_design_studio: bool) -> str:
     outputs = ["documents/reports → a .md/.pdf/.html file under artifacts/", "runnable apps → their own folder with a package.json (auto-detected)"]
     if include_design_studio:
         outputs.insert(0, "designs → artifacts/design/<id>/scene.json")
-    if include_video:
-        outputs.insert(0, "videos → artifacts/video/<id>/index.html")
     guidance = (
         "- User-facing deliverables belong under artifacts/ (or reports/ / exports/) so "
         f"Proxima surfaces them as result cards: {', '.join(outputs)}."
@@ -305,7 +303,7 @@ DESIGN_GUIDE = (
     "writing a JSON scene to artifacts/design/<id>/scene.json (one folder per design; <id> is "
     "a short slug = the scene's \"id\"). It then appears in Design → Your designs for the user "
     "to refine on a canvas. Schema (everything you need — no external doc):\n"
-    '{ "id":"<id>", "type":"graphic|deck|mobile|video", "title":"…", "artboards":[ '
+    '{ "id":"<id>", "type":"graphic|deck|mobile", "title":"…", "artboards":[ '
     '{ "id":"a1", "width":1080, "height":1080, "background":"#ffffff", "layers":[ … ] } ] }\n'
     "The artboard background can be a gradient: add backgroundType(\"linear-gradient\"|\"radial-gradient\"), "
     "background2(hex) and backgroundAngle(deg) alongside \"background\" (the base colour) when a gradient "
@@ -330,23 +328,6 @@ DESIGN_GUIDE = (
     "(same id). Proxima will surface newly written designs as chat result cards that open "
     "Design Studio directly."
 )
-
-VIDEO_GUIDE = (
-    "## Videos (Video Studio)\n"
-    "This project has a Video Studio for editable HTML/HyperFrames-style video compositions. "
-    "When the user asks for a video, motion graphic, reel, short, promo video, animated title, "
-    "or timeline-ready video artifact, create a folder at artifacts/video/<id>/ where <id> is a "
-    "short slug. Write the main composition to artifacts/video/<id>/index.html and include "
-    "data-composition-id=\"root\", data-width, data-height, data-start=\"0\", and data-duration "
-    "on the root composition element. Default sizes: reel/short/story 1080×1920, landscape promo "
-    "1920×1080, square 1080×1080. Keep text as real HTML text, use CSS/WAAPI/GSAP-friendly "
-    "animations, and build a complete visual scene rather than a static poster. If the brief is "
-    "generic, ask a compact <question-form> for only high-impact video decisions: platform/aspect, "
-    "duration, goal, audience, copy, visual style, assets/source material, music/voiceover needs, "
-    "and CTA. If enough direction is provided, make sensible motion-direction decisions and proceed. "
-    "New video folders are surfaced as chat result cards that open Video Studio directly."
-)
-
 
 def list_project_designs(project_root: Path) -> list[dict[str, Any]]:
     """Scan the project's Design Studio designs (artifacts/design/*/scene.json) so the
@@ -421,13 +402,12 @@ def build_run_preamble(
     wiki_root: Path | None,
     *,
     include_design_studio: bool = False,
-    include_video: bool = False,
     design_guidelines: str | None = None,
 ) -> str | None:
     """Context block prepended to the FIRST prompt of an agent's ACP session,
     telling it it runs inside Proxima, how to ask interactive questions, and how to
     consult the project's wiki memory. Runner-agnostic plain text."""
-    general_guide = _general_guide(include_design_studio=include_design_studio, include_video=include_video)
+    general_guide = _general_guide(include_design_studio=include_design_studio)
     if not project_name:
         return PREAMBLE_MARKER + "\nYou are running inside Proxima.\n\n" + general_guide + "\n\n" + QFORM_GUIDE
     lines = [
@@ -456,8 +436,6 @@ def build_run_preamble(
                 design_guidelines.strip()[:12000],
                 "```",
             ]
-    if include_video:
-        lines += ["", VIDEO_GUIDE]
     root = Path(wiki_root) if wiki_root is not None else None
     if root is not None and root.is_dir():
         lines += ["", "This project keeps durable memory as markdown notes in wiki/."]

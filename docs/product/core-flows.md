@@ -1,8 +1,7 @@
 # Proxima Core Flows
 
-> **Release scope:** Design Studio and Video flows are retained product direction,
-> not current default capabilities. Both server flags default to disabled; image
-> generation remains active.
+> **Release scope:** Design Studio is retained but disabled by default; image
+> generation remains active. Video Studio is not a current product surface.
 
 Updated: 2026-06-27
 

@@ -334,4 +334,4 @@ SQLite (WAL mode). 18 tables. Applied migration version: **17**. This is the exa
 
 
 ---
-_Generated 2026-07-17 13:57 UTC._
+_Generated 2026-07-18 13:55 UTC._

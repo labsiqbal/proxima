@@ -100,7 +100,7 @@ constraints). Do NOT use a fixed form; choose questions and answer options for t
 If the brief is already clear or this is an autonomous workflow/job run, make sensible art-direction
 decisions and proceed.
 Schema:
-{ "id": "<id>", "type": "graphic|deck|mobile|video", "title": "...",
+{ "id": "<id>", "type": "graphic|deck|mobile", "title": "...",
   "artboards": [ { "id": "a1", "width": 1080, "height": 1080, "background": "#ffffff",
     "layers": [
       { "type":"text", "x":0,"y":0,"width":860,"text":"...","fontSize":78,"fontFamily":"Playfair Display","fontStyle":"bold","fill":"#0A0A0A","align":"center","lineHeight":1.05,"shadow":true,"shadowBlur":14,"shadowOpacity":0.25 },
@@ -141,18 +141,8 @@ otherwise produce the step's expected output as text.
 Files tab. **Wiki / memory** — consult the project wiki context provided above.
 """
 
-_VIDEO_CAPABILITY_PREAMBLE = """**Video** — for an editable video composition, create
-`artifacts/video/<id>/index.html` with a HyperFrames-compatible root composition. Keep text as real
-HTML and use deterministic CSS, WAAPI, or GSAP motion. Generated video files belong under
-`artifacts/media/videos/`.
-"""
-
-
-def build_capability_preamble(*, include_design_studio: bool = False, include_video: bool = False) -> str:
-    parts = [_DESIGN_CAPABILITY_PREAMBLE if include_design_studio else _BASE_CAPABILITY_PREAMBLE]
-    if include_video:
-        parts.append(_VIDEO_CAPABILITY_PREAMBLE)
-    return "\n\n".join(parts)
+def build_capability_preamble(*, include_design_studio: bool = False) -> str:
+    return _DESIGN_CAPABILITY_PREAMBLE if include_design_studio else _BASE_CAPABILITY_PREAMBLE
 
 
 def build_iteration_preamble(name: str, steps: list[dict[str, Any]], *, include_design_studio: bool = False) -> str:

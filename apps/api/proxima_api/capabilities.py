@@ -23,8 +23,12 @@ import json
 import logging
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+import tomlkit
+import yaml
 
 try:  # tomllib is stdlib on 3.11+; codex config is TOML
     import tomllib
@@ -192,8 +196,7 @@ def detect_for_runner(spec: Any, source_override: str | None = None) -> dict[str
         elif rid == "codex":
             mcp = _mcp_from_codex(host)
         elif rid == "hermes":
-            # Hermes keeps MCP inline in config.yaml; parse best-effort if PyYAML
-            # is available, else skip (skills still detected).
+            # Hermes keeps MCP inline in config.yaml.
             mcp = _mcp_from_hermes(host)
     except Exception:  # never let detection break a caller
         log.exception("capability detection failed for runner %s", rid)
@@ -203,10 +206,6 @@ def detect_for_runner(spec: Any, source_override: str | None = None) -> dict[str
 def _mcp_from_hermes(host: Path) -> list[dict[str, Any]]:
     cfg = host / "config.yaml"
     if not cfg.is_file():
-        return []
-    try:
-        import yaml  # optional
-    except ModuleNotFoundError:
         return []
     try:
         data = yaml.safe_load(cfg.read_text(encoding="utf-8", errors="ignore")) or {}
@@ -265,8 +264,12 @@ def apply_capabilities(spec: Any, home: Path, selection: dict[str, Any] | None,
         if rid == "claude-code":
             applied["mcp"] = _apply_claude_mcp(
                 home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
-        # codex/hermes MCP activation: their config is copied wholesale by seeding
-        # today; filtering is a follow-up (documented). Detection already surfaces them.
+        elif rid == "codex":
+            applied["mcp"] = _apply_codex_mcp(
+                home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
+        elif rid == "hermes":
+            applied["mcp"] = _apply_hermes_mcp(
+                home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
     except Exception:
         log.exception("apply_capabilities failed for runner %s", rid)
     return applied
@@ -359,6 +362,64 @@ def _apply_claude_mcp(home: Path, selected: list[dict[str, Any]], source_overrid
     try:
         home.mkdir(parents=True, exist_ok=True)
         home_cfg.write_text(json.dumps(home_data, indent=2), encoding="utf-8")
+    except OSError:
+        return []
+    return list(subset.keys())
+
+
+def _apply_codex_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
+                     spec: Any) -> list[str]:
+    """Filter Codex's [mcp_servers.*] tables while preserving unrelated TOML."""
+    host_cfg = _host_dir(spec, source_override) / "config.toml"
+    home_cfg = home / "config.toml"
+    try:
+        host_doc = tomlkit.parse(host_cfg.read_text(encoding="utf-8", errors="ignore"))
+        home_doc = tomlkit.parse(home_cfg.read_text(encoding="utf-8", errors="ignore")) if home_cfg.is_file() else tomlkit.document()
+    except (OSError, ValueError):
+        return []
+    source = host_doc.get("mcp_servers") or {}
+    names = {m["name"] for m in selected}
+    subset = tomlkit.table()
+    for name, value in source.items():
+        if name in names:
+            subset.add(name, deepcopy(value))
+    home_doc["mcp_servers"] = subset
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        rendered = tomlkit.dumps(home_doc)
+        if not home_cfg.is_file() or home_cfg.read_text(encoding="utf-8", errors="ignore") != rendered:
+            home_cfg.write_text(rendered, encoding="utf-8")
+    except OSError:
+        return []
+    return list(subset.keys())
+
+
+def _apply_hermes_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
+                      spec: Any) -> list[str]:
+    """Filter Hermes' inline MCP map while preserving the rest of config.yaml."""
+    host_cfg = _host_dir(spec, source_override) / "config.yaml"
+    home_cfg = home / "config.yaml"
+    try:
+        host_data = yaml.safe_load(host_cfg.read_text(encoding="utf-8", errors="ignore")) if host_cfg.is_file() else {}
+        home_data = yaml.safe_load(home_cfg.read_text(encoding="utf-8", errors="ignore")) if home_cfg.is_file() else {}
+    except (OSError, ValueError, yaml.YAMLError):
+        return []
+    if not isinstance(host_data, dict):
+        host_data = {}
+    if not isinstance(home_data, dict):
+        home_data = {}
+    source_key = "mcpServers" if "mcpServers" in host_data else "mcp_servers"
+    source = host_data.get(source_key) or {}
+    names = {m["name"] for m in selected}
+    subset = {name: value for name, value in source.items() if name in names} if isinstance(source, dict) else {}
+    home_data.pop("mcpServers", None)
+    home_data.pop("mcp_servers", None)
+    home_data[source_key] = subset
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        rendered = yaml.safe_dump(home_data, sort_keys=False, allow_unicode=True)
+        if not home_cfg.is_file() or home_cfg.read_text(encoding="utf-8", errors="ignore") != rendered:
+            home_cfg.write_text(rendered, encoding="utf-8")
     except OSError:
         return []
     return list(subset.keys())

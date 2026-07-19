@@ -216,7 +216,6 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
         messages={messages}
         events={events}
         pendingRunId={busyRun}
-        pendingText={busyRun != null ? 'Working…' : ''}
         token={token}
         slug={projectSlug || undefined}
         agentName={activeProfile?.name}

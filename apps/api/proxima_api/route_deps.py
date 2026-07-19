@@ -15,7 +15,7 @@ from typing import Any
 
 import json as _json
 
-from .auth import expiry, hash_password, hash_token, iso_now, new_token, verify_password
+from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
 from .profile_seed import seed_agent_home
 from .provisioning import provision_user_workspace
@@ -54,8 +54,7 @@ def build_route_deps(
 
     def ensure_single_user_owner() -> dict[str, Any]:
         """Single-user cockpit: guarantee one owner exists and return it. Created
-        password-less (login bypassed in this mode); revive multi-user by unsetting
-        PROXIMA_SINGLE_USER and setting a password."""
+        password-less so first-run setup can establish the owner's password."""
         name = validate_slug(cfg.get("single_user_name") or "owner")
         with app.state.db_lock:
             row = db().execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
@@ -124,12 +123,6 @@ def build_route_deps(
 
     def public_user(user: dict[str, Any]) -> dict[str, Any]:
         return {"id": user["id"], "username": user["username"], "role": user["role"], "os_user": user["os_user"]}
-
-    def get_user(username: str) -> dict[str, Any]:
-        row = db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        if not row:
-            raise http_exception(status_code=404, detail="user not found")
-        return dict(row)
 
     def create_token(user_id: int) -> str:
         token = new_token()
@@ -232,10 +225,6 @@ def build_route_deps(
             raise http_exception(status_code=404, detail="project not found")
         return dict(row)
 
-    def require_owner(slug: str, user: dict[str, Any]) -> dict[str, Any]:
-        # Single-user: the owner owns everything.
-        return visible_project(slug, user)
-
     def session_for_user(session_id: int, user: dict[str, Any]) -> dict[str, Any]:
         # Single-user: every session belongs to the owner.
         row = db().execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
@@ -245,8 +234,8 @@ def build_route_deps(
 
     def run_projectctl(*args: str) -> None:
         # Single-user $HOME deployments don't manage OS ownership/ACLs: the dir is
-        # scaffolded by scaffold_project_dir and access is enforced at the app layer
-        # (DB membership). Only the privileged /srv multi-user install opts in.
+        # scaffolded by scaffold_project_dir and access is enforced by the single-owner
+        # session plus project-root checks. Only privileged installs opt into ACL ops.
         if not cfg.get("manage_os_acl"):
             return
         base_command = cfg.get("projectctl_command") or [str(cfg["projectctl_path"])]
@@ -307,7 +296,7 @@ def build_route_deps(
         db().execute("DELETE FROM sessions WHERE project_id = ?", (project["id"],))
         db().execute("DELETE FROM projects WHERE id = ?", (project["id"],))
 
-    def _can_access(created_by: Any, project_id: Any, user: dict[str, Any]) -> bool:
+    def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.
         return True
 
@@ -338,7 +327,6 @@ def build_route_deps(
         "current_user_strict_token": current_user_strict_token,
         "admin_user": admin_user,
         "visible_project": visible_project,
-        "require_owner": require_owner,
         "session_for_user": session_for_user,
         "profile_for_user": profile_for_user,
         "project_payload": project_payload,
@@ -350,7 +338,6 @@ def build_route_deps(
         "ensure_default_profile": ensure_default_profile,
         "runner_source_dir": runner_source_dir,
         "apply_profile_capabilities": apply_profile_capabilities,
-        "get_user": get_user,
         "run_projectctl": run_projectctl,
         "_purge_project": _purge_project,
         "_project_root": _project_root,

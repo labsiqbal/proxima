@@ -337,14 +337,6 @@ def _validate_triggers(nodes: list[dict[str, Any]], edges: list[dict[str, Any]])
         )
 
 
-def trigger_node_id(graph: Mapping[str, Any]) -> str | None:
-    """Return the graph's trigger node id, if it has one."""
-    for node in graph.get("nodes", []):
-        if node.get("type") == "trigger":
-            return str(node["id"])
-    return None
-
-
 def dependency_map(graph: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     """Return each node's direct upstream dependencies in graph order."""
     nodes = graph.get("nodes", [])

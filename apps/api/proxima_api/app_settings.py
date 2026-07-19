@@ -1,10 +1,10 @@
 """Key/value app settings store, backed by the `app_settings` table.
 
 Single-user cockpit: settings are owner-scoped (one row per key). Values are
-strings; structured values are stored as JSON. API keys live here in plaintext,
-which is acceptable because the access gate is the network (loopback / Cloudflare
-Access) and the DB file is owner-owned under ~/.local/share — the same trust
-boundary as the NINEROUTER env-file already in use.
+strings; structured values are stored as JSON. API keys live here in plaintext:
+the owner session protects the API, while the DB itself relies on the server-user
+filesystem boundary under ~/.local/share. This is the same host trust boundary as
+the provider config files Proxima reads.
 """
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ def set_json(conn, key: str, value: Any) -> None:
 # ── image-generation config ────────────────────────────────────────────────
 
 IMAGE_GEN_KEY = "image_gen"
-VIDEO_GEN_KEY = "video_gen"
 HIGGSFIELD_KEY = "higgsfield"
 COLLABORATION_BRAINSTORM_AGENTS_KEY = "collaboration_brainstorm_agents"
 COLLABORATION_DEBATE_ROUNDS_KEY = "collaboration_debate_rounds"

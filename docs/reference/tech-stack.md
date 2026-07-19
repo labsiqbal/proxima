@@ -20,10 +20,11 @@ it ships no model and no credentials of its own.
 | HTTP client | **httpx** (`>=0.27`) | outbound calls (image providers, Cloudflare, proxy) |
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
+| Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex TOML MCP selections while preserving unrelated settings |
 | Database | **SQLite** (stdlib `sqlite3`, WAL mode) | one file per install; no server |
 | Package manager | **uv** (`uv.lock`) | `uv run …`, `uv sync` |
 | Tests | **pytest** (`>=8.3`) | `apps/api/tests/` |
-| Lint | **ruff** | `.ruff_cache` present |
+| Lint | **Ruff** (`>=0.15`) | `F` rules run locally and in CI to catch undefined names and dead imports/locals |
 
 **No ORM** — SQLite is accessed with hand-written SQL through a thin per-thread
 connection helper (`db.py`). The schema lives in `db.py` (`SCHEMA`) plus versioned
@@ -32,7 +33,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 ### Key backend concepts
 
 - **ACP runners** (`acp.py`, `runners.py`, `runner_specs.py`) — each supported CLI
-  (Claude Code, Codex, Gemini CLI, Hermes) is described by a _runner spec_ (spawn
+  (Claude Code, Codex, Hermes, Pi) is described by a _runner spec_ (spawn
   argv + credential home + readiness check). The app spawns one ACP subprocess per
   `(runner, home, cwd)` on demand.
 - **Run worker** (`worker.py`) — a bounded-concurrency background worker that
@@ -41,8 +42,9 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 - **Event hub** (`event_hub.py`) — fan-out of run/session events to SSE + WebSocket
   subscribers.
 - **Terminal** (`terminal.py`) — a PTY-backed shell exposed over WebSocket.
-- **App runner + preview proxy** (`apprunner.py`, `preview_proxy.py`) — launch a
-  project's dev server and reverse-proxy it (locally, or on a per-app subdomain).
+- **App runner + preview proxy** (`apprunner.py`, `preview_proxy.py`) — launch an
+  owner-confirmed project dev server with a filtered env and reverse-proxy it using
+  preview-only credentials that are stripped before requests reach project code.
 
 ## Frontend — `apps/web`
 
@@ -56,11 +58,10 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Design canvas | **Konva** / **react-konva** | dependency retained; Design Studio disabled by default |
 | Terminal UI | **xterm.js** (`@xterm/xterm` + fit addon) | in-browser terminal |
 | Wiki graph | **react-force-graph-2d** | linked-note graph |
-| Workflow graph | Native **SVG** + pure topological layout | no workflow graph UI dependency; gated by `PROXIMA_FEATURE_WORKFLOW_GRAPH` |
+| Workflow graph | Native **SVG** + pure topological layout | enabled by default; `PROXIMA_FEATURE_WORKFLOW_GRAPH` remains a recovery switch |
 | Search | **minisearch** | client-side global search |
 | Markdown | **react-markdown** + **remark-gfm** | chat + wiki rendering |
 | Export | **jspdf**, **jszip** | retained Studio PNG/PDF/zip implementation |
-| Video studio | **@hyperframes/studio** | dependency retained; Video disabled by default |
 
 Frontend source layout: `src/screens` (top-level views), `src/components`
 (chat / design / files / shell / tasks / terminal / wiki / ui), `src/api` (typed

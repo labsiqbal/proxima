@@ -18,7 +18,7 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 ## 1. Agents & runners (bring-your-own-agent)
 
 **Why:** Proxima drives the AI coding agents you already own (Claude Code, Codex,
-Hermes, Gemini, …) over ACP — no baked-in model.
+Hermes, and Pi) over ACP — no baked-in model.
 **How:** `runner_specs.py` defines each runner's spawn argv + credential home. The
 worker (`worker.py`) starts one ACP subprocess per (runner, home, cwd) on demand;
 `runner_spec(run.runner_id)` makes it runner-agnostic. Default resolves via
@@ -36,9 +36,10 @@ its runner actually has on this host — detected from the runner's own config d
 (`capabilities.py`, driven off `RunnerSpec.source_dir` so it's portable, no hardcoded
 paths). The user checks which to enable per profile (`profiles.capabilities` JSON; NULL =
 inherit all). Enabled skills are symlinked into the profile home and its MCP config is
-filtered to the selection, re-applied idempotently before each run so newly installed
-host skills appear automatically. Not applicable to `claude_live_home` profiles (they
-already use the host config directly).
+filtered to the selection for Claude (`.claude.json`), Codex (`config.toml`), and
+Hermes (`config.yaml`). Selection is re-applied idempotently before each run so newly
+installed host skills appear automatically. Pi still uses its runner-global home;
+`claude_live_home` profiles likewise use the host config directly.
 **Endpoints:** `GET/POST /api/profiles`, `PATCH/DELETE /api/profiles/{id}`,
 `GET /api/runners/{id}/capabilities`.
 
@@ -46,10 +47,29 @@ already use the host config directly).
 
 **Why:** Talk to an agent; it streams back, runs tools, asks for approvals.
 **How:** A `session` holds messages; a `run` is one agent turn driving the ACP
-session. The worker is bounded-concurrent (`max_concurrent_runs`) so one slow run
-never blocks other chats. Streaming via SSE (`/events/stream`) + WebSocket.
+session. The worker is bounded-concurrent (`run_worker_concurrency`) so one slow run
+never blocks other chats. Tool permissions ask the owner by default; auto-approve is
+an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
 **Endpoints:** `POST /api/chat/send`, `/api/sessions/{id}/runs`, `/messages`,
 `/events/stream`, `WS /api/ws/sessions/{id}`, `/runs/{id}/cancel`, `/runs/{id}/permission`.
+
+### Project-file references (`@`)
+
+Every project-scoped prompt surface shares the same file picker: Code chat, the Ops
+Task Composer, workflow authoring chat and graph fields, Design Home, Design chat, and
+Graph Home. Typing `@` filters a path-only project index and inserts the selected
+reference at the caret; arrow keys plus Enter/Tab work as well as the mouse. Ordinary
+files become project-relative paths, which project-scoped runners can open from their
+working directory. Images become `![name](path)` references, so `/image` providers and
+design-agent vision receive the selected pixels instead of only a filename. The popup
+viewport shows four ranked matches at once; additional matches remain available by
+scrolling, while typing more of the path narrows the full bounded index.
+
+The picker never expands text-file contents into the prompt. Its authenticated
+`GET /api/projects/{slug}/reference-files` index is bounded and project-jailed, skips
+symlinks, dependency/build/cache and hidden directories, and omits common secret/key
+files. Vision loading re-validates paths against the session project and accepts only
+bounded image files (10 files, 8 MB each, 32 MB total).
 
 ### Per-prompt Brainstorm / Debate modes
 
@@ -114,10 +134,11 @@ live in the composer before a prompt is submitted.
 ## 6. Chat → Workflow (Convert to Workflow)
 
 **Why:** Turn a proven conversation into a reusable recipe.
-**How:** `promote-workflow` has an architect agent decompose the chat. With the graph
-flag off it emits the established ordered-step draft. With the flag on it emits a
+**How:** `promote-workflow` has an architect agent decompose the chat. The graph path
+is enabled by default and emits a
 normalized `{nodes,edges}` DAG with typed outputs and review gates; the user must review
-or edit the queued frozen plan before explicitly starting it.
+or edit the queued frozen plan before explicitly starting it. The feature flag remains
+an owner recovery switch; the legacy ordered-step path is retained only for existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
 ## 7. Workflows (graphs) + schedules
@@ -192,23 +213,32 @@ uses the starter project auto-provisioned under the data dir.
 
 **Why:** Browse/edit the whole project tree with live preview.
 **How:** Tree + file read/write (CodeMirror), HTML/MD live preview, mkdir/rename/delete,
-file upload, raw + token-scoped preview route (for images/SSE-safe URLs).
+chunk-streamed file upload with collision-safe naming and a configurable 100 MB default
+limit, plus an authenticated raw/preview
+route (for images and embedded previews). A separate bounded, path-only reference index
+powers `@` autocomplete without returning file contents.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
-`/api/preview/{token}/{slug}/{path}`.
+`/reference-files`, `/api/preview/{slug}/{path}`.
 
 ## 13. Run & Preview app
 
 **Why:** Launch a project's dev server and preview it in-app.
-**How:** `AppManager` runs one dev process per project; an authed reverse proxy serves
-it. Folder field picks what to run.
+**How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
+environment; an authenticated reverse proxy serves it. Local direct preview uses the
+other loopback hostname so the Proxima cookie is not sent across ports. Remote preview
+uses a short-lived preview-only cookie, never the owner API token. Both proxies strip
+cookies/auth before forwarding and strip upstream `Set-Cookie`. Same-origin fallback
+and generated HTML use an opaque iframe sandbox. This is credential-leak mitigation,
+not OS/container isolation; the command still runs as the Proxima service user.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
-## 14. Image generation and retained media studios
+## 14. Image generation and Design Studio
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under
 `artifacts/media/images/`, and returns the artifact in the originating chat. Images
-attached to the message (rendered as `![name](path)` markdown by the composer) are used
+attached to the message or explicitly selected through `@` (rendered as
+`![name](path)` markdown by the composer) are used
 as reference/source images when the selected provider advertises `imageEdit` — the
 first attachment is the primary source and the rest are passed as `extra_images` when
 the provider also supports `referenceImages`; the reference markdown is stripped from
@@ -227,25 +257,26 @@ immediately. Implemented in `routes/chat.py` (`_media_brief_is_thin`, `_MEDIA_BR
 `_complete_media_ask`); the frontend prepends `submit-as` on submit
 (`questionForm.ts` / `QuestionForm.tsx`).
 
-These synchronous media completions (the clarify form, and the design/video draft cards)
+These synchronous media completions (the clarify form and design draft cards)
 finish inside the POST and emit their run events before the client can subscribe to the
 stream, so `ChatScreen` treats a `status: "completed"` create-run response specially: it
 loads the assistant reply directly instead of waiting on the stream — otherwise the
 composer would sit stuck on the "Simmering…" thinking indicator.
 
-**Temporarily disabled by default:** Video and Design Studio remain in source but are
-server-gated with `PROXIMA_FEATURE_VIDEO=0` and
-`PROXIMA_FEATURE_DESIGN_STUDIO=0`. `GET /api/config` publishes the effective flags.
+**Temporarily disabled by default:** Design Studio remains in source and is
+server-gated with `PROXIMA_FEATURE_DESIGN_STUDIO=0`. `GET /api/config` publishes the effective flag.
 When disabled, the frontend omits their navigation, deep links, commands, settings,
 provider health checks, artifact bridge actions, and agent guidance. Backend guards
 return HTTP 503 with the `feature_disabled` payload before message creation, database
 writes, provider calls, file writes, subprocesses, or collaboration dispatch.
 
-The retained Studio implementation includes layered Konva scenes and exports; the
-retained Video implementation includes generation providers and project artifacts.
-Neither is an advertised or reachable capability in the default Proxima release.
-Image generation does not expose *Edit in Design Studio* or *Add to Video Studio*
-bridge actions while those features are disabled.
+The retained Studio implementation includes layered Konva scenes and exports. It is
+not an advertised or reachable capability in the default Proxima release. Image
+generation does not expose *Edit in Design Studio* while that feature is disabled.
+When enabled, both Design Home and its chat share the project-file picker; selected
+images are appended to the design run's jailed vision inputs.
+Video Studio, editable video projects, and the `/video` generation surface were removed;
+ordinary video files remain readable and playable as generic artifacts.
 
 ## 15. Wiki + memory (knowledge)
 
@@ -278,7 +309,7 @@ aggregation. Fed by Chat→Wiki (§5).
 **Connections card (auth health):** `/api/dashboard` includes `authHealth` — cached
 background checks (`auth_health.py`, 60s TTL, never on the request path) of the
 selected image provider plus every runner referenced by a profile (deep auth check
-for hermes/codex). Disabled Video/Studio providers are omitted. Home shows a compact
+for hermes/codex). Disabled Studio providers are omitted. Home shows a compact
 "Connections" card beside System readout: green/red dot per check, with the
 actionable fix detail on failures and a jump to Settings. Saving active provider
 settings calls `auth_health.invalidate()` so the card re-checks on the next 5s poll.
@@ -292,8 +323,10 @@ settings calls `auth_health.invalidate()` so the card re-checks on the next 5s p
 
 Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
 salvage, orphaned-run cleanup, run timeout (configurable `run_timeout_seconds`, default
-600s) + cancel-on-timeout, daily DB backup
-(`proxima-backup` timer with `VACUUM INTO`).
+900s) + cancel-on-timeout, and daily DB backup (`proxima-backup` timer with
+`VACUUM INTO`). Setup failures are finalized immediately instead of waiting for the
+reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
+media result, message-review result, collaboration synthesis, draft, or graph update.
 
 ## 21. Updates (version check + self-update)
 
@@ -304,10 +337,13 @@ offline host, private repo, or GitHub hiccup never surfaces to the user); the
 owner can also trigger a manual check from a **Check for updates** button in
 Settings → Updates. When a newer release exists, the sidebar shows an update
 pill that opens a release-notes modal (rendered markdown) with a one-click
-**Update now**, which runs `scripts/proxima update` (`git pull --ff-only` +
-rebuild + restart, tracked via an `update-status.json` marker file) behind a
+**Update now**, which requires a clean checkout and runs `scripts/proxima update`
+(`git pull --ff-only` + locked build/tests + restart + health check, tracked via an
+`update-status.json` marker file) behind a
 blocking overlay that polls `/api/health` until the new version answers, then
-reloads. Failures leave the old version running. **Windows:** check/notify
+reloads. A build failure happens before restart, while a failed post-restart health
+check is surfaced for manual log inspection (there is no automatic checkout/DB rollback).
+**Windows:** check/notify
 works the same; one-click apply is unsupported and returns a manual `git pull`
 command instead.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
@@ -317,18 +353,18 @@ command instead.
 
 ## Removed (was multi-user, now single-user)
 
-In-app user accounts, roles (`environment_admin`/`member`), login/password wall,
-first-run team bootstrap, invite links, project membership/sharing, project
+In-app user accounts, roles (`environment_admin`/`member`), multi-user login,
+team bootstrap, invite links, project membership/sharing, project
 visibility (private/shared), team name. Collaboration model is instead: **everyone
 self-hosts their own instance + shares folders/repos.** The runtime model is one
-owner; legacy invite/member tables have been dropped.
+owner with one password/session gate; legacy invite/member tables have been dropped.
 
 ## Compact shell, Ops tasks, and Code
 
 + **Ops** uses a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. Home does not duplicate Tasks, Scheduled, Artifacts, or Projects as dashboard cards. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible Code conversation.
 + **Code** opens the current chat and adds only a real-context header (session, project, profile). Only the Code header’s **New session** action clears the active session; the chat remains lazily created on first send.
-+ The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, a single Workflows destination, Artifacts, gated Design, and gated Graph/Video. Code contains New session, Projects, Terminal, and project-scoped recents. Tasks is the permanent execution/review index; Ops Home and workflow runs open the same task workspace. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
-+ The single **Workflows** destination contains Sequential recipes, feature-gated Advanced graph orchestration, and Scheduled automation. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
++ The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, Workflows, Artifacts, and gated Design. Code contains New session, Projects, Terminal, and project-scoped recents. Tasks is the permanent execution/review index; Ops Home and workflow runs open the same task workspace. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ The single **Workflows** destination contains the graph Editor and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
 + Terminal is lazy-mounted on first visit and then hidden rather than unmounted, preserving PTYs. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.

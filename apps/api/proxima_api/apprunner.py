@@ -23,7 +23,7 @@ def _port_open(port: int) -> bool:
     except OSError:
         return False
 
-from .runners import augmented_path
+from .runners import subprocess_env
 
 IS_WINDOWS = os.name == "nt"
 
@@ -39,8 +39,10 @@ class AppManager:
 
     async def start(self, slug: str, cwd: str, command: str, port: int) -> None:
         await self.stop(slug)
-        env = os.environ.copy()
-        env["PATH"] = augmented_path(env.get("PATH"))
+        env = subprocess_env(
+            allowlist_env="PROXIMA_APP_ENV_ALLOWLIST",
+            inherit_env="PROXIMA_APP_INHERIT_ENV",
+        )
         env["PORT"] = str(port)
         # Run the command string through the platform shell, in its own process
         # group so we can clean-kill the whole tree later.

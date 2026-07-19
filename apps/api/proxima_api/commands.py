@@ -27,8 +27,6 @@ COMMANDS: tuple[CommandDefinition, ...] = (
     CommandDefinition("/goal", "Autonomous goal loop — agent works across turns until done", "Session", "proxima"),
     CommandDefinition("/image", "Generate an image with the selected image provider (Settings → Image generation)", "Media", "proxima"),
     CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima", feature=features.DESIGN_STUDIO),
-    CommandDefinition("/video", "Generate a video with the selected video provider (Settings → Video generation)", "Media", "proxima", feature=features.VIDEO),
-    CommandDefinition("/video-studio", "Create a Video Studio draft from a brief", "Media", "proxima", feature=features.VIDEO),
     CommandDefinition("/model", "Open/select model via UI", "Runner", "ui-owned", "/model is managed by Proxima model picker, not raw chat."),
     CommandDefinition("/clear", "Terminal-only clear screen command", "Unavailable", "terminal-only", "/clear is terminal-only. Use /new or the Sessions sidebar in Proxima."),
     CommandDefinition("/tools", "Terminal-only toolset command", "Unavailable", "terminal-only", "/tools is terminal-only. Use Runners/Settings in Proxima."),

@@ -33,13 +33,15 @@ The app/runner layer must reject anything that escapes the run's project/path po
 
 Before starting a run, Proxima resolves:
 
-- the owner (auto-login session)
+- the authenticated owner session
 - selected profile (and its isolated credential home)
 - selected project
 - allowed working directory (the project root)
 - allowed tools / capabilities
 
-The runner receives only this resolved context.
+The runner receives this resolved context and a filtered environment. This is a
+guardrail, not an OS sandbox: the subprocess still has the service user's filesystem
+permissions.
 
 ## Path policy
 
@@ -80,28 +82,40 @@ When launching a runner:
 - pass minimal env; do not pass server secrets unless explicitly scoped
 - record run / profile / project in audit/events
 
+Current environment behavior:
+
+- runner children get platform basics plus common model-provider API keys;
+- app-preview children get platform basics but no provider keys;
+- extra variables require the runner/app allowlist;
+- `PROXIMA_RUNNER_INHERIT_ENV=1` and `PROXIMA_APP_INHERIT_ENV=1` are explicit
+  compatibility escape hatches for trusted installations.
+
 ## Developer mode (future)
 
 A future explicit "developer mode" could allow source inspection with a reason +
 expiry + audit event. Not implemented; noted so it isn't assumed to exist.
 
-## Tests to add for future hardening
+## Regression tests
 
-- a run cannot browse the app source repo through the project file API
-- a prompt asking for `~/.config/proxima/proxima.env` is denied by policy
-- project path traversal (`..`) is rejected
-- raw secret paths (`~/.ssh`, `.env`) are not readable through the file API
+- project path traversal (`..`) is rejected by file APIs;
+- runner subprocess env omits unrelated service secrets;
+- app subprocess env omits provider/service secrets unless allowlisted;
+- preview capability is not the owner session and is tamper-evident;
+- generated HTML does not receive `allow-same-origin`.
 
 ## Current status
 
-Access is gated at the **network layer** (single-user, auto-login owner; loopback /
+Access is gated at the **network layer** (single authenticated owner; loopback /
 Tailscale / Cloudflare Access). Each run carries a per-profile credential home and is
-scoped to the selected project cwd.
+scoped to the selected project cwd. Permission prompts default to interactive review,
+and child environments are filtered as described above.
 
 > An earlier *advisory command-policy classifier* (`POST /api/policy/command/check`)
 > was **removed** — it never gated real agent/tool execution (the agent runs its own
 > shell inside the runner CLI, not through this API), so it created a false impression
 > of a guard. Do not document it as an active control.
 
-Full path/tool confinement is not comprehensively enforced yet. Until it is, do not
-expose arbitrary file browsing or unrestricted shell tools beyond the project scope.
+Full path/tool confinement is not comprehensively enforced because runners retain the
+service user's OS permissions. For the intended self-hosted model, use trusted projects,
+skills, and MCP servers; keep auto-approve off for unfamiliar content; and use a separate
+low-privilege service user when stronger host separation is needed.

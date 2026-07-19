@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,98 @@ logger = logging.getLogger("proxima.run_prompting")
 # A design run appends ⟦VISION:relpath|relpath⟧ to its prompt so the worker can read
 # those project files and send them to the model as image content blocks (vision).
 _VISION_MARKER = re.compile(r"\n*⟦VISION:([^⟧]*)⟧\s*$")
+_MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _VISION_MAX_BYTES = 8_000_000
 _VISION_MAX_COUNT = 10
+_VISION_MAX_TOTAL_BYTES = 32_000_000
+
+
+def markdown_image_paths(text: str, limit: int = _VISION_MAX_COUNT) -> list[str]:
+    """Return explicit local image-reference paths from Markdown, in owner order.
+
+    This only recognizes references emitted by the project-file picker/attachment
+    control. Filesystem validation and MIME/size checks happen when bytes are loaded.
+    """
+    paths: list[str] = []
+    for match in _MARKDOWN_IMAGE.finditer(text or ""):
+        rel = match.group(1).strip()
+        if (
+            not rel
+            or rel in paths
+            or len(paths) >= max(0, limit)
+            or "|" in rel
+            or "⟧" in rel
+            or "\n" in rel
+            or "\r" in rel
+            or re.match(r"^(?:https?:|data:|blob:)", rel, re.IGNORECASE)
+        ):
+            continue
+        paths.append(rel)
+    return paths
+
+
+def append_vision_references(text: str, paths: Iterable[str]) -> str:
+    """Append the worker's private vision marker for explicit local references."""
+    safe: list[str] = []
+    for raw in paths:
+        rel = str(raw).strip()
+        if (
+            not rel
+            or rel in safe
+            or "|" in rel
+            or "⟧" in rel
+            or "\n" in rel
+            or "\r" in rel
+        ):
+            continue
+        safe.append(rel)
+        if len(safe) >= _VISION_MAX_COUNT:
+            break
+    if not safe:
+        return text
+    return f"{text.rstrip()}\n\n⟦VISION:{'|'.join(safe)}⟧"
+
+
+def load_project_images(
+    project_root: str | Path,
+    paths: Iterable[str],
+) -> list[tuple[bytes, str]]:
+    """Load bounded, jailed image references from a project.
+
+    Bad paths are skipped rather than failing the run: the prompt remains useful even
+    if a file was renamed between picker selection and execution.
+    """
+    root = Path(project_root)
+    images: list[tuple[bytes, str]] = []
+    total_bytes = 0
+    for rel in paths:
+        rel = str(rel).strip()
+        if not rel or len(images) >= _VISION_MAX_COUNT:
+            continue
+        try:
+            path = fsapi.resolve_in_project(root, rel)
+            mime = mimetypes.guess_type(path.name)[0] or ""
+            size = path.stat().st_size if path.is_file() else 0
+            if (
+                not mime.startswith("image/")
+                or size <= 0
+                or size > _VISION_MAX_BYTES
+                or total_bytes + size > _VISION_MAX_TOTAL_BYTES
+            ):
+                continue
+            data = path.read_bytes()
+            if (
+                not data
+                or len(data) > _VISION_MAX_BYTES
+                or total_bytes + len(data) > _VISION_MAX_TOTAL_BYTES
+            ):
+                continue
+        except Exception:
+            logger.debug("vision image skipped: %s", rel, exc_info=True)
+            continue
+        images.append((data, mime))
+        total_bytes += len(data)
+    return images
 
 
 def extract_vision_images(text: str, project_root: str) -> tuple[str, list[tuple[bytes, str]]]:
@@ -29,19 +120,7 @@ def extract_vision_images(text: str, project_root: str) -> tuple[str, list[tuple
     if not m:
         return text, []
     clean = text[: m.start()].rstrip()
-    images: list[tuple[bytes, str]] = []
-    for rel in m.group(1).split("|"):
-        rel = rel.strip()
-        if not rel or len(images) >= _VISION_MAX_COUNT:
-            continue
-        try:
-            p = fsapi.resolve_in_project(Path(project_root), rel)
-            if p.is_file():
-                data = p.read_bytes()
-                if 0 < len(data) <= _VISION_MAX_BYTES:
-                    images.append((data, mimetypes.guess_type(p.name)[0] or "image/png"))
-        except Exception:
-            logger.debug("vision image skipped: %s", rel, exc_info=True)
+    images = load_project_images(project_root, m.group(1).split("|"))
     return clean, images
 from . import workflows as wf
 from . import features
@@ -147,7 +226,6 @@ class RunPrompting:
         db = self.app.state.worker_db
         cfg = self.app.state.config
         include_design_studio = features.enabled(cfg, features.DESIGN_STUDIO)
-        include_video = features.enabled(cfg, features.VIDEO)
         prompt_text = run["prompt"]
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
             try:
@@ -175,7 +253,6 @@ class RunPrompting:
                     project_slug,
                     project_wiki,
                     include_design_studio=include_design_studio,
-                    include_video=include_video,
                     design_guidelines=design_guidelines,
                 )
                 if preamble:
@@ -186,7 +263,6 @@ class RunPrompting:
                 if is_job:
                     prompt_text = wf.build_capability_preamble(
                         include_design_studio=include_design_studio,
-                        include_video=include_video,
                     ) + "\n\n---\n\n" + prompt_text
                 elif is_build:
                     wfb = db.execute("SELECT name, steps FROM workflows WHERE id = ?", (jrow["workflow_id"],)).fetchone()
@@ -200,7 +276,6 @@ class RunPrompting:
                             + "\n"
                             + wf.build_capability_preamble(
                                 include_design_studio=include_design_studio,
-                                include_video=include_video,
                             )
                             + "\n\n---\n\n"
                             + prompt_text

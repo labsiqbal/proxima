@@ -18,12 +18,13 @@ import {
 import { Dropdown } from '../components/ui/Dropdown'
 import { runnerCapabilities } from '../api/profiles'
 import { IconTrash } from '../components/shell/icons'
-import { listArtifacts } from '../api/files'
-import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
+import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
 import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
+import { usePolling } from '../hooks/usePolling'
+import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import type {
   AppFeatures,
   GraphJob,
@@ -507,7 +508,6 @@ export function GraphScreen({
   // A test asked for while the chat panel is closed: the panel must mount before the
   // ref exists, so the request waits one render here.
   const [pendingTest, setPendingTest] = React.useState<string | null>(null)
-  const [mentionItems, setMentionItems] = React.useState<MentionItem[]>([])
   const [skillsByRunner, setSkillsByRunner] = React.useState<Record<string, DetectedSkill[]>>({})
   const skillFetches = React.useRef(new Set<string>())
   const loadSkills = React.useCallback((runnerId: string | undefined) => {
@@ -636,11 +636,11 @@ export function GraphScreen({
     })
   }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed])
 
-  React.useEffect(() => {
-    if (!job || !['running', 'review'].includes(job.status)) return
-    const timer = window.setInterval(() => { void loadJob(job.id) }, 1500)
-    return () => clearInterval(timer)
-  }, [job?.id, job?.status, loadJob])
+  usePolling(
+    () => job ? loadJob(job.id) : undefined,
+    1500,
+    { enabled: !!job && ['running', 'review'].includes(job.status), immediate: false },
+  )
 
   const definition = plan?.nodes.find(node => node.id === selectedId)
   const selectedState = job && selectedId ? stateFor(job, selectedId) : undefined
@@ -737,17 +737,8 @@ export function GraphScreen({
     setDirty(true)
   }
 
-  const mentionSlug = job?.project_slug ?? activeProject?.slug ?? null
-  React.useEffect(() => {
-    if (!mentionSlug) { setMentionItems([]); return }
-    let alive = true
-    // A generous window: mentions are for pointing at existing deliverables, and an
-    // old but real file beats an empty picker.
-    listArtifacts(token, mentionSlug, 60 * 24 * 365)
-      .then(body => { if (alive) setMentionItems(body.artifacts.map(a => ({ path: a.path, title: a.title, type: a.type }))) })
-      .catch(() => { if (alive) setMentionItems([]) })
-    return () => { alive = false }
-  }, [token, mentionSlug])
+  const mentionSlug = job?.project_slug ?? activeProject?.slug ?? undefined
+  const mentionItems = useProjectMentionItems(token, mentionSlug)
 
   React.useEffect(() => {
     if (!pendingTest || !chatOpen || !plan) return
@@ -1017,13 +1008,19 @@ export function GraphScreen({
           {activeProject && <p className="muted graph-project-tag">Building in <strong>{activeProject.name}</strong> · runs stay in this project</p>}
           <h1>What should this workflow do?</h1>
           <p className="muted graph-sub">Describe it and the agent draws the graph — independent branches run in parallel. Nothing's locked; you can rearrange everything on the canvas.</p>
-          <div className="graph-prompt">
-            <textarea
+          <div className="graph-prompt" onKeyDown={event => {
+            if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter' && heroText.trim()) {
+              void newPlan(heroText)
+              setHeroText('')
+            }
+          }}>
+            <MentionTextarea
               rows={3}
+              items={mentionItems}
               value={heroText}
               placeholder="Describe your workflow — e.g. riset topik dari {{brief}}, tulis post X dan LinkedIn secara paralel, gabungkan jadi satu bundle"
-              onChange={event => setHeroText(event.target.value)}
-              onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && heroText.trim()) { void newPlan(heroText); setHeroText('') } }}
+              onChange={setHeroText}
+              ariaLabel="Workflow brief"
             />
             <div className="graph-prompt-bar">
               <button className="ghost-button" disabled={!!busy} onClick={() => void newPlan()}>Blank canvas</button>

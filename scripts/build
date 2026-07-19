@@ -10,13 +10,19 @@ need uv
 need npm
 
 printf '==> Syncing API dependencies\n'
-( cd "$ROOT/apps/api" && uv sync )
+( cd "$ROOT/apps/api" && uv sync --locked )
 
 printf '==> Installing web dependencies\n'
-( cd "$ROOT/apps/web" && npm install )
+( cd "$ROOT/apps/web" && npm ci )
+
+printf '==> Linting API\n'
+( cd "$ROOT/apps/api" && .venv/bin/ruff check proxima_api tests )
 
 printf '==> Running API tests\n'
 ( cd "$ROOT/apps/api" && .venv/bin/python -m pytest -q tests )
+
+printf '==> Running web tests\n'
+npm --prefix "$ROOT/apps/web" test
 
 printf '==> Building web PWA\n'
 npm --prefix "$ROOT/apps/web" run build

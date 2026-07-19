@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
-from proxima_api.runners import RunnerDefinition, detect_runners, hermes_status
+from proxima_api.runners import RunnerDefinition, detect_runners, hermes_status, subprocess_env
 
 
 def _make_hermes_bin(tmp_path: Path) -> str:
@@ -155,3 +154,26 @@ def test_runners_detect_endpoint_lists_runners(tmp_path: Path):
     assert body["user"] == "bob"
     assert any(runner["id"] == "hermes" for runner in body["runners"])
     assert all(runner["id"] != "manual" for runner in body["runners"])
+
+
+def test_runner_subprocess_env_drops_service_secrets_but_keeps_provider_auth(monkeypatch):
+    monkeypatch.setenv("PROXIMA_CF_API_TOKEN", "must-not-leak")
+    monkeypatch.setenv("OPENAI_API_KEY", "runner-needs-this")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = subprocess_env(provider_auth=True, allowlist_env="PROXIMA_RUNNER_ENV_ALLOWLIST")
+
+    assert env["OPENAI_API_KEY"] == "runner-needs-this"
+    assert "PROXIMA_CF_API_TOKEN" not in env
+    assert env["PATH"]
+
+
+def test_app_subprocess_env_requires_explicit_allowlist(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "not-for-project-code")
+    monkeypatch.setenv("PROJECT_PUBLIC_URL", "https://example.test")
+    monkeypatch.setenv("PROXIMA_APP_ENV_ALLOWLIST", "PROJECT_PUBLIC_URL")
+
+    env = subprocess_env(allowlist_env="PROXIMA_APP_ENV_ALLOWLIST")
+
+    assert env["PROJECT_PUBLIC_URL"] == "https://example.test"
+    assert "OPENAI_API_KEY" not in env

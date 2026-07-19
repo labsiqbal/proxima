@@ -16,7 +16,7 @@ Visual system for Proxima. Documents the **existing** implementation in `apps/we
 | Body / chat surface | `--ui-chat-surface-background` | `#fbfcfe` | `#0d1117` |
 | Surface (cards) | `--ui-surface` | `#ffffff` | `#161b22` |
 | Surface subtle | `--ui-surface-subtle` | `#f8fafc` | `#1c232c` |
-| Chrome / sidebar | `--ui-bg-chrome` / `--ui-bg-sidebar` | `#f4f7fb` / `#f7f9fc` | dark variants |
+| Sidebar | `--ui-bg-sidebar` | `#f7f9fc` | dark variant |
 | Text primary | `--ui-text-primary` | `#111827` | light |
 | Text secondary | `--ui-text-secondary` | `#4b5563` | — |
 | Text tertiary (muted) | `--ui-text-tertiary` | `#8a94a6` | — |
@@ -25,7 +25,7 @@ Visual system for Proxima. Documents the **existing** implementation in `apps/we
 | Accent / on-accent | `--ui-accent` / `--ui-on-accent` | `#0053fd` / `#fff` | `#4f8cff` |
 | Danger | `--ui-danger` | `#dc2626` | — |
 | Success | `--ui-success` | `#22c55e` | — |
-| Warning (status) | (literal) | `#d29922` | — |
+| Warning (status) | `--ui-warning` / `--ui-warning-bg` | amber tokens | dark variants |
 
 **Contrast rule:** body text ≥ 4.5:1, large/secondary ≥ 3:1. Muted (`--ui-text-tertiary`) is for meta/labels, never body prose. Status colors carry meaning (green=done/enabled, amber=review, blue=running/active, red=failed), used consistently.
 

@@ -6,7 +6,7 @@ import { Sidebar } from './Sidebar'
 
 const base = {
   activeProfile: null, activeProject: null, activeSession: null, currentView: 'home' as const, workspaceMode: 'ops' as const,
-  features: { video: false, designStudio: false, workflowGraph: false }, onClose: vi.fn(), onNewChat: vi.fn(), onSelectWorkspace: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
+  features: { designStudio: false, workflowGraph: false }, onClose: vi.fn(), onNewChat: vi.fn(), onSelectWorkspace: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
 }
 
 describe('Sidebar workspace IA', () => {
@@ -14,7 +14,6 @@ describe('Sidebar workspace IA', () => {
     render(<Sidebar {...base} />)
     expect(screen.queryByRole('button', { name: 'Design' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Workflow Graphs' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Video' })).not.toBeInTheDocument()
     const { unmount } = render(<Sidebar {...base} features={{ ...base.features, workflowGraph: true }} />)
     expect(screen.queryByRole('button', { name: 'Workflow Graphs' })).not.toBeInTheDocument()
     unmount()

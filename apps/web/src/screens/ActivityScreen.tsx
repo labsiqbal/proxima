@@ -1,6 +1,7 @@
 import React from 'react'
 import type { Job, JobStatus, JobStep, Project } from '../types'
 import { listJobs } from '../api/jobs'
+import { usePolling } from '../hooks/usePolling'
 
 const PAGE = 25
 const relTime = (value?: string | null): string => {
@@ -59,11 +60,8 @@ export function ActivityScreen({ token, activeProject, onOpenTask }: {
   }, [token, effectiveStatus, activeProject?.slug, includeArchived, mode])
 
   React.useEffect(() => { setOffset(0); void load(0, false) }, [load])
-  React.useEffect(() => {
-    if (mode === 'review' || !items.some(job => job.status === 'queued' || job.status === 'running')) return
-    const timer = window.setInterval(() => { void load(0, false) }, 2500)
-    return () => window.clearInterval(timer)
-  }, [items, load, mode])
+  const hasActiveJobs = items.some(job => job.status === 'queued' || job.status === 'running')
+  usePolling(() => load(0, false), 2500, { enabled: mode !== 'review' && hasActiveJobs, immediate: false })
 
   return <section className="tasks-view">
     <div className="tasks-head">

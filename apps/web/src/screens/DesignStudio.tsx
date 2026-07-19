@@ -12,9 +12,11 @@ import { projectFs } from '../api/fsAdapter'
 import { fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
+import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
 import { QuestionForm } from '../components/chat/QuestionForm'
 import { splitOnQuestionForms } from '../components/chat/questionForm'
 import { getImageGenSettings } from '../api/settings'
+import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
 import { ColorInput } from '../components/design/ColorInput'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
@@ -219,7 +221,7 @@ const traceFrameClip = (ctx: Konva.Context, l: Layer) => {
   }
 }
 
-function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupMove, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode, onDropImage }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupMove?: (dx: number, dy: number) => void; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean; onDropImage?: (cx: number, cy: number) => boolean }) {
+function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode, onDropImage }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean; onDropImage?: (cx: number, cy: number) => boolean }) {
   const l = layer as unknown as AnyL
   const dragLast = React.useRef<{ x: number; y: number } | null>(null)
   const lastGuides = React.useRef<string>('') // dedupe guide emits — only setState when the lines change (else every frame re-renders and resets the dragged node = flicker)
@@ -477,7 +479,7 @@ function BrandGuideModal({ token, slug, onClose, onOpenFile }: { token: string; 
   </div>
 }
 
-function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBrandGuide }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; projectName: string; onBrandGuide?: () => void }) {
+function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBrandGuide, mentionItems }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; projectName: string; onBrandGuide?: () => void; mentionItems: MentionItem[] }) {
   const [surface, setSurface] = React.useState<Surface>('graphic')
   const [brief, setBrief] = React.useState('')
   const tpls = surfaceTemplates(surface)
@@ -486,8 +488,10 @@ function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBran
     <p className="muted ds-project-tag">Designing in <strong>{projectName}</strong> · saved to this project</p>
     <h1>What do you want to make?</h1>
     <p className="muted ds-sub">Describe it and the AI drafts editable layers — or start from a template. Nothing's locked; you can change size, aspect ratio and everything else on the canvas.</p>
-    <div className="ds-prompt">
-      <textarea rows={3} placeholder="Describe your design — e.g. Acme launch post, dark mood, bold headline, blue CTA" value={brief} onChange={e => setBrief(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generate() }} />
+    <div className="ds-prompt" onKeyDown={event => {
+      if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter') generate()
+    }}>
+      <MentionTextarea rows={3} items={mentionItems} placeholder="Describe your design — e.g. Acme launch post, dark mood, bold headline, blue CTA" value={brief} onChange={setBrief} ariaLabel="Design brief" />
       <div className="ds-prompt-bar">
         <div className="ds-surface-pills">
           {SURFACES.map(s => <button key={s.key} className={surface === s.key ? 'active' : ''} onClick={() => setSurface(s.key)}>{s.label}</button>)}
@@ -553,6 +557,7 @@ const chatFromMessages = (msgs: { role: string; content: string }[]): { role: 'u
 
 export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void }) {
   const isMobile = useIsMobile()
+  const mentionItems = useProjectMentionItems(token, project?.slug)
   const [mSheet, setMSheet] = React.useState<'panel' | 'inspector' | 'add' | null>(null)
   const [snapOn, setSnapOn] = React.useState(true) // touch has no Shift key → snap via toggle (default on)
   const mobileSnap = isMobile && snapOn
@@ -587,7 +592,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [imgBusyKind, setImgBusyKind] = React.useState<'generate' | 'edit' | 'resolve' | null>(null)
   const [imgStartedAt, setImgStartedAt] = React.useState<number | null>(null)
   const [imgElapsed, setImgElapsed] = React.useState(0)
-  const [imageProviderKind, setImageProviderKind] = React.useState<'auto' | 'codex' | 'oauth' | 'higgsfield' | 'http'>('codex')
   const [imageEditReady, setImageEditReady] = React.useState(false)
   // Provider can compose MULTIPLE reference images (Settings → Image generation);
   // when false the ref tray is capped at one.
@@ -652,7 +656,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [marquee, setMarquee] = React.useState<{ ai: number; x: number; y: number; w: number; h: number } | null>(null)
   const marqueeRef = React.useRef<{ ai: number; sx: number; sy: number; additive: boolean } | null>(null)
   const marqueeBoxRef = React.useRef<{ ai: number; x: number; y: number; w: number; h: number } | null>(null)
-  const dragStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const [view, setView] = React.useState({ x: 0, y: 0, scale: 1 })
   // Canvas eyedropper: active when a ColorInput asked to pick from the canvas (used
   // where the native browser EyeDropper isn't available). Next canvas click samples.
@@ -839,8 +842,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     getImageGenSettings(token).then(cfg => {
       if (!mountedRef.current || seq !== settingsSeq.current) return
       const p = cfg.providers.find(x => x.id === cfg.provider)
-      const kind = p?.kind || 'codex'
-      setImageProviderKind(kind)
       // The provider advertises whether it can edit/use reference images (codex now
       // can, via the Codex OAuth Responses surface). A text-to-image-only provider
       // still edits when the backend can fall back to a connected xAI OAuth.
@@ -848,7 +849,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       // Multiple-reference composition follows the selected model's capability.
       setImageMultiReady(!!p?.capabilities?.referenceImages)
     }).catch(() => {
-      if (mountedRef.current && seq === settingsSeq.current) { setImageProviderKind('codex'); setImageEditReady(false); setImageMultiReady(false) }
+      if (mountedRef.current && seq === settingsSeq.current) { setImageEditReady(false); setImageMultiReady(false) }
     })
     return () => { if (seq === settingsSeq.current) settingsSeq.current += 1 }
   }, [token])
@@ -1256,7 +1257,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   if (!project) return <section className="design-studio"><div className="ds-start"><div className="ds-start-inner center"><h1>Pick a project first</h1><p className="muted ds-sub">Design Studio saves your work into the active project's <code>artifacts/design</code>. Choose a project from the sidebar.</p></div></div></section>
   if (stage === 'gallery') return <section className="design-studio"><GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} /></section>
-  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen designCount={designs.length} projectName={cleanProjectName(project.name)} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
+  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen mentionItems={mentionItems} designCount={designs.length} projectName={cleanProjectName(project.name)} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
     {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
 
@@ -1417,30 +1418,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     setTimeout(() => arrangeAutoLayout(ids), 0)
   }
   const selectedLayoutLeader = selectedIds.map(id => findLayer(id)).find((l): l is Layer => !!l?.autoLayout)
-  const saveSelectedStyle = (kind: 'color' | 'text' | 'effect') => {
-    if (!selected) return
-    const name = `${selected.type} ${kind} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-    snapshot()
-    setScene(s => {
-      if (!s) return s
-      const ds = s.designSystem || {}
-      if (kind === 'color' && 'fill' in selected) return { ...s, designSystem: { ...ds, colorStyles: [...(ds.colorStyles || []), { id: uid('cs'), name, fill: selected.fill, fillType: selected.fillType, fill2: selected.fill2, gradientAngle: selected.gradientAngle, gradientStartX: selected.gradientStartX, gradientStartY: selected.gradientStartY, gradientEndX: selected.gradientEndX, gradientEndY: selected.gradientEndY, gradientStops: selected.gradientStops }] } }
-      if (kind === 'text' && selected.type === 'text') return { ...s, designSystem: { ...ds, textStyles: [...(ds.textStyles || []), { id: uid('ts'), name, fontFamily: selected.fontFamily, fontStyle: selected.fontStyle, fontSize: selected.fontSize, fill: selected.fill, lineHeight: selected.lineHeight, letterSpacing: selected.letterSpacing, textTransform: selected.textTransform, listStyle: selected.listStyle }] } }
-      return { ...s, designSystem: { ...ds, effectStyles: [...(ds.effectStyles || []), { id: uid('es'), name, effects: selected.effects || [] }] } }
-    })
-  }
-  const applyColorStyle = (id: string) => {
-    const st = scene.designSystem?.colorStyles?.find(x => x.id === id)
-    if (st && selected) patchLayer(selected.id, { fill: st.fill, fillType: st.fillType, fill2: st.fill2, gradientAngle: st.gradientAngle, gradientStartX: st.gradientStartX, gradientStartY: st.gradientStartY, gradientEndX: st.gradientEndX, gradientEndY: st.gradientEndY, gradientStops: st.gradientStops } as Partial<Layer>)
-  }
-  const applyTextStyle = (id: string) => {
-    const st = scene.designSystem?.textStyles?.find(x => x.id === id)
-    if (st && selected?.type === 'text') patchLayer(selected.id, st as Partial<Layer>)
-  }
-  const applyEffectStyle = (id: string) => {
-    const st = scene.designSystem?.effectStyles?.find(x => x.id === id)
-    if (st && selected) patchLayer(selected.id, { effects: st.effects } as Partial<Layer>)
-  }
   const saveComponentFromSelection = () => {
     const layers = ab.layers.filter(l => selectedIds.includes(l.id))
     const b = getBounds(layers)
@@ -1861,7 +1838,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const placed = sc.artboards.flatMap(a => a.layers.filter(l => l.type === 'image').map(l => (l as ImageLayer).src)).filter(s => !/^(gen:|https?:|data:|blob:)/i.test(s))
       const lowerText = text.toLowerCase()
       const mentioned = assets.filter(a => { const n = (a.split('/').pop() || '').toLowerCase(); return n && lowerText.includes(n) })
-      const visionPaths = [...new Set([...placed, ...mentioned])].slice(0, 8)
+      const markdownImages = [...text.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)]
+        .map(match => match[1].trim())
+        .filter(path => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(path) && !/^(?:https?:|data:|blob:|\/)/i.test(path))
+      const visionPaths = [...new Set([...placed, ...mentioned, ...markdownImages])].slice(0, 8)
       const r = await createRun(token, sid, { message: buildDesignPrompt(sc, sel, text, assets, visionPaths), display_message: text, profile_id: profileId ?? null })
       // Snapshot what the agent saw (detects mid-run manual edits at apply time) and
       // mark the scene as awaiting this run (persisted → recovery-on-open is exact).
@@ -2110,7 +2090,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               {(chatBusy || chatBusyRun !== null) && <div className="ds-msg assistant pending"><span className="typing"><i /><i /><i /></span><span className="shimmer">Designing…</span></div>}
             </div>
             <div className="ds-chat-input">
-              <Composer disabled={chatBusy || chatBusyRun !== null || !project} token={token} slug={project?.slug} attachIconOnly promptModes={false} placeholder={selectedId ? 'Edit the selected element or attach references…' : 'Describe a design change or attach references…'} onSubmit={async text => send(text)} />
+              <Composer disabled={chatBusy || chatBusyRun !== null || !project} token={token} slug={project?.slug} mentionItems={mentionItems} attachIconOnly promptModes={false} placeholder={selectedId ? 'Edit the selected element or attach references…' : 'Describe a design change or attach references…'} onSubmit={async text => send(text)} />
             </div>
           </div>}
           {leftTab === 'assets' && <div className="ds-assets">

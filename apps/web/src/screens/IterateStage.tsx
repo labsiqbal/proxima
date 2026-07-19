@@ -5,11 +5,12 @@ import { listMessages } from '../api/sessions'
 import { cancelRun, deleteRun } from '../api/runs'
 import { getWorkflow, updateWorkflow, type StepInput } from '../api/workflows'
 import { useEventStream } from '../hooks/useEventStream'
+import { usePolling } from '../hooks/usePolling'
 import { MiniPreview } from '../components/design/MiniPreview'
 import { AppRunner } from '../components/files/AppRunner'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
-import type { ChatMessage, RunEvent, Workflow, WorkflowStep } from '../types'
+import type { ChatMessage, RunEvent, WorkflowStep } from '../types'
 
 type DesignCard = { id: string; title: string; type: string; path: string; w: number; h: number; art?: any }
 const blankStep = (): WorkflowStep => ({ id: Math.random().toString(36).slice(2, 10), name: '', instruction: '', expected_output: '', type: 'other', rules: null, skill_ids: null, review_required: false, depends_on: null })
@@ -32,7 +33,6 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   token: string; workflowId: number; sessionId: number; projectSlug: string | null
   running?: boolean; designStudioEnabled?: boolean; onOpenDesign?: (id: string) => void; onRunRecipe?: (prompt?: string, label?: string, instantResult?: string) => void
 }) {
-  const [wf, setWf] = React.useState<Workflow | null>(null)
   const [steps, setSteps] = React.useState<WorkflowStep[]>([])
   const [sel, setSel] = React.useState(0)
   const [dirty, setDirty] = React.useState(false)
@@ -51,11 +51,12 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const saveSeq = React.useRef(0)  // bumped on save; discards in-flight poll responses
   const loadSeq = React.useRef(0)
   const resultSeq = React.useRef(0)
+  const messagesSeq = React.useRef(0)
   const docSeq = React.useRef(0)
   const [deletingArtifact, setDeletingArtifact] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const projFs = React.useMemo(() => projectSlug ? projectFs(token, projectSlug, '') : null, [token, projectSlug])
-  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s) : s), [token, projectSlug])
+  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s) : s), [projectSlug])
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -64,23 +65,22 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
       loadSeq.current += 1
       saveSeq.current += 1
       resultSeq.current += 1
+      messagesSeq.current += 1
       docSeq.current += 1
     }
   }, [])
 
-  React.useEffect(() => {
-    const load = () => {
-      const seq = ++loadSeq.current
-      const saveVersion = saveSeq.current
-      getWorkflow(token, workflowId).then(w => {
-        if (!mountedRef.current || seq !== loadSeq.current) return
-        setWf(w)
-        if (!dirtyRef.current && saveSeq.current === saveVersion) setSteps(w.steps)
-      }).catch(() => {})
-    }
-    load(); const t = setInterval(load, 3000)
-    return () => { loadSeq.current += 1; clearInterval(t) }
+  const loadWorkflow = React.useCallback(async () => {
+    const seq = ++loadSeq.current
+    const saveVersion = saveSeq.current
+    try {
+      const w = await getWorkflow(token, workflowId)
+      if (!mountedRef.current || seq !== loadSeq.current) return
+      if (!dirtyRef.current && saveSeq.current === saveVersion) setSteps(w.steps)
+    } catch { /* transient polling failure — retry on the next tick */ }
   }, [token, workflowId])
+  usePolling(loadWorkflow, 3000, { restartKey: `${token}:${workflowId}` })
+  React.useEffect(() => () => { loadSeq.current += 1 }, [token, workflowId])
 
   // Result is scoped to THIS iterate session's own output (not the whole project):
   // the backend attributes artifacts to the session per run; we just render them.
@@ -104,13 +104,15 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     seen.current = total
   }, [token, sessionId, projFs])
   const loadRunMessages = React.useCallback(async () => {
+    const seq = ++messagesSeq.current
     try {
       const body = await listMessages(token, sessionId)
-      if (mountedRef.current) setMessages(body.messages)
+      if (mountedRef.current && seq === messagesSeq.current) setMessages(body.messages)
     } catch { /* ignore */ }
   }, [token, sessionId])
   React.useEffect(() => {
     resultSeq.current += 1
+    messagesSeq.current += 1
     docSeq.current += 1
     seen.current = null
     setDesigns([])
@@ -121,15 +123,8 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     setEvents([])
     setError('')
   }, [token, sessionId, projectSlug])
-  React.useEffect(() => {
-    loadResult()
-    loadRunMessages()
-    const t = setInterval(loadResult, 4000)
-    return () => {
-      resultSeq.current += 1
-      clearInterval(t)
-    }
-  }, [loadResult, loadRunMessages])
+  React.useEffect(() => { void loadRunMessages() }, [loadRunMessages])
+  usePolling(loadResult, 4000, { restartKey: `${token}:${sessionId}:${projectSlug || ''}` })
   const onEvent = React.useCallback((event: RunEvent) => {
     setEvents(e => [...e.filter(x => x.id !== event.id), event])
     if (event.type === 'run.started' || event.type === 'run.queued') setTab('result')
@@ -154,7 +149,7 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
       const payload: StepInput[] = steps.filter(s => s.name.trim() || s.instruction.trim()).map(s => ({ name: s.name.trim() || 'Step', instruction: s.instruction.trim(), expected_output: s.expected_output?.trim() || undefined, type: s.type || undefined, rules: s.rules?.trim() || null, skill_ids: s.skill_ids?.length ? s.skill_ids : null, review_required: !!s.review_required }))
       const w = await updateWorkflow(token, workflowId, { steps: payload })
       if (!mountedRef.current || seq !== saveSeq.current) return false
-      setWf(w); setSteps(w.steps); setDirty(false)
+      setSteps(w.steps); setDirty(false)
       return true
     } catch { return false /* keep dirty so the user can retry */ } finally { if (mountedRef.current && seq === saveSeq.current) setSaving(false) }
   }

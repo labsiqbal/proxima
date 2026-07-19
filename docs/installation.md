@@ -1,15 +1,15 @@
 # Proxima Installation
 
-Proxima is currently a **single-user cockpit**. It auto-creates one owner and the
-frontend signs in through `/auth/auto`; there is no login, bootstrap, invite, or
-team-user flow.
+Proxima is currently a **single-user cockpit**. It auto-creates one owner; first run
+sets that owner's password, later visits log in or resume the HttpOnly session. There
+are no invites, memberships, roles, or team-user flows.
 
 ## Requirements
 
-- Linux/macOS/Windows host
+- Linux or macOS host (Windows packaging exists, but the PTY backend is not yet portable)
 - `uv`
 - Node.js + `npm`
-- At least one authenticated agent CLI: Claude Code, Codex, Gemini CLI, or Hermes
+- At least one authenticated agent CLI: Claude Code, Codex, Hermes, or Pi
 
 Proxima ships no provider credentials. It uses the runner CLIs already installed
 and authenticated on the host.
@@ -97,9 +97,13 @@ PROXIMA_DEFAULT_RUNNER=claude-code
 PROXIMA_CLAUDE_LIVE_HOME=0
 PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
-PROXIMA_FEATURE_VIDEO=0
 PROXIMA_FEATURE_DESIGN_STUDIO=0
-PROXIMA_FEATURE_WORKFLOW_GRAPH=0
+PROXIMA_FEATURE_WORKFLOW_GRAPH=1
+PROXIMA_RUNNER_ENV_ALLOWLIST=
+PROXIMA_APP_ENV_ALLOWLIST=
+PROXIMA_RUNNER_INHERIT_ENV=0
+PROXIMA_APP_INHERIT_ENV=0
+PROXIMA_MAX_UPLOAD_MB=100
 ```
 
 Notes:
@@ -108,11 +112,14 @@ Notes:
 - `PROXIMA_CLAUDE_LIVE_HOME=1` makes the Claude Code runner use the live
   `~/.claude` home. This is powerful and broad; the current handoff says whether
   it is enabled.
-- Video and Design Studio are temporarily disabled by default. Image generation
+- Video Studio was removed and Design Studio is disabled by default. Image generation
   remains available without Studio bridge actions.
-- `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps the graph architect, navigation, routes,
-  and worker inert. Set it to `1` and restart to use the reviewable DAG canvas; the
-  classic linear engine is unaffected either way. See [workflow-graph.md](workflow-graph.md).
+- Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
+  only as a recovery switch; the classic linear engine is unaffected either way.
+- Runner/app children receive filtered environments. Add trusted variable names to the
+  corresponding comma-separated allowlist. Full inheritance is a compatibility escape
+  hatch and should remain off when opening unfamiliar projects.
+- Uploads default to 100 MB per file; adjust `PROXIMA_MAX_UPLOAD_MB` if needed.
 
 Restart after backend/config changes:
 
@@ -136,8 +143,10 @@ Proxima checks GitHub Releases for a newer version every 6 hours (and on
 Settings → "Check for updates"). When one exists, the sidebar shows an update
 pill; it opens the release notes with a one-click **Update now** button
 (Linux/macOS). The update runs `git pull --ff-only`, rebuilds, restarts the
-service, and the UI reloads on the new version. Failures leave the old
-version running; the log lives at `~/.local/share/proxima/update.log`.
+service, and the UI reloads on the new version. Build failures happen before restart;
+a failed post-restart health check is reported for manual inspection because automatic
+checkout/DB rollback is intentionally not attempted. The log lives at
+`~/.local/share/proxima/update.log`.
 
 CLI equivalent (also the Windows path):
 
@@ -170,6 +179,13 @@ This runs an isolated dev DB and starts:
 
 - API on `127.0.0.1:8765`
 - Vite dev server on `127.0.0.1:5177`
+
+For parallel worktrees, set a short unique ID. It derives a separate runtime root,
+profile root, API port, and Vite port while keeping the normal command unchanged:
+
+```bash
+PROXIMA_DEV_ID=agent-a bash scripts/dev
+```
 
 Verification:
 
@@ -236,6 +252,8 @@ bash scripts/backup
 ```
 
 Backups are stored under `~/.local/share/proxima/backups` by default.
+Each output is mode `0600` and passes `PRAGMA integrity_check`; project/workspace files
+still require a separate filesystem or off-host backup.
 
 ## Troubleshooting
 

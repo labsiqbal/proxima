@@ -13,7 +13,7 @@ export type Dashboard = {
   recentArtifacts?: { type: string; title: string; path: string; project_slug: string; updated_at: string }[]
   systemHealth?: { activeRuns: number; failedRuns24h: number; staleRuns: number; runnersReady: number; runnersTotal: number }
   pendingApprovals?: { id: number; title: string; project_slug: string | null; mode?: string | null }[]
-  authHealth?: { status: 'checking' | 'ok' | 'error'; checks: { id: string; area: 'image' | 'video' | 'runner'; label: string; ok: boolean; detail: string }[]; checkedAt?: string }
+  authHealth?: { status: 'checking' | 'ok' | 'error'; checks: { id: string; area: 'image' | 'runner'; label: string; ok: boolean; detail: string }[]; checkedAt?: string }
 }
 
 export const getDashboard = (token: string) => api<Dashboard>('/api/dashboard', token)

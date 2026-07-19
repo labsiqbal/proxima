@@ -5,29 +5,21 @@ Extracted via the register() pattern — handler bodies verbatim. No behavior ch
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
-import mimetypes
-import os
-import re
-import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 
 from .. import fsapi
 from .. import app_settings
 from .. import auth_health
-from .. import features
 from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
-from .. import video_providers
 from .. import cf_hostnames
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
@@ -37,45 +29,17 @@ from ..schemas import (
 
 def register(app, deps):
     db = deps["db"]
-    feature_cfg = deps["cfg"]
+    cfg = deps["cfg"]
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
     _project_root = deps["_project_root"]
-    user_from_token_query = deps["user_from_token_query"]
-    video_render_jobs: dict[str, str] = {}
 
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         db().execute(
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
             (user["id"], action, slug, json.dumps({"path": path})),
         )
-
-    def _parse_video_studio_id(studio_id: str) -> tuple[str, str] | None:
-        prefix = "proxima-video__"
-        if not studio_id.startswith(prefix):
-            return None
-        parts = studio_id[len(prefix):].split("__", 1)
-        if len(parts) != 2:
-            return None
-        slug, video_id = parts
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", slug or ""):
-            return None
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,80}", video_id or ""):
-            return None
-        return slug, video_id
-
-    def _video_studio_dir(studio_id: str, user: dict[str, Any]) -> tuple[str, str, Path]:
-        features.require(feature_cfg, features.VIDEO)
-        parsed = _parse_video_studio_id(studio_id)
-        if not parsed:
-            raise HTTPException(status_code=404, detail="video studio project not found")
-        slug, video_id = parsed
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        return slug, video_id, d
 
     @app.get("/api/projects/{slug}/tree")
     def project_tree(slug: str, path: str = "", user: dict[str, Any] = Depends(current_user)):
@@ -84,6 +48,17 @@ def register(app, deps):
             return {"path": path, "entries": fsapi.list_tree(root, path)}
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/projects/{slug}/reference-files")
+    def project_reference_files(
+        slug: str,
+        limit: int = Query(default=fsapi.REFERENCE_MAX_RESULTS, ge=1, le=fsapi.REFERENCE_MAX_RESULTS),
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Safe, path-only project file index for @-reference autocomplete."""
+        root = _project_root(slug, user)
+        files, truncated = fsapi.list_reference_files(root, limit=limit)
+        return {"files": files, "truncated": truncated}
 
     @app.get("/api/projects/{slug}/file")
     def project_read_file(slug: str, path: str, user: dict[str, Any] = Depends(current_user)):
@@ -104,27 +79,7 @@ def register(app, deps):
         return {"ok": True, "path": path}
 
     @app.post("/api/projects/{slug}/upload")
-    async def project_upload(slug: str, request: Request, file: UploadFile = File(...), dir: str = "uploads", user: dict[str, Any] = Depends(current_user)):
-        parsed = _parse_video_studio_id(slug)
-        if parsed:
-            features.require(feature_cfg, features.VIDEO)
-            project_slug, video_id, _ = _video_studio_dir(slug, user)
-            port = app.state.app_manager.port(project_slug)
-            if not port:
-                raise HTTPException(status_code=503, detail="HyperFrames Studio API is not running")
-            url = f"http://127.0.0.1:{port}/api/projects/{video_id}/upload"
-            fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP and k.lower() != "content-type"}
-            try:
-                uploaded = await file.read()
-                async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
-                    up = await client.request(
-                        request.method, url, params=request.query_params, headers=fwd,
-                        files={"file": (file.filename or "file", uploaded, file.content_type or "application/octet-stream")},
-                    )
-            except httpx.RequestError:
-                raise HTTPException(status_code=502, detail="HyperFrames Studio API not reachable yet") from None
-            out = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
-            return Response(content=up.content, status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
+    async def project_upload(slug: str, file: UploadFile = File(...), dir: str = "uploads", user: dict[str, Any] = Depends(current_user)):
         root = _project_root(slug, user)
         name = Path(file.filename or "file").name or "file"
         folder = (dir or "uploads").strip("/") or "uploads"
@@ -136,252 +91,37 @@ def register(app, deps):
             target.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise HTTPException(status_code=400, detail=f"cannot create upload directory: {exc.strerror}") from exc
-        if target.exists():  # de-dupe: name.ext -> name-1.ext
-            stem, suffix, i = target.stem, target.suffix, 1
-            while target.exists():
-                target = target.parent / f"{stem}-{i}{suffix}"; i += 1
-        try:
-            target.write_bytes(await file.read())
-        except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"cannot write upload: {exc.strerror}") from exc
+        # Stream from UploadFile's spool instead of copying the whole upload into
+        # RAM. Exclusive creation also makes same-name concurrent uploads de-dupe
+        # safely instead of racing between exists() and write_bytes().
+        stem, suffix, index = target.stem, target.suffix, 0
+        max_bytes = int(cfg.get("max_upload_bytes") or 100 * 1024 * 1024)
+        while True:
+            candidate = target if index == 0 else target.parent / f"{stem}-{index}{suffix}"
+            try:
+                written = 0
+                with candidate.open("xb") as output:
+                    while chunk := await file.read(1024 * 1024):
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"upload exceeds {max_bytes // (1024 * 1024)} MB limit",
+                            )
+                        output.write(chunk)
+                target = candidate
+                break
+            except FileExistsError:
+                index += 1
+            except HTTPException:
+                candidate.unlink(missing_ok=True)
+                raise
+            except OSError as exc:
+                candidate.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail=f"cannot write upload: {exc.strerror}") from exc
         rel = f"{folder}/{target.name}"
         _audit_fs(user, "file.upload", slug, rel)
         return {"path": rel, "name": target.name}
-
-    def _ninerouter() -> tuple[str, str | None]:
-        """9router base URL + API key, from env (NINEROUTER_URL / NINEROUTER_KEY /
-        NINEROUTER_TOKEN) or an optional env-file at NINEROUTER_ENV_FILE."""
-        url = os.environ.get("NINEROUTER_URL") or "http://localhost:20128"
-        key = os.environ.get("NINEROUTER_KEY") or os.environ.get("NINEROUTER_TOKEN")
-        env_file = os.environ.get("NINEROUTER_ENV_FILE")
-        if not key and env_file:
-            try:
-                for line in Path(os.path.expanduser(env_file)).read_text().splitlines():
-                    s = line.strip()
-                    if s.startswith(("NINEROUTER_TOKEN=", "NINEROUTER_KEY=")):
-                        key = s.split("=", 1)[1].strip().strip('"').strip("'")
-                    elif s.startswith("NINEROUTER_URL="):
-                        url = s.split("=", 1)[1].strip().strip('"').strip("'")
-            except Exception:
-                pass
-        return url, key
-
-    # ── HyperFrames video projects ───────────────────────────────────────
-
-    def _video_id(name: str) -> str:
-        base = re.sub(r"[^a-z0-9]+", "-", (name or "video").lower()).strip("-")[:54] or "video"
-        return f"{base}-{int(time.time())}"
-
-    def _video_template(title: str, brief: str, w: int = 1080, h: int = 1920, duration: int = 10) -> str:
-        esc = lambda s: (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return f"""<!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)}</title>
-<style>
-html,body{{margin:0;width:100%;height:100%;background:#080a10;font-family:Inter,system-ui,sans-serif;color:white;overflow:hidden}}
-[data-composition-id=root]{{position:relative;width:{w}px;height:{h}px;background:radial-gradient(circle at 20% 20%,#3b82f6 0,#111827 34%,#050816 100%);overflow:hidden}}
-.scene-content{{position:absolute;inset:0;display:grid;align-content:center;gap:28px;padding:96px;box-sizing:border-box}}
-.eyebrow{{width:max-content;padding:12px 18px;border:1px solid rgba(255,255,255,.22);border-radius:999px;background:rgba(255,255,255,.08);font-size:26px;text-transform:uppercase;letter-spacing:.12em;color:#bfdbfe}}
-h1{{font-size:92px;line-height:.96;margin:0;letter-spacing:-.04em;max-width:850px}}
-p{{font-size:34px;line-height:1.25;margin:0;color:#dbeafe;max-width:760px}}
-.orb{{position:absolute;width:520px;height:520px;border-radius:50%;right:-180px;bottom:-130px;background:linear-gradient(135deg,#60a5fa,#f472b6);filter:blur(10px);opacity:.55}}
-</style></head>
-<body>
-<div data-composition-id="root" data-width="{w}" data-height="{h}" data-start="0" data-duration="{duration}">
-  <div id="motion-orb" class="clip orb" data-start="0" data-duration="{duration}" data-track-index="0"></div>
-  <section id="main-message" class="clip scene-content" data-start="0" data-duration="{duration}" data-track-index="1">
-    <div class="eyebrow">Proxima Video</div>
-    <h1 id="title">{esc(title)}</h1>
-    <p id="subtitle">{esc(brief or "Edit this HyperFrames composition with the agent.")}</p>
-  </section>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
-<script>
-window.__timelines = window.__timelines || {{}};
-const duration = {duration};
-if (window.gsap) {{
-  const tl = gsap.timeline({{ paused: true }});
-  tl.from('.eyebrow', {{ y: 28, opacity: 0, duration: .55, ease: 'power3.out' }}, 0)
-    .from('h1', {{ y: 64, opacity: 0, duration: .7, ease: 'power3.out' }}, .15)
-    .from('p', {{ y: 34, opacity: 0, duration: .55, ease: 'power2.out' }}, .35)
-    .fromTo('.orb', {{ scale: .75, rotate: 0 }}, {{ scale: 1.12, rotate: 18, duration, ease: 'none' }}, 0);
-  window.__timelines.root = tl;
-}} else {{
-  let current = 0;
-  const clamp = v => Math.max(0, Math.min(duration, Number(v) || 0));
-  const apply = t => {{
-    current = clamp(t);
-    const p = current / duration;
-    document.querySelector('.eyebrow').style.opacity = p > .03 ? '1' : '0';
-    document.querySelector('h1').style.opacity = p > .06 ? '1' : '0';
-    document.querySelector('p').style.opacity = p > .1 ? '1' : '0';
-    document.querySelector('.orb').style.transform = `scale(${{.75 + p * .37}}) rotate(${{p * 18}}deg)`;
-  }};
-  window.__timelines.root = {{
-    duration: () => duration,
-    time: value => value == null ? current : (apply(value), window.__timelines.root),
-    seek: value => (apply(value), window.__timelines.root),
-    play: () => window.__timelines.root,
-    pause: () => window.__timelines.root,
-  }};
-  apply(0);
-}}
-</script>
-</body></html>
-"""
-
-    @app.get("/api/projects/{slug}/videos")
-    def list_videos(slug: str, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        root = _project_root(slug, user)
-        base = fsapi.resolve_in_project(root, "artifacts/video")
-        if not base.exists():
-            return {"videos": []}
-        out = []
-        for d in sorted([p for p in base.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
-            idx = d / "index.html"
-            if not idx.is_file():
-                continue
-            title = d.name
-            width = 1080
-            height = 1920
-            try:
-                html = idx.read_text(encoding="utf-8", errors="ignore")
-                m = re.search(r"<title>(.*?)</title>", html, re.I | re.S)
-                if m:
-                    title = re.sub(r"\s+", " ", m.group(1)).strip() or title
-                wm = re.search(r'data-width=["\'](\d+)["\']', html, re.I)
-                hm = re.search(r'data-height=["\'](\d+)["\']', html, re.I)
-                if wm and hm:
-                    width = int(wm.group(1))
-                    height = int(hm.group(1))
-            except OSError:
-                pass
-            out.append({"id": d.name, "title": title, "path": f"artifacts/video/{d.name}", "width": width, "height": height, "updated_at": d.stat().st_mtime})
-        return {"videos": out}
-
-    @app.post("/api/projects/{slug}/videos")
-    def create_video(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        payload = payload or {}
-        root = _project_root(slug, user)
-        title = str(payload.get("title") or "Untitled video").strip() or "Untitled video"
-        brief = str(payload.get("brief") or "").strip()
-        vid = _video_id(title)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{vid}")
-        d.mkdir(parents=True, exist_ok=False)
-        (d / "index.html").write_text(_video_template(title, brief), encoding="utf-8")
-        (d / "hyperframes.json").write_text(json.dumps({"name": vid, "entry": "index.html"}, indent=2), encoding="utf-8")
-        (d / "renders").mkdir(exist_ok=True)
-        _audit_fs(user, "video.create", slug, f"artifacts/video/{vid}")
-        return {"id": vid, "title": title, "path": f"artifacts/video/{vid}"}
-
-    MEDIA_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".mp4", ".webm", ".mov", ".mp3", ".wav", ".ogg"}
-
-    @app.post("/api/projects/{slug}/videos/{video_id}/import-file")
-    def video_import_file(slug: str, video_id: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        """Copy an existing project media file into the video project's assets/ so the
-        studio (which only sees its own directory) can use it on the timeline."""
-        features.require(feature_cfg, features.VIDEO)
-        payload = payload or {}
-        root = _project_root(slug, user)
-        video_dir = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (video_dir / "index.html").is_file():
-            raise HTTPException(status_code=404, detail=f"video project not found: {video_id}")
-        rel = str(payload.get("path") or "").strip()
-        if not rel:
-            raise HTTPException(status_code=400, detail="path is required")
-        source = fsapi.resolve_in_project(root, rel)
-        if not source.is_file():
-            raise HTTPException(status_code=404, detail=f"file not found: {rel}")
-        if source.suffix.lower() not in MEDIA_IMPORT_EXTS:
-            raise HTTPException(status_code=400, detail=f"not an importable media file: {source.name}")
-        assets = video_dir / "assets"
-        assets.mkdir(exist_ok=True)
-        target = assets / source.name
-        i = 1
-        while target.exists():
-            target = assets / f"{source.stem}-{i}{source.suffix}"; i += 1
-        shutil.copy2(source, target)
-        _audit_fs(user, "video.import_file", slug, f"{rel} -> artifacts/video/{video_id}/assets/{target.name}")
-        return {"ok": True, "video_id": video_id, "path": f"assets/{target.name}"}
-
-    @app.delete("/api/projects/{slug}/videos/{video_id}")
-    def delete_video(slug: str, video_id: str, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,80}", video_id or ""):
-            raise HTTPException(status_code=404, detail="video project not found")
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not d.is_dir() or not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        shutil.rmtree(d)
-        _audit_fs(user, "video.delete", slug, f"artifacts/video/{video_id}")
-        return {"ok": True, "id": video_id, "path": f"artifacts/video/{video_id}"}
-
-    @app.post("/api/projects/{slug}/videos/{video_id}/studio/start")
-    async def start_video_studio(slug: str, video_id: str, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        if not shutil.which("npx"):
-            raise HTTPException(status_code=400, detail="npx is not installed; install Node.js/HyperFrames tooling to run Studio")
-        port = 3920 + (abs(hash(f"{slug}:{video_id}")) % 600)
-        cmd = f"npx --yes hyperframes preview . --port {port} --no-open --force-new"
-        await app.state.app_manager.start(slug, str(d), cmd, port)
-        _audit_fs(user, "video.studio.start", slug, f"artifacts/video/{video_id}")
-        return {"ok": True, "port": port, "path": f"artifacts/video/{video_id}"}
-
-    @app.post("/api/projects/{slug}/videos/{video_id}/lint")
-    def lint_video(slug: str, video_id: str, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        if not shutil.which("npx"):
-            raise HTTPException(status_code=400, detail="npx is not installed; install Node.js/HyperFrames tooling to lint video")
-        try:
-            proc = subprocess.run(
-                ["npx", "--yes", "hyperframes", "lint"],
-                cwd=str(d), text=True, capture_output=True, timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(status_code=504, detail="HyperFrames lint timed out") from exc
-        log = ((proc.stdout or "") + ("\n" if proc.stdout and proc.stderr else "") + (proc.stderr or "")).strip()
-        return {"ok": proc.returncode == 0, "log": log[-8000:]}
-
-    @app.post("/api/projects/{slug}/videos/{video_id}/render")
-    def render_video(slug: str, video_id: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        if not shutil.which("npx"):
-            raise HTTPException(status_code=400, detail="npx is not installed; install Node.js/HyperFrames tooling to render MP4")
-        payload = payload or {}
-        fmt = str(payload.get("format") or "mp4").lower()
-        if fmt not in {"mp4", "webm"}:
-            raise HTTPException(status_code=400, detail="format must be mp4 or webm")
-        out = d / "renders" / f"{video_id}.{fmt}"
-        cmd = ["npx", "--yes", "hyperframes", "render", "--output", str(out), "--quality", str(payload.get("quality") or "draft")]
-        fps = payload.get("fps")
-        if fps:
-            cmd.extend(["--fps", str(fps)])
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(d), text=True, capture_output=True, timeout=600,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(status_code=504, detail="HyperFrames render timed out") from exc
-        if proc.returncode != 0:
-            raise HTTPException(status_code=400, detail=(proc.stderr or proc.stdout or "HyperFrames render failed")[-4000:])
-        _audit_fs(user, "video.render", slug, str(out.relative_to(root)))
-        return {"ok": True, "path": str(out.relative_to(root)), "log": (proc.stdout or "")[-4000:]}
 
     # ── Image-generation provider settings ────────────────────────────────
 
@@ -391,28 +131,11 @@ if (window.gsap) {{
     def _resolve_higgsfield_settings() -> dict[str, Any]:
         return media_settings.resolve_higgsfield_settings(db())
 
-    def _public_higgsfield_settings(settings: dict[str, Any]) -> dict[str, Any]:
-        if features.enabled(feature_cfg, features.VIDEO):
-            return settings
-        return {key: settings[key] for key in ("imagePolicy", "imageModel")}
-
-    def _resolve_video_gen() -> dict[str, Any]:
-        cfg = app_settings.get_json(db(), app_settings.VIDEO_GEN_KEY)
-        if cfg and isinstance(cfg, dict) and cfg.get("provider") in video_providers.VIDEO_PROVIDER_IDS:
-            return cfg
-        hcfg = _resolve_higgsfield_settings()
-        return {
-            "provider": video_providers.DEFAULT_PROVIDER,
-            "model": video_providers.DEFAULT_MODEL,
-            "videoPolicy": hcfg["videoPolicy"],
-            "maxVideoCredits": hcfg["maxVideoCredits"],
-        }
-
     @app.get("/api/settings/permissions")
     def get_permission_settings(user: dict[str, Any] = Depends(current_user)):
         """Auto-approve toggle: when on, agent permission prompts are approved
-        automatically (no cards). Default ON (unset ⇒ on)."""
-        return {"auto_approve": app_settings.get_setting(db(), "auto_approve_permissions", "1") != "0"}
+        automatically (no cards). Default OFF; trusted owners may opt in."""
+        return {"auto_approve": app_settings.get_setting(db(), "auto_approve_permissions", "0") == "1"}
 
     @app.put("/api/settings/permissions")
     def set_permission_settings(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
@@ -510,104 +233,26 @@ if (window.gsap) {{
         _audit_fs(user, "settings.image_gen.test", "-", json.dumps({"provider": provider_id, "status": status}))
         return result
 
-    @app.get("/api/settings/video-gen")
-    def get_video_gen_settings(user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        cfg = _resolve_video_gen()
-        provider = video_providers.get_provider(cfg["provider"])
-        return {
-            "provider": provider.id,
-            "model": cfg.get("model") or (higgsfield.DEFAULT_VIDEO_MODEL if provider.id == "higgsfield" else video_providers.DEFAULT_MODEL),
-            "videoPolicy": cfg.get("videoPolicy") or "confirm-credits",
-            "maxVideoCredits": cfg.get("maxVideoCredits") if isinstance(cfg.get("maxVideoCredits"), (int, float)) else 50,
-            "providers": video_providers.provider_list(),
-            "defaultProvider": video_providers.DEFAULT_PROVIDER,
-            "status": video_providers.test_connection(provider.id),
-        }
-
-    @app.put("/api/settings/video-gen")
-    def put_video_gen_settings(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        payload = payload or {}
-        current = _resolve_video_gen()
-        provider_id = payload.get("provider") or current["provider"]
-        if provider_id not in video_providers.VIDEO_PROVIDER_IDS:
-            raise HTTPException(status_code=400, detail=f"unknown provider: {provider_id}")
-        policy = payload.get("videoPolicy") or current.get("videoPolicy") or "confirm-credits"
-        if policy not in {"confirm-credits", "allow-with-limit", "disabled"}:
-            raise HTTPException(status_code=400, detail="invalid video policy")
-        max_video = payload.get("maxVideoCredits", current.get("maxVideoCredits", 50))
-        try:
-            max_video = max(0, int(max_video))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="invalid max video credits")
-        model = payload.get("model") if "model" in payload else current.get("model")
-        if not model:
-            model = higgsfield.DEFAULT_VIDEO_MODEL if provider_id == "higgsfield" else video_providers.DEFAULT_MODEL
-        cfg = {"provider": provider_id, "model": str(model).strip(), "videoPolicy": policy, "maxVideoCredits": max_video}
-        app_settings.set_json(db(), app_settings.VIDEO_GEN_KEY, cfg)
-        auth_health.invalidate()  # Home Connections card re-checks on its next poll
-        if provider_id == "higgsfield":
-            hcfg = _resolve_higgsfield_settings()
-            hcfg.update({"videoModel": cfg["model"], "videoPolicy": policy, "maxVideoCredits": max_video})
-            app_settings.set_json(db(), app_settings.HIGGSFIELD_KEY, hcfg)
-        _audit_fs(user, "settings.video_gen", "-", json.dumps({"provider": cfg["provider"], "model": cfg["model"], "videoPolicy": policy, "maxVideoCredits": max_video}))
-        return {"ok": True, **cfg, "status": video_providers.test_connection(provider_id)}
-
-    @app.post("/api/settings/video-gen/test")
-    def test_video_gen_settings(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        payload = payload or {}
-        provider_id = payload.get("provider") or _resolve_video_gen()["provider"]
-        if provider_id not in video_providers.VIDEO_PROVIDER_IDS:
-            raise HTTPException(status_code=400, detail=f"unknown provider: {provider_id}")
-        result = video_providers.test_connection(provider_id)
-        _audit_fs(user, "settings.video_gen.test", "-", json.dumps({"provider": provider_id, "status": "ok" if result.get("ok") else "fail"}))
-        return result
 
     @app.get("/api/settings/higgsfield")
     def get_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
-        return {"settings": _public_higgsfield_settings(_resolve_higgsfield_settings()), "status": higgsfield.status()}
+        return {"settings": _resolve_higgsfield_settings(), "status": higgsfield.status()}
 
     @app.put("/api/settings/higgsfield")
     def put_higgsfield_settings(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
         payload = payload or {}
-        video_keys = {"videoPolicy", "videoModel", "maxVideoCredits"}
-        if video_keys.intersection(payload) and not features.enabled(feature_cfg, features.VIDEO):
-            features.require(feature_cfg, features.VIDEO)
         current = _resolve_higgsfield_settings()
         image_policy = payload.get("imagePolicy") or current["imagePolicy"]
-        video_policy = payload.get("videoPolicy") or current["videoPolicy"]
         if image_policy not in {"zero-credit-only", "ask-before-credits"}:
             raise HTTPException(status_code=400, detail="invalid image policy")
-        if video_policy not in {"confirm-credits", "allow-with-limit", "disabled"}:
-            raise HTTPException(status_code=400, detail="invalid video policy")
-        max_video = payload.get("maxVideoCredits", current["maxVideoCredits"])
-        try:
-            max_video = max(0, int(max_video))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="invalid max video credits")
-        saved = app_settings.get_json(db(), app_settings.HIGGSFIELD_KEY) or {}
-        if not isinstance(saved, dict):
-            saved = {}
         cfg = {
-            **saved,
             "imagePolicy": image_policy,
             "imageModel": (payload.get("imageModel") or current["imageModel"] or higgsfield.DEFAULT_IMAGE_MODEL).strip(),
         }
-        if features.enabled(feature_cfg, features.VIDEO):
-            cfg.update({
-                "videoPolicy": video_policy,
-                "videoModel": (payload.get("videoModel") or current["videoModel"] or "").strip(),
-                "maxVideoCredits": max_video,
-            })
         app_settings.set_json(db(), app_settings.HIGGSFIELD_KEY, cfg)
         auth_health.invalidate()  # Home Connections card re-checks on its next poll
-        audit = {"imagePolicy": cfg["imagePolicy"]}
-        if features.enabled(feature_cfg, features.VIDEO):
-            audit.update({"videoPolicy": cfg["videoPolicy"], "maxVideoCredits": cfg["maxVideoCredits"]})
-        _audit_fs(user, "settings.higgsfield", "-", json.dumps(audit))
-        return {"ok": True, "settings": _public_higgsfield_settings(cfg), "status": higgsfield.status()}
+        _audit_fs(user, "settings.higgsfield", "-", json.dumps({"imagePolicy": cfg["imagePolicy"]}))
+        return {"ok": True, "settings": cfg, "status": higgsfield.status()}
 
     @app.post("/api/settings/higgsfield/test")
     def test_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
@@ -636,8 +281,6 @@ if (window.gsap) {{
     @app.delete("/api/sessions/{session_id}/artifacts")
     def delete_session_artifact(session_id: int, path: str, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
-        row = db().execute("SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        artifacts = json.loads((row["produced_artifacts"] if row else None) or "[]")
         if session.get("project_id"):
             p = db().execute("SELECT slug FROM projects WHERE id = ?", (session["project_id"],)).fetchone()
             if p:
@@ -746,12 +389,19 @@ if (window.gsap) {{
         _project_root(slug, user)
         return app.state.app_manager.status(slug)
 
-    _HOP = {"connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "host"}
+    # Project code is owner-triggered but still untrusted. Never pass Proxima/API
+    # credentials into it and never let it set cookies on the Proxima origin.
+    _HOP = {
+        "authorization", "cf-access-jwt-assertion", "connection", "content-encoding",
+        "content-length", "cookie", "host", "keep-alive", "proxy-authorization",
+        "transfer-encoding",
+    }
+    _RESPONSE_HOP = _HOP | {"set-cookie", "www-authenticate"}
 
     @app.api_route("/api/appview/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def app_view(slug: str, path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        # Proxy to the project's running app. Auth via the proxima_session cookie
-        # (same-origin) so the iframe + its relative assets authenticate — no URL token.
+        # Proxy to the project's running app. Proxima authenticates the inbound request,
+        # then strips its session/auth headers before forwarding to project code.
         _project_root(slug, user)  # access check
         port = app.state.app_manager.port(slug)
         if not port:
@@ -763,55 +413,9 @@ if (window.gsap) {{
                 up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="app not reachable yet") from None
-        out = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
+        out = {k: v for k, v in up.headers.items() if k.lower() not in _RESPONSE_HOP}
         return Response(content=up.content, status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
 
-    def _rewrite_video_studio_text(text: str, prefix: str) -> str:
-        # HyperFrames Studio is served as a root app and uses absolute /assets and
-        # /api paths. Inside Proxima it lives behind a project-scoped proxy.
-        p = prefix.rstrip("/")
-        text = re.sub(r'(src|href)="(/(?!api/video-studio/)[^"]*)"', lambda m: f'{m.group(1)}="{p}{m.group(2)}"', text)
-        text = re.sub(r'url\((/(?!api/video-studio/)[^)]+)\)', lambda m: f'url({p}{m.group(1)})', text)
-        for quote in ('"', "'", "`"):
-            text = text.replace(f"{quote}/api/", f"{quote}{p}/api/")
-            text = text.replace(f"{quote}{p}/api/video-studio/", f"{quote}/api/video-studio/")
-            text = text.replace(f"{quote}/assets/", f"{quote}{p}/assets/")
-            text = text.replace(f"{quote}/favicon.svg", f"{quote}{p}/favicon.svg")
-        return text
-
-    async def _video_studio_proxy(token: str, slug: str, video_id: str, path: str, request: Request):
-        features.require(feature_cfg, features.VIDEO)
-        user = user_from_token_query(token)
-        root = _project_root(slug, user)
-        d = fsapi.resolve_in_project(root, f"artifacts/video/{video_id}")
-        if not (d / "index.html").is_file():
-            raise HTTPException(status_code=404, detail="video project not found")
-        port = app.state.app_manager.port(slug)
-        if not port:
-            raise HTTPException(status_code=503, detail="HyperFrames Studio is not running")
-        url = f"http://127.0.0.1:{port}/{path}"
-        fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
-        try:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-                up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
-        except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="HyperFrames Studio not reachable yet") from None
-        out = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
-        media = up.headers.get("content-type") or ""
-        content = up.content
-        if "text/html" in media or "javascript" in media or path.endswith((".js", ".mjs", ".css")):
-            prefix = f"/api/video-studio/{token}/{slug}/{video_id}"
-            content = _rewrite_video_studio_text(up.text, prefix).encode("utf-8")
-            out.pop("content-length", None)
-        return Response(content=content, status_code=up.status_code, headers=out, media_type=media)
-
-    @app.api_route("/api/video-studio/{token}/{slug}/{video_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_root(token: str, slug: str, video_id: str, request: Request):
-        return await _video_studio_proxy(token, slug, video_id, "", request)
-
-    @app.api_route("/api/video-studio/{token}/{slug}/{video_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_view(token: str, slug: str, video_id: str, path: str, request: Request):
-        return await _video_studio_proxy(token, slug, video_id, path, request)
 
     @app.post("/api/projects/{slug}/fs/mkdir")
     def project_mkdir(slug: str, payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)):
@@ -867,149 +471,3 @@ if (window.gsap) {{
         if not target.is_file():
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(str(target))  # inline (no attachment) so HTML/CSS/JS render
-
-    async def _proxy_video_studio_project_api_for(project_slug: str, video_id: str, path: str, request: Request, *, stream: bool = False):
-        features.require(feature_cfg, features.VIDEO)
-        port = app.state.app_manager.port(project_slug)
-        if not port:
-            raise HTTPException(status_code=503, detail="HyperFrames Studio API is not running")
-        url = f"http://127.0.0.1:{port}/api/projects/{video_id}/{path}"
-        fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
-        try:
-            if stream:
-                client = httpx.AsyncClient(timeout=None, follow_redirects=False)
-                req = client.build_request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
-                up = await client.send(req, stream=True)
-            else:
-                async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
-                    up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
-        except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="HyperFrames Studio API not reachable yet") from None
-        out = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
-        if stream:
-            async def body():
-                try:
-                    async for chunk in up.aiter_bytes():
-                        yield chunk
-                finally:
-                    await up.aclose()
-                    await client.aclose()
-            return StreamingResponse(body(), status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
-        return Response(content=up.content, status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
-
-    async def _proxy_video_studio_project_api(studio_id: str, path: str, request: Request, user: dict[str, Any], *, stream: bool = False):
-        project_slug, video_id, _ = _video_studio_dir(studio_id, user)
-        return await _proxy_video_studio_project_api_for(project_slug, video_id, path, request, stream=stream)
-
-    @app.api_route("/api/projects/{studio_id}/files/{file_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_files_api(studio_id: str, file_path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, f"files/{file_path}", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/preview", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_preview_root_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "preview", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/preview/{preview_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_preview_api(studio_id: str, preview_path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, f"preview/{preview_path}", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/lint", methods=["GET", "POST"])
-    async def video_studio_lint_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "lint", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/gsap-mutations/{mutation_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_gsap_mutations_api(studio_id: str, mutation_path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, f"gsap-mutations/{mutation_path}", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/file-mutations/{mutation_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def video_studio_file_mutations_api(studio_id: str, mutation_path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, f"file-mutations/{mutation_path}", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/duplicate-file", methods=["POST"])
-    async def video_studio_duplicate_file_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "duplicate-file", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/registry/install", methods=["POST"])
-    async def video_studio_registry_install_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "registry/install", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/storyboard", methods=["GET", "POST"])
-    async def video_studio_storyboard_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "storyboard", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/renders", methods=["GET"])
-    async def video_studio_renders_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, "renders", request, user)
-
-    @app.api_route("/api/projects/{studio_id}/renders/file/{filename:path}", methods=["GET"])
-    async def video_studio_render_file_api(studio_id: str, filename: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_studio_project_api(studio_id, f"renders/file/{filename}", request, user, stream=True)
-
-    @app.api_route("/api/projects/{studio_id}/render", methods=["POST"])
-    async def video_studio_render_api(studio_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        project_slug, video_id, _ = _video_studio_dir(studio_id, user)
-        response = await _proxy_video_studio_project_api_for(project_slug, video_id, "render", request)
-        if 200 <= response.status_code < 300:
-            try:
-                body = json.loads(bytes(response.body).decode("utf-8"))
-                job_id = str(body.get("jobId") or "")
-                if job_id:
-                    video_render_jobs[job_id] = project_slug
-            except Exception:
-                pass
-        return response
-
-    async def _proxy_video_render_job(job_id: str, path: str, request: Request, user: dict[str, Any], *, stream: bool = False):
-        features.require(feature_cfg, features.VIDEO)
-        project_slug = video_render_jobs.get(job_id)
-        if not project_slug:
-            raise HTTPException(status_code=404, detail="render job not found")
-        _project_root(project_slug, user)
-        port = app.state.app_manager.port(project_slug)
-        if not port:
-            raise HTTPException(status_code=503, detail="HyperFrames Studio API is not running")
-        suffix = f"/{path.strip('/')}" if path else ""
-        url = f"http://127.0.0.1:{port}/api/render/{job_id}{suffix}"
-        fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
-        try:
-            if stream:
-                client = httpx.AsyncClient(timeout=None, follow_redirects=False)
-                req = client.build_request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
-                up = await client.send(req, stream=True)
-            else:
-                async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
-                    up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
-        except httpx.RequestError:
-            raise HTTPException(status_code=502, detail="HyperFrames Studio API not reachable yet") from None
-        out = {k: v for k, v in up.headers.items() if k.lower() not in _HOP}
-        if stream:
-            async def body():
-                try:
-                    async for chunk in up.aiter_bytes():
-                        yield chunk
-                finally:
-                    await up.aclose()
-                    await client.aclose()
-            return StreamingResponse(body(), status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
-        return Response(content=up.content, status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
-
-    @app.api_route("/api/render/{job_id}", methods=["GET", "DELETE"])
-    async def video_studio_render_job_api(job_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        response = await _proxy_video_render_job(job_id, "", request, user)
-        if request.method == "DELETE" and 200 <= response.status_code < 300:
-            video_render_jobs.pop(job_id, None)
-        return response
-
-    @app.get("/api/render/{job_id}/progress")
-    async def video_studio_render_progress_api(job_id: str, request: Request, user: dict[str, Any] = Depends(current_user)):
-        return await _proxy_video_render_job(job_id, "progress", request, user, stream=True)
-
-    @app.get("/api/events")
-    async def hyperframes_events(user: dict[str, Any] = Depends(current_user)):
-        features.require(feature_cfg, features.VIDEO)
-        async def stream():
-            yield ": proxima hyperframes events\n\n"
-            while True:
-                await asyncio.sleep(25)
-                yield ": keepalive\n\n"
-        return StreamingResponse(stream(), media_type="text/event-stream")

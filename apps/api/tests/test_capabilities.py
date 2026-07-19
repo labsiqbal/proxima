@@ -86,6 +86,43 @@ def test_apply_symlinks_selected_and_prunes(tmp_path):
     assert set(json.loads((home / ".claude.json").read_text())["mcpServers"]) == {"m1", "m2"}
 
 
+def test_apply_codex_mcp_filters_profile_config_and_preserves_other_settings(tmp_path):
+    src = tmp_path / ".codex"
+    src.mkdir()
+    (src / "config.toml").write_text(
+        'model = "gpt-5"\n[mcp_servers.keep]\ncommand = "keep"\n[mcp_servers.drop]\ncommand = "drop"\n'
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text((src / "config.toml").read_text())
+
+    applied = cap.apply_capabilities(_Spec("codex", str(src)), home, {"skills": [], "mcp": ["keep"]})
+    rendered = (home / "config.toml").read_text()
+
+    assert applied["mcp"] == ["keep"]
+    assert 'model = "gpt-5"' in rendered
+    assert "mcp_servers.keep" in rendered
+    assert "mcp_servers.drop" not in rendered
+
+
+def test_apply_hermes_mcp_filters_profile_config_and_preserves_other_settings(tmp_path):
+    src = tmp_path / ".hermes"
+    src.mkdir()
+    source = "model: test\nmcp_servers:\n  keep:\n    command: keep\n  drop:\n    command: drop\n"
+    (src / "config.yaml").write_text(source)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(source)
+
+    applied = cap.apply_capabilities(_Spec("hermes", str(src)), home, {"skills": [], "mcp": ["keep"]})
+    rendered = (home / "config.yaml").read_text()
+
+    assert applied["mcp"] == ["keep"]
+    assert "model: test" in rendered
+    assert "keep:" in rendered
+    assert "drop:" not in rendered
+
+
 # ── API (integration) ────────────────────────────────────────────────────────
 
 def test_capabilities_endpoint_and_patch(tmp_path):
@@ -107,5 +144,5 @@ def test_capabilities_endpoint_and_patch(tmp_path):
     assert r2.status_code == 200
     assert r2.json()["capabilities"] == sel
 
-    r3 = c.get(f"/api/runners/does-not-exist/capabilities", headers=h)
+    r3 = c.get("/api/runners/does-not-exist/capabilities", headers=h)
     assert r3.status_code == 400

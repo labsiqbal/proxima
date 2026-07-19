@@ -1,5 +1,7 @@
-"""Health, setup status, and auth (auto-login/logout/me) routes for the Proxima
-OS API. Single-user cockpit: no login wall, no team bootstrap.
+"""Health, setup status, and owner authentication routes for the Proxima API.
+
+The first run establishes one owner's password; later requests require the owner
+session in addition to the deployment's network boundary.
 """
 from __future__ import annotations
 
@@ -23,7 +25,6 @@ def register(app, deps):
     cfg = deps["cfg"]
     current_user = deps["current_user"]
     current_user_strict_token = deps["current_user_strict_token"]
-    visible_project = deps["visible_project"]
     create_token = deps["create_token"]
     public_user = deps["public_user"]
     ensure_single_user_owner = deps["ensure_single_user_owner"]
@@ -108,9 +109,9 @@ def register(app, deps):
 
     @app.post("/auth/auto")
     def auth_auto(request: Request):
-        """Passwordless auto-login (network-only mode). Disabled once a password is
-        set — clients must then use /auth/login. Mints an HttpOnly session cookie so
-        SSE/WS don't need the token in the URL."""
+        """First-run passwordless session bootstrap. Disabled once the owner password
+        is set — clients must then use /auth/login. Mints an HttpOnly session cookie
+        so SSE/WS don't need the token in the URL."""
         user = ensure_single_user_owner()
         if user.get("password_hash"):
             raise HTTPException(status_code=401, detail="login required")

@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import html
 import json
 import logging
-import mimetypes
 import re
 import sqlite3
 import threading
@@ -25,8 +23,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
-from ..artifacts import update_produced_artifacts
-from ..auth import hash_token
+from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..db import connect
 from ..terminal import TerminalSession
 from .. import fsapi
@@ -37,12 +34,16 @@ from .. import features
 from .. import kinds
 from .. import state
 from .. import image_providers
-from .. import video_providers
 from .. import wiki_memory
 from .. import workflows as wf
 from ..prompt_collaborations import collaboration_card_payload
 from ..chat_collaboration import make_start_collaboration
 from ..run_state import active_run_clause, stale_params
+from ..run_prompting import (
+    append_vision_references,
+    load_project_images,
+    markdown_image_paths,
+)
 from ..runners import detect_runners
 from ..goal_loop import GOAL_INSTRUCTIONS, build_goal_prompt
 from ..schemas import (
@@ -103,41 +104,6 @@ async def _stream_session_events(
         hub.unsubscribe(session_id, event_signal)
 
 
-def _mode_display_message(mode: str, message: str, display_message: str | None) -> str:
-    # No mode prefix on the stored user message — the UI already shows the mode
-    # (collaboration cards header + result title).
-    return display_message or message
-
-
-def _mode_prompt(mode: str, message: str) -> str:
-    if mode == "chat":
-        return message
-    if mode == "brainstorm":
-        return (
-            "You are running Proxima Brainstorm mode for this single user prompt. "
-            "This is not Validate mode: do not review a previous answer. Explore possibilities before committing to one output.\n\n"
-            "Return a concise brainstorm with:\n"
-            "1. 4-6 distinct ideas or approaches.\n"
-            "2. Key tradeoffs, risks, and when each approach fits.\n"
-            "3. A recommended direction or synthesis.\n"
-            "4. Suggested next prompt or action.\n\n"
-            "Do not mutate files or implement unless the user explicitly asks for implementation inside this prompt.\n\n"
-            f"User prompt:\n{message}"
-        )
-    return (
-        "You are running Proxima Debate mode for this single user prompt. "
-        "This is not Validate mode: do not review a previous answer. Debate the prompt from the start.\n\n"
-        "Return a structured debate with:\n"
-        "1. Two or three strong positions.\n"
-        "2. Best argument for each position.\n"
-        "3. Objections and rebuttals.\n"
-        "4. Final synthesis and recommendation.\n"
-        "5. Suggested next prompt or action.\n\n"
-        "Do not mutate files or implement unless the user explicitly asks for implementation inside this prompt.\n\n"
-        f"User prompt:\n{message}"
-    )
-
-
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
@@ -149,7 +115,13 @@ def register(app, deps):
     session_payload = deps["session_payload"]
     _project_root = deps["_project_root"]
     user_from_token_query = deps["user_from_token_query"]
-    ensure_single_user_owner = deps["ensure_single_user_owner"]
+
+    def _websocket_user(websocket: WebSocket, token: str) -> dict[str, Any] | None:
+        """Apply the same revoked/expiry checks as HTTP and SSE auth."""
+        try:
+            return user_from_token_query(token or websocket.cookies.get("proxima_session", ""))
+        except HTTPException:
+            return None
 
     def _require_mode_feature(mode: str | None) -> None:
         # Feature-blind gate: the registry owns the mode -> feature-flag mapping,
@@ -198,11 +170,13 @@ def register(app, deps):
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
             (uid, like, like)).fetchall()]
         chats = [dict(r) for r in db().execute(
-            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND title LIKE ? ESCAPE '\\' "
+            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND job_id IS NULL "
+            "AND workflow_id IS NULL AND title LIKE ? ESCAPE '\\' "
             "ORDER BY updated_at DESC LIMIT 10", (uid, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
             "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title "
             "FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.owner_user_id = ? "
+            "AND s.job_id IS NULL AND s.workflow_id IS NULL "
             "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
         return {"projects": projects, "chats": chats, "messages": msgs}
 
@@ -278,16 +252,17 @@ def register(app, deps):
         rows = db().execute("SELECT id, role, content, author, run_id, output_links, created_at FROM messages WHERE session_id = ? ORDER BY id ASC", (session_id,)).fetchall()
         # Batch activity + duration for every assistant run in one pass each
         # (avoids an N+1: previously 2 queries per assistant message).
-        run_ids = [r["run_id"] for r in rows if r["role"] == "assistant" and r["run_id"]]
+        run_ids = sorted({_as_int(r["run_id"]) for r in rows if r["role"] == "assistant" and r["run_id"]})
         activity_by_run: dict[int, list[dict[str, Any]]] = {}
         duration_by_run: dict[int, int] = {}
         if run_ids:
-            run_id_filter = ",".join(str(_as_int(rid)) for rid in run_ids)
+            placeholders = ",".join("?" for _ in run_ids)
             order: dict[int, list[str]] = {}
             items: dict[int, dict[str, dict[str, Any]]] = {}
             for e in db().execute(
-                "SELECT run_id, type, payload FROM events WHERE instr(',' || ? || ',', ',' || run_id || ',') > 0 AND type IN ('tool.start','tool.complete') ORDER BY seq",
-                (run_id_filter,),
+                f"SELECT run_id, type, payload FROM events WHERE run_id IN ({placeholders}) "
+                "AND type IN ('tool.start','tool.complete') ORDER BY run_id, seq",
+                run_ids,
             ).fetchall():
                 rid = e["run_id"]
                 p = _decode_json(e["payload"] or "{}")
@@ -307,8 +282,8 @@ def register(app, deps):
                 activity_by_run[rid] = [items[rid][t] for t in order[rid]]
             for d in db().execute(
                 "SELECT id, (julianday(finished_at) - julianday(started_at)) * 86400 AS d "
-                "FROM runs WHERE instr(',' || ? || ',', ',' || id || ',') > 0 AND started_at IS NOT NULL AND finished_at IS NOT NULL",
-                (run_id_filter,),
+                f"FROM runs WHERE id IN ({placeholders}) AND started_at IS NOT NULL AND finished_at IS NOT NULL",
+                run_ids,
             ).fetchall():
                 if d["d"] and d["d"] >= 1:
                     duration_by_run[d["id"]] = round(d["d"])
@@ -364,11 +339,13 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="instant result is only available in workflow iteration sessions")
         if payload.instant_result is not None and payload.prompt_mode != "chat":
             raise HTTPException(status_code=400, detail="prompt modes are only available for normal chat runs")
-        display_message = _mode_display_message(payload.prompt_mode, payload.message, payload.display_message)
+        # No mode prefix in the stored user message: collaboration cards already
+        # show their mode, while normal chat can carry a separate display label.
+        display_message = payload.display_message or payload.message
         db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)", (session_id, display_message, user["username"]))
         if payload.prompt_mode != "chat":
             return _start_prompt_collaboration(session, payload, user, profile, display_message)
-        # Media prompts (/image, /video, "buat video …") short-circuit to the selected
+        # Media prompts (/image and /design) short-circuit to the selected
         # generation provider — the ACP agent never sees them (left to improvise, it
         # builds a studio draft instead of generating). This is the endpoint the chat
         # UI actually posts to, so the interception must live here, not just in
@@ -379,7 +356,7 @@ def register(app, deps):
                 return media
         # Resume a goal that paused waiting for the user: their reply re-enters goal
         # mode (instructions appended so the loop continues from this turn).
-        prompt = _mode_prompt(payload.prompt_mode, payload.message)
+        prompt = payload.message
         goal = db().execute("SELECT goal_text, goal_status FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
             prompt = payload.message + GOAL_INSTRUCTIONS
@@ -549,8 +526,7 @@ def register(app, deps):
 
     def _chat_media_kind(message: str) -> tuple[str, str] | None:
         """Command-only by owner decision: generation costs credits, so only an
-        explicit /image, /gambar, /video, or /video-studio triggers it — natural
-        language ("buat video …") always goes to the agent."""
+        explicit /image, /gambar, or /design command triggers it."""
         text = (message or "").strip()
         low = text.lower()
         command = low.split(maxsplit=1)[0] if low else ""
@@ -559,10 +535,6 @@ def register(app, deps):
             return "image-studio", arg or "Create a Design Studio draft."
         if command in {"/image", "/gambar"}:
             return "image", arg or "Generate an image."
-        if command == "/video-studio":
-            return "video-studio", arg or "Create a Video Studio project."
-        if command == "/video":
-            return "video", arg or "Generate a video."
         return None
 
     def _project_slug_for_session(session: sqlite3.Row | dict[str, Any]) -> str | None:
@@ -584,36 +556,6 @@ def register(app, deps):
         if not isinstance(cfg, dict) or cfg.get("provider") not in image_providers.PROVIDERS:
             return {"provider": image_providers.DEFAULT_PROVIDER, "baseUrl": None, "model": None, "apiKey": None}
         return cfg
-
-    def _resolve_chat_video_gen() -> dict[str, Any]:
-        cfg = app_settings.get_json(db(), app_settings.VIDEO_GEN_KEY)
-        if not isinstance(cfg, dict) or cfg.get("provider") not in video_providers.VIDEO_PROVIDER_IDS:
-            return {"provider": video_providers.DEFAULT_PROVIDER, "model": video_providers.DEFAULT_MODEL}
-        return cfg
-
-    def _video_title(prompt: str) -> str:
-        words = re.sub(r"[^a-zA-Z0-9 ]+", " ", prompt).strip().split()
-        return " ".join(words[:8]) or "Video draft"
-
-    def _slug(text: str, fallback: str) -> str:
-        base = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:48]
-        return base or fallback
-
-    def _write_video_shell(root: Path, prompt: str) -> dict[str, Any]:
-        title = _video_title(prompt)
-        video_id = f"{_slug(title, 'video')}-{_as_int(time.time())}"
-        rel_dir = f"artifacts/video/{video_id}"
-        d = fsapi.resolve_in_project(root, rel_dir)
-        d.mkdir(parents=True, exist_ok=True)
-        escaped_title = html.escape(title)
-        escaped_prompt = html.escape(prompt)
-        (d / "index.html").write_text(f"""<!doctype html>
-<html><head><meta charset=\"utf-8\"><title>{escaped_title}</title></head>
-<body style=\"margin:0;background:#0b0f19;color:#f8fafc;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh\">
-<main style=\"max-width:760px;padding:48px\"><p style=\"letter-spacing:.16em;text-transform:uppercase;color:#94a3b8\">Proxima video artifact</p><h1>{escaped_title}</h1><p style=\"font-size:20px;line-height:1.5\">{escaped_prompt}</p><p style=\"color:#94a3b8\">Open/Edit in Video Studio to turn this brief into a timeline/render.</p></main>
-</body></html>""", encoding="utf-8")
-        (d / "brief.json").write_text(json.dumps({"title": title, "prompt": prompt}, indent=2), encoding="utf-8")
-        return {"type": "video", "id": video_id, "title": title, "path": rel_dir}
 
     def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
         profile = profile_for_user(payload.profile_id, user)
@@ -710,7 +652,7 @@ def register(app, deps):
 
             def work() -> None:
                 try:
-                    box["result"] = generate_fn()
+                    box["result"] = generate_fn(run_id)
                 except Exception as exc:  # provider errors surface in-thread, in the chat
                     box["error"] = exc
                 finally:
@@ -723,13 +665,24 @@ def register(app, deps):
                     box.setdefault("error", TimeoutError(f"Media generation timed out after {_as_int(MEDIA_RUN_MAX_SECONDS)}s."))
                     break
                 with app.state.db_lock:
-                    conn.execute("UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+                    heartbeat = conn.execute(
+                        "UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    )
+                if heartbeat.rowcount != 1:
+                    return
             error = box.get("error")
             if error is not None:
                 detail = str(error) or error.__class__.__name__
                 text = f"⚠️ Media generation failed: {detail}"
                 with app.state.db_lock:
-                    conn.execute("UPDATE runs SET status = 'failed', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+                    updated = conn.execute(
+                        "UPDATE runs SET status = 'failed', finished_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    )
+                    if updated.rowcount != 1:
+                        return
                     msg = conn.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, text, profile_name, run_id))
                     conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
                 worker.add_event(run_id, session_id, project_id, "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": []})
@@ -740,7 +693,13 @@ def register(app, deps):
                 return
             artifact, text = box["result"]
             with app.state.db_lock:
-                conn.execute("UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
+                updated = conn.execute(
+                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'running'",
+                    (run_id,),
+                )
+                if updated.rowcount != 1:
+                    return
                 msg = conn.execute("INSERT INTO messages(session_id, role, content, author, run_id, output_links) VALUES (?, 'assistant', ?, ?, ?, ?)", (session_id, text, profile_name, run_id, json.dumps([artifact])))
                 _merge_session_artifact(conn, session_id, artifact)
                 conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
@@ -753,8 +712,13 @@ def register(app, deps):
             logging.getLogger("proxima.api").exception("media run %s finalization failed", run_id)
             with contextlib.suppress(Exception):
                 with app.state.db_lock:
-                    conn.execute("UPDATE runs SET status = 'failed', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
-                worker.add_event(run_id, session_id, project_id, "run.failed", {"error": "internal error while saving the media result"})
+                    updated = conn.execute(
+                        "UPDATE runs SET status = 'failed', finished_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    )
+                if updated.rowcount == 1:
+                    worker.add_event(run_id, session_id, project_id, "run.failed", {"error": "internal error while saving the media result"})
         finally:
             conn.close()
 
@@ -789,7 +753,9 @@ def register(app, deps):
         if not media:
             return None
         session = session_for_user(session_id, user)
-        slug = payload.project_slug or _project_slug_for_session(session)
+        # An existing session's project is authoritative. A payload slug is only
+        # needed for the create-and-send endpoint before that session context exists.
+        slug = _project_slug_for_session(session) or payload.project_slug
         if not slug:
             return None
         root = _project_root(slug, user)
@@ -797,7 +763,7 @@ def register(app, deps):
         # Thin brief → clarify in THIS (main) chat with a compact form instead of
         # generating something generic. Answering re-issues the command (submit-as)
         # with the answers as the brief, so this same path runs again — now with enough
-        # to go on. Only for the image + design surfaces; video keeps its own flow.
+        # to go on.
         if kind in _MEDIA_BRIEF_FORMS and _media_brief_is_thin(payload.message):
             return _complete_media_ask(session, payload, user, kind, _MEDIA_BRIEF_FORMS[kind])
         if kind == "image":
@@ -809,17 +775,11 @@ def register(app, deps):
             # source/reference images when the provider can edit — so "/image … with this
             # logo" actually uses the logo instead of ignoring it. Strip the refs from the
             # prompt so the model gets clean instructions + the attached pixels.
-            ref_paths = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prompt)
+            ref_paths = markdown_image_paths(prompt)
             clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
             sources: list[tuple[bytes, str | None]] = []
             if ref_paths and caps.get("imageEdit"):
-                for rel in ref_paths:
-                    try:
-                        src = fsapi.resolve_in_project(root, rel.strip())
-                        if src.is_file():
-                            sources.append((src.read_bytes(), mimetypes.guess_type(src.name)[0] or "image/png"))
-                    except Exception:
-                        logging.getLogger("proxima.api").debug("chat /image reference skipped: %s", rel, exc_info=True)
+                sources = load_project_images(root, ref_paths)
                 if len(sources) > 1 and not caps.get("referenceImages"):
                     sources = sources[:1]
             image_bytes = sources[0][0] if sources else None
@@ -829,12 +789,15 @@ def register(app, deps):
             # Attached images but the selected provider can't use them (text-to-image only).
             refs_ignored = bool(ref_paths) and not sources
 
-            def generate_image() -> tuple[dict[str, Any], str]:
-                target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{_as_int(time.time())}.png")
+            def generate_image(run_id: int) -> tuple[dict[str, Any], str]:
+                # run_id is unique in this database, so concurrent generations
+                # started in the same second can never select the same target.
+                stamp = _as_int(time.time())
+                target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{stamp}-{run_id}.png")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 i = 1
                 while target.exists():
-                    target = target.parent / f"chat-{_as_int(time.time())}-{i}.png"
+                    target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
                     i += 1
                 raw = image_providers.generate(
                     provider.id,
@@ -869,8 +832,12 @@ def register(app, deps):
             design_id, scene = design_scenes.scene_shell(prompt)
             design_session = create_session(SessionCreateRequest(title=f"Design: {scene['title']}", project_slug=slug, profile_id=payload.profile_id, mode="design"), user)
             scene["sessionId"] = design_session["id"]
+            design_prompt = append_vision_references(
+                design_scenes.design_run_message(scene, prompt),
+                markdown_image_paths(prompt),
+            )
             design_run = create_run(design_session["id"], RunCreateRequest(
-                message=design_scenes.design_run_message(scene, prompt),
+                message=design_prompt,
                 display_message=prompt,
                 profile_id=payload.profile_id,
                 model=payload.model,
@@ -878,37 +845,7 @@ def register(app, deps):
             artifact = design_scenes.persist_draft(root, design_id, scene, slug, run_pending_id=design_run["run_id"])
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(session, payload, user, "image-studio", artifact, text)
-        if kind == "video-studio":
-            # Fast local file write — no provider involved, complete synchronously.
-            artifact = _write_video_shell(root, prompt)
-            artifact["project_slug"] = slug
-            artifact["actions"] = ["open-video-studio"]
-            text = f"Created Video Studio draft: `{artifact['path']}`. Open/Edit in Video Studio to build the timeline or render."
-            return _complete_media_run(session, payload, user, "video-studio", artifact, text)
-        cfg = _resolve_chat_video_gen()
-        video_model = payload.model or cfg.get("model")
-
-        def generate_video() -> tuple[dict[str, Any], str]:
-            result = video_providers.generate(str(cfg.get("provider") or video_providers.DEFAULT_PROVIDER), prompt=prompt, model=video_model)
-            if result.content is None and not result.url:
-                raise video_providers.VideoProviderError("Video provider returned no video data.")
-            ext = Path(result.filename or "video.mp4").suffix or ".mp4"
-            target = fsapi.resolve_in_project(root, f"artifacts/media/videos/chat-{_as_int(time.time())}{ext}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            i = 1
-            while target.exists():
-                target = target.parent / f"chat-{_as_int(time.time())}-{i}{ext}"; i += 1
-            if result.content is not None:
-                target.write_bytes(result.content)
-            else:
-                target.write_text((result.url or "") + "\n", encoding="utf-8")
-            meta = {"provider": cfg.get("provider"), "model": video_model, "prompt": prompt, "sourceUrl": result.url, "contentType": result.content_type}
-            (target.with_suffix(target.suffix + ".json")).write_text(json.dumps(meta, indent=2), encoding="utf-8")
-            artifact = {"type": "video-file", "title": target.name, "path": str(target.relative_to(root)), "project_slug": slug, "actions": ["send-to-video-studio", "use-as-reference"]}
-            text = f"Generated video artifact: `{artifact['path']}`. Saved as a generated media result; send it to Video Studio only if you want to remix or build a timeline from it."
-            return artifact, text
-
-        return _start_media_run(session, payload, user, "video", generate_video)
+        return None
 
     @app.post("/api/chat/send", status_code=202)
     def chat_send(payload: ChatSendRequest, user: dict[str, Any] = Depends(current_user)):
@@ -934,7 +871,7 @@ def register(app, deps):
     @app.get("/api/dashboard")
     def dashboard(user: dict[str, Any] = Depends(current_user)):
         """Aggregated real-data summary for the Home dashboard."""
-        from datetime import datetime as _dtm, timedelta as _td, timezone as _tz
+        from datetime import datetime as _dtm, timezone as _tz
         d = db()
         stale_seconds = _as_int(getattr(app.state, "config", {}).get("run_stale_seconds") or 60)
         active_runs_count = d.execute(
@@ -992,43 +929,35 @@ def register(app, deps):
             "WHERE j.status = 'review' AND j.archived_at IS NULL ORDER BY j.updated_at DESC, j.id DESC LIMIT 5"
         ).fetchall()]
 
-        def _artifact_kind(path: Path) -> str:
-            ext = path.suffix.lower()
-            if path.name == "scene.json" and "artifacts/design" in str(path):
-                return "design"
-            if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"):
-                return "image"
-            if ext in (".mp4", ".webm", ".mov"):
-                return "video-file"
-            if ext in (".html", ".htm"):
-                return "page"
-            if ext in (".md", ".txt", ".pdf", ".doc", ".docx"):
-                return "doc"
-            return "file"
-
         recent_artifacts: list[dict[str, Any]] = []
         for p in projects[:12]:
             root = Path(p["path"])
             if not root.is_dir():
                 continue
-            for folder in ("artifacts", "reports", "exports"):
-                base = root / folder
-                if not base.is_dir():
+            # Reuse the bounded/pruned artifact scanner used by run results. The
+            # old dashboard rglob walked every descendant on every Home poll and
+            # had a second, drifting type classifier.
+            for artifact in scan_project_artifacts(root, 0.0):
+                rel = str(artifact.get("path") or "")
+                parts = Path(rel).parts
+                if not parts or parts[0] not in {"artifacts", "reports", "exports"} or "renders" in parts:
                     continue
+                target = root / rel
+                if artifact.get("type") == "design" and target.is_dir():
+                    target = target / "scene.json"
+                elif artifact.get("type") == "app" and target.is_dir():
+                    target = target / "package.json"
                 try:
-                    for f in base.rglob("*"):
-                        if not f.is_file() or any(part in {"node_modules", ".git", "dist", "build", "renders"} for part in f.parts):
-                            continue
-                        try:
-                            rel = str(f.relative_to(root))
-                            recent_artifacts.append({
-                                "type": _artifact_kind(f), "title": f.parent.name if f.name == "scene.json" else f.name,
-                                "path": rel, "project_slug": p["slug"], "updated_at": _dtm.fromtimestamp(f.stat().st_mtime, _tz.utc).isoformat(),
-                            })
-                        except OSError:
-                            pass
+                    updated_at = _dtm.fromtimestamp(target.stat().st_mtime, _tz.utc).isoformat()
                 except OSError:
-                    pass
+                    continue
+                recent_artifacts.append({
+                    "type": artifact["type"],
+                    "title": artifact.get("title") or target.name,
+                    "path": rel,
+                    "project_slug": p["slug"],
+                    "updated_at": updated_at,
+                })
         recent_artifacts.sort(key=lambda a: a["updated_at"], reverse=True)
         recent_artifacts = recent_artifacts[:6]
         failed_runs_24h = d.execute("SELECT COUNT(*) AS c FROM runs WHERE status = 'failed' AND created_at >= datetime('now','-24 hours')").fetchone()["c"]
@@ -1065,7 +994,6 @@ def register(app, deps):
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
             enabled=auth_checks_enabled,
-            include_video=features.enabled(app_cfg, features.VIDEO),
         )
         return {
             "counts": counts, "jobsByStatus": jobs_by_status,
@@ -1104,12 +1032,7 @@ def register(app, deps):
         # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
         # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
         # could have opened the terminal without the password once that flag was set.)
-        token = token or websocket.cookies.get("proxima_session", "")
-        user = None
-        with app.state.db_lock:
-            row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (hash_token(token),)).fetchone()
-        if row:
-            user = dict(row)
+        user = _websocket_user(websocket, token)
         if not user:
             await websocket.close(code=4401)
             return
@@ -1117,10 +1040,17 @@ def register(app, deps):
         if project:
             try:
                 p = visible_project(project, user)
-                if p.get("path"):
-                    cwd = p["path"]
+            except HTTPException as exc:
+                await websocket.close(code=4404 if exc.status_code == 404 else 4403)
+                return
             except Exception:
-                pass
+                logging.getLogger("proxima.api").exception("terminal project lookup failed")
+                await websocket.close(code=1011)
+                return
+            if not p.get("path"):
+                await websocket.close(code=4404)
+                return
+            cwd = p["path"]
         Path(cwd).mkdir(parents=True, exist_ok=True)
         await websocket.accept()
         term = TerminalSession(cwd)
@@ -1174,13 +1104,7 @@ def register(app, deps):
 
     @app.websocket("/api/ws/sessions/{session_id}")
     async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):
-        token = token or websocket.cookies.get("proxima_session", "")
-        user = None
-        token_hash = hash_token(token)
-        with app.state.db_lock:
-            row = db().execute("SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL", (token_hash,)).fetchone()
-        if row:
-            user = dict(row)
+        user = _websocket_user(websocket, token)
         if not user:
             await websocket.close(code=4401)
             return
@@ -1259,6 +1183,12 @@ def register(app, deps):
         collab_cancelled = []
         collab_row = None
         if changed:
+            if str(row["kind"]).startswith("message_review"):
+                db().execute(
+                    "UPDATE message_reviews SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP "
+                    "WHERE run_id = ? AND status IN ('queued', 'running')",
+                    (run_id,),
+                )
             queued = db().execute(
                 "SELECT id FROM runs WHERE session_id = ? AND id != ? AND status = 'queued'",
                 (row["session_id"], run_id),

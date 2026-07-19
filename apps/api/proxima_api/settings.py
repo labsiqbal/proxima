@@ -23,24 +23,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "run_worker_poll_interval_ms": 250,
     "run_worker_concurrency": 2,
     "run_timeout_seconds": 900,
+    "max_upload_bytes": 100 * 1024 * 1024,
     "auth_token_ttl_hours": 24 * 14,
     "seed_users": [],
-    "default_team_name": "Team",
     "provision_starter_dirs": ["wiki", "tasks", "artifacts"],
     "auto_provision": True,
     "start_worker": True,
     "web_dist_path": None,
-    "public_base_url": None,  # override for invite links; else auto-detected from Tailscale
     # Release update check (docs/installation.md#updating). update_check=False
     # disables only the periodic loop; the manual "Check now" endpoint still works.
     "update_check": True,
     "update_repo": "labsiqbal/proxima",
     "update_token": None,
-    "feature_video": False,
     "feature_design_studio": False,
-    # Graph workflow engine (ADR-0001). Master safety switch: OFF by default so
-    # the new engine is inert until explicitly enabled.
-    "feature_workflow_graph": False,
+    # Graph workflows are the shipped authoring path. Keep the switch as an owner
+    # recovery control, but default it on so Workflows is usable after install.
+    "feature_workflow_graph": True,
     # How many nodes of one graph job may be in flight at once. This is a dispatch
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
@@ -66,7 +64,6 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["projectctl_path"] = str(Path(cfg.get("projectctl_path") or repo_root() / "infra/scripts/projectctl"))
     cfg["source_hermes_home"] = str(Path(cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")))
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
-    cfg["feature_video"] = _bool_flag(cfg.get("feature_video"))
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
     return cfg

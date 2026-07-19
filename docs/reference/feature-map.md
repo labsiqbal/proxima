@@ -21,7 +21,7 @@ The foundation everything leans on. Least allowed to change casually.
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
 | Auth & Session Tokens | active | `routes/auth.py`, `route_deps.py` (`current_user`), `main.py` (`/api/preview-auth`) | `api/client.ts`, `App.tsx` | `users`, `auth_sessions` | gates every route, Preview Proxy |
-| Health / Config / Feature Flags | active | `main.py` (`/api/health`, `/api/config`), `features.py` | `features.ts`, `api/config.ts` | — | Design/Video Studio gates |
+| Health / Config / Feature Flags | active | `main.py` (`/api/health`, `/api/config`), `features.py` | `features.ts`, `api/config.ts` | — | Design Studio / graph gates |
 | Projects & FS Linking | active | `routes/projects.py`, `fsapi.py` | `screens/ProjectsScreen.tsx` | `projects` | files, tasks, wiki, apps, workflows |
 | Profiles / Runners / Commands | active | `routes/profiles.py`, `runners.py`, `runner_specs.py`, `commands.py`, `capabilities.py` | `screens/ProfilesScreen.tsx`, `RunnersScreen.tsx` | `profiles` | runs pick profile→runner→home |
 | Sessions & Messages | active | `routes/chat.py` (list/create/patch/delete) | `api/sessions.ts`, `ChatScreen.tsx` | `sessions`, `messages`, `agent_sessions` | runs, ACP, collab, reviews, goal |
@@ -45,10 +45,10 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 
 | Feature | Status | Backend | Frontend | Relates to |
 | --- | --- | --- | --- | --- |
-| Composer / input | active | `routes/chat.py` → `create_run` | `components/chat/Composer.tsx`, `ChatScreen.tsx` | core chat/runs |
+| Composer / input + `@` project-file references | active | `routes/files.py` (`reference-files`), `fsapi.py`; `routes/chat.py` media vision | `components/chat/Composer.tsx`, `MentionTextarea.tsx`, `useProjectMentionItems.ts` | core chat/runs, projects/files |
 | File attach / upload | active | `routes/files.py` (upload) | `Composer.tsx`, `api/files.ts` | files, artifacts |
 | Slash commands | active | `commands.py`, `/api/commands/catalog` | `Composer.tsx`, `ChatScreen.tsx` (`localCommandReply`) | sessions, projects, runners |
-| Chat modes (Normal/Brainstorm/Debate) | active | `routes/chat.py` (`_mode_prompt`) | `Composer.tsx` (`MODES`) | collaborations |
+| Chat modes (Normal/Brainstorm/Debate) | active | `routes/chat.py` + `chat_collaboration.py` | `Composer.tsx` (`MODES`) | collaborations |
 | **Brainstorm entry** | **risk** | `routes/chat.py` (`_start_prompt_collaboration`), `prompt_collaborations.py` | `ChatThread.tsx` (CollaborationCards) | run lifecycle, profiles |
 | Debate entry | active | `routes/chat.py` (debate branch) | `ChatThread.tsx` | collaborations |
 | **Interactive Form** (`<question-form>`) | active | `routes/chat.py` (`list_messages` synth step) | `QuestionForm.tsx`, `questionForm.ts`, `ChatThread.tsx` | core chat (clarifying UX) |
@@ -59,8 +59,8 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 | Approval / permission cards | active | `routes/chat.py` (`respond_permission`), `worker.resolve_permission` | `ChatThread.tsx` (ApprovalCard) | run lifecycle, ACP |
 | Quick-reply buttons | active | — (FE parse) | `ChatThread.tsx` (`parseChoices`) | core chat |
 | Result cards / output links | active | `routes/chat.py` (`_merge_session_artifact`) | `ChatThread.tsx` (ResultCards) | artifacts, studios |
-| Bridge → Design/Video Studio | gated | `api/files` designFromImage, `api/video` | `ChatThread.tsx` | Design/Video Studio |
-| Media generation (`/image` `/video`) | gated (image on) | `routes/chat.py` (`_maybe_complete_chat_media`), `image_providers.py`, `video_providers.py` | `Composer.tsx` (Generate) | Design/Video Studio |
+| Bridge → Design Studio | gated | `api/files` designFromImage | `ChatThread.tsx` | Design Studio |
+| Media generation (`/image`) | active | `routes/chat.py` (`_maybe_complete_chat_media`), `image_providers.py` | `Composer.tsx` (Generate) | Design Studio |
 | Distill to wiki | active | `routes/chat.py` (`wiki_note_draft/commit`), `wiki_memory.py` | `ChatScreen.tsx`, `WikiNotePreview.tsx` | wiki |
 | Distill to workflow | active | `routes/chat.py` (`promote_workflow`), `workflows.py` | `ConvertToWorkflowButton.tsx` | workflows |
 | Workflow iterate / Run recipe | active | `routes/chat.py` (instant_result branch) | `ChatScreen.tsx`, `IterateStage.tsx` | workflows |
@@ -91,28 +91,27 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | **Cron Scheduling** | **risk** | `routes/work.py`, `scheduler.py`, `main.py` loop | `WorkflowsScreen.tsx` | `schedules`, `jobs`, `workflows` | workflows/jobs |
 | **Tasks (Kanban)** | **risk** | `routes/tasks.py` | `TasksScreen.tsx`, `TaskChat.tsx` | `tasks`, `sessions` | sessions, jobs |
 | Wiki Memory | active | `routes/wiki.py`, `wiki_memory.py`, `run_summaries.py` | `WikiScreen.tsx`, `WikiGraph.tsx` | — (FS wiki) | run lifecycle, tasks |
-| Files / Tree / Uploads | active | `routes/files.py`, `fsapi.py` | `WorkspaceTree.tsx`, `FileEditor.tsx` | `projects` (+FS) | artifacts, studios, apps |
+| Files / Tree / Uploads / reference index | active | `routes/files.py`, `fsapi.py` | `WorkspaceTree.tsx`, `FileEditor.tsx`, `useProjectMentionItems.ts` | `projects` (+FS) | chat, workflows, studios, artifacts, apps |
 | App Run & Preview | active | `apprunner.py`, `preview_proxy.py`, `cf_hostnames.py`, `routes/files.py` | `AppRunner.tsx` | `projects` (+in-mem) | preview-auth cookie, Cloudflare |
 | In-browser Terminal | active | `terminal.py`, `routes/chat.py` (`/ws/terminal`) | `TerminalTabs.tsx`, `TerminalView.tsx` | — | projects (cwd) |
 | **Artifacts** | active | `artifacts.py`, `routes/files.py` | `ArtifactsScreen.tsx` | `messages.output_links` (+FS) | run outputs, studios, apps |
 | Design Studio / Image gen | gated `PROXIMA_FEATURE_DESIGN_STUDIO=0` | `routes/files.py` (design/*), `image_providers.py`, `design_scenes.py`, `higgsfield.py` | `DesignStudio.tsx`, `components/design/*` | `app_settings` (+FS) | features gate, artifacts, wiki |
-| Video Studio / Video gen | gated `PROXIMA_FEATURE_VIDEO=0` | `routes/files.py` (videos/*), `video_providers.py`, `higgsfield.py` | `VideoScreen.tsx`, `vendor/video-studio/` | `app_settings` (+FS) | features gate, Higgsfield |
-| Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image/video providers |
+| Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image providers |
 | Settings Store | active | `app_settings.py`, `routes/files.py`, `settings.py` | `SettingsScreen.tsx` | `app_settings` | collab, permission, providers |
 | Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `SettingsScreen` | `app_settings`, `events` | run lifecycle, ACP |
 | Self-update | active (`update_check`) | `routes/update.py`, `updates.py`, `main.py` loop | `UpdateModal.tsx`, `useUpdateStatus` | — (marker file) | app version, health |
 | Readiness Health Dashboard | active | `auth_health.py`, `routes/chat.py` (dashboard) | `HomeScreen.tsx` (Connections) | `profiles`, `app_settings` | providers, runners |
-| Command palette / Search | active | `routes/chat.py` (search) | `SearchModal.tsx`, `api/search.ts` | `sessions`, `messages`, `tasks`, `projects` | sessions, tasks |
+| Command palette / Search | active | `routes/chat.py` (search) | `SearchModal.tsx`, `api/search.ts` | `sessions`, `messages`, `projects` | visible Code sessions, projects |
 | PWA / Static serving | active | `frontend_static.py` | `src/pwa.ts`, `public/` | — | tab label |
 
 **Notes**
 
-- *Workflows & Jobs — graph engine (ADR-0001)* — schema, isolated typed dispatch, correction routes, gated chat architect, and dedicated SVG graph canvas have landed. With the flag on, promotion emits a normalized DAG for queued human plan review; the canvas edits nodes/dependencies, explicitly starts execution, polls live node state, and exposes correction/rerun/approval/save-template actions. Corrections mark all transitive descendants `stale` before sequential redispatch. Default `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` keeps graph planning, navigation, routes, and queued graph architect/`wf_node` runs inert. Classic workflow/job lists remain linear-only; the canvas lists graph jobs through `/api/graph/jobs` and reusable graph templates through `/api/graph/templates` instead.
-- *Cron Scheduling* — `last_run_minute` check-and-set is not atomic (lock released in between); safe only because there is a single scheduler task. No DB-level claim.
-- *Tasks* — **duplication**: the `tasks` table is still live *alongside* `jobs`. Two routed kanbans (Tasks screen vs Activity) whose status can contradict; a task-backed session carries both `sessions.task_id` and `sessions.job_id`.
-- *Artifacts* — `produced_artifacts`/`output_links` are free-floating JSON blobs pointing at filesystem paths with no artifact table; can reference deleted files, and concurrent read-modify-write can lose updates.
-- *App Run & Preview* — `app/start` executes a command string via `bash -lc` under the owner account (see the security audit F-02).
-- *Design Studio* — **cleanest isolation pilot**: its own modules do zero core-table writes; coupling is only the additive `sessions.mode='design'` + `runs.kind` columns. Reactivation = set `PROXIMA_FEATURE_DESIGN_STUDIO=1` in `~/.config/proxima/proxima.env` and **restart the API** (flag read once at boot). Image generation needs an image provider (default `codex` needs a working `codex login`); editing scenes needs no provider. Video is far more entangled (bulk of `routes/files.py` + 3.1 MB vendored editor) — not a good pilot.
+- *Workflows & Jobs — graph engine (ADR-0001)* — schema, isolated typed dispatch, correction routes, chat architect, and dedicated SVG graph canvas are shipped and enabled by default. Promotion emits a normalized DAG for queued human plan review; the canvas edits nodes/dependencies, explicitly starts execution, polls live node state, and exposes correction/rerun/approval/save-template actions. Corrections mark all transitive descendants `stale` before sequential redispatch. `PROXIMA_FEATURE_WORKFLOW_GRAPH=0` remains a recovery switch that makes graph planning/routes/worker paths inert. Legacy linear rows remain readable.
+- *Cron Scheduling* — the per-minute claim is an atomic conditional update; overlapping scheduler ticks cannot claim the same schedule minute twice.
+- *Tasks* — ad-hoc work and workflow execution are unified in `jobs`; the old `tasks` table and `sessions.task_id` were removed by migration 17.
+- *Artifacts* — `produced_artifacts`/`output_links` remain filesystem-path JSON rather than a separate artifact table; guarded compare-and-swap updates prevent concurrent lost updates, while deleted files can still leave stale links.
+- *App Run & Preview* — `app/start` remains an owner-confirmed `bash -lc` command under the service OS user. Child env is filtered; preview uses isolated loopback/subdomain origins, preview-only capabilities, credential-stripping proxies, and opaque same-origin HTML sandboxing. This mitigates credential leakage but is not an OS sandbox.
+- *Design Studio* — **cleanest isolation pilot**: its own modules do zero core-table writes; coupling is only the additive `sessions.mode='design'` + `runs.kind` columns. Reactivation = set `PROXIMA_FEATURE_DESIGN_STUDIO=1` in `~/.config/proxima/proxima.env` and **restart the API** (flag read once at boot). Image generation needs an image provider (default `codex` needs a working `codex login`); editing scenes needs no provider. The former Video Studio/editor has been removed rather than retained behind a gate.
 
 ---
 

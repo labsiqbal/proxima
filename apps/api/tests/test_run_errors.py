@@ -136,6 +136,53 @@ def test_failed_run_stores_error_message(tmp_path):
     assert any(e["type"] == "run.failed" for e in events)
 
 
+def test_setup_failure_immediately_fails_claimed_run(tmp_path):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+    })
+    c = TestClient(app)
+    token = c.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    created = c.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": "broken", "name": "Broken"},
+    )
+    assert created.status_code == 201, created.text
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'broken'"
+    ).fetchone()["id"]
+    not_a_directory = tmp_path / "project-is-a-file"
+    not_a_directory.write_text("not a directory", encoding="utf-8")
+    app.state.db.execute(
+        "UPDATE projects SET path = ? WHERE id = ?",
+        (str(not_a_directory), project_id),
+    )
+    session = c.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "setup failure", "project_slug": "broken"},
+    ).json()
+    run_id = c.post(
+        f"/api/sessions/{session['id']}/runs",
+        headers=headers,
+        json={"message": "hi"},
+    ).json()["run_id"]
+    run = app.state.worker.claim_run()
+    assert run and run["id"] == run_id
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = c.get(f"/api/runs/{run_id}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert persisted["error"]
+    events = c.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+    assert any(e["type"] == "run.failed" and e["run_id"] == run_id for e in events)
+
+
 def test_timed_out_run_recycles_agent_process(tmp_path):
     # A run that times out must recycle the cached agent process, otherwise the
     # next message in the project gets "Queued for the next turn" forever against

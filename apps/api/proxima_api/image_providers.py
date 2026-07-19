@@ -9,10 +9,9 @@ Two user-facing provider kinds, chosen in Settings:
                      OpenAI, FAL, 9router, or any gateway that speaks that surface.
 
 Higgsfield remains available to the app as a local CLI integration, but it is not
-the default image path because CLI/MCP image jobs are credit-based. Video
-generation can still use Higgsfield explicitly. Requests use httpx (already a
-dependency). Every failure raises ImageProviderError with a message safe to show
-the user.
+the default image path because CLI/MCP image jobs are credit-based. Requests use
+httpx (already a dependency). Every failure raises ImageProviderError with a
+message safe to show the user.
 """
 from __future__ import annotations
 

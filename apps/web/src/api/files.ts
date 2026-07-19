@@ -26,6 +26,11 @@ export const designFromImage = (token: string, slug: string, path: string, title
 export const listTree = (token: string, slug: string, path = '') =>
   api<{ path: string; entries: FileEntry[] }>(`/api/projects/${slug}/tree?path=${q(path)}`, token)
 
+export type ReferenceFile = { path: string }
+export type ReferenceFilesResponse = { files: ReferenceFile[]; truncated: boolean }
+export const listReferenceFiles = (token: string, slug: string) =>
+  api<ReferenceFilesResponse>(`/api/projects/${q(slug)}/reference-files`, token)
+
 export const projectWikiAll = (token: string, slug: string) =>
   api<{ notes: { path: string; content: string }[] }>(`/api/projects/${slug}/wiki/all`, token)
 
@@ -49,8 +54,6 @@ export async function uploadFile(token: string, slug: string, file: File, dir?: 
 // Generate (text→image) or edit (image+prompt→image) a design asset via 9router.
 export const genDesignImage = (token: string, slug: string, body: { prompt: string; size?: string; model?: string; image?: string; images?: string[] }, signal?: AbortSignal) =>
   api<{ path: string; name: string }>(`/api/projects/${slug}/design/image`, token, { method: 'POST', body: JSON.stringify(body), signal })
-export const designImageModels = (token: string, slug: string) =>
-  api<{ models: string[]; configured: boolean }>(`/api/projects/${slug}/design/image-models`, token)
 
 // Kick off an agent run that writes <project>/design.md brand guidelines from reference
 // URLs (crawled server-side), uploaded reference images (vision), and free-text notes.

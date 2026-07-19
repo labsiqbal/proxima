@@ -88,7 +88,11 @@ async function apiSmoke() {
   }
   console.log('api: health ok (proxima)')
 
-  const auth = await request('/auth/auto', { method: 'POST', body: {} })
+  const suppliedToken = process.env.PROXIMA_SMOKE_TOKEN || ''
+  const password = process.env.PROXIMA_SMOKE_PASSWORD || ''
+  const auth = suppliedToken
+    ? { body: { token: suppliedToken, user: { username: 'token-authenticated owner' } } }
+    : await request(password ? '/auth/login' : '/auth/auto', { method: 'POST', body: password ? { password } : {} })
   const token = auth.body.token
   if (!token || !auth.body.user?.username) throw new Error(`auth/auto returned unexpected payload: ${JSON.stringify(auth.body)}`)
   const headers = { Authorization: `Bearer ${token}` }
@@ -175,6 +179,7 @@ async function apiSmoke() {
       console.log(`api: temporary project deleted (${project.slug})`)
     }
   }
+  return token
 }
 
 async function waitForTarget(port) {
@@ -189,7 +194,7 @@ async function waitForTarget(port) {
   throw new Error(`Chrome DevTools target for ${BASE} was not ready`)
 }
 
-async function browserNavigationSmoke({ name, width, height, port, mobile }) {
+async function browserNavigationSmoke({ name, width, height, port, mobile, token }) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `proxima-smoke-${name}-`))
   const chrome = spawn('google-chrome', [
     '--headless=new',
@@ -228,6 +233,14 @@ async function browserNavigationSmoke({ name, width, height, port, mobile }) {
 
     await send('Runtime.enable')
     await send('Page.enable')
+    await send('Network.enable')
+    await send('Network.setCookie', {
+      name: 'proxima_session',
+      value: token,
+      url: BASE,
+      httpOnly: true,
+      sameSite: 'Lax',
+    })
     if (mobile) {
       await send('Emulation.setDeviceMetricsOverride', {
         width,
@@ -244,7 +257,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile }) {
       expression: `(${async function (mobile) {
         const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
         const body = () => document.body.innerText || ''
-        const disabledLabels = new Set(['Design', 'Design Studio', 'Video', 'Video Studio'])
+        const disabledLabels = new Set(['Design', 'Design Studio'])
         const visibleDisabledNav = [...document.querySelectorAll('.sidebar button, .sidebar a')]
           .map(node => (node.textContent || '').trim())
           .filter(label => disabledLabels.has(label))
@@ -342,7 +355,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile }) {
   }
 }
 
-async function browserSmoke() {
+async function browserSmoke(token) {
   if (SKIP_BROWSER) {
     console.log('browser: skipped (PROXIMA_SMOKE_SKIP_BROWSER=1)')
     return
@@ -352,14 +365,14 @@ async function browserSmoke() {
   const configuredPort = process.env.PROXIMA_SMOKE_CDP_PORT ? Number(process.env.PROXIMA_SMOKE_CDP_PORT) : null
   const desktopPort = configuredPort || await freePort()
   const mobilePort = configuredPort ? configuredPort + 1 : await freePort()
-  await browserNavigationSmoke({ name: 'desktop', width: 1280, height: 900, port: desktopPort, mobile: false })
-  await browserNavigationSmoke({ name: 'mobile', width: 390, height: 844, port: mobilePort, mobile: true })
+  await browserNavigationSmoke({ name: 'desktop', width: 1280, height: 900, port: desktopPort, mobile: false, token })
+  await browserNavigationSmoke({ name: 'mobile', width: 390, height: 844, port: mobilePort, mobile: true, token })
 }
 
 async function main() {
   console.log(`smoke: ${BASE}`)
-  await apiSmoke()
-  await browserSmoke()
+  const token = await apiSmoke()
+  await browserSmoke(token)
   console.log('smoke: ok')
 }
 

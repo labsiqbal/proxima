@@ -1,7 +1,6 @@
 """Scheduler + job-archival helpers for the Proxima API.
 
-Extracted verbatim from main.py (no behavior change): cron tick, scheduled-job
-spawn, old-job archival, and Tailscale URL detection. All reach shared state via
+Cron tick, scheduled-job spawn, and old-job archival. All reach shared state via
 the passed `app`/`conn`, not via create_app closures.
 """
 from __future__ import annotations
@@ -9,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import subprocess
 from datetime import datetime
 from typing import Any
 
@@ -18,18 +16,6 @@ from fastapi import FastAPI
 from .auth import iso_now
 from . import features, workflows as wf
 from .graph import normalize_graph
-
-
-def tailscale_base_url() -> str | None:
-    """Best-effort detection of this host's Tailscale MagicDNS HTTPS URL."""
-    try:
-        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=4)
-        if out.returncode != 0:
-            return None
-        name = (json.loads(out.stdout).get("Self") or {}).get("DNSName", "").rstrip(".")
-        return f"https://{name}" if name else None
-    except Exception:
-        return None
 
 
 def archive_old_jobs(conn: sqlite3.Connection, days: int = 30) -> int:

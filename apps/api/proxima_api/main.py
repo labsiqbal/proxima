@@ -3,21 +3,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .auth import hash_token, iso_now
 from .db import connect, init_db
 from .migrations import run_migrations
 from .acp import AcpManager
 from .apprunner import AppManager
-from .preview_proxy import PreviewProxyMiddleware
+from .preview_proxy import (
+    PREVIEW_COOKIE,
+    PREVIEW_TOKEN_TTL_SECONDS,
+    PreviewProxyMiddleware,
+    mint_preview_token,
+    valid_preview_token,
+)
 from .settings import DEFAULT_CONFIG, hermes_home_for, normalize_config
 from .updates import (
     UPDATE_CHECK_INTERVAL_SECONDS,
@@ -141,7 +147,6 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager()
     app.state.app_manager = AppManager()
-    app.state.login_attempts = {}  # ip -> [monotonic timestamps] for login throttling
     app.state.hub = EventHub()
     app.state.updates = UpdateManager(cfg)
 
@@ -214,33 +219,21 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def public_config():
         return {"apps_domain": cfg.get("apps_domain"), "features": public_flags(cfg)}
 
+    preview_secret = secrets.token_bytes(32)
+
     def _valid_preview_token(token: str) -> bool:
-        # Validation for the preview-subdomain cookie gate; runs in the ASGI
-        # middleware (outside a request) so it uses a fresh connection. Fail-closed.
-        try:
-            conn = connect(cfg["database_path"])
-            try:
-                row = conn.execute(
-                    "SELECT 1 FROM auth_sessions WHERE token_hash=? AND revoked_at IS NULL "
-                    "AND (expires_at IS NULL OR expires_at > ?)",
-                    (hash_token(token), iso_now()),
-                ).fetchone()
-                return row is not None
-            finally:
-                conn.close()
-        except Exception:
-            return False
+        return valid_preview_token(preview_secret, token)
 
     @app.post("/api/preview-auth")
-    def preview_auth(request: Request, user: dict[str, Any] = Depends(current_user)):
-        # Mint the domain-wide cookie that gates preview subdomains (they carry no CF
-        # Access so they can be iframed). Echoes the caller's already-valid bearer token
-        # into an HttpOnly, same-site cookie the preview iframe then carries itself.
-        token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-        resp = JSONResponse({"ok": bool(token)})
-        if token and cfg.get("apps_domain"):
-            resp.set_cookie("proxima_preview", token, domain="." + cfg["apps_domain"], path="/",
-                            httponly=True, secure=True, samesite="lax", max_age=86400)
+    def preview_auth(user: dict[str, Any] = Depends(current_user)):
+        # A preview capability can load preview subdomains but is useless against the
+        # main API. Never reuse or copy the owner's bearer/session token here.
+        token = mint_preview_token(preview_secret)
+        resp = JSONResponse({"ok": True})
+        if cfg.get("apps_domain"):
+            resp.set_cookie(PREVIEW_COOKIE, token, domain="." + cfg["apps_domain"], path="/",
+                            httponly=True, secure=True, samesite="lax",
+                            max_age=PREVIEW_TOKEN_TTL_SECONDS)
         return resp
 
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
@@ -260,15 +253,19 @@ def _config_from_env() -> dict[str, Any]:
     """
     workspace_root = Path(os.environ.get("PROXIMA_WORKSPACE_ROOT", str(Path.home() / ".local/share/proxima")))
     update_check_env = os.environ.get("PROXIMA_UPDATE_CHECK")
+    try:
+        max_upload_mb = max(1, int(os.environ.get("PROXIMA_MAX_UPLOAD_MB", "100")))
+    except ValueError:
+        max_upload_mb = 100
     return {
         "database_path": os.environ.get("PROXIMA_DB_PATH", str(workspace_root / "proxima.db")),
         "workspace_root": str(workspace_root),
         "hermes_profiles_root": os.environ.get("PROXIMA_HERMES_PROFILES_ROOT", str(workspace_root / "hermes-profiles")),
         "web_dist_path": os.environ.get("PROXIMA_WEB_DIST") or None,
-        "public_base_url": os.environ.get("PROXIMA_PUBLIC_BASE_URL") or None,
+        "max_upload_bytes": max_upload_mb * 1024 * 1024,
         "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split() or None,
-        # Proxima is single-user by design: one owner, no login wall / team
-        # management; the access gate is the network (loopback / Cloudflare Access).
+        # Proxima is single-user by design: one owner and no team management. The
+        # network gate remains primary; the owner password/session is defense-in-depth.
         "single_user": True,
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME", "admin"),
         # Point the claude-code runner at the live ~/.claude (full skills/plugins/
@@ -294,9 +291,8 @@ def _config_from_env() -> dict[str, Any]:
         ),
         "update_repo": os.environ.get("PROXIMA_UPDATE_REPO") or DEFAULT_CONFIG["update_repo"],
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
-        "feature_video": os.environ.get("PROXIMA_FEATURE_VIDEO", "").lower() in ("1", "true", "yes", "on"),
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "").lower() in ("1", "true", "yes", "on"),
-        "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "").lower() in ("1", "true", "yes", "on"),
+        "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
     }
 
 

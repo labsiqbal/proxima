@@ -7,7 +7,7 @@ import { activeRuns, createRun } from './api/runs'
 import { createJob, deleteJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
-import { DEFAULT_FEATURES, isDisabledFeatureHash, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
+import { DEFAULT_FEATURES, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
 import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
@@ -17,6 +17,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import type { OpsTaskRequest } from './components/tasks/TaskComposer'
 import { DialogHost } from './components/ui/Dialog'
 import { useUpdateStatus } from './hooks/useUpdateStatus'
+import { usePolling } from './hooks/usePolling'
 import { UpdateModal, UpdateOverlay } from './components/shell/UpdateModal'
 import { ProximaMark } from './components/brand/ProximaMark'
 const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m => ({ default: m.IterateStage })))
@@ -32,12 +33,11 @@ const TerminalTabs = React.lazy(() => import('./components/terminal/TerminalTabs
 const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(m => ({ default: m.ProfilesScreen })))
 const RunnersScreen = React.lazy(() => import('./screens/RunnersScreen').then(m => ({ default: m.RunnersScreen })))
 const SettingsScreen = React.lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })))
-const VideoScreen = React.lazy(() => import('./screens/VideoScreen').then(m => ({ default: m.VideoScreen })))
 const WorkspaceOnboarding = React.lazy(() => import('./screens/WorkspaceOnboarding').then(m => ({ default: m.WorkspaceOnboarding })))
 
 type WorkspaceMode = 'ops' | 'code'
 const CODE_VIEWS = new Set<View>(['chat', 'terminal'])
-const OPS_VIEWS = new Set<View>(['home', 'artifacts', 'workflows', 'activity', 'task', 'graph', 'design', 'video'])
+const OPS_VIEWS = new Set<View>(['home', 'artifacts', 'workflows', 'activity', 'task', 'graph', 'design'])
 
 type OpsTaskKind = 'agent' | 'image' | 'design'
 const opsTaskKind = (brief: string): OpsTaskKind => /^\/(image|gambar)\b/i.test(brief) ? 'image' : /^\/(design|image-studio|design-studio)\b/i.test(brief) ? 'design' : 'agent'
@@ -106,7 +106,6 @@ export function App() {
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
-  const [pendingVideoId, setPendingVideoId] = React.useState<string | null>(null)
   // Latch: mount the terminal lazily on first visit, then keep it mounted (hidden
   // when away) so live shells survive view changes. Avoids an eager PTY on load.
   const terminalMounted = React.useRef(false)
@@ -123,19 +122,16 @@ export function App() {
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
   const [returnToTask, setReturnToTask] = React.useState<number | null>(null)
-  const [videoCameFrom, setVideoCameFrom] = React.useState<View | null>(null)
   const clearPendingNavigation = React.useCallback(() => {
     setPendingGraphDraft(null)
     setPendingGraphJob(null)
     setPendingDesign(null)
     setPendingDesignId(null)
-    setPendingVideoId(null)
     setPendingFile(null)
     setPendingArtifact(null)
     setReturnToChat(null)
     setReturnToTask(null)
     setDesignCameFrom(null)
-    setVideoCameFrom(null)
   }, [])
   const clearTaskHash = React.useCallback(() => {
     if (window.location.hash.startsWith('#task/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
@@ -164,7 +160,6 @@ export function App() {
   }, [clearTaskHash, clearPendingNavigation, openTask])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   const goView = (v: View) => { clearTaskHash(); clearPendingNavigation(); if (v === 'workflows') setWorkflowMode('graph'); setView(viewEnabled(v) ? v : 'home') }
-  const goScheduled = () => { clearTaskHash(); clearPendingNavigation(); setWorkflowMode('scheduled'); setView('workflows') }
   const selectWorkspace = (mode: WorkspaceMode) => {
     clearTaskHash()
     clearPendingNavigation()
@@ -284,32 +279,34 @@ export function App() {
   // survives navigating away from the chat (ChatScreen's busyRun is local + unmounts).
   const [busySessions, setBusySessions] = React.useState<number[]>([])
   const prevBusyKey = React.useRef('')
-  React.useEffect(() => {
-    if (!token) { setBusySessions([]); return }
-    let on = true
-    const tick = () => {
+  const pollActiveRuns = React.useCallback(async () => {
+    if (!token) return
+    try {
       const seq = ++activeRunsSeq.current
-      void activeRuns(token).then(r => {
-        if (!on || !mountedRef.current || seq !== activeRunsSeq.current) return
-        setBusySessions(r.session_ids)
-        // When the busy set changes (a run started or finished), refresh the session
-        // list so updated_at is fresh — that lights the unread dot for a chat whose
-        // agent replied while you were elsewhere. The dot persists until you open it.
-        const key = r.session_ids.slice().sort((a, b) => a - b).join(',')
-        if (key !== prevBusyKey.current) {
-          prevBusyKey.current = key
-          const sessionSeq = ++sessionsSeq.current
-          void listSessions(token).then(s => { if (on && mountedRef.current && sessionSeq === sessionsSeq.current) setSessions(s.sessions) }).catch(() => {})
-        }
-      }).catch(() => {})
+      const r = await activeRuns(token)
+      if (!mountedRef.current || seq !== activeRunsSeq.current) return
+      setBusySessions(r.session_ids)
+      // When the busy set changes (a run started or finished), refresh the session
+      // list so updated_at is fresh — that lights the unread dot for a chat whose
+      // agent replied while you were elsewhere. The dot persists until you open it.
+      const key = r.session_ids.slice().sort((a, b) => a - b).join(',')
+      if (key !== prevBusyKey.current) {
+        prevBusyKey.current = key
+        const sessionSeq = ++sessionsSeq.current
+        const s = await listSessions(token)
+        if (mountedRef.current && sessionSeq === sessionsSeq.current) setSessions(s.sessions)
+      }
+    } catch { /* transient polling failure — retry on the next tick */ }
+  }, [token])
+  usePolling(pollActiveRuns, 2500, { enabled: !!token, restartKey: token })
+  React.useEffect(() => {
+    if (!token) {
+      setBusySessions([])
+      prevBusyKey.current = ''
     }
-    tick()
-    const t = window.setInterval(tick, 2500)
     return () => {
-      on = false
       activeRunsSeq.current += 1
       sessionsSeq.current += 1
-      clearInterval(t)
     }
   }, [token])
 
@@ -354,11 +351,6 @@ export function App() {
   React.useEffect(() => {
     if (!viewEnabled(view)) setView('home')
   }, [view, viewEnabled])
-
-  React.useEffect(() => {
-    if (booting || !isDisabledFeatureHash(window.location.hash, features)) return
-    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
-  }, [booting, features])
 
   // A new chat is just a blank composer — no DB session yet. The session is created
   // lazily on the first message (ChatScreen.ensureSession), so empty chats never
@@ -413,12 +405,6 @@ export function App() {
       setView('design')
       return
     }
-    if (link.type === 'video' && features.video) {
-      setPendingVideoId(link.id || link.path.split('/').filter(Boolean).slice(-1)[0] || null)
-      setVideoCameFrom('chat')
-      setView('video')
-      return
-    }
     if (targetSlug && link.path) {
       setPendingArtifact({ ...link, project_slug: targetSlug })
       setView('artifacts')
@@ -429,7 +415,6 @@ export function App() {
     const origin = returnToChat
     setReturnToChat(null)
     setDesignCameFrom(null)
-    setVideoCameFrom(null)
     if (origin) {
       setActiveSession(origin)
       const p = projects.find(x => x.slug === origin.project_slug)
@@ -528,10 +513,9 @@ export function App() {
           to another view and back — unmounting would kill every running session. */}
       {terminalMounted.current && <section className="chat-stage" style={{ display: view === 'terminal' ? 'flex' : 'none' }}><React.Suspense fallback={<ViewFallback label="Loading terminal..." />}><TerminalTabs token={token} projectSlug={activeProject?.slug} /></React.Suspense></section>}
       {features.designStudio && view === 'design' && <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
-      {features.video && view === 'video' && <React.Suspense fallback={<ViewFallback label="Loading Video Studio..." />}><VideoScreen token={token} project={activeProject} profileId={activeProfile?.id ?? null} openVideoId={pendingVideoId} onOpened={() => setPendingVideoId(null)} onExit={videoCameFrom === 'chat' && returnToChat ? backToOriginChat : videoCameFrom ? () => { const v = videoCameFrom; setVideoCameFrom(null); setView(v) } : undefined} onOpenArtifact={path => { if (!activeProject) return; setPendingArtifact({ type: 'video-file', title: path.split('/').pop() || 'Rendered video', path, project_slug: activeProject.slug }); setView('artifacts') }} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading runners..." />}><RunnersScreen runners={runners} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />

@@ -17,9 +17,9 @@ import shutil
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
-from .runners import augmented_path
+from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.acp")
 
@@ -93,11 +93,14 @@ class AcpProcess:
     async def start(self) -> None:
         if self._started:
             return
-        env = os.environ.copy()
+        env = subprocess_env(
+            provider_auth=True,
+            allowlist_env="PROXIMA_RUNNER_ENV_ALLOWLIST",
+            inherit_env="PROXIMA_RUNNER_INHERIT_ENV",
+        )
         if self.home and self.spec.home_env:
             env[self.spec.home_env] = self.home
             os.makedirs(self.home, exist_ok=True)
-        env["PATH"] = augmented_path(env.get("PATH"))
         os.makedirs(self.cwd, exist_ok=True)
         # Resolve the launcher to a full path. On Windows `npx` is actually
         # `npx.cmd`; create_subprocess_exec won't apply PATHEXT, so spawning the

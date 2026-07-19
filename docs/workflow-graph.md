@@ -2,15 +2,15 @@
 
 The workflow graph engine is Proxima's runner-agnostic, reviewable orchestration
 path from [ADR-0001](adr/0001-workflow-execution-model.md). It coexists with the
-classic linear engine and is default-off behind:
+classic linear engine and is enabled by default behind:
 
 ```bash
-PROXIMA_FEATURE_WORKFLOW_GRAPH=0
+PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 ```
 
-Set the value to `1` and restart the API to expose graph planning, routes, worker
-dispatch, and the **Workflow Graphs** navigation item. Leaving it off keeps graph
-routes inert and prevents queued graph-architect or graph-node runs from reaching a runner.
+Set the value to `0` and restart the API only when a recovery/debug session needs to
+make graph planning, routes, schedules, and worker dispatch inert. Workflows normally
+opens the graph Editor directly.
 
 ## What it provides
 

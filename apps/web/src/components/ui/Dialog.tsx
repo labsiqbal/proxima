@@ -20,10 +20,14 @@ export function promptDialog(o: { title: string; label?: string; defaultValue?: 
 export function DialogHost() {
   const [req, setReq] = React.useState<Req | null>(null)
   const [val, setVal] = React.useState('')
+  const cardRef = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
     listener = r => { setReq(r); if (r.kind === 'prompt') setVal(r.defaultValue || '') }
     return () => { listener = null }
   }, [])
+  React.useEffect(() => {
+    if (req?.kind === 'confirm') cardRef.current?.focus()
+  }, [req])
   if (!req) return null
   const cancel = () => { if (req.kind === 'confirm') req.resolve(false); else req.resolve(null); setReq(null) }
   const accept = () => {
@@ -33,8 +37,8 @@ export function DialogHost() {
   }
   const acceptDisabled = req.kind === 'prompt' && !val.trim()
   return <div className="modal-scrim" onClick={cancel}>
-    <div className="modal-card confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
-      <h3>{req.title}</h3>
+    <div className="modal-card confirm-card" ref={cardRef} tabIndex={-1} onClick={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Escape') cancel() }} role="dialog" aria-modal="true" aria-labelledby="proxima-dialog-title">
+      <h3 id="proxima-dialog-title">{req.title}</h3>
       {req.kind === 'confirm' && req.message && <p className="confirm-msg">{req.message}</p>}
       {req.kind === 'prompt' && <label>{req.label || 'Value'}
         <input className="ui-select" autoFocus value={val} onChange={e => setVal(e.target.value)}

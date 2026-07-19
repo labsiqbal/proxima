@@ -3,7 +3,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_DIR="$ROOT/apps/api"
 WEB_DIR="$ROOT/apps/web"
-DEV_ROOT="${PROXIMA_DEV_ROOT:-$HOME/.local/share/proxima-dev}"
+DEV_ID="${PROXIMA_DEV_ID:-}"
+if [[ -n "$DEV_ID" && ! "$DEV_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo 'PROXIMA_DEV_ID may contain only letters, numbers, _ and -' >&2
+  exit 1
+fi
+DEV_SUFFIX="${DEV_ID:+-$DEV_ID}"
+DEV_ROOT="${PROXIMA_DEV_ROOT:-$HOME/.local/share/proxima-dev$DEV_SUFFIX}"
+if [[ -n "$DEV_ID" ]]; then
+  DEV_OFFSET="$(printf '%s' "$DEV_ID" | cksum | awk '{print $1 % 10000}')"
+else
+  DEV_OFFSET=""
+fi
+API_PORT="${PROXIMA_PORT:-${DEV_OFFSET:+$((12000 + DEV_OFFSET))}}"
+API_PORT="${API_PORT:-8765}"
+WEB_PORT="${PROXIMA_WEB_PORT:-${DEV_OFFSET:+$((22000 + DEV_OFFSET))}}"
+WEB_PORT="${WEB_PORT:-5177}"
 
 command -v uv >/dev/null 2>&1 || { echo 'uv is required' >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo 'npm is required' >&2; exit 1; }
@@ -14,18 +29,19 @@ mkdir -p "$DEV_ROOT"
 
 export PROXIMA_DB_PATH="${PROXIMA_DB_PATH:-$DEV_ROOT/proxima-dev.db}"
 export PROXIMA_WORKSPACE_ROOT="${PROXIMA_WORKSPACE_ROOT:-$DEV_ROOT}"
+export PROXIMA_HERMES_PROFILES_ROOT="${PROXIMA_HERMES_PROFILES_ROOT:-$DEV_ROOT/hermes-profiles}"
+export PROXIMA_PORT="$API_PORT"
 export PROXIMA_PROJECTCTL_COMMAND="${PROXIMA_PROJECTCTL_COMMAND:-/usr/bin/true}"
 export PROXIMA_WEB_DIST="${PROXIMA_WEB_DIST:-$WEB_DIR/dist}"
-export PROXIMA_FEATURE_VIDEO="${PROXIMA_FEATURE_VIDEO:-0}"
 export PROXIMA_FEATURE_DESIGN_STUDIO="${PROXIMA_FEATURE_DESIGN_STUDIO:-1}"
-export PROXIMA_FEATURE_WORKFLOW_GRAPH="${PROXIMA_FEATURE_WORKFLOW_GRAPH:-0}"
+export PROXIMA_FEATURE_WORKFLOW_GRAPH="${PROXIMA_FEATURE_WORKFLOW_GRAPH:-1}"
 export PYTHONPATH="$API_DIR"
 
 cleanup() { jobs -p | xargs -r kill 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-printf '==> Starting Proxima API on http://127.0.0.1:8765\n'
+printf '==> Starting Proxima API on http://127.0.0.1:%s\n' "$API_PORT"
 "$API_DIR/.venv/bin/python" "$API_DIR/scripts/serve.py" &
-printf '==> Starting Proxima web on http://127.0.0.1:5177\n'
-npm --prefix "$WEB_DIR" run dev &
+printf '==> Starting Proxima web on http://127.0.0.1:%s\n' "$WEB_PORT"
+npm --prefix "$WEB_DIR" run dev -- --port "$WEB_PORT" --strictPort &
 wait

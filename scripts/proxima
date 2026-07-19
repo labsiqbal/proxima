@@ -30,7 +30,7 @@ load_config() {
   export PROXIMA_PORT="${PROXIMA_PORT:-8765}"
   # Per-app remote preview (optional): export whatever the config file set so serve.py sees them.
   export PROXIMA_ENV_NAME PROXIMA_APPS_DOMAIN PROXIMA_CF_API_TOKEN PROXIMA_CF_ACCOUNT_ID PROXIMA_CF_TUNNEL_ID PROXIMA_CF_ZONE PROXIMA_CF_ZONE_ID PROXIMA_UPDATE_CHECK PROXIMA_UPDATE_REPO
-  export PROXIMA_FEATURE_VIDEO PROXIMA_FEATURE_DESIGN_STUDIO PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
+  export PROXIMA_FEATURE_DESIGN_STUDIO PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
   export PYTHONPATH="$API_DIR${PYTHONPATH:+:$PYTHONPATH}"
 }
 
@@ -65,6 +65,7 @@ svc() {
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   init-config)
+    umask 077
     mkdir -p "$(dirname "$CONFIG_FILE")" "$DATA_DIR"
     if [[ -f "$CONFIG_FILE" ]]; then
       echo "config exists: $CONFIG_FILE"
@@ -84,11 +85,17 @@ PROXIMA_PORT="8765"
 PROXIMA_SERVICE_NAME="proxima"
 PROXIMA_LAUNCHD_LABEL="com.minarflow.proxima"
 PROXIMA_UPDATE_REPO="labsiqbal/proxima"
-PROXIMA_FEATURE_VIDEO="0"
 PROXIMA_FEATURE_DESIGN_STUDIO="0"
+PROXIMA_FEATURE_WORKFLOW_GRAPH="1"
+PROXIMA_RUNNER_ENV_ALLOWLIST=""
+PROXIMA_APP_ENV_ALLOWLIST=""
+PROXIMA_RUNNER_INHERIT_ENV="0"
+PROXIMA_APP_INHERIT_ENV="0"
+PROXIMA_MAX_UPLOAD_MB="100"
 # Dev/no-OS-isolation project helper. Remove this to use real infra/scripts/projectctl.
 PROXIMA_PROJECTCTL_COMMAND="/usr/bin/true"
 EOF
+    chmod 600 "$CONFIG_FILE"
     echo "wrote $CONFIG_FILE"
     ;;
   doctor)
@@ -108,38 +115,47 @@ EOF
   update)
     load_config
     REPO="${PROXIMA_REPO_ROOT:-$ROOT}"
-    echo "==> Pulling latest ($REPO)"
-    # The build step can rewrite tracked lockfiles (npm/uv churn), which would
-    # otherwise block the next fast-forward pull. Discard that self-inflicted
-    # churn before pulling so the update never wedges itself.
-    git -C "$REPO" checkout -- apps/web/package-lock.json apps/api/uv.lock 2>/dev/null || true
-    if ! git -C "$REPO" pull --ff-only; then
-      echo "✗ git pull failed — local changes are blocking the update:" >&2
+    if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+      echo "✗ refusing to update a checkout with local changes" >&2
       git -C "$REPO" status --short >&2
-      echo "   If none of those are edits you made on purpose, run:" >&2
-      echo "     git -C \"$REPO\" checkout -- . && proxima update" >&2
       exit 1
     fi
-    echo "==> Rebuilding"
-    ( cd "$REPO/apps/api" && uv sync )
-    # Prefer npm ci (reproducible, doesn't rewrite the lockfile). If the lockfile
-    # has drifted from package.json — common when transitive/optional deps resolve
-    # differently across npm versions — ci aborts with a wall of errors. Swallow
-    # that noise and fall back to npm install, printing one honest line instead.
-    (
-      cd "$REPO/apps/web"
-      if npm ci >/dev/null 2>&1; then
-        echo "    deps: clean install from lockfile"
-      else
-        echo "    deps: lockfile drifted, running npm install"
-        npm install
-      fi
-      npm run build
-    )
+    echo "==> Pulling latest ($REPO)"
+    if ! git -C "$REPO" pull --ff-only; then
+      echo "✗ git pull failed; inspect the branch/remote before retrying:" >&2
+      git -C "$REPO" status --short >&2
+      exit 1
+    fi
+    echo "==> Rebuilding and verifying"
+    "$REPO/scripts/build"
     # Restart whichever service is installed so the new code (and DB migrations) load.
     echo "==> Restarting"
     if svc restart 2>/dev/null; then
-      echo "✅ Proxima updated and restarted."
+      if "$API_DIR/.venv/bin/python" - "$PROXIMA_HOST" "$PROXIMA_PORT" <<'PY'
+import json
+import sys
+import time
+import urllib.request
+
+host, port = sys.argv[1:]
+if host in {"0.0.0.0", "::"}:
+    host = "127.0.0.1"
+url = f"http://{host}:{port}/api/health"
+for _ in range(30):
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            if json.load(response).get("ok") is True:
+                raise SystemExit(0)
+    except Exception:
+        time.sleep(1)
+raise SystemExit(1)
+PY
+      then
+        echo "✅ Proxima updated, restarted, and healthy."
+      else
+        echo "✗ service restarted but health check failed; inspect 'proxima logs'" >&2
+        exit 1
+      fi
     else
       echo "✅ Built. No managed service detected — restart Proxima yourself (e.g. 'proxima serve')."
     fi
@@ -163,7 +179,12 @@ EOF
     ;;
   print-env)
     load_config
-    env | grep '^PROXIMA_' | sort
+    while IFS='=' read -r key value; do
+      case "$key" in
+        *TOKEN*|*KEY*|*PASSWORD*|*SECRET*) printf '%s=%s\n' "$key" '[REDACTED]' ;;
+        *) printf '%s=%s\n' "$key" "$value" ;;
+      esac
+    done < <(env | grep '^PROXIMA_' | sort)
     ;;
   help|*)
     cat <<EOF

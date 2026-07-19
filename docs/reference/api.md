@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-158 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — the SPA obtains a bearer token via `POST /auth/auto`, then sends it as `Authorization: Bearer <token>`.
+132 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -12,7 +12,7 @@
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
-- [`routes/files.py`](#routes-files-py) — 54 endpoints
+- [`routes/files.py`](#routes-files-py) — 28 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 11 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 7 endpoints
@@ -38,7 +38,7 @@
 | --- | --- | --- | --- |
 | GET | `/api/me` | `me` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
 | GET | `/api/setup/status` | `setup_status` |  |
-| POST | `/auth/auto` | `auth_auto` | Passwordless auto-login (network-only mode). Disabled once a password is |
+| POST | `/auth/auto` | `auth_auto` | First-run passwordless session bootstrap. Disabled once the owner password |
 | POST | `/auth/change-password` | `change_password` | Change the password (from Settings): verify the current one, set the new, |
 | POST | `/auth/login` | `login_with_password` | Verify the owner's password and start a session (no expiry until logout). |
 | POST | `/auth/logout` | `logout` |  |
@@ -92,7 +92,6 @@
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
 | API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
-| GET | `/api/events` | `hyperframes_events` |  |
 | GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
 | GET | `/api/projects/{slug}/app/status` | `app_status` |  |
@@ -105,29 +104,9 @@
 | POST | `/api/projects/{slug}/fs/mkdir` | `project_mkdir` |  |
 | POST | `/api/projects/{slug}/fs/rename` | `project_rename` |  |
 | GET | `/api/projects/{slug}/raw` | `project_raw` |  |
+| GET | `/api/projects/{slug}/reference-files` | `project_reference_files` | Safe, path-only project file index for @-reference autocomplete. |
 | GET | `/api/projects/{slug}/tree` | `project_tree` |  |
 | POST | `/api/projects/{slug}/upload` | `project_upload` |  |
-| GET | `/api/projects/{slug}/videos` | `list_videos` |  |
-| POST | `/api/projects/{slug}/videos` | `create_video` |  |
-| DELETE | `/api/projects/{slug}/videos/{video_id}` | `delete_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/import-file` | `video_import_file` | Copy an existing project media file into the video project's assets/ so the |
-| POST | `/api/projects/{slug}/videos/{video_id}/lint` | `lint_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/render` | `render_video` |  |
-| POST | `/api/projects/{slug}/videos/{video_id}/studio/start` | `start_video_studio` |  |
-| API_ROUTE | `/api/projects/{studio_id}/duplicate-file` | `video_studio_duplicate_file_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/file-mutations/{mutation_path:path}` | `video_studio_file_mutations_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/files/{file_path:path}` | `video_studio_files_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/gsap-mutations/{mutation_path:path}` | `video_studio_gsap_mutations_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/lint` | `video_studio_lint_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/preview` | `video_studio_preview_root_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/preview/{preview_path:path}` | `video_studio_preview_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/registry/install` | `video_studio_registry_install_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/render` | `video_studio_render_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/renders` | `video_studio_renders_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/renders/file/{filename:path}` | `video_studio_render_file_api` |  |
-| API_ROUTE | `/api/projects/{studio_id}/storyboard` | `video_studio_storyboard_api` |  |
-| API_ROUTE | `/api/render/{job_id}` | `video_studio_render_job_api` |  |
-| GET | `/api/render/{job_id}/progress` | `video_studio_render_progress_api` |  |
 | DELETE | `/api/sessions/{session_id}/artifacts` | `delete_session_artifact` |  |
 | GET | `/api/sessions/{session_id}/artifacts` | `session_artifacts` | Artifacts produced BY this session's runs (accumulated) — scopes the iterate |
 | GET | `/api/settings/collaboration` | `get_collaboration_settings` |  |
@@ -140,11 +119,6 @@
 | POST | `/api/settings/image-gen/test` | `test_image_gen` | Test a provider. Codex/xAI → OAuth status; openai-compatible → endpoint probe. |
 | GET | `/api/settings/permissions` | `get_permission_settings` | Auto-approve toggle: when on, agent permission prompts are approved |
 | PUT | `/api/settings/permissions` | `set_permission_settings` |  |
-| GET | `/api/settings/video-gen` | `get_video_gen_settings` |  |
-| PUT | `/api/settings/video-gen` | `put_video_gen_settings` |  |
-| POST | `/api/settings/video-gen/test` | `test_video_gen_settings` |  |
-| API_ROUTE | `/api/video-studio/{token}/{slug}/{video_id}` | `video_studio_root` |  |
-| API_ROUTE | `/api/video-studio/{token}/{slug}/{video_id}/{path:path}` | `video_studio_view` |  |
 
 
 ## routes/graph.py
@@ -260,4 +234,4 @@
 
 
 ---
-_Generated 2026-07-17 13:57 UTC._
+_Generated 2026-07-18 13:55 UTC._

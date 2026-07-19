@@ -1,4 +1,4 @@
-// Design Studio scene model (Konva surfaces: graphic/deck/mobile/video).
+// Design Studio scene model (Konva surfaces: graphic/deck/mobile).
 // A design doc is a typed set of artboards; each artboard holds absolute layers.
 
 // Shared geometry/style fields. rotation (deg) + opacity apply to every layer;

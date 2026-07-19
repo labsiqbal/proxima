@@ -13,8 +13,9 @@ whichever agent CLI you already use and log into — Proxima ships **no credenti
 
 ## Features
 
-- **Single-user cockpit** — no login wall; auto-signs you in as the owner. Run it
-  for yourself, see your work organized, never lose context.
+- **Single-user cockpit** — set one owner password on first run, then use a
+  persistent owner session. Run it for yourself, see your work organized, never
+  lose context.
 - **Full-power chat** — point the Claude Code runner at your live config and the
   agent inherits your real skills, plugins, rules, MCP servers, and memory.
   Streaming responses, tool-activity cards, slash commands, session continuity.
@@ -34,8 +35,9 @@ whichever agent CLI you already use and log into — Proxima ships **no credenti
   Pi. Credentials auto-seed from the host.
 - **Themes & PWA** — six themes; installable on desktop or phone.
 
-Image generation remains available. Video and Design Studio are retained in source
-but temporarily disabled by default while the new Proxima release line settles.
+Image generation remains available. Design Studio remains in source but is
+temporarily disabled by default; Video Studio and video generation were removed.
+Ordinary video files still play as generic artifacts.
 
 ## Requirements
 
@@ -58,10 +60,9 @@ Open `http://127.0.0.1:8765`.
 Configuration (e.g. in `~/.config/proxima/proxima.env`):
 
 ```bash
-export PROXIMA_SINGLE_USER=1            # auto-login as the owner, no login wall
+export PROXIMA_SINGLE_USER_NAME=owner   # optional owner name used on first run
 export PROXIMA_CLAUDE_LIVE_HOME=1       # claude-code runner uses your live ~/.claude
 export PROXIMA_LINK_ROOTS="$HOME"       # roots you may browse + link folders from
-export PROXIMA_FEATURE_VIDEO=0           # temporarily disabled
 export PROXIMA_FEATURE_DESIGN_STUDIO=0   # temporarily disabled
 ```
 
@@ -82,10 +83,11 @@ With `PROXIMA_CLAUDE_LIVE_HOME=1`, the Claude Code runner points at your live
 
 ## Security / trust model
 
-Proxima is a **single-user cockpit**. The access gate is the network layer
-(loopback, Tailnet, Cloudflare Access, or equivalent), not in-app accounts. Agents
-run with the **same privileges as the server process** — they can read/write files
-and run tools on the host.
+Proxima is a **single-user cockpit**. Keep the primary access gate at the network
+layer (loopback, Tailnet, Cloudflare Access, or equivalent). On first run the owner
+also sets a password; its session is defense-in-depth, not a multi-user permission
+system. Agents run with the **same privileges as the server process** — they can
+read/write files and run tools on the host.
 
 Do **not** expose Proxima to untrusted users without a real external access gate
 and OS/container isolation. See [docs/security-boundaries.md](docs/security-boundaries.md).

@@ -12,7 +12,6 @@ import { QuestionForm } from "./QuestionForm";
 import { splitOnQuestionForms } from "./questionForm";
 import { respondPermission } from "../../api/runs";
 import { designFromImage, previewUrl } from "../../api/files";
-import { createVideo, listVideos, videoImportFile, type VideoProject } from "../../api/video";
 import { ApiError } from "../../api/client";
 import { IconSparkle, IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
@@ -375,9 +374,7 @@ function ActivityPanel({ items }: { items: ActivityItem[] }) {
 const outputTypeLabel = (t: string) =>
 	t === "design"
 		? "Design"
-		: t === "video"
-			? "Video"
-			: t === "video-file"
+		: t === "video-file"
 				? "Video"
 				: t === "app"
 					? "App"
@@ -392,9 +389,7 @@ const outputTypeLabel = (t: string) =>
 const outputHint = (o: OutputLink, features: AppFeatures) =>
 	o.type === "design"
 		? features.designStudio ? "Editable layered design" : "Layered design artifact"
-		: o.type === "video"
-			? features.video ? "Editable video project" : "Video project artifact"
-			: o.type === "video-file"
+		: o.type === "video-file"
 				? "Rendered video file"
 				: o.type === "app"
 					? o.command
@@ -419,8 +414,6 @@ function ResultCards({
 	slug?: string;
 	features?: AppFeatures;
 }) {
-	const [videoMenu, setVideoMenu] = React.useState<number | null>(null);
-	const [videos, setVideos] = React.useState<VideoProject[] | null>(null);
 	const [busy, setBusy] = React.useState("");
 	const [actionError, setActionError] = React.useState("");
 	if (!links.length) return null;
@@ -445,47 +438,6 @@ function ResultCards({
 			setBusy("");
 		}
 	};
-	const openVideoMenu = async (i: number, link: OutputLink) => {
-		const project = projectOf(link);
-		if (!token || !project) return;
-		if (videoMenu === i) {
-			setVideoMenu(null);
-			return;
-		}
-		setVideoMenu(i);
-		setVideos(null);
-		setActionError("");
-		try {
-			setVideos((await listVideos(token, project)).videos);
-		} catch (e) {
-			setVideos([]);
-			setActionError(String(e));
-		}
-	};
-	// Copy the media file into a video project's assets/ (new draft when videoId is
-	// null), then open that project in Video Studio.
-	const toVideoStudio = async (link: OutputLink, videoId: string | null) => {
-		const project = projectOf(link);
-		if (!token || !project) return;
-		setVideoMenu(null);
-		setBusy(`video:${link.path}`);
-		setActionError("");
-		try {
-			let id = videoId;
-			let title = videoId || "";
-			if (!id) {
-				const created = await createVideo(token, project, { title: link.title || "Media draft" });
-				id = created.id;
-				title = created.title;
-			}
-			await videoImportFile(token, project, id, link.path);
-			onOpen?.({ type: "video", id, title: title || id, path: `artifacts/video/${id}`, project_slug: project });
-		} catch (e) {
-			setActionError(String(e));
-		} finally {
-			setBusy("");
-		}
-	};
 	return (
 		<div className="result-cards" aria-label="Created outputs">
 			<div className="result-cards-title">Created outputs</div>
@@ -493,7 +445,6 @@ function ResultCards({
 					const src = mediaSrc(link);
 					const bridges = studioBridgeAvailability(link.type, features);
 					const canEditDesign = bridges.design;
-					const canAddToVideo = bridges.video;
 				return (
 					<div className="result-item" key={`${link.type}:${link.path}:${i}`}>
 						{link.type === "image" && src && (
@@ -528,7 +479,7 @@ function ResultCards({
 							</span>
 							<span className="result-open">Open</span>
 						</button>
-							{(canEditDesign || canAddToVideo) &&
+							{canEditDesign &&
 								token &&
 							projectOf(link) && (
 								<div className="result-actions">
@@ -542,31 +493,6 @@ function ResultCards({
 											{busy === `design:${link.path}` ? "Opening…" : "Edit in Design Studio"}
 										</button>
 									)}
-									{canAddToVideo && <span className="result-actions-menu">
-										<button
-											type="button"
-											className="ghost-button"
-											disabled={busy !== ""}
-											onClick={() => void openVideoMenu(i, link)}
-										>
-											{busy === `video:${link.path}` ? "Adding…" : "Add to Video Studio ▾"}
-										</button>
-										{videoMenu === i && (
-											<div className="composer-gen-menu result-video-menu" role="menu">
-												{videos === null && <span className="result-video-note">Loading…</span>}
-												{(videos ?? []).map((v) => (
-													<button key={v.id} type="button" role="menuitem" onClick={() => void toVideoStudio(link, v.id)}>
-														{v.title || v.id}
-													</button>
-												))}
-												{videos !== null && (
-													<button type="button" role="menuitem" onClick={() => void toVideoStudio(link, null)}>
-														+ New Video Studio draft
-													</button>
-												)}
-											</div>
-										)}
-									</span>}
 								</div>
 							)}
 					</div>
@@ -841,7 +767,6 @@ export function ChatThread({
 	messages: ChatMessage[];
 	events: RunEvent[];
 	pendingRunId?: number | null;
-	pendingText?: string;
 	token?: string;
 	slug?: string;
 	agentName?: string;
