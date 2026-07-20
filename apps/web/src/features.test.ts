@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import {
   DEFAULT_FEATURES,
   isFeatureCommandEnabled,
@@ -8,7 +8,7 @@ import {
   parseAppFeatures,
   resolveAppFeatures,
   studioBridgeAvailability,
-} from '../src/features.ts'
+} from './features'
 
 test('feature config is strict and defaults off', async () => {
   assert.deepEqual(parseAppFeatures({ features: { design_studio: true, workflow_graph: true } }), { designStudio: true, workflowGraph: true })
