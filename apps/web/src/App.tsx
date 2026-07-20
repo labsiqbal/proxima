@@ -278,7 +278,10 @@ export function App() {
   // Poll which sessions have an in-flight run → sidebar "thinking" indicator that
   // survives navigating away from the chat (ChatScreen's busyRun is local + unmounts).
   const [busySessions, setBusySessions] = React.useState<number[]>([])
-  const prevBusyKey = React.useRef('')
+  // null = "no poll yet": the first poll after (re)auth always refreshes the session
+  // list, so a boot-time listSessions response lost to the seq-guard race still
+  // heals — otherwise a fresh browser with no run activity never shows history.
+  const prevBusyKey = React.useRef<string | null>(null)
   const pollActiveRuns = React.useCallback(async () => {
     if (!token) return
     try {
@@ -302,7 +305,7 @@ export function App() {
   React.useEffect(() => {
     if (!token) {
       setBusySessions([])
-      prevBusyKey.current = ''
+      prevBusyKey.current = null
     }
     return () => {
       activeRunsSeq.current += 1
