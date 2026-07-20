@@ -73,9 +73,9 @@ bounded image files (10 files, 8 MB each, 32 MB total).
 
 ### Per-prompt Brainstorm / Debate modes
 
-> **Status:** the `Brainstorm`/`Debate` chips are shown only in **Code chat**. Ops
-> Task Composer omits collaboration modes. The retained Studio composer also disables them, but Design Studio itself
-> is unavailable while `PROXIMA_FEATURE_DESIGN_STUDIO=0`.
+> **Status:** the `Brainstorm`/`Debate` chips are shown only in **Code chat**. The Ops
+> Task Composer and the Design chat omit collaboration modes (tasks and design
+> sessions are single-agent).
 
 **Why:** Run a prompt through multiple agents before the answer lands in the
 main chat, instead of validating a completed answer afterward.
@@ -186,14 +186,7 @@ disabled schedule (`enabled` gates the tick, and trying a schedule out is exactl
 is still off) and reports an overlap skip as a 409 rather than silently no-op'ing.
 **Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`, `POST /api/schedules/{id}/run`.
 
-## 10. Tasks (kanban)
-
-**Why:** Steerable per-task agent threads on a board (todo/doing/review/done).
-**How:** `tasks` table; auto status doing→review, human marks Done. Each task has a
-backing session/thread. (Unified under the jobs model.)
-**Endpoints:** `GET/POST /api/projects/{slug}/tasks`, `PATCH/DELETE /api/tasks/{id}`.
-
-## 11. Projects (workspaces)
+## 10. Projects (workspaces)
 
 **Why:** Scope agents to a folder — your real code, not a sandbox.
 **How:** `projects` table. Create a scaffolded project OR **link an existing folder**
@@ -209,18 +202,22 @@ uses the starter project auto-provisioned under the data dir.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
-## 12. Files workspace
+## 11. Files & uploads (APIs)
 
-**Why:** Browse/edit the whole project tree with live preview.
-**How:** Tree + file read/write (CodeMirror), HTML/MD live preview, mkdir/rename/delete,
+**Why:** Read/write project files safely from every surface that needs them.
+**How:** Tree + file read/write (CodeMirror editor), HTML/MD preview, mkdir/rename/delete,
 chunk-streamed file upload with collision-safe naming and a configurable 100 MB default
 limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents.
+There is **no standalone "Files" screen** in the current shell: these APIs power the
+**Artifacts** gallery's *Source* editor view, the **Wiki** tree under Settings →
+Knowledge & Wiki, chat attachments, and `@` file references — with the in-browser
+**Terminal** as the raw escape hatch.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/reference-files`, `/api/preview/{slug}/{path}`.
 
-## 13. Run & Preview app
+## 12. Run & Preview app
 
 **Why:** Launch a project's dev server and preview it in-app.
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
@@ -232,7 +229,7 @@ and generated HTML use an opaque iframe sandbox. This is credential-leak mitigat
 not OS/container isolation; the command still runs as the Proxima service user.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
-## 14. Image generation and Design Studio
+## 13. Image generation and Design Studio
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under
@@ -263,34 +260,42 @@ stream, so `ChatScreen` treats a `status: "completed"` create-run response speci
 loads the assistant reply directly instead of waiting on the stream — otherwise the
 composer would sit stuck on the "Simmering…" thinking indicator.
 
-**Temporarily disabled by default:** Design Studio remains in source and is
-server-gated with `PROXIMA_FEATURE_DESIGN_STUDIO=0`. `GET /api/config` publishes the effective flag.
-When disabled, the frontend omits their navigation, deep links, commands, settings,
-provider health checks, artifact bridge actions, and agent guidance. Backend guards
-return HTTP 503 with the `feature_disabled` payload before message creation, database
-writes, provider calls, file writes, subprocesses, or collaboration dispatch.
+**Design Studio (active, server-gated):** an AI-assisted canvas where the agent
+drafts **editable layered scenes** (text stays real text) and the human refines them
+directly. The Design home takes a brief (Graphic / Slide deck / Mobile app / Website)
+or a size template (Instagram post/story/carousel, X post, poster, …) and opens a
+linked **design session**: the agent replies with a `<design-scene>` block the Konva
+canvas applies live. The studio offers select/move/resize with a full inspector
+(text, fonts, fills/gradients, artboard presets), Layers/Assets panels, a
+selection-aware chat, undo/redo + version history, multi-image reference inputs, an
+eyedropper, a per-project brand guide (`design.md`, generatable from reference
+URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
+`artifacts/design/<id>/scene.json` and appear in the Artifacts visual gallery.
+See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
 
-The retained Studio implementation includes layered Konva scenes and exports. It is
-not an advertised or reachable capability in the default Proxima release. Image
-generation does not expose *Edit in Design Studio* while that feature is disabled.
-When enabled, both Design Home and its chat share the project-file picker; selected
-images are appended to the design run's jailed vision inputs.
+The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: `scripts/dev` enables
+it by default, installed instances opt in via `proxima.env` (read at boot).
+`GET /api/config` publishes the effective flag. When disabled, the frontend omits its
+navigation, deep links, commands, settings, provider health checks, artifact bridge
+actions, and agent guidance, and backend guards return HTTP 503 with the
+`feature_disabled` payload before message creation, database writes, provider calls,
+file writes, subprocesses, or collaboration dispatch.
 Video Studio, editable video projects, and the `/video` generation surface were removed;
 ordinary video files remain readable and playable as generic artifacts.
 
-## 15. Wiki + memory (knowledge)
+## 14. Wiki + memory (knowledge)
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
 aggregation. Fed by Chat→Wiki (§5).
 **Endpoints:** `/api/projects/{slug}/wiki/all`, `/api/wiki/all`, `/tree`, `/file`, `/fs/*`.
 
-## 16. Terminal
+## 15. Terminal
 
 **Why:** A real shell in the cockpit, scoped to the project.
 **How:** `terminal.py` over `WS /api/ws/terminal`.
 
-## 17. Command palette (quick commands)
+## 16. Command palette (quick commands)
 
 **Why:** A catalog of quick slash-style commands runnable from chat.
 **How:** `commands.py` — `command_catalog()` lists them; `execute_command()` runs one.
@@ -302,24 +307,25 @@ aggregation. Fed by Chat→Wiki (§5).
 > guard. The real access boundary is network reachability (single-user). See
 > [security-boundaries.md](security-boundaries.md).
 
-## 18. Home dashboard + search
+## 17. Home + search
 
-**Why:** The cockpit's cockpit — pulse of runs/tasks/projects; jump anywhere.
+**Why:** Land where the work starts: delegate a task, and see what needs you.
+**How:** Ops Home is deliberately minimal — a greeting, the **Task Composer**
+(project + agent + Guarded/Autonomous policy), and an **attention strip** when
+jobs are waiting in review (jump to the first, or open Tasks). It polls
+`GET /api/dashboard` every 5s; the dashboard payload also carries `authHealth` —
+cached background checks (`auth_health.py`, 60s TTL, never on the request path)
+of the selected image provider plus every runner referenced by a profile —
+though the current Home renders only the review-attention data. Global **Search**
+(magnifier in the top bar) covers chats, messages, projects, and designs.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
-**Connections card (auth health):** `/api/dashboard` includes `authHealth` — cached
-background checks (`auth_health.py`, 60s TTL, never on the request path) of the
-selected image provider plus every runner referenced by a profile (deep auth check
-for hermes/codex). Disabled Studio providers are omitted. Home shows a compact
-"Connections" card beside System readout: green/red dot per check, with the
-actionable fix detail on failures and a jump to Settings. Saving active provider
-settings calls `auth_health.invalidate()` so the card re-checks on the next 5s poll.
 
-## 19. Audit log
+## 18. Audit log
 
 **Why:** An activity trail of meaningful actions.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
 
-## 20. Reliability (cross-cutting)
+## 19. Reliability (cross-cutting)
 
 Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
 salvage, orphaned-run cleanup, run timeout (configurable `run_timeout_seconds`, default
@@ -328,7 +334,7 @@ salvage, orphaned-run cleanup, run timeout (configurable `run_timeout_seconds`, 
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 21. Updates (version check + self-update)
+## 20. Updates (version check + self-update)
 
 **Why:** Every install should be one click away from the latest release without
 the owner babysitting `git pull`.

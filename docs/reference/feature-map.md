@@ -52,7 +52,7 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 | **Brainstorm entry** | **risk** | `routes/chat.py` (`_start_prompt_collaboration`), `prompt_collaborations.py` | `ChatThread.tsx` (CollaborationCards) | run lifecycle, profiles |
 | Debate entry | active | `routes/chat.py` (debate branch) | `ChatThread.tsx` | collaborations |
 | **Interactive Form** (`<question-form>`) | active | `routes/chat.py` (`list_messages` synth step) | `QuestionForm.tsx`, `questionForm.ts`, `ChatThread.tsx` | core chat (clarifying UX) |
-| Validate sidecar | active | `routes/chat.py` (message-review routes), `message_reviews.py` | `MessageReviewSidecar.tsx`, `api/messageReviews.ts` | profiles/runners |
+| Validate sidecar | active | `routes/reviews.py`, `message_reviews.py` | `MessageReviewSidecar.tsx`, `api/messageReviews.ts` | profiles/runners |
 | **Cancel run** | **risk** | `routes/chat.py` (`cancel_run`) | `ChatScreen.tsx` (`stopRun`) | jobs/runs, collab, tasks |
 | Streaming deltas / smooth reveal | active | SSE/WS streams | `ChatThread.tsx` (StreamingBubble) | runs/worker |
 | Tool-call activity | active | `routes/chat.py` (`_run_activity`) | `ChatThread.tsx` (ActivityPanel) | runs/worker, jobs |
@@ -89,13 +89,13 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | --- | --- | --- | --- | --- | --- |
 | Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx`, `GraphScreen.tsx`, `graphLayout.ts` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
 | **Cron Scheduling** | **risk** | `routes/work.py`, `scheduler.py`, `main.py` loop | `WorkflowsScreen.tsx` | `schedules`, `jobs`, `workflows` | workflows/jobs |
-| **Tasks (Kanban)** | **risk** | `routes/tasks.py` | `TasksScreen.tsx`, `TaskChat.tsx` | `tasks`, `sessions` | sessions, jobs |
+| Ops Tasks (ad-hoc jobs) | active | `routes/work.py` | `TaskComposer.tsx`, `TaskWorkspace.tsx`, `ActivityScreen.tsx` | `jobs`, `sessions`, `runs` | run lifecycle, review gates |
 | Wiki Memory | active | `routes/wiki.py`, `wiki_memory.py`, `run_summaries.py` | `WikiScreen.tsx`, `WikiGraph.tsx` | — (FS wiki) | run lifecycle, tasks |
 | Files / Tree / Uploads / reference index | active | `routes/files.py`, `fsapi.py` | `WorkspaceTree.tsx`, `FileEditor.tsx`, `useProjectMentionItems.ts` | `projects` (+FS) | chat, workflows, studios, artifacts, apps |
 | App Run & Preview | active | `apprunner.py`, `preview_proxy.py`, `cf_hostnames.py`, `routes/files.py` | `AppRunner.tsx` | `projects` (+in-mem) | preview-auth cookie, Cloudflare |
 | In-browser Terminal | active | `terminal.py`, `routes/chat.py` (`/ws/terminal`) | `TerminalTabs.tsx`, `TerminalView.tsx` | — | projects (cwd) |
 | **Artifacts** | active | `artifacts.py`, `routes/files.py` | `ArtifactsScreen.tsx` | `messages.output_links` (+FS) | run outputs, studios, apps |
-| Design Studio / Image gen | gated `PROXIMA_FEATURE_DESIGN_STUDIO=0` | `routes/files.py` (design/*), `image_providers.py`, `design_scenes.py`, `higgsfield.py` | `DesignStudio.tsx`, `components/design/*` | `app_settings` (+FS) | features gate, artifacts, wiki |
+| Design Studio / Image gen | gated `PROXIMA_FEATURE_DESIGN_STUDIO` (on in dev, opt-in when installed) | `routes/design.py`, `image_providers.py`, `design_scenes.py`, `higgsfield.py` | `DesignStudio.tsx`, `components/design/*` | `app_settings` (+FS) | features gate, artifacts, wiki |
 | Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image providers |
 | Settings Store | active | `app_settings.py`, `routes/files.py`, `settings.py` | `SettingsScreen.tsx` | `app_settings` | collab, permission, providers |
 | Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `SettingsScreen` | `app_settings`, `events` | run lifecycle, ACP |
@@ -117,30 +117,29 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 
 ## Home & Activity cards
 
-Every card on the Home ("Command Center") dashboard and the Activity screen. Home = one `GET /api/dashboard` call (polled 5s). Activity = `GET /api/jobs`.
+Ops Home (`HomeScreen.tsx`) is deliberately minimal: greeting + **Task Composer**
+(`TaskComposer.tsx`) + an **attention strip** shown when `reviewCount > 0`
+(first review job + jump to Tasks). It polls `GET /api/dashboard` every 5s.
+The dashboard payload still returns more than Home renders (counts, recents,
+`authHealth`, `runsPerDay`); those fields are currently unrendered server data.
 
-| Card | Status | Data source | Renders in |
+| Surface | Status | Data source | Renders in |
 | --- | --- | --- | --- |
-| Home · Headline status flag | active | `/api/dashboard` (pendingApprovals, reviewCount, activeSessions) | `HomeScreen.tsx:108-119` |
-| Home · Quick actions (6 buttons) | active | `/api/dashboard` | `HomeScreen.tsx:122-129` |
-| Home · Activity log (C1) | active | `/api/dashboard` (recent, activeSessions) | `HomeScreen.tsx:134-146` |
-| Home · System readout (C2) — KPI tiles + task bar + health | active | `/api/dashboard` (counts, tasksByStatus, systemHealth) | `HomeScreen.tsx:148-164` |
-| Home · Connections (C3) | active (video rows gated) | `/api/dashboard` (authHealth.checks) | `HomeScreen.tsx:168-178` |
-| Home · Review inbox (C4) | active | `/api/dashboard` (reviewJobs) | `HomeScreen.tsx:180-189` |
-| Home · Recent artifacts (C5) | active | `/api/dashboard` (recentArtifacts) | `HomeScreen.tsx:191-201` |
-| Home · Up next / schedules (C6) | active | `/api/dashboard` (schedules) | `HomeScreen.tsx:204-214` |
-| Home · Workflows (C7) | active | `/api/dashboard` (workflows) | `HomeScreen.tsx:216-225` |
-| Home · Projects (C8) | active | `/api/dashboard` (projects) | `HomeScreen.tsx:227-232` |
-| Home · runsPerDay time-series | **dead** | `/api/dashboard` returns `runsPerDay` but nothing renders it | — |
-| Activity · Mode + status filter | active | `GET /api/jobs?status&include_archived` | `ActivityScreen.tsx:257-267` |
-| Activity · Job row / Kanban card | active | `GET /api/jobs`, `GET /api/jobs/{id}` | `ActivityScreen.tsx:270-294` |
-| Activity · Job detail (flow + steps + review bar + artifact chips) | active | `GET /api/jobs/{id}`, `POST /api/jobs/{id}/approve` | `ActivityScreen.tsx:136-191` |
+| Home · greeting + Task Composer | active | props (projects/profiles) | `HomeScreen.tsx` |
+| Home · attention strip (review jobs) | active | `/api/dashboard` (reviewJobs, reviewCount) | `HomeScreen.tsx` |
+| Home · other dashboard fields | **dead** | `/api/dashboard` (counts, recents, authHealth, runsPerDay) | not rendered |
+| Tasks list (List / Board / Review) | active | `GET /api/jobs?status&include_archived` | `ActivityScreen.tsx` |
+| Task workspace (steps + review bar + artifact chips) | active | `GET /api/jobs/{id}`, `POST /api/jobs/{id}/approve` | `TaskWorkspace.tsx` |
 
 **Notes**
 
-- The only data-viz on Home is the C2 task-status segmented bar. There is no chart/sparkline library; `runsPerDay` is a returned-but-unrendered time series.
-- Activity list auto-refreshes every 2.5 s while any job is `queued`/`running`; Job-detail step polls 1.5 s while running.
-- Design-open from a Job-detail artifact chip is gated on `designStudioEnabled`.
+- Tool-permission requests raised by a job's agent run are **not** surfaced in
+  `TaskWorkspace` — with auto-approve off, a Guarded task can sit "Running…" on a
+  hidden `approval.request` until the run times out. Approve them from the run's
+  chat surface or via `POST /api/runs/{id}/permission`; a task-side approval card
+  is an open gap.
+- Tasks list auto-refreshes while any job is `queued`/`running`; the task
+  workspace polls while running.
 
 ---
 

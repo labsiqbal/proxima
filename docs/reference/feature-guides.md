@@ -170,7 +170,7 @@ Notice all five parts are present, it cites its reference, and the **default rec
 |----|---------|-------|-------|
 | `general` | How to operate (all sessions) | `GENERAL_GUIDE` | ✅ **wired 2026-07-05** — project awareness, toolkit/skills, output routing, evidence-first, ask-vs-act, reporting; profile instructions override. [feature-guides/general.md](feature-guides/general.md) |
 | `qform`  | Ask user questions      | `QFORM_GUIDE`  | ✅ solid (mechanical) |
-| `design` | Design Studio           | `DESIGN_GUIDE` | retained; disabled by default and not injected |
+| `design` | Design Studio           | `DESIGN_GUIDE` | injected when `PROXIMA_FEATURE_DESIGN_STUDIO` is on |
 | `app-ui` | Build & Preview app     | —              | ❌ missing — biggest gap (example above) |
 | `wiki`   | Wiki / memory           | inline         | ✅ ok |
 

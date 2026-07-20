@@ -10,11 +10,11 @@ A **solo operator** — a founder, indie builder, or one person on a small team 
 
 ## Product Purpose
 
-Proxima is a **self-hosted, single-user control plane / cockpit** for one operator directing human + AI-agent work: one private place to **chat** with agents, run repeatable **workflows** (recipes of steps, runnable now or on a cron schedule), watch each step execute and **review/approve** results, browse the project's **files & wiki**, and produce real artifacts. It is runner-agnostic (drives Hermes/Claude/Codex/Gemini over ACP) and BYO-AI (no per-seat SaaS). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Headed toward **open source** (each user self-hosts their own single-owner cockpit).
+Proxima is a **self-hosted, single-user control plane / cockpit** for one operator directing human + AI-agent work: one private place to **chat** with agents, run repeatable **workflows** (recipes of steps, runnable now or on a cron schedule), watch each step execute and **review/approve** results, browse the project's **files & wiki**, and produce real artifacts. It is runner-agnostic (drives Claude Code / Codex / Hermes / Pi over ACP) and BYO-AI (no per-seat SaaS). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Headed toward **open source** (each user self-hosts their own single-owner cockpit).
 
-Image generation is part of the active product. Video and Design Studio remain in
-source for later reactivation but are disabled by default in the initial Proxima
-release line.
+Image generation and Design Studio are part of the active product (Design Studio
+sits behind a server-owned feature flag — on by default in dev, opt-in on
+installed instances). Video Studio was removed.
 
 ## Brand Personality
 
