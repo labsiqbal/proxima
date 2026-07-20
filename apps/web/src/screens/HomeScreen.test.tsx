@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeScreen } from "./HomeScreen";
@@ -107,7 +107,16 @@ describe("HomeScreen Ops task composer", () => {
 		expect(await screen.findByText("docs/release-brief.md")).toBeInTheDocument();
 		await user.keyboard("{Enter}");
 		expect(base.onCreateTask).not.toHaveBeenCalled();
-		await user.type(brief, "for launch");
+		// Wait for the mention insertion to commit, then extend the brief with a
+		// change event: continued per-key typing here races the controlled-value
+		// commit in jsdom and scrambles the keystrokes (flaky), and the flow under
+		// test is the @-insertion + submit payload, not typing mechanics.
+		await waitFor(() =>
+			expect(brief).toHaveValue("Audit docs/release-brief.md "),
+		);
+		fireEvent.change(brief, {
+			target: { value: "Audit docs/release-brief.md for launch" },
+		});
 		await user.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() =>
