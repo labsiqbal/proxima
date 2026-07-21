@@ -97,7 +97,7 @@ PROXIMA_DEFAULT_RUNNER=claude-code
 PROXIMA_CLAUDE_LIVE_HOME=0
 PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
-PROXIMA_FEATURE_DESIGN_STUDIO=0
+PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 PROXIMA_RUNNER_ENV_ALLOWLIST=
 PROXIMA_APP_ENV_ALLOWLIST=
@@ -112,8 +112,10 @@ Notes:
 - `PROXIMA_CLAUDE_LIVE_HOME=1` makes the Claude Code runner use the live
   `~/.claude` home. This is powerful and broad; the current handoff says whether
   it is enabled.
-- Video Studio was removed and Design Studio is disabled by default. Image generation
-  remains available without Studio bridge actions.
+- Design Studio is an active feature behind `PROXIMA_FEATURE_DESIGN_STUDIO`:
+  `scripts/dev` turns it on by default, while installer-written env files default it
+  to `0` — set it to `1` and restart to enable it on an installed instance. Video
+  Studio was removed. Image generation is always available, independent of this flag.
 - Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
   only as a recovery switch; the classic linear engine is unaffected either way.
 - Runner/app children receive filtered environments. Add trusted variable names to the

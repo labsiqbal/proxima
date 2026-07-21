@@ -7,7 +7,7 @@ own** — not an IDE, not a closed agent product. Every feature is judged agains
 five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 1. **Bring-your-own-agent** — drives *your* local runners (Claude Code, Codex,
-   Gemini, Hermes, local models) over ACP. No baked-in model, no lock-in.
+   Hermes, Pi — local models later) over ACP. No baked-in model, no lock-in.
 2. **Orchestration** — many agents/personas working in parallel, steerable,
    with humans in the loop.
 3. **Self-hosted & local-first** — your machine, your data, your keys. Privacy by

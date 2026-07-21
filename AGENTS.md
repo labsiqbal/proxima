@@ -16,6 +16,11 @@ This project keeps its truth in `docs/`. **Every agent follows this loop — doc
 - Changed a **dependency**? → update [`docs/reference/tech-stack.md`](docs/reference/tech-stack.md).
 - **Always (maintainer machines — these living logs are untracked, never commit them):** refresh `docs/STATUS.md` (feature status / current focus / next) and append a dated entry to `docs/wiki/log.md`. Record any bug + fix in `docs/bugfix-log.md`.
 
+**③ Before calling the work done / opening a PR — VERIFY, don't assume (this step is mandatory):**
+1. Run `apps/api/.venv/bin/python scripts/gen_docs.py`, then `git status docs/`. Any change means the generated docs drifted — they weren't committed with the code. Commit them.
+2. Re-read the doc(s) for every feature/flow you touched and confirm they still describe reality — a **removed** feature still listed, or a **disabled** feature marked live, is a shipped bug (both have happened; do not repeat).
+3. Never let docs lag across a long, multi-commit session and "catch up at the end" — each commit carries its own doc update. The end-of-work check is a safety net, not the plan.
+
 If a change makes a doc wrong and you leave it, you've shipped a bug.
 
 ## Source of truth
@@ -61,3 +66,10 @@ The web UI has a centralized design system — keep it that way:
 - **Themes**: a theme is a ~10-line `:root[data-theme="..."]` variable override in the "Theme presets" section of `styles.css` plus one entry in `apps/web/src/theme.ts` (`THEMES`). Never branch on theme in component code — components read tokens, tokens change per theme.
 - **Fonts / font sizes** are handled the same way (`FONTS` + the font-size slider bounds in `theme.ts`; the UI is rem-based, so root font-size scales everything). Don't set fixed `px` font sizes in components.
 - Vendored UI (`apps/web/src/vendor/`) maps its own tokens onto the app tokens (see `studio-theme.css`) — preserve that mapping when touching vendor styles.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

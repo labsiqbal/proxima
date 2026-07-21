@@ -5,9 +5,12 @@
 (session notes, snapshots) and **historical** point-in-time docs (design plans,
 audits — kept for context, not maintained).
 
-> **One-line what-it-is:** a self-hosted, single-user **control plane for AI coding
+> **One-line what-it-is:** a self-hosted, single-user **control plane for AI
 > agents** — a FastAPI backend + React PWA that drives Claude Code / Codex / Hermes /
-> Pi over ACP. It ships no model and no credentials of its own.
+> Pi over ACP. It ships no model and no credentials of its own; the work it
+> orchestrates (tasks, workflows, designs, artifacts) is domain-neutral.
+
+**New here?** Start with the **[visual tour](tour.md)** — screenshots of every surface.
 
 ---
 
@@ -29,7 +32,8 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
-| [DESIGN-STUDIO.md](DESIGN-STUDIO.md) | Retained Design Studio blueprint (temporarily disabled) | by hand |
+| [DESIGN-STUDIO.md](DESIGN-STUDIO.md) | Design Studio: agent contract, scene schema, flag | by hand |
+| [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·

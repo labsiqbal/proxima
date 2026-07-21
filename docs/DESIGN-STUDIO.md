@@ -4,10 +4,12 @@ AI-assisted, multi-surface design inside Proxima. The agent generates designs as
 **editable layered structures** (not flat images), and the human refines them on a
 canvas — direct manipulation (Figma-feel) + AI iteration (chat).
 
-> **Status:** retained blueprint, not an active release capability. Design Studio is
-> disabled by default with `PROXIMA_FEATURE_DESIGN_STUDIO=0`; its navigation,
-> commands, provider checks, bridge actions, and routes stay unavailable until the
-> server-owned flag is deliberately enabled. Image generation remains available.
+> **Status:** active feature behind a server-owned flag. `scripts/dev` turns it on by
+> default; installed instances opt in with `PROXIMA_FEATURE_DESIGN_STUDIO=1` in
+> `~/.config/proxima/proxima.env` and a restart (the flag is read at boot). While the
+> flag is off, the backend answers 503 (`feature_disabled`) before any side effect and
+> the frontend omits Design navigation, commands, provider checks, and bridge actions.
+> Image generation is independent of this flag and always available.
 
 ## Why
 
@@ -153,7 +155,7 @@ a linked **design session**, kicks off the compose run, and returns a draft card
   words), the backend replies with a `<question-form>` in the main chat instead of drafting
   something generic. The form's `submit-as="/design"` makes answering re-issue `/design`
   with the answers as the brief, so the same path runs again — now on-brief. (Same
-  mechanism for `/image`.) See CAPABILITIES §14.
+  mechanism for `/image`.) See CAPABILITIES §13.
 - **Deep-open.** The draft card opens *that* design directly. `DesignStudio` defers
   `onOpened()` until `openDesign()` resolves so clearing the pending prop can't let the
   restore-last-design effect race in and drop the user on the start screen; a failed read

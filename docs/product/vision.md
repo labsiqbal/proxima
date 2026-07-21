@@ -4,9 +4,14 @@ Updated: 2026-06-27
 
 Proxima is an opinionated agent harness and workspace OS. It gives AI agents full execution capacity inside a project, while keeping humans in control through visible actions, structured outputs, editable surfaces, memory, and project-scoped ownership.
 
-> **Release scope:** Design Studio references below describe a retained future flow
-> that is disabled by default. Image generation remains active; Video Studio is not
-> a current product surface.
+> **How to read this doc:** this is product *direction*, not a description of current
+> behavior — several flows below are **not in the code yet**. Implemented today:
+> chat, projects, Ops tasks, workflow graphs, schedules, wiki, artifacts, image
+> generation, and **Design Studio** (active, feature-flagged). Planned only — marked
+> *(planned)* on their sections: **Main Project**, **Integrations** (global
+> connections + project bindings), **Workflow versioning**, **artifact
+> registry/Publish**, and per-agent `AGENT.md` memory files. Video Studio was
+> removed and is not planned.
 
 The product is not just a chat wrapper. Chat is the gateway. The real product is the workspace that turns conversations into editable work products: designs, files, wiki notes, workflows, apps, reports, and artifacts.
 
@@ -79,7 +84,7 @@ Home should show:
 
 Home is not a setup checklist or a marketing page. It is a cockpit for resuming work.
 
-### Main Project Is The Global Workspace
+### Main Project Is The Global Workspace *(planned — not yet in code)*
 
 Proxima has a pinned Main Project above regular projects.
 
@@ -125,7 +130,7 @@ The product should earn trust by making work visible:
 
 Approval is not the default blocker for all work. It is used when intent is ambiguous, external destruction is involved, or the agent needs a decision.
 
-### Memory Evolves
+### Memory Evolves *(partially planned — `AGENT.md`/auto-memory not yet in code)*
 
 Proxima has evolving memory at two levels:
 
@@ -147,7 +152,7 @@ Instruction priority:
 
 More specific instructions override broader ones.
 
-### Artifacts Are The Output Library
+### Artifacts Are The Output Library *(registry beyond the filesystem scanner is planned)*
 
 Artifacts is the universal gallery for outputs in the active project.
 
@@ -175,7 +180,7 @@ Artifacts should filter by:
 
 Files is a utility surface for inspecting and editing the project filesystem. It should keep quick single-file preview for HTML/Markdown, but app preview and output consumption should live in Artifacts.
 
-### Workflows Are Reusable Processes
+### Workflows Are Reusable Processes *(versioning is planned — not yet in code)*
 
 Workflows are project-scoped reusable processes. A workflow starts as draft, can be iterated and tested, then published as active.
 
@@ -210,7 +215,7 @@ Top-level Tasks are likely redundant. Ad-hoc work starts from Chat or `/goal`. R
 
 If task data remains internally, it should behave as a one-step job, not as a separate top-level product concept.
 
-### Integrations Are Global Connections With Project Bindings
+### Integrations Are Global Connections With Project Bindings *(planned — not yet in code)*
 
 Integrations such as GitHub, Cloudflare, Google, and MCP servers are connected globally, then bound to projects.
 
@@ -228,7 +233,7 @@ Runner/agent is not the same as integration. The runner executes. The integratio
 
 Terminal remains a global utility, opening in the active project by default. It is a power tool and escape hatch, not a primary product surface.
 
-### Remote Access And Publish Are Separate
+### Remote Access And Publish Are Separate *(publish flow planned — not yet in code)*
 
 Cloudflare/remote access has two different product modes:
 

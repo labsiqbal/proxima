@@ -69,6 +69,7 @@ export function MentionTextarea({ value, onChange, items, rows = 3, placeholder,
   ariaLabel?: string
 }) {
   const areaRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const pendingCaret = React.useRef<{ caret: number; forText: string } | null>(null)
   const listRef = React.useRef<HTMLDivElement | null>(null)
   const listId = React.useId()
   const [open, setOpen] = React.useState<{ query: string; at: number } | null>(null)
@@ -97,13 +98,24 @@ export function MentionTextarea({ value, onChange, items, rows = 3, placeholder,
     if (!element || !open) return
     const caret = element.selectionStart ?? value.length
     const applied = applyMention(value, caret, open.at, mentionInsertion(item))
+    pendingCaret.current = { caret: applied.caret, forText: applied.text }
     onChange(applied.text)
     setOpen(null)
-    requestAnimationFrame(() => {
-      element.focus()
-      element.setSelectionRange(applied.caret, applied.caret)
-    })
   }
+
+  // Place the caret after the inserted mention once the controlled re-render has
+  // committed the new value — but only while the value is still exactly the inserted
+  // text. If more keystrokes landed first, restoring the stale caret would scramble
+  // their order (the old requestAnimationFrame version did exactly that).
+  React.useLayoutEffect(() => {
+    const pending = pendingCaret.current
+    const element = areaRef.current
+    if (!pending || !element) return
+    pendingCaret.current = null
+    if (element.value !== pending.forText) return
+    element.focus()
+    element.setSelectionRange(pending.caret, pending.caret)
+  })
 
   return <div className="mention-wrap">
     <textarea

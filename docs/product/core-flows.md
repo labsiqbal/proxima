@@ -1,7 +1,11 @@
 # Proxima Core Flows
 
-> **Release scope:** Design Studio is retained but disabled by default; image
-> generation remains active. Video Studio is not a current product surface.
+> **How to read this doc:** these are the *intended* flows guiding implementation —
+> not all of them exist yet. Sections marked *(planned)* (**Main Project**,
+> **Workflow versioning**, **Integrations**, **artifact/app Publish**, per-agent
+> `AGENT.md` memory) are design targets with **no code behind them today**. Design
+> Studio is an active, feature-flagged surface; image generation is active; Video
+> Studio was removed.
 
 Updated: 2026-06-27
 
@@ -12,13 +16,13 @@ This document turns the product vision into concrete user flows and ownership ru
 Proxima should revolve around these primitives:
 
 - Project: the ownership boundary for work.
-- Main Project: pinned global/abstract workspace.
+- Main Project: pinned global/abstract workspace. *(planned)*
 - Agent: global profile/persona with its own memory.
 - Session: project-scoped chat context.
 - Run: one execution by an agent.
 - Artifact: concrete output or previewable result.
 - Workflow: reusable process definition.
-- Workflow Version: draft/active/history of a workflow.
+- Workflow Version: draft/active/history of a workflow. *(planned)*
 - Activity Job: tracked execution history/status.
 - Wiki Note: project memory.
 
@@ -104,7 +108,7 @@ Rules:
 - cross-project read-only access is allowed only when explicitly requested,
 - cross-project read-only targets are files and artifacts.
 
-## Main Project
+## Main Project *(planned — not yet in code)*
 
 Main Project is pinned above regular projects.
 
@@ -198,7 +202,7 @@ This fixes the current broken loop where users must manually open Design, find a
 
 ## Memory Flow
 
-### Agent Memory
+### Agent Memory *(planned — not yet in code)*
 
 Each global agent/profile has memory/instructions conceptually stored as:
 
@@ -398,7 +402,7 @@ It should let users inspect and edit:
 
 It edits the workflow definition, not one completed run's output.
 
-### Workflow Versioning
+### Workflow Versioning *(planned — not yet in code)*
 
 Rules:
 
@@ -463,7 +467,7 @@ one-step Activity job
 
 Ad-hoc work starts from Chat or `/goal`. Repeatable work starts from Workflows.
 
-## Integration Flow
+## Integration Flow *(planned — not yet in code)*
 
 Integrations are global connections with project bindings.
 
@@ -528,7 +532,7 @@ Terminal is a global utility, opening in the active project by default.
 
 It is not primary navigation. It should remain available from utility/profile menus.
 
-## Remote Access And Publish Flow
+## Remote Access And Publish Flow *(publish is planned — not yet in code)*
 
 Remote access:
 

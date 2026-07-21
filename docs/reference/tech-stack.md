@@ -55,7 +55,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Build tool | **Vite** | dev on `127.0.0.1:5177`, `npm run build` → `dist/` |
 | State | **Zustand** | lightweight store |
 | Code editor | **CodeMirror 6** (`@uiw/react-codemirror` + language packs) | files, artifacts, wiki edit |
-| Design canvas | **Konva** / **react-konva** | dependency retained; Design Studio disabled by default |
+| Design canvas | **Konva** / **react-konva** | powers Design Studio (feature-flagged: on in dev, opt-in when installed) |
 | Terminal UI | **xterm.js** (`@xterm/xterm` + fit addon) | in-browser terminal |
 | Wiki graph | **react-force-graph-2d** | linked-note graph |
 | Workflow graph | Native **SVG** + pure topological layout | enabled by default; `PROXIMA_FEATURE_WORKFLOW_GRAPH` remains a recovery switch |

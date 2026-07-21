@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5177",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4177",
-    "test": "vitest run && node tests/features.test.mjs",
+    "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

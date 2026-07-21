@@ -6,12 +6,14 @@ for the exact schema see [database.md](database.md); for the stack see
 
 ## What it is
 
-A self-hosted, **single-user control plane for AI coding agents**. It provides a PWA
+A self-hosted, **single-user control plane for AI agents**. It provides a PWA
 
 + backend for chat, projects, files, terminal, workflows, jobs, schedules, wiki,
-artifacts, and runner profiles. It does **not** run models itself — it drives agent
-CLIs you already own (Claude Code, Codex, Hermes, Pi) over the **Agent
-Client Protocol (ACP)**.
+artifacts, design, and runner profiles. It does **not** run models itself — it drives
+agent CLIs you already own (Claude Code, Codex, Hermes, Pi) over the **Agent
+Client Protocol (ACP)**. The work it orchestrates is domain-neutral (content,
+ops, research, code alike); the runners it drives today happen to be coding-agent
+CLIs.
 
 ### Non-goals
 
@@ -56,7 +58,7 @@ Owner ── Profile ── Runner ── Project / Workspace
                          SQLite DB  (see database.md)
                                  │  spawns / talks ACP
                                  ▼
-                Agent CLIs: claude-code · codex · gemini · hermes
+                Agent CLIs: claude-code · codex · hermes · pi
 ```
 
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
@@ -81,22 +83,30 @@ code never mixes with per-install state:
 ~/.local/share/proxima/backups                      DB snapshots
 ```
 
+> **Naming note:** `hermes-profiles/` — like the `hermes_home` columns on
+> `profiles`/`runs`/`agent_sessions` and the `HERMES_*` env names — is legacy naming
+> from the Hermes-first era. Every runner (Claude Code, Codex, Hermes, Pi) stores its
+> per-profile credential home there; the mechanism is fully runner-agnostic. The
+> schema/paths are intentionally not renamed.
+
 ## Server-owned feature gates
 
 ```text
-PROXIMA_FEATURE_DESIGN_STUDIO=0 ───────┐
+PROXIMA_FEATURE_DESIGN_STUDIO ─────────┐
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> frontend capability map
                                        └─> route/run guards before side effects
 ```
 
-Design Studio is retained in source but disabled by default. The backend
-is authoritative: disabled requests return HTTP 503 with the consistent
-`feature_disabled` payload before creating messages, writing the database or files,
-calling providers, spawning processes, or dispatching collaboration. The frontend
-uses the published flags to omit navigation, deep links, commands, settings,
-provider health checks, bridge actions, and agent guidance. Image generation remains
-enabled, and existing media files—including video files—remain readable as ordinary
-artifacts. Video Studio and video generation are not product surfaces.
+Design Studio is an active feature behind a server-owned flag: `scripts/dev`
+enables it by default; installed instances opt in via `proxima.env` (the flag is
+read once at boot). The backend is authoritative: while disabled, requests return
+HTTP 503 with the consistent `feature_disabled` payload before creating messages,
+writing the database or files, calling providers, spawning processes, or
+dispatching collaboration, and the frontend uses the published flags to omit
+navigation, deep links, commands, settings, provider health checks, bridge
+actions, and agent guidance. Image generation is independent of the flag, and
+existing media files—including video files—remain readable as ordinary artifacts.
+Video Studio and video generation are not product surfaces.
 
 `PROXIMA_FEATURE_WORKFLOW_GRAPH` gates the graph workflow engine (ADR-0001) and
 defaults to **on**, because the graph canvas is the shipped authoring path. It remains
@@ -151,8 +161,9 @@ artifacts.
 in a `session` (a chat thread) which accumulates `messages` and spawns `runs` (one
 agent turn each); a run emits ordered `events` that stream to the UI. Repeatable work
 is a `workflow` (recipe, steps as JSON); one execution is a `job` (frozen step
-snapshot + state); a `schedule` fires jobs on cron. `tasks` are a kanban surface
-unified onto the jobs model. `agent_sessions` maps a chat to its per-home ACP session.
+snapshot + state); a `schedule` fires jobs on cron. Ad-hoc Ops tasks are 1-step
+jobs (the old kanban `tasks` table was dropped by migration 17). `agent_sessions`
+maps a chat to its per-home ACP session.
 A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
 and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-node state
 in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_GRAPH`.

@@ -1,43 +1,90 @@
 # Proxima
 
-Your self-hosted **cockpit for AI coding agents** — chat, workflows, an in-browser
-terminal, files with live preview, and a wiki, all in one private space that runs on
-**your own machine**. Bring your own agent: **Claude Code, Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
+Your self-hosted **cockpit for the AI agents you already own** — delegate tasks,
+chat, run reviewable workflow graphs on a schedule, and design, all in one private
+control plane on **your own machine**. Bring your own agent CLI: **Claude Code,
+Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
+
+![Ops home — delegate a task](docs/screenshots/ops-home.png)
 
 ## What it is
 
 A workspace you self-host as a background service and open in a browser (or
 install as a PWA on your phone). FastAPI backend + React PWA. It's a **control
 plane**: it drives agents over the Agent Client Protocol (ACP), so you plug in
-whichever agent CLI you already use and log into — Proxima ships **no credentials**.
+whichever agent CLI you already use and log into — Proxima ships **no model and
+no credentials**. The work it orchestrates is domain-neutral: content, ops,
+research, and code all flow through the same tasks, workflows, reviews, and
+artifacts.
+
+Two workspaces, one cockpit:
+
+- **Ops** — delegate an outcome and review the result: task composer, durable
+  jobs with review gates, workflow graphs, schedules, artifacts, Design Studio.
+- **Code** — work alongside the agent: chat with tool approvals, multi-agent
+  modes, and a real in-browser terminal.
 
 ## Features
 
 - **Single-user cockpit** — set one owner password on first run, then use a
   persistent owner session. Run it for yourself, see your work organized, never
   lose context.
-- **Full-power chat** — point the Claude Code runner at your live config and the
-  agent inherits your real skills, plugins, rules, MCP servers, and memory.
-  Streaming responses, tool-activity cards, slash commands, session continuity.
-- **In-browser terminal** — a real PTY shell scoped to the project, right in the
-  app. Work in the shell from anywhere, no SSH.
-- **Interactive cards** — agent approval/permission prompts render as clickable
-  cards; choice lists become quick-reply buttons.
-- **Link existing folders** — register any folder on disk as a project, so your
-  existing work connects to the cockpit (chat/terminal/files operate on it).
-  Removing a linked project only unlinks it — your real files stay.
-- **Workflows & schedules** — promote a good chat into a repeatable workflow, run
-  it on a cron schedule, and follow every run in the activity feed.
-- **Files** — per-project browser with edit + live HTML/Markdown **preview**, plus
-  **Run & Preview** for dev servers.
-- **Wiki** — linked notes (`[[Note]]`) with an auto-updating graph.
-- **Multi-runner** — pick a runner per profile: Claude Code, Codex, Hermes, or
-  Pi. Credentials auto-seed from the host.
-- **Themes & PWA** — six themes; installable on desktop or phone.
+- **Ops tasks with review gates** — describe an outcome, pick an agent and a
+  **Guarded** or **Autonomous** policy; the task runs as a durable job and
+  pauses for your review before it counts as done.
 
-Image generation remains available. Design Studio remains in source but is
-temporarily disabled by default; Video Studio and video generation were removed.
-Ordinary video files still play as generic artifacts.
+  ![Task review gate](docs/screenshots/task-review.png)
+- **Full-power chat** — streaming responses, tool-activity cards, slash
+  commands, session continuity. Agent approval/permission prompts render as
+  clickable cards; point the Claude Code runner at your live config and the
+  agent inherits your real skills, plugins, rules, MCP servers, and memory.
+
+  ![Chat with a tool-approval card](docs/screenshots/chat-approval.png)
+- **Workflow graphs** — describe a process and an agent draws the DAG on an
+  n8n-style canvas; nodes carry typed output contracts (`text` / `json` /
+  `artifact-ref`), per-node agents, and review gates. Correct one node's output
+  and every dependent node reruns deterministically. Promote a good chat into a
+  graph with one click, save it as a template, run it on cron.
+
+  ![Workflow graph run](docs/screenshots/workflow-graph-run.png)
+- **Multi-agent collaboration** — per-prompt **Brainstorm** (parallel idea
+  lanes + synthesis) and **Debate** (alternating rounds + judge), plus a
+  **Validate** sidecar where a different runner pressure-tests a finished
+  answer and can replace it.
+
+  ![Brainstorm lanes and synthesis](docs/screenshots/brainstorm.png)
+- **Design Studio** — the agent drafts **editable layered designs** (text stays
+  real text) from a brief; refine them on a Konva canvas with a full inspector,
+  selection-aware chat, per-project brand guide, and PNG/JPG/PDF/HTML export.
+
+  ![Design Studio](docs/screenshots/design-studio-inspector.png)
+- **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,
+  Higgsfield, or any OpenAI-compatible endpoint; results land in Artifacts and
+  can open in Design Studio.
+- **Artifacts** — every project's outputs in one gallery (designs, images,
+  documents, apps, data) with type-aware viewers and **Run & Preview** for dev
+  servers behind a credential-stripping proxy.
+- **In-browser terminal** — a real PTY shell scoped to the project. Work in the
+  shell from anywhere, no SSH.
+- **Link existing folders** — register any folder on disk as a project;
+  chat/terminal/files operate on it. Removing a linked project only unlinks it.
+- **Goal loop** — `/goal` keeps the agent iterating until done or blocked.
+- **Wiki + knowledge** — per-project linked notes (`[[Note]]`) with an
+  auto-updating graph; distill any chat into a wiki note.
+- **Multi-runner profiles** — each agent profile picks a runner (Claude Code,
+  Codex, Hermes, Pi) with an isolated credential home, its own instructions,
+  and per-profile skills/MCP selection detected from your host.
+- **Schedules** — five-field cron for saved workflow templates, with overlap
+  policy and a "Run now" that exercises the real spawn path.
+- **Self-update, audit log, themes & PWA** — one-click update from GitHub
+  Releases, an audit trail of meaningful actions, six themes, installable on
+  desktop or phone.
+
+Video Studio and video generation were removed; ordinary video files still play
+as generic artifacts.
+
+**More screenshots:** [docs/tour.md](docs/tour.md) — a visual tour of every
+surface.
 
 ## Requirements
 
@@ -63,7 +110,7 @@ Configuration (e.g. in `~/.config/proxima/proxima.env`):
 export PROXIMA_SINGLE_USER_NAME=owner   # optional owner name used on first run
 export PROXIMA_CLAUDE_LIVE_HOME=1       # claude-code runner uses your live ~/.claude
 export PROXIMA_LINK_ROOTS="$HOME"       # roots you may browse + link folders from
-export PROXIMA_FEATURE_DESIGN_STUDIO=0   # temporarily disabled
+export PROXIMA_FEATURE_DESIGN_STUDIO=1  # enable Design Studio (on by default in dev)
 ```
 
 Manage the service:
@@ -118,9 +165,11 @@ templates/       project workspace templates
 **📖 [Documentation hub](docs/README.md)** — the single entry point to everything
 (reference, guides, logs). Highlights:
 
+- [Visual tour](docs/tour.md) — screenshots of every surface
 - [Tech stack](docs/reference/tech-stack.md) · [Architecture & flows](docs/reference/architecture.md)
 - [API reference](docs/reference/api.md) · [Database schema](docs/reference/database.md) _(both auto-generated from code)_
 - [Capabilities / feature map](docs/CAPABILITIES.md)
+- [Design Studio](docs/DESIGN-STUDIO.md)
 - [Installation](docs/installation.md) · [Security boundaries](docs/security-boundaries.md) · [Backup & recovery](docs/backup.md)
 
 ## Contributing
