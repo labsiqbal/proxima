@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 18 tables. Applied migration version: **17**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 19 tables. Applied migration version: **18**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -180,6 +180,21 @@ SQLite (WAL mode). 18 tables. Applied migration version: **17**. This is the exa
 | `capabilities` | TEXT | yes |  |  |
 
 
+### project_areas
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `project_id` | INTEGER | NO |  | → `projects.id` (ON DELETE CASCADE) |
+| `kind` | TEXT | NO | `'code'` |  |
+| `rel_path` | TEXT | NO |  |  |
+| `source` | TEXT | NO | `'auto'` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_project_areas_one_ops` — UNIQUE (project_id); `idx_project_areas_project` — (project_id, kind)
+
+
 ### projects
 
 | Column | Type | Null | Default | Key / FK |
@@ -334,4 +349,4 @@ SQLite (WAL mode). 18 tables. Applied migration version: **17**. This is the exa
 
 
 ---
-_Generated 2026-07-20 21:15 UTC._
+_Generated 2026-07-21 18:51 UTC._

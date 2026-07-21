@@ -50,6 +50,23 @@ CREATE TABLE IF NOT EXISTS projects (
   archived_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- Work-container areas (Phase-1 slice 1, T1): a project holds zero-or-more
+-- code areas (rel_path of a git-repo subfolder; '.' = repo at root) and
+-- exactly one ops area (non-code output space). source: 'auto' (detected),
+-- 'manual' (owner-registered, never clobbered by re-detection), 'excluded'
+-- (tombstone left by removal so re-detection can't resurrect the area).
+CREATE TABLE IF NOT EXISTS project_areas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'code',
+  rel_path TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'auto',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, kind, rel_path)
+);
+CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops';
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,

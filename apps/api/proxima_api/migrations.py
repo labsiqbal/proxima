@@ -368,6 +368,54 @@ def _drop_tasks_feature(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _add_project_areas(conn: sqlite3.Connection) -> None:
+    """Container model, Phase-1 slice 1 (T1): create `project_areas` and wrap
+    every existing flat project in place as a work container.
+
+    Schema shape - a table of rows, not a JSON column on projects, because
+    areas are individually addressable: the manual-override API adds/removes
+    one area at a time, `UNIQUE(project_id, kind, rel_path)` gives duplicate
+    protection and the partial unique index enforces exactly-one-ops in the DB
+    rather than in code, and later slices (worktree-per-repo-job, the slicer's
+    job→target binding) can reference an area row by id with FK integrity.
+    `ON DELETE CASCADE` keeps areas from outliving their project.
+
+    Migration behavior (the spec's Migration note, binding): the existing
+    `projects.path` folder becomes the container root; if it is itself a git
+    repo it registers as the sole code area (`.`); the conventional
+    artifacts/ reports/ exports/ wiki/ subdirs continue as the ops area
+    (rel_path `.`). No file moves; a project with no detected repo simply has
+    zero code areas. A path that is missing on this machine detects nothing
+    and can be re-detected on demand later.
+    """
+    from .project_areas import ensure_ops_area, sync_code_areas
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS project_areas (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL DEFAULT 'code',
+          rel_path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'auto',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, kind, rel_path)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops'")
+    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    if not {"id", "path"}.issubset(cols):
+        return  # minimal test fixture, nothing to wrap
+    for row in conn.execute("SELECT id, path FROM projects").fetchall():
+        ensure_ops_area(conn, row["id"])
+        sync_code_areas(conn, row["id"], row["path"])
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -386,6 +434,7 @@ MIGRATIONS: list[Migration] = [
     (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
     (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
     (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
+    (18, "add project_areas: wrap existing projects as work containers (T1)", _add_project_areas),
 ]
 
 
@@ -451,6 +500,10 @@ def run_migrations(
                 "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
                 (version, description, iso_now()),
             )
+            # On a default-isolation connection this INSERT implicitly opened a
+            # transaction; commit it so the next migration's explicit BEGIN works.
+            if conn.in_transaction:
+                conn.commit()
         else:
             conn.execute("BEGIN")
             try:
