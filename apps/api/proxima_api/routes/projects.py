@@ -13,9 +13,11 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
+from .. import fsapi
+from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
-from ..schemas import ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
+from ..schemas import ProjectAreaAddRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
 
 
 def register(app, deps):
@@ -30,7 +32,7 @@ def register(app, deps):
     @app.get("/api/projects")
     def list_projects(user: dict[str, Any] = Depends(current_user)):
         rows = db().execute(
-            "SELECT p.slug, p.name, p.path, p.visibility, u.username AS owner, 'owner' AS role "
+            "SELECT p.id, p.slug, p.name, p.path, p.visibility, u.username AS owner, 'owner' AS role "
             "FROM projects p JOIN users u ON u.id = p.owner_user_id "
             "WHERE p.archived_at IS NULL ORDER BY p.created_at DESC, p.id DESC"
         ).fetchall()
@@ -88,6 +90,9 @@ def register(app, deps):
             (slug, name, str(target), user["id"]),
         )
         pid = cur.lastrowid
+        # Container areas (T1): register the ops area + auto-detect code areas.
+        ensure_ops_area(db(), pid)
+        sync_code_areas(db(), pid, target)
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.link', 'project', ?, ?)", (user["id"], slug, json.dumps({"path": str(target)})))
         row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
         return project_payload(row)
@@ -104,6 +109,8 @@ def register(app, deps):
             (payload.slug, payload.name, path, user["id"]),
         )
         project_id = cur.lastrowid
+        ensure_ops_area(db(), project_id)
+        sync_code_areas(db(), project_id, path)
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.create', 'project', ?)", (user["id"], payload.slug))
         row = dict(db().execute("SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?", (user["username"], project_id)).fetchone())
         return project_payload(row)
@@ -130,3 +137,70 @@ def register(app, deps):
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)", (user["id"], slug))
         _purge_project(project)  # rm dir (jailed) + DB row; cascades tasks, nulls session/run links
         return {"ok": True, "slug": slug}
+
+    # ── Work-container areas (Phase-1 slice 1, T1): code areas + ops area ──
+
+    @app.get("/api/projects/{slug}/areas")
+    def list_project_areas(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """The project's container areas: code areas (git-repo subfolders,
+        auto-detected or manual) and its single ops area."""
+        project = visible_project(slug, user)
+        return areas_payload(db(), project["id"])
+
+    @app.post("/api/projects/{slug}/areas", status_code=201)
+    def add_project_area(slug: str, payload: ProjectAreaAddRequest, user: dict[str, Any] = Depends(current_user)):
+        """Manually register (or correct) a code area - T1's hybrid override.
+        The folder must exist inside the project but need not be a git repo yet
+        (not-yet-`git init`'d code is a valid code area). A manual row is never
+        clobbered by re-detection; re-adding a removed area revives it."""
+        project = visible_project(slug, user)
+        root = Path(project["path"]).resolve()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail="project folder is missing on disk")
+        try:
+            target = fsapi.resolve_in_project(root, payload.rel_path)
+        except fsapi.FsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="not a directory inside the project")
+        rel = "." if target == root else target.relative_to(root).as_posix()
+        existing = db().execute(
+            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
+            (project["id"], rel),
+        ).fetchone()
+        if existing:
+            area_id = existing["id"]
+            db().execute("UPDATE project_areas SET source = 'manual', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
+        else:
+            area_id = db().execute(
+                "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
+                (project["id"], rel),
+            ).lastrowid
+        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.add', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": rel})))
+        return {"id": area_id, "rel_path": rel, "source": "manual"}
+
+    @app.delete("/api/projects/{slug}/areas/{area_id}")
+    def remove_project_area(slug: str, area_id: int, user: dict[str, Any] = Depends(current_user)):
+        """Remove a code area. The row becomes an 'excluded' tombstone (not a
+        delete) so auto-re-detection cannot resurrect an area the owner
+        explicitly removed; the tombstone is garbage-collected once the folder
+        stops being detectable."""
+        project = visible_project(slug, user)
+        row = db().execute(
+            "SELECT id, kind, source, rel_path FROM project_areas WHERE id = ? AND project_id = ?",
+            (area_id, project["id"]),
+        ).fetchone()
+        if not row or row["kind"] != "code" or row["source"] == "excluded":
+            raise HTTPException(status_code=404, detail="code area not found")
+        db().execute("UPDATE project_areas SET source = 'excluded', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
+        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.remove', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": row["rel_path"]})))
+        return {"ok": True, "id": area_id}
+
+    @app.post("/api/projects/{slug}/areas/detect")
+    def detect_project_areas(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Re-run code-area auto-detection on demand. Only auto rows follow the
+        filesystem; manual and excluded rows are never clobbered."""
+        project = visible_project(slug, user)
+        ensure_ops_area(db(), project["id"])
+        summary = sync_code_areas(db(), project["id"], project["path"])
+        return {**areas_payload(db(), project["id"]), "detect": summary}

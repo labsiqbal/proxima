@@ -141,6 +141,10 @@ class ProjectLinkRequest(BaseModel):
     slug: str | None = None
 
 
+class ProjectAreaAddRequest(BaseModel):
+    rel_path: str = Field(min_length=1, max_length=500)  # '.' = container root
+
+
 class CommandRequest(BaseModel):
     command: str = Field(min_length=1)
     project_slug: str | None = None
