@@ -1,0 +1,20 @@
+{
+  "//": "Recommended host CLIs (T8 decision 3): Proxima probes PATH for these at run setup and advertises the present ones in the agent preamble. Never vendored or installed by Proxima - bring your own binaries. Edit this file to change the toolbelt; no code change needed.",
+  "tools": [
+    {
+      "bin": "markitdown",
+      "use": "converting documents (PDF, Office, HTML) to Markdown",
+      "install": "pip install markitdown"
+    },
+    {
+      "bin": "lavish-axi",
+      "use": "rendering rich, reviewable HTML artifacts from plans, reports, and comparisons",
+      "install": "npm install -g lavish-axi"
+    },
+    {
+      "bin": "gh",
+      "use": "GitHub operations (repos, pull requests, issues) from the shell",
+      "install": "https://cli.github.com"
+    }
+  ]
+}

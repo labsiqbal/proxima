@@ -288,6 +288,8 @@ def _config_from_env() -> dict[str, Any]:
         # Point the claude-code runner at the live ~/.claude (full skills/plugins/
         # rules/memory) instead of an isolated seeded profile home.
         "claude_live_home": os.environ.get("PROXIMA_CLAUDE_LIVE_HOME", "").lower() in ("1", "true", "yes"),
+        # Capability bundle (T8): unset -> <repo root>/bundled-skills via normalize_config.
+        "bundled_skills_dir": os.environ.get("PROXIMA_BUNDLED_SKILLS_DIR") or None,
         "link_roots": [p for p in os.environ.get("PROXIMA_LINK_ROOTS", os.path.expanduser("~")).split(":") if p],
         # Per-app remote preview: apps run on their own subdomain (<slug>.<apps_domain>)
         # that rides the tunnel; unset ⇒ local-only preview (no subdomain routing). The

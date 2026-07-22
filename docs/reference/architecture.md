@@ -534,6 +534,20 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 { "type": "run.completed" }
 ```
 
+**Capability bundle (Phase-1 slice 9, T8).** Profile homes get skills from TWO
+sources through one symlink mechanism (`capabilities.py`): the runner's own host
+config dir, and Proxima's shipped `bundled-skills/` (content-pluggable - any folder
+with a `SKILL.md` is a skill, ids namespaced `bundled/<name>`, per-profile opt-out via
+the same `profiles.capabilities` selection JSON; first content: the vendored MIT
+masterplan skill). Live-home claude profiles are exempt - nothing is seeded or
+symlinked into the real `~/.claude`. The bundle also carries
+`recommended-tools.json`: `recommended_tools.py` probes PATH at run setup and the
+run preamble advertises the present CLIs one line each (detect-and-advertise;
+binaries are always BYO), while Settings quietly hints at missing ones. The preamble
+itself (`wiki_memory.GENERAL_GUIDE`) ships a distilled work-discipline pack
+(evidence-first, small slices, self-review, wiki currency, script reuse) for every
+runner.
+
 ## Concurrency & reliability
 
 + **Per-thread SQLite connections** in WAL mode — sync handlers run across FastAPI's

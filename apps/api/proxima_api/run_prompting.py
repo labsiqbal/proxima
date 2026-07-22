@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fsapi
+from . import recommended_tools
 from . import wiki_memory
 
 logger = logging.getLogger("proxima.run_prompting")
@@ -147,7 +148,8 @@ class RunPrompting:
             ).fetchone()
             selection = parse_selection(row["capabilities"] if row else None)
             override = cfg.get("source_hermes_home") if getattr(spec, "id", "") == "hermes" else None
-            apply_capabilities(spec, Path(hermes_home), selection, override)
+            apply_capabilities(spec, Path(hermes_home), selection, override,
+                               bundle_dir=cfg.get("bundled_skills_dir"))
         except Exception:
             logging.getLogger("proxima.worker").exception("capability re-apply failed (non-fatal)")
 
@@ -254,6 +256,11 @@ class RunPrompting:
                     project_wiki,
                     include_design_studio=include_design_studio,
                     design_guidelines=design_guidelines,
+                    # T8 detect-and-advertise: probe PATH for the bundle's
+                    # recommended tools (cheap, first turn only) so present ones
+                    # are advertised to the agent. Missing ones stay silent here.
+                    host_tools=recommended_tools.probe_recommended_tools(
+                        cfg.get("bundled_skills_dir")),
                 )
                 if preamble:
                     prompt_text = preamble + "\n\n---\n\n" + prompt_text

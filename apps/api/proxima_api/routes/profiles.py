@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException
 
 from ..commands import command_catalog, execute_command
 from ..capabilities import detect_for_runner
+from ..recommended_tools import probe_recommended_tools
 from ..runners import detect_runners, hermes_status, runner_readiness
 from ..runner_specs import runner_is_selectable, runner_spec
 from ..profile_seed import seed_agent_home
@@ -99,7 +100,15 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="unknown runner")
         spec = runner_spec(runner_id)
         override = str(runner_source_dir(spec)) if runner_id == "hermes" else None
-        return {"runner_id": runner_id, **detect_for_runner(spec, override)}
+        return {"runner_id": runner_id,
+                **detect_for_runner(spec, override, bundle_dir=cfg.get("bundled_skills_dir"))}
+
+    @app.get("/api/tools/recommended")
+    def tools_recommended(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        """The capability bundle's recommended-tools list with a PATH-probe result
+        per tool (T8 detect-and-advertise). Advisory only: missing tools are a
+        quiet Settings hint, never a blocker; Proxima never installs binaries."""
+        return {"tools": probe_recommended_tools(cfg.get("bundled_skills_dir"))}
 
     @app.delete("/api/profiles/{profile_id}")
     def delete_profile(profile_id: int, user: dict[str, Any] = Depends(current_user)):

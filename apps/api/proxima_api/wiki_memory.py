@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import recommended_tools
 from . import scripts_library
 
 # Layer 1 — the summarize prompt the worker sends after a successful run.
@@ -127,6 +128,15 @@ GENERAL_GUIDE = (
     "what it already does.\n"
     "- If the task needs a capability you don't have, say so plainly and propose the closest "
     "alternative — never fake a result.\n"
+    "### Work discipline\n"
+    "- Evidence first: reproduce a bug before fixing it, and check the actual behavior "
+    "before trusting an assumption about the cause.\n"
+    "- Slice work small: land the smallest end-to-end piece that works, then build on it, "
+    "rather than one big-bang change.\n"
+    "- Before marking anything done, review your own diff/output the way a skeptical "
+    "reviewer would, and run the checks that prove it works.\n"
+    "- Keep the project's wiki memory current as part of finishing, and prefer reusing an "
+    "existing scripts/ script over redoing mechanical work by hand.\n"
     "### Where output goes\n"
     "__ARTIFACT_OUTPUTS__\n"
     "- Code changes follow the project's existing structure. Never scatter ad-hoc files in "
@@ -405,11 +415,18 @@ def build_run_preamble(
     *,
     include_design_studio: bool = False,
     design_guidelines: str | None = None,
+    host_tools: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Context block prepended to the FIRST prompt of an agent's ACP session,
     telling it it runs inside Proxima, how to ask interactive questions, and how to
-    consult the project's wiki memory. Runner-agnostic plain text."""
+    consult the project's wiki memory. Runner-agnostic plain text. `host_tools` is
+    the probed recommended-tools list (T8 detect-and-advertise): present tools get
+    a one-liner so the agent knows they exist without a PATH hunt."""
     general_guide = _general_guide(include_design_studio=include_design_studio)
+    tools_block = recommended_tools.tools_preamble_block(
+        [t for t in (host_tools or []) if t.get("present")])
+    if tools_block:
+        general_guide = general_guide + "\n\n" + tools_block
     if not project_name:
         return PREAMBLE_MARKER + "\nYou are running inside Proxima.\n\n" + general_guide + "\n\n" + QFORM_GUIDE
     lines = [

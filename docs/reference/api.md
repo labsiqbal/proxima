@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-144 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+145 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -15,7 +15,7 @@
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 30 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 12 endpoints
-- [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
+- [`routes/profiles.py`](#routes-profiles-py) — 9 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 11 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
@@ -163,6 +163,7 @@
 | PATCH | `/api/profiles/{profile_id}` | `update_profile` |  |
 | GET | `/api/runners/detect` | `runners_detect` |  |
 | GET | `/api/runners/{runner_id}/capabilities` | `runner_capabilities` | Skills + MCP servers detected on the host for this runner (portable — |
+| GET | `/api/tools/recommended` | `tools_recommended` | The capability bundle's recommended-tools list with a PATH-probe result |
 
 
 ## routes/projects.py
@@ -253,4 +254,4 @@
 
 
 ---
-_Generated 2026-07-22 07:45 UTC._
+_Generated 2026-07-22 08:04 UTC._

@@ -245,3 +245,41 @@ def test_preamble_teaches_the_script_convention_when_library_is_empty(tmp_path: 
     assert "none yet" in p
     # No project -> no scripts block at all.
     assert "Script library" not in (wiki_memory.build_run_preamble(None, None, None) or "")
+
+
+# ── discipline pack + host-tool advertisement (T8, capability bundle) ─────────
+
+def test_general_guide_carries_the_work_discipline_pack():
+    # The distilled discipline pack rides GENERAL_GUIDE into every session:
+    # evidence-first, small slices, self-review before done, wiki currency,
+    # script reuse. Lean by design - a section, not a dump.
+    g = wiki_memory.GENERAL_GUIDE
+    assert "### Work discipline" in g
+    assert "reproduce a bug before fixing it" in g
+    assert "smallest end-to-end piece" in g
+    assert "review your own diff" in g
+    assert "wiki memory current" in g
+    assert "scripts/ script" in g
+
+
+def test_preamble_advertises_present_host_tools_only():
+    tools = [
+        {"bin": "markitdown", "use": "document conversion", "present": True},
+        {"bin": "gh", "use": "GitHub operations", "present": False},
+    ]
+    p = wiki_memory.build_run_preamble("P", "p", None, host_tools=tools)
+    assert "### Host tools available" in p
+    assert "`markitdown` - available for document conversion" in p
+    assert "`gh`" not in p  # missing tools are never advertised to the agent
+
+    # no-project sessions get the same advertisement
+    p2 = wiki_memory.build_run_preamble(None, None, None, host_tools=tools)
+    assert "`markitdown` - available for document conversion" in p2
+
+
+def test_preamble_omits_tools_block_when_none_present():
+    p = wiki_memory.build_run_preamble("P", "p", None, host_tools=[
+        {"bin": "gh", "use": "GitHub operations", "present": False},
+    ])
+    assert "Host tools available" not in p
+    assert wiki_memory.build_run_preamble("P", "p", None) is not None  # default arg safe
