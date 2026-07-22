@@ -275,3 +275,35 @@ def test_v18_full_chain_enforces_single_ops_area(tmp_path: Path):
     # Areas die with their project (ON DELETE CASCADE).
     conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
     assert conn.execute("SELECT COUNT(*) FROM project_areas WHERE project_id = ?", (pid,)).fetchone()[0] == 0
+
+
+def test_v19_adds_job_target_binding_and_worktrees(tmp_path: Path):
+    """Slice 2 (T1): existing jobs gain a NULL target_area_id (today's
+    behavior - no repo binding) and the job_worktrees lifecycle table appears;
+    a repo job's worktree row dies with its job (ON DELETE CASCADE)."""
+    conn = connect(tmp_path / "m.db")
+    conn.executescript("""
+      CREATE TABLE messages(id INTEGER PRIMARY KEY);
+      CREATE TABLE profiles(id INTEGER PRIMARY KEY);
+      CREATE TABLE runs(id INTEGER PRIMARY KEY);
+      CREATE TABLE sessions(id INTEGER PRIMARY KEY);
+      CREATE TABLE jobs(id INTEGER PRIMARY KEY, title TEXT, status TEXT);
+      INSERT INTO jobs(title, status) VALUES ('pre-existing', 'done');
+    """)
+
+    applied = run_migrations(conn, str(tmp_path / "m.db"))
+    assert 19 in applied
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    assert "target_area_id" in cols
+    assert conn.execute("SELECT target_area_id FROM jobs").fetchone()["target_area_id"] is None
+
+    job_id = conn.execute("INSERT INTO jobs(title, status) VALUES ('repo job', 'running')").lastrowid
+    conn.execute(
+        "INSERT INTO job_worktrees(job_id, repo_path, worktree_path, branch, base_branch, base_commit) "
+        "VALUES (?, '/tmp/repo', '/tmp/wt', 'proxima/job-2', 'main', 'abc')",
+        (job_id,),
+    )
+    assert conn.execute("SELECT status FROM job_worktrees WHERE job_id = ?", (job_id,)).fetchone()["status"] == "active"
+    conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    assert conn.execute("SELECT COUNT(*) FROM job_worktrees").fetchone()[0] == 0

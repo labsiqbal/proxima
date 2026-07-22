@@ -39,6 +39,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Graph workflows are the shipped authoring path. Keep the switch as an owner
     # recovery control, but default it on so Workflows is usable after install.
     "feature_workflow_graph": True,
+    # Repo jobs in isolated git worktrees with diff review + local merge (Phase-1
+    # slice 2, T1). Off until the review UI ships (slice 4); off = the machinery
+    # is inert and job execution is unchanged.
+    "feature_repo_worktrees": False,
     # How many nodes of one graph job may be in flight at once. This is a dispatch
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
@@ -66,6 +70,7 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
+    cfg["feature_repo_worktrees"] = _bool_flag(cfg.get("feature_repo_worktrees"))
     return cfg
 
 

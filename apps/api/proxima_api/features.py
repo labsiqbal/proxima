@@ -7,15 +7,22 @@ from fastapi import HTTPException
 
 DESIGN_STUDIO = "design_studio"
 WORKFLOW_GRAPH = "workflow_graph"
+# Repo jobs run in isolated git worktrees with diff review + local merge
+# (Phase-1 slice 2, T1). Off by default until slice 4 ships the review UI;
+# while off the worktree machinery is fully inert and jobs behave exactly as
+# before.
+REPO_WORKTREES = "repo_worktrees"
 
 _CONFIG_KEYS = {
     DESIGN_STUDIO: "feature_design_studio",
     WORKFLOW_GRAPH: "feature_workflow_graph",
+    REPO_WORKTREES: "feature_repo_worktrees",
 }
 
 _DISPLAY_NAMES = {
     DESIGN_STUDIO: "Design Studio",
     WORKFLOW_GRAPH: "Workflow Graph",
+    REPO_WORKTREES: "Repo worktrees",
 }
 
 _COMMAND_FEATURES = {
@@ -37,6 +44,7 @@ def public_flags(config: Mapping[str, Any] | None) -> dict[str, bool]:
     return {
         DESIGN_STUDIO: enabled(config, DESIGN_STUDIO),
         WORKFLOW_GRAPH: enabled(config, WORKFLOW_GRAPH),
+        REPO_WORKTREES: enabled(config, REPO_WORKTREES),
     }
 
 

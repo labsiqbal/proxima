@@ -23,7 +23,7 @@ The foundation everything leans on. Least allowed to change casually.
 | Auth & Session Tokens | active | `routes/auth.py`, `route_deps.py` (`current_user`), `main.py` (`/api/preview-auth`) | `api/client.ts`, `App.tsx` | `users`, `auth_sessions` | gates every route, Preview Proxy |
 | Health / Config / Feature Flags | active | `main.py` (`/api/health`, `/api/config`), `features.py` | `features.ts`, `api/config.ts` | — | Design Studio / graph gates |
 | Projects & FS Linking | active | `routes/projects.py`, `fsapi.py` | `screens/ProjectsScreen.tsx` | `projects` | files, tasks, wiki, apps, workflows |
-| Work-container areas (data layer) | active | `project_areas.py`, `routes/projects.py` (areas endpoints), migration 18 | (no UI yet; payload carries `code_areas`/`ops_area`) | `project_areas` | future worktree machinery + job→target binding (Phase-1 slices 2-3) |
+| Work-container areas (data layer) | active | `project_areas.py`, `routes/projects.py` (areas endpoints), migration 18 | (no UI yet; payload carries `code_areas`/`ops_area`) | `project_areas` | repo-job worktrees (slice 2, shipped flag-gated); slicer job→target binding is slice 3 |
 | Profiles / Runners / Commands | active | `routes/profiles.py`, `runners.py`, `runner_specs.py`, `commands.py`, `capabilities.py` | `screens/ProfilesScreen.tsx`, `RunnersScreen.tsx` | `profiles` | runs pick profile→runner→home |
 | Sessions & Messages | active | `routes/chat.py` (list/create/patch/delete) | `api/sessions.ts`, `ChatScreen.tsx` | `sessions`, `messages`, `agent_sessions` | runs, ACP, collab, reviews, goal |
 | Run Lifecycle (engine) | active | `worker.py` (RunWorker), `acp.py`, `run_prompting/outputs/summaries/advancers/drafts/state.py` | `hooks/useRunStream.ts` | `runs`, `events`, `messages` | EventHub, collab, reviews, goal, workflow |
@@ -89,6 +89,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
 | Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx`, `GraphScreen.tsx`, `graphLayout.ts` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
+| Repo-job worktrees (flag-gated, off) | gated | `worktrees.py`, `routes/work.py` (start/diff/approve/delete), `worker.py` (cwd seam), migration 19 | (no UI until slice 4; job payload carries `worktree`) | `job_worktrees`, `jobs.target_area_id`, `project_areas` | work-container areas, run lifecycle, slice-4 review UI, slice-5 continuation |
 | **Cron Scheduling** | **risk** | `routes/work.py`, `scheduler.py`, `main.py` loop | `WorkflowsScreen.tsx` | `schedules`, `jobs`, `workflows` | workflows/jobs |
 | Ops Tasks (ad-hoc jobs) | active | `routes/work.py` | `TaskComposer.tsx`, `TaskWorkspace.tsx`, `ActivityScreen.tsx` | `jobs`, `sessions`, `runs` | run lifecycle, review gates |
 | Wiki Memory | active | `routes/wiki.py`, `wiki_memory.py`, `run_summaries.py` | `WikiScreen.tsx`, `WikiGraph.tsx` | — (FS wiki) | run lifecycle, tasks |
