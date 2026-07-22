@@ -191,18 +191,30 @@ Enforcement lives at two gates:
   the question(s); the owner answers it by picking a target in the node inspector's
   **Works in** field (the answer clears the question — one act, no separate flag).
 
-With `PROXIMA_FEATURE_REPO_WORKTREES` **on**, start also reserves the repo jobs' path:
-the plan's single code-area target is pinned to `jobs.target_area_id` and the slice-2
-worktree is cut *before* the plan claims `running` (a refused cut — dirty repo,
-detached HEAD, no commits — is a 409 and the plan stays queued). Phase-1 keeps **one
-worktree per plan**, so all repo jobs of a plan must target the *same* code area; a
-multi-area plan refuses to start with a split-the-plan message. During execution the
-worker's cwd seam is **node-aware**: a node runs in the worktree only when *it*
-touches the repo — its ops siblings run at the project root, where their artifact
-outputs belong. The final plan approve is the merge point, with the same guarded
-`--no-ff` local merge and park-in-review-on-conflict contract as a linear repo job.
-Flag **off**: targets are inert metadata, no worktree is cut, and execution is exactly
-as before slice 3.
+With `PROXIMA_FEATURE_REPO_WORKTREES` **on** (the default since slice 4), start also
+reserves the repo jobs' path: the plan's single code-area target is pinned to
+`jobs.target_area_id` and the slice-2 worktree is cut *before* the plan claims
+`running` (a refused cut — dirty repo, detached HEAD, no commits — is a 409 and the
+plan stays queued). Phase-1 keeps **one worktree per plan**, so all repo jobs of a
+plan must target the *same* code area; a multi-area plan refuses to start with a
+split-the-plan message. During execution the worker's cwd seam is **node-aware**: a
+node runs in the worktree only when *it* touches the repo — its ops siblings run at
+the project root, where their artifact outputs belong. The final plan approve is the
+merge point, with the same guarded `--no-ff` local merge and park-in-review-on-conflict
+contract as a linear repo job.
+Flag **off** (the escape hatch): targets are inert metadata, no worktree is cut, and
+execution is exactly as before slice 3.
+
+**Reviewing a repo plan's changes (slice 4):** the plan's diff surface lives on the
+Tasks screen — the plan row expands into its job list plus a **Changes** section
+(`components/tasks/ChangesReview.tsx`; T4's ratified language: expanding row and
+full-width page, never a side panel or popup) showing the per-file list and unified
+change from `GET /api/jobs/{id}/diff`. **Approve & merge changes** there (or on the
+canvas — the same `POST /api/graph/jobs/{id}/approve`) runs the guarded local merge;
+it is held while any plan job still awaits its own node review. A merge conflict
+parks the plan in review with a plain needs-attention banner and a retry. **Reject…**
+demands a one-line reason, then `POST /api/jobs/{id}/reject` fails the plan with
+`rejected_reason` recorded and discards the isolated copy unmerged.
 
 ## Lifecycle
 

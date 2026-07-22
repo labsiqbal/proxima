@@ -1,9 +1,11 @@
 import React from 'react'
 import type { AppFeatures, GraphJob, Job, JobStatus, JobStep, Profile, Project } from '../types'
 import { listJobs } from '../api/jobs'
-import { listGraphJobs, saveGraphTemplate } from '../api/graph'
+import { approveGraphJob, listGraphJobs, saveGraphTemplate } from '../api/graph'
 import { GraphCanvas } from '../components/workflows/GraphCanvas'
 import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
+import { ChangesReview } from '../components/tasks/ChangesReview'
+import { worktreeStateLabel } from '../components/tasks/diff'
 import { orderedPlanJobs, planBranches, planProgress, targetBadge } from '../components/tasks/planProjection'
 import { usePolling } from '../hooks/usePolling'
 
@@ -186,7 +188,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
     {plan.title}
     <span className="job-pill plan">plan</span>
     {plan.graph.nodes.some(node => node.target_ambiguous) && <span className="plan-target is-open" title="A job in this plan still needs a work area before it can start.">where?</span>}
-    {plan.worktree && <span className="plan-target is-repo" title={`Repo plan — branch ${plan.worktree.branch} (${plan.worktree.status})`}><span className="plan-repo-mark" aria-hidden="true">⎇</span>{plan.worktree.status}</span>}
+    {plan.worktree && <span className="plan-target is-repo" title="This plan works in the repo — it ran in an isolated copy whose changes you review before they land."><span className="plan-repo-mark" aria-hidden="true">⎇</span>{worktreeStateLabel(plan.worktree.status)}</span>}
   </>
 
   return <section className="tasks-view">
@@ -248,6 +250,20 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                     </button>
                     {expanded.has(row.plan.id) && <div className="plan-detail">
                       <PlanJobs plan={row.plan} profiles={profiles} onOpenPlan={onOpenPlan} />
+                      {/* The repo-plan review surface (slice 4): the diff lives in
+                          this EXPANDING row (T4 — no side panel, no popup), and the
+                          plan's final approve here is the local merge point. */}
+                      {row.plan.worktree && <ChangesReview
+                        token={token}
+                        jobId={row.plan.id}
+                        jobStatus={row.plan.status}
+                        worktree={row.plan.worktree}
+                        rejectedReason={row.plan.rejected_reason}
+                        canDecide={row.plan.node_states.every(node => node.status === 'done')}
+                        decideBlockedNote="Some jobs in this plan still need their own review — open the plan to approve them first."
+                        onApprove={() => approveGraphJob(token, row.plan.id)}
+                        onChanged={() => void load(0, false)}
+                      />}
                       <div className="plan-actions">
                         <button className="ghost-button" onClick={() => onOpenPlan(row.plan.id)}>Open plan</button>
                         <button className="ghost-button" onClick={() => setSavingPlan(row.plan)}>Save as Recipe</button>

@@ -3,12 +3,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskWorkspace } from "./TaskWorkspace";
-import { approveJob, getJob } from "../api/jobs";
+import { approveJob, getJob, getJobDiff } from "../api/jobs";
 
 vi.mock("../api/jobs", () => ({
 	getJob: vi.fn(),
 	approveJob: vi.fn(),
 	deleteJob: vi.fn(),
+	getJobDiff: vi.fn(),
+	rejectJob: vi.fn(),
 }));
 vi.mock("../components/ui/Dialog", () => ({ confirmDialog: vi.fn() }));
 
@@ -90,5 +92,56 @@ describe("TaskWorkspace", () => {
 		await waitFor(() =>
 			expect(approveJob).toHaveBeenCalledWith("token", 42, undefined),
 		);
+	});
+
+	it("repo job at final review: the verdict lives with the changes (slice 4)", async () => {
+		const repoJob = {
+			...job,
+			worktree: {
+				area_id: 1,
+				branch: "proxima/job-42",
+				base_branch: "main",
+				base_commit: "aaaaaaa",
+				status: "active",
+				merge_commit: null,
+				error: null,
+				worktree_path: "/ws/worktrees/job-42",
+			},
+		};
+		vi.mocked(getJob).mockResolvedValue(repoJob as never);
+		vi.mocked(getJobDiff).mockResolvedValue({
+			job_id: 42,
+			branch: "proxima/job-42",
+			base_branch: "main",
+			worktree_status: "active",
+			base_commit: "aaaaaaa",
+			head_commit: "bbbbbbb",
+			files: [{ path: "app.py", old_path: null, status: "A" }],
+			patch: [
+				"diff --git a/app.py b/app.py",
+				"--- /dev/null",
+				"+++ b/app.py",
+				"@@ -0,0 +1 @@",
+				"+x = 1",
+			].join("\n"),
+			patch_truncated: false,
+			summary: "1 file changed, 1 insertion(+)",
+		} as never);
+		const user = userEvent.setup();
+		render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+
+		// The generic bar points at the changes; the single approve door is the merge.
+		expect(
+			await screen.findByText(/check the changes below/),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Approve.*Done/ }),
+		).not.toBeInTheDocument();
+		expect((await screen.findAllByText("app.py")).length).toBeGreaterThan(0);
+		expect(screen.getByText("+x = 1")).toBeInTheDocument();
+		await user.click(
+			screen.getByRole("button", { name: /Approve & merge changes/ }),
+		);
+		await waitFor(() => expect(approveJob).toHaveBeenCalledWith("token", 42));
 	});
 });

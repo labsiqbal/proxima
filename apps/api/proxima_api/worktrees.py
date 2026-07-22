@@ -27,9 +27,10 @@ bookkeeping, and a failing owner hook would wedge the review flow with a
 confusing error) before either. Partial work therefore also survives crashes
 and future continuation turns (T5).
 
-Everything here is gated behind ``feature_repo_worktrees`` (off until slice 4
-ships the review UI); with the flag off no caller invokes this module and job
-execution is unchanged. State lives in the ``job_worktrees`` table, one row
+Everything here is gated behind ``feature_repo_worktrees`` (on by default
+since slice 4 shipped the review UI; the flag stays as an escape hatch); with
+the flag off no caller invokes this module and job execution is unchanged.
+State lives in the ``job_worktrees`` table, one row
 per job: status ``active`` (agent may work) -> ``merging`` (merge claimed) ->
 ``merged`` (landed on the base branch, worktree torn down) with ``conflict``
 (merge refused or conflicted; job parks in review, worktree kept for

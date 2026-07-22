@@ -1,10 +1,13 @@
-"""Worktree machinery for repo jobs (Phase-1 slice 2, T1/T5).
+"""Worktree machinery for repo jobs (Phase-1 slices 2+4, T1/T5).
 
 Covers the lifecycle module against scratch repos (create/teardown for
 root + subfolder repos, dirty-repo refusal, crash-leftover cleanup), the
 diff endpoint contract, merge success + conflict paths through approve,
-and the flag-off regression: with ``feature_repo_worktrees`` off (the
-default) repo-targeted jobs behave exactly as today - including the
+the reject path (slice 4: fail the job, record the why, tear the worktree
+down without merging), the full worktree -> diff -> approve -> merge
+lifecycle on the LIVE worker, and the flag-off regression: with
+``feature_repo_worktrees`` off (the slice-4 escape hatch) repo-targeted
+jobs behave exactly as before the machinery existed - including the
 worker's cwd selection, proven end-to-end with a real ACP subprocess
 that reports its own working directory.
 """
@@ -353,6 +356,62 @@ def test_approve_merge_conflict_parks_job_in_review_then_retry_succeeds(tmp_path
     assert (repo / "README.md").read_text() == "job version\n"
 
 
+def test_reject_fails_job_records_reason_and_discards_worktree(tmp_path: Path):
+    repo = _scratch_repo(tmp_path / "myrepo")
+    app = _app(tmp_path, feature_repo_worktrees=True)
+    c = _client(app)
+    job = _repo_job(c, "myrepo", repo)
+    assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
+    wt = c.get(f"/api/jobs/{job['id']}").json()["worktree"]
+    Path(wt["worktree_path"], "bad.txt").write_text("wrong\n", encoding="utf-8")
+    app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
+
+    rejected = c.post(f"/api/jobs/{job['id']}/reject", json={"reason": "wrong approach - use the API client"})
+    assert rejected.status_code == 200, rejected.text
+    body = rejected.json()
+    assert body["status"] == "failed"
+    assert body["rejected_reason"] == "wrong approach - use the API client"
+    assert body["worktree"]["status"] == "discarded"
+    # Torn down WITHOUT merging: dir + branch gone, primary tree never saw it.
+    assert not Path(wt["worktree_path"]).exists()
+    assert _git(repo, "branch", "--list", wt["branch"]) == ""
+    assert not (repo / "bad.txt").exists()
+    assert _git(repo, "log", "--oneline").count("\n") == 0  # still just the init commit
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_reject_requires_a_reason_and_a_review_state(tmp_path: Path):
+    repo = _scratch_repo(tmp_path / "myrepo")
+    app = _app(tmp_path, feature_repo_worktrees=True)
+    c = _client(app)
+    job = _repo_job(c, "myrepo", repo)
+
+    # Not waiting for review -> refused, nothing recorded.
+    assert c.post(f"/api/jobs/{job['id']}/reject", json={"reason": "nope"}).status_code == 409
+    # Blank/missing reasons are refused: a rejection must leave a record.
+    app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
+    assert c.post(f"/api/jobs/{job['id']}/reject", json={"reason": "   "}).status_code == 422
+    assert c.post(f"/api/jobs/{job['id']}/reject", json={}).status_code == 422
+    refreshed = c.get(f"/api/jobs/{job['id']}").json()
+    assert refreshed["status"] == "review"
+    assert refreshed["rejected_reason"] is None
+
+
+def test_reject_is_a_review_verdict_not_worktree_machinery(tmp_path: Path):
+    # A plain (non-repo) job rejects the same way, flag on or off: failed +
+    # reason recorded, and no worktree key ever appears.
+    app = _app(tmp_path, feature_repo_worktrees=False)
+    c = _client(app)
+    job = c.post("/api/jobs", json={"input": {"brief": "write a note"}}).json()
+    app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
+
+    rejected = c.post(f"/api/jobs/{job['id']}/reject", json={"reason": "not needed anymore"})
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "failed"
+    assert rejected.json()["rejected_reason"] == "not needed anymore"
+    assert "worktree" not in rejected.json()
+
+
 def test_create_job_validates_target_area(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
     other = _scratch_repo(tmp_path / "other")
@@ -415,12 +474,14 @@ def test_start_recuts_worktree_when_dir_vanished(tmp_path: Path):
     assert Path(again["worktree_path"]).is_dir()
 
 
-# ── flag OFF (the default): provably unchanged behavior ──────────────────
+# ── flag OFF (the escape hatch): provably unchanged behavior ─────────────
 
 
 def test_flag_off_repo_targeted_job_runs_exactly_as_today(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path)  # feature_repo_worktrees defaults to OFF
+    # The flag defaults ON since slice 4; off is the owner's escape hatch and
+    # must still behave exactly as before the machinery existed.
+    app = _app(tmp_path, feature_repo_worktrees=False)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
 
@@ -560,6 +621,81 @@ def test_flag_off_run_executes_in_the_project_path_as_today(tmp_path: Path):
     cwd, payload, repo = _run_repo_job_and_capture_cwd(tmp_path, repo_worktrees=False)
     assert str(Path(cwd).resolve()) == str(repo.resolve())
     assert "worktree" not in payload
+
+
+# Same JSON-RPC skeleton, but this agent EDITS its working directory - the
+# real thing a repo job does - so the full worktree -> diff -> approve ->
+# merge lifecycle can be proven end to end on the live worker.
+FAKE_EDIT_ACP_SCRIPT = FAKE_CWD_ACP_SCRIPT.replace(
+    '''        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":SID,
+              "update":{"sessionUpdate":"agent_message_chunk",
+                        "content":{"type":"text","text":"ran-in:" + os.getcwd()}}}})''',
+    '''        with open("agent-change.txt", "w") as fh:
+            fh.write("made by the agent\\n")
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":SID,
+              "update":{"sessionUpdate":"agent_message_chunk",
+                        "content":{"type":"text","text":"added agent-change.txt in " + os.getcwd()}}}})''',
+)
+
+
+def test_repo_job_live_e2e_worktree_diff_approve_merge_lands_on_main(tmp_path: Path):
+    """The slice-4 E2E, on the DEFAULT config (flag on): a container project
+    with a scratch subfolder repo runs a repo job on the live worker + a real
+    ACP subprocess whose edit happens in the isolated worktree, shows up in
+    the review diff, and lands on the scratch repo's main line when the
+    review is approved. The repo is a SUBFOLDER code area (the canonical T1
+    container shape) so ops-side writes (e.g. the auto wiki log) land at the
+    container root and never race the repo's cleanliness."""
+    script = tmp_path / "fake_acp_edit.py"
+    script.write_text(FAKE_EDIT_ACP_SCRIPT)
+    container = tmp_path / "container"
+    container.mkdir()
+    repo = _scratch_repo(container / "app")
+    saved = _install_fake_runner(script)
+    try:
+        # Deliberately no feature_repo_worktrees override: slice 4 turns the
+        # flag on by default, and this test proves that default path.
+        app = _app(
+            tmp_path,
+            start_worker=True,
+            start_scheduler=False,
+            run_worker_poll_interval_ms=20,
+        )
+        with TestClient(app) as c:
+            tok = c.post("/auth/auto").json()["token"]
+            c.headers.update({"Authorization": f"Bearer {tok}"})
+            job = _repo_job(c, "container", container, brief="add the file")
+            assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
+            deadline = time.time() + 20
+            status = "running"
+            while time.time() < deadline:
+                status = c.get(f"/api/jobs/{job['id']}").json()["status"]
+                if status in ("review", "done", "failed"):
+                    break
+                time.sleep(0.05)
+            assert status == "review", f"job did not reach review: {status}"
+
+            # While in review: the edit exists only in the isolated copy.
+            assert not (repo / "agent-change.txt").exists()
+            assert _git(repo, "status", "--porcelain") == ""
+            diff = c.get(f"/api/jobs/{job['id']}/diff")
+            assert diff.status_code == 200, diff.text
+            body = diff.json()
+            assert {(f["path"], f["status"]) for f in body["files"]} == {("agent-change.txt", "A")}
+            assert "+made by the agent" in body["patch"]
+
+            approved = c.post(f"/api/jobs/{job['id']}/approve")
+            assert approved.status_code == 200, approved.text
+            assert approved.json()["status"] == "done"
+            assert approved.json()["worktree"]["status"] == "merged"
+
+        # The merge landed on the scratch repo's main line, cleanly.
+        assert _git(repo, "symbolic-ref", "--short", "HEAD") == "main"
+        assert (repo / "agent-change.txt").read_text() == "made by the agent\n"
+        assert _git(repo, "log", "-1", "--format=%s").startswith("Merge Proxima job")
+        assert _git(repo, "status", "--porcelain") == ""
+    finally:
+        _restore_fake_runner(*saved)
 
 
 def test_graph_repo_node_runs_in_worktree_and_ops_node_in_project(tmp_path: Path):

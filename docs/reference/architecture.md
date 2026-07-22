@@ -94,7 +94,7 @@ code never mixes with per-install state:
 ```text
 PROXIMA_FEATURE_DESIGN_STUDIO ─────────┐
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> frontend capability map
-PROXIMA_FEATURE_REPO_WORKTREES ────────┘─> route/run guards before side effects
+PROXIMA_FEATURE_REPO_WORKTREES=1 ──────┘─> route/run guards before side effects
 ```
 
 Design Studio is an active feature behind a server-owned flag: `scripts/dev`
@@ -145,10 +145,12 @@ its typed output replaced or be rerun; either action marks every transitive desc
 job reaches `done` only after all nodes are `done` and final approval is explicit.
 
 `PROXIMA_FEATURE_REPO_WORKTREES` gates the repo-job worktree machinery (Phase-1
-slice 2, T1) and defaults to **off** until slice 4 ships the diff-review UI. While
-off, `worktrees.py` has no callers on the execution path, the `/api/jobs/{id}/diff`
-endpoint returns the standard 503 `feature_disabled` payload, and job start/approve/
-cwd selection behave exactly as without the feature. See flow 6b.
+slices 2+4, T1) and defaults to **on** since slice 4 shipped the diff-review UI;
+it remains the owner's escape hatch. While off, `worktrees.py` has no callers on
+the execution path, the `/api/jobs/{id}/diff` endpoint returns the standard 503
+`feature_disabled` payload, and job start/approve/cwd selection behave exactly as
+without the feature (the reject action still works - it is a review verdict, not
+worktree machinery). See flow 6b.
 
 ## Media provider setup
 
@@ -363,11 +365,12 @@ review actions live) and **Save as Recipe** (the same save-template mechanics).
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
 
-### 6b. Repo job: worktree → diff review → local merge (slice 2, flag-gated)
+### 6b. Repo job: worktree → diff review → local merge (slices 2+4, live)
 
-Gated behind `PROXIMA_FEATURE_REPO_WORKTREES` (off until slice 4 ships the review
-UI; off = flow 6 exactly). A job whose `target_area_id` names a code area is a
-**repo job** and never edits the primary tree:
+Gated behind `PROXIMA_FEATURE_REPO_WORKTREES` (on by default since slice 4 shipped
+the review UI; off is the escape hatch = flow 6 exactly). A job whose
+`target_area_id` names a code area is a **repo job** and never edits the primary
+tree:
 
 ```text
 POST /api/jobs/{id}/start
@@ -387,6 +390,10 @@ POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
     ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn down
     └─ refusal/conflict: 409, job PARKS in review with the surfaced error;
        worktree kept - resolve, approve again to retry. Never forced.
+POST /api/jobs/{id}/reject  {reason}  →  the other verdict door (slice 4, either
+    engine): job → failed with jobs.rejected_reason recorded; the worktree is
+    discarded UNMERGED (flag-independent teardown, like delete) - the primary
+    tree never sees the change. A blank reason is refused (422).
 ```
 
 Lifecycle state is one `job_worktrees` row per job
@@ -394,6 +401,18 @@ Lifecycle state is one `job_worktrees` row per job
 deleting a job tears its worktree down. Snapshot-then-merge means partial agent
 work is durable in the worktree across crashes - the substrate slice 5's
 continuation turns (T5) resume in.
+
+**The review surface (slice 4)** renders this flow captain-side, in T4's ratified
+detail language (expanding row + full-width page; no side panel, no popup):
+`components/tasks/ChangesReview.tsx` is the one shared surface, mounted in a plan
+row's expanded body on the Tasks screen (approve = `POST /api/graph/jobs/{id}/approve`,
+held while any plan job still awaits its own node review) and on the full-width task
+page (`TaskWorkspace`, approve = `POST /api/jobs/{id}/approve`). It shows the per-file
+list and unified change from `GET /api/jobs/{id}/diff`, keeps the merged result
+readable afterwards, surfaces a conflict as a plain needs-attention banner (job parked
+in review, retry offered), and gates the reject door behind a required one-line
+reason. UI copy is de-jargonized ("isolated copy", "changes"); slice 12's satpam
+consumes these same review states.
 
 **Graph plans reuse this same machinery per job-in-plan (slice 3).** When the flag is
 on and a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`

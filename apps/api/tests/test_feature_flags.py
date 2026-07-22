@@ -43,19 +43,24 @@ def _counts(app):
     }
 
 
-def test_public_config_defaults_to_graph_authoring(tmp_path):
+def test_public_config_defaults_to_graph_authoring_and_repo_worktrees(tmp_path):
+    # Graph authoring and repo worktrees are the shipped paths (slices 3+4):
+    # both default on; Design Studio stays opt-in.
     app = _app(tmp_path)
     response = TestClient(app).get("/api/config")
 
     assert response.status_code == 200
-    assert response.json()["features"] == {"design_studio": False, "workflow_graph": True, "repo_worktrees": False}
+    assert response.json()["features"] == {"design_studio": False, "workflow_graph": True, "repo_worktrees": True}
 
 
-def test_public_config_reports_explicit_boot_opt_in(tmp_path):
+def test_public_config_reports_explicit_boot_opt_out(tmp_path):
+    # The worktree flag is the slice-4 escape hatch: an explicit off must win
+    # over the on-by-default.
     app = _app(
         tmp_path,
         feature_design_studio=True,
         feature_workflow_graph=True,
+        feature_repo_worktrees=False,
     )
     assert TestClient(app).get("/api/config").json()["features"] == {
         "design_studio": True,

@@ -1,6 +1,7 @@
 import React from 'react'
 import type { Job, JobStatus, JobStep } from '../types'
 import { getJob, approveJob, deleteJob } from '../api/jobs'
+import { ChangesReview } from '../components/tasks/ChangesReview'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
 import { IconTrash } from '../components/shell/icons'
@@ -120,11 +121,27 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
           <span>⏸ Paused for your review — step {job.current_step_idx + 1}{reviewStep ? `: ${reviewStep.name}` : ''}.</span>
           <button className="primary-button" onClick={() => void approve(reviewStep && edited.trim() !== (reviewStep.output_summary || '') ? { edited_output: edited } : undefined)} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve & continue'}</button>
         </div>
-      : <div className="task-review-bar">
-          <span>✅ Ready for review.</span>
-          <button className="primary-button" onClick={() => void approve()} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve → Done'}</button>
-        </div>)}
+      : job.worktree
+        // Repo job (slice 4): the verdict lives with the changes below — the
+        // final approve here is also the local merge, so the two must be one act.
+        ? <div className="task-review-bar">
+            <span>✅ Ready for review — check the changes below.</span>
+          </div>
+        : <div className="task-review-bar">
+            <span>✅ Ready for review.</span>
+            <button className="primary-button" onClick={() => void approve()} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve → Done'}</button>
+          </div>)}
     {error && <div className="error-bar">{error}</div>}
+    {job.worktree && <ChangesReview
+      token={token}
+      jobId={job.id}
+      jobStatus={job.status}
+      worktree={job.worktree}
+      rejectedReason={job.rejected_reason}
+      canDecide={isReview && !isMidGate}
+      onApprove={() => approveJob(token, jobId)}
+      onChanged={() => { void load(); onChanged?.() }}
+    />}
 
     <div className="job-flow-wrap">
       {/* Left: the flow diagram — each step a node on a connected spine, colored by state */}

@@ -20,8 +20,9 @@ from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
 from ..schemas import (
-    JobApproveRequest, JobCreateRequest, JobRunLinkRequest, ScheduleCreateRequest,
-    ScheduleUpdateRequest, WorkflowCreateRequest, WorkflowUpdateRequest,
+    JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
+    ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
+    WorkflowUpdateRequest,
 )
 
 
@@ -500,6 +501,36 @@ def register(app, deps):
             if claimed.rowcount == 0:
                 return _job_payload(_job_or_404(job_id, user))
             db().execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
+        return _job_payload(_job_or_404(job_id, user))
+
+    @app.post("/api/jobs/{job_id}/reject")
+    def reject_job(job_id: int, payload: JobRejectRequest, user: dict[str, Any] = Depends(current_user)):
+        """The review surface's other door (slice 4, T1): rejecting a job at
+        review marks it failed with the owner's one-line why, and for a repo
+        job tears down its isolated worktree WITHOUT merging - the primary
+        tree never sees the discarded change. Either engine: the row-level
+        verdict is the same for a classic task and a graph plan."""
+        job = _job_or_404(job_id, user)
+        if job["status"] != "review":
+            raise HTTPException(status_code=409, detail="only a job waiting for review can be rejected")
+        # Claim first (this is the review verdict mutex - a concurrent approve
+        # and reject cannot both win), tear down after.
+        claimed = db().execute(
+            "UPDATE jobs SET status='failed', rejected_reason=?, finished_at=CURRENT_TIMESTAMP, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'",
+            (payload.reason, job_id),
+        )
+        if claimed.rowcount == 0:
+            raise HTTPException(status_code=409, detail="job is no longer waiting for review")
+        # Flag-independent, like delete: a flag flip must not orphan a
+        # worktree. Cleanup trouble is logged, not raised - the verdict stands
+        # either way and discard_job_worktree is idempotent on retry.
+        try:
+            worktrees.discard_job_worktree(db(), job_id)
+        except worktrees.WorktreeError:
+            logging.getLogger("proxima.worktrees").exception(
+                "job %s worktree cleanup failed (job rejected anyway)", job_id
+            )
         return _job_payload(_job_or_404(job_id, user))
 
     @app.delete("/api/jobs/{job_id}")

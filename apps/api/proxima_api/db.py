@@ -218,6 +218,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- repo job (isolated worktree + diff review + local merge); an ops-area
   -- target (or NULL, today's jobs) runs exactly as before.
   target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+  -- Why the owner rejected the job at review (slice 4). Set only by the reject
+  -- action (status -> 'failed'); NULL for jobs that failed on their own.
+  rejected_reason TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

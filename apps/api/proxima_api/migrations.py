@@ -466,6 +466,17 @@ def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_job_worktrees_status ON job_worktrees(status)")
 
 
+def _add_jobs_rejected_reason(conn: sqlite3.Connection) -> None:
+    """Reject path for the review surface, Phase-1 slice 4 (T1): rejecting a
+    job at review marks it failed and must leave a durable why. A job column
+    (not an event) because it is the job's terminal review verdict - the
+    Tasks screen and slice 12's satpam read it straight off the job row."""
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "rejected_reason" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN rejected_reason TEXT")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -486,6 +497,7 @@ MIGRATIONS: list[Migration] = [
     (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
     (18, "add project_areas: wrap existing projects as work containers (T1)", _add_project_areas),
     (19, "add jobs.target_area_id + job_worktrees: worktree machinery for repo jobs (T1 slice 2)", _add_repo_job_worktrees),
+    (20, "add jobs.rejected_reason: reject-at-review verdict for the review surface (slice 4)", _add_jobs_rejected_reason),
 ]
 
 

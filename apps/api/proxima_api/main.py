@@ -293,7 +293,7 @@ def _config_from_env() -> dict[str, Any]:
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "").lower() in ("1", "true", "yes", "on"),
         "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
-        "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "").lower() in ("1", "true", "yes", "on"),
+        "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "1").lower() in ("1", "true", "yes", "on"),
     }
 
 

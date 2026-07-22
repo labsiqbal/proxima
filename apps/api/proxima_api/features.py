@@ -8,9 +8,9 @@ from fastapi import HTTPException
 DESIGN_STUDIO = "design_studio"
 WORKFLOW_GRAPH = "workflow_graph"
 # Repo jobs run in isolated git worktrees with diff review + local merge
-# (Phase-1 slice 2, T1). Off by default until slice 4 ships the review UI;
-# while off the worktree machinery is fully inert and jobs behave exactly as
-# before.
+# (Phase-1 slices 2+4, T1). On by default since slice 4 shipped the review UI;
+# the switch stays as an owner escape hatch - while off the worktree machinery
+# is fully inert and jobs behave exactly as before it existed.
 REPO_WORKTREES = "repo_worktrees"
 
 _CONFIG_KEYS = {

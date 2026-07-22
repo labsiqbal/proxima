@@ -512,9 +512,10 @@ def test_ambiguous_target_blocks_start_with_the_owners_question(tmp_path):
 
 
 def test_flag_off_regression_repo_tagged_plan_runs_without_worktrees(tmp_path):
-    """feature_repo_worktrees off (the default): a target-tagged plan executes
-    exactly as before slice 3 - no worktree row, no target pinned on the job."""
-    app = _app(tmp_path, enabled=True)
+    """feature_repo_worktrees off (the slice-4 escape hatch): a target-tagged
+    plan executes exactly as before slice 3 - no worktree row, no target
+    pinned on the job."""
+    app = _app(tmp_path, enabled=True, feature_repo_worktrees=False)
     client = _client(app)
     _scratch_repo(tmp_path / "myrepo")
     _link_project(client, tmp_path / "myrepo", "myrepo")
@@ -573,6 +574,37 @@ def test_repo_plan_reserves_its_worktree_and_merges_on_final_approve(tmp_path):
     assert approved.json()["worktree"]["status"] == "merged"
     assert (tmp_path / "myrepo" / "fix.txt").read_text(encoding="utf-8") == "patched\n"
     assert not worktree_dir.exists()
+
+
+def test_repo_plan_reject_discards_worktree_and_records_reason(tmp_path):
+    """The review surface's reject door works for plans too (shared /api/jobs
+    reject): the plan fails with the owner's why and the isolated worktree is
+    torn down unmerged - the primary tree never sees the discarded change."""
+    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    client = _client(app)
+    _scratch_repo(tmp_path / "myrepo")
+    _link_project(client, tmp_path / "myrepo", "myrepo")
+    plan = client.post(
+        "/api/graph/jobs",
+        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
+    ).json()
+    started = client.post(f"/api/graph/jobs/{plan['id']}/start")
+    assert started.status_code == 200, started.text
+    worktree_dir = Path(started.json()["worktree"]["worktree_path"])
+    (worktree_dir / "fix.txt").write_text("wrong fix\n", encoding="utf-8")
+    _complete_running_node(app, plan["id"], "fixed")
+    _complete_running_node(app, plan["id"], "reported")
+    assert client.get(f"/api/graph/jobs/{plan['id']}").json()["status"] == "review"
+
+    rejected = client.post(f"/api/jobs/{plan['id']}/reject", json={"reason": "fixes the wrong module"})
+
+    assert rejected.status_code == 200, rejected.text
+    payload = client.get(f"/api/graph/jobs/{plan['id']}").json()
+    assert payload["status"] == "failed"
+    assert payload["rejected_reason"] == "fixes the wrong module"
+    assert payload["worktree"]["status"] == "discarded"
+    assert not worktree_dir.exists()
+    assert not (tmp_path / "myrepo" / "fix.txt").exists()
 
 
 def test_repo_plan_with_two_code_areas_refuses_to_start(tmp_path):
