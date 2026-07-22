@@ -552,8 +552,8 @@ URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
 `artifacts/design/<id>/scene.json` and appear as design records in the Archive.
 See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
 
-The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: `scripts/dev` enables
-it by default, installed instances opt in via `proxima.env` (read at boot).
+The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: on by default,
+with `proxima.env` as the owner opt-out (read at boot).
 `GET /api/config` publishes the effective flag. When disabled, the frontend omits its
 navigation, deep links, commands, settings, provider health checks, artifact bridge
 actions, and agent guidance, and backend guards return HTTP 503 with the

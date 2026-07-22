@@ -99,9 +99,9 @@ PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> 
 PROXIMA_FEATURE_REPO_WORKTREES=1 ──────┘─> route/run guards before side effects
 ```
 
-Design Studio is an active feature behind a server-owned flag: `scripts/dev`
-enables it by default; installed instances opt in via `proxima.env` (the flag is
-read once at boot). The backend is authoritative: while disabled, requests return
+Design Studio is a shipped feature behind a server-owned flag, on by default;
+owners can disable it via `proxima.env` (the flag is read once at boot). The
+backend is authoritative: while disabled, requests return
 HTTP 503 with the consistent `feature_disabled` payload before creating messages,
 writing the database or files, calling providers, spawning processes, or
 dispatching collaboration, and the frontend uses the published flags to omit

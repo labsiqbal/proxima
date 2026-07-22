@@ -88,7 +88,6 @@ mkdir -p "$HOME_DIR" "$(dirname "$CONFIG_FILE")" "$DATA_DIR" "$WORKSPACE_ROOT"
   printf 'PROXIMA_LINK_ROOTS=%q\n' "$HOME_DIR"
   printf 'PROXIMA_REFRESH_CREDENTIALS=%q\n' '0'
   printf 'PROXIMA_UPDATE_CHECK=%q\n' '0'
-  printf 'PROXIMA_FEATURE_DESIGN_STUDIO=%q\n' '0'
 } > "$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE"
 
@@ -182,14 +181,14 @@ with TestClient(serve.app) as client:
 
     config_response = client.get("/api/config")
     config_response.raise_for_status()
-    # Fresh-boot defaults: graph authoring and repo worktrees are the shipped
-    # paths (slices 3+4, both on); Design Studio stays opt-in.
+    # Fresh-boot defaults: every shipped feature flag is on (Design Studio per
+    # standing decision 8; graph authoring + repo worktrees per slices 3+4).
     assert config_response.json()["features"] == {
-        "design_studio": False,
+        "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": True,
     }
-    print("config: design_studio=false, workflow_graph=true, repo_worktrees=true")
+    print("config: design_studio=true, workflow_graph=true, repo_worktrees=true")
 
     auth_response = client.post("/auth/auto", json={})
     auth_response.raise_for_status()
@@ -308,9 +307,9 @@ async function main() {
   console.log(`health: proxima ${health.version}, database ok`)
 
   const config = await request('/api/config')
-  // Fresh-boot defaults: graph authoring + repo worktrees on (slices 3+4); Design Studio opt-in.
-  assert.deepEqual(config.features, { design_studio: false, workflow_graph: true, repo_worktrees: true })
-  console.log('config: design_studio=false, workflow_graph=true, repo_worktrees=true')
+  // Fresh-boot defaults: all shipped feature flags on (Design Studio per standing decision 8).
+  assert.deepEqual(config.features, { design_studio: true, workflow_graph: true, repo_worktrees: true })
+  console.log('config: design_studio=true, workflow_graph=true, repo_worktrees=true')
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')

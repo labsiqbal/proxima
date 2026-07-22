@@ -86,6 +86,7 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
             "start_worker": False,
+            "feature_design_studio": False,
         }
     )
     client = TestClient(app)

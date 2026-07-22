@@ -43,14 +43,14 @@ def _counts(app):
     }
 
 
-def test_public_config_defaults_to_graph_authoring_and_repo_worktrees(tmp_path):
-    # Graph authoring and repo worktrees are the shipped paths (slices 3+4):
-    # both default on; Design Studio stays opt-in.
+def test_public_config_defaults_all_shipped_features_on(tmp_path):
+    # Design Studio (standing decision 8), graph authoring, and repo worktrees
+    # are all shipped paths: every feature flag defaults on.
     app = _app(tmp_path)
     response = TestClient(app).get("/api/config")
 
     assert response.status_code == 200
-    assert response.json()["features"] == {"design_studio": False, "workflow_graph": True, "repo_worktrees": True}
+    assert response.json()["features"] == {"design_studio": True, "workflow_graph": True, "repo_worktrees": True}
 
 
 def test_public_config_reports_explicit_boot_opt_out(tmp_path):
@@ -81,7 +81,7 @@ def test_programmatic_zero_values_do_not_enable_features():
 
 
 def test_disabled_commands_are_omitted_and_rejected(tmp_path):
-    _app_obj, client, headers, _root = _client_with_project(tmp_path)
+    _app_obj, client, headers, _root = _client_with_project(tmp_path, feature_design_studio=False)
     catalog = client.get("/api/commands/catalog", headers=headers).json()
     commands = {item["name"] for group in catalog["groups"] for item in group["commands"]}
 
@@ -99,7 +99,7 @@ def test_disabled_commands_are_omitted_and_rejected(tmp_path):
     [("/design launch card", features.DESIGN_STUDIO)],
 )
 def test_disabled_prompt_modes_cannot_bypass_guards_or_write_rows(tmp_path, monkeypatch, prompt_mode, message, feature):
-    app, client, headers, _root = _client_with_project(tmp_path)
+    app, client, headers, _root = _client_with_project(tmp_path, feature_design_studio=False)
     session_id = client.post("/api/sessions", headers=headers, json={"title": "chat", "project_slug": "demo"}).json()["id"]
     before = _counts(app)
 
@@ -114,7 +114,7 @@ def test_disabled_prompt_modes_cannot_bypass_guards_or_write_rows(tmp_path, monk
 
 
 def test_disabled_chat_send_and_design_session_create_have_no_side_effects(tmp_path):
-    app, client, headers, _root = _client_with_project(tmp_path)
+    app, client, headers, _root = _client_with_project(tmp_path, feature_design_studio=False)
     before = _counts(app)
 
     _assert_disabled(
@@ -125,7 +125,7 @@ def test_disabled_chat_send_and_design_session_create_have_no_side_effects(tmp_p
 
 
 def test_disabled_direct_routes_stop_before_provider_or_file_side_effects(tmp_path, monkeypatch):
-    app, client, headers, root = _client_with_project(tmp_path)
+    app, client, headers, root = _client_with_project(tmp_path, feature_design_studio=False)
     design_requests = [
         client.post("/api/projects/demo/designs/from-image", headers=headers, json={"path": "missing.png"}),
         client.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "blocked"}),
@@ -189,7 +189,7 @@ def test_disabled_features_do_not_block_ordinary_artifact_reads(tmp_path):
 def test_worker_rejects_disabled_queued_work_before_runner_setup(
     tmp_path, monkeypatch, session_mode, prompt, run_kind, feature
 ):
-    app, client, headers, _root = _client_with_project(tmp_path, feature_workflow_graph=False)
+    app, client, headers, _root = _client_with_project(tmp_path, feature_design_studio=False, feature_workflow_graph=False)
     owner = app.state.worker_db.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
     profile = app.state.worker_db.execute("SELECT * FROM profiles LIMIT 1").fetchone()
     project = app.state.worker_db.execute("SELECT id FROM projects WHERE slug = 'demo'").fetchone()["id"]
@@ -245,7 +245,7 @@ def test_worker_rejects_disabled_queued_work_before_runner_setup(
 
 
 def test_disabled_design_session_secondary_actions_do_not_write(tmp_path):
-    app, client, headers, root = _client_with_project(tmp_path)
+    app, client, headers, root = _client_with_project(tmp_path, feature_design_studio=False)
     owner = app.state.db.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
     profile = app.state.db.execute("SELECT * FROM profiles LIMIT 1").fetchone()
     project = app.state.db.execute("SELECT id FROM projects WHERE slug = 'demo'").fetchone()["id"]

@@ -146,7 +146,7 @@ Configuration (e.g. in `~/.config/proxima/proxima.env`):
 export PROXIMA_SINGLE_USER_NAME=owner   # optional owner name used on first run
 export PROXIMA_CLAUDE_LIVE_HOME=1       # claude-code runner uses your live ~/.claude
 export PROXIMA_LINK_ROOTS="$HOME"       # roots you may browse + link folders from
-export PROXIMA_FEATURE_DESIGN_STUDIO=1  # enable Design Studio (on by default in dev)
+export PROXIMA_FEATURE_DESIGN_STUDIO=1  # Design Studio (on by default; 0 disables)
 ```
 
 Manage the service:

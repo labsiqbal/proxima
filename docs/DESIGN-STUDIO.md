@@ -4,8 +4,8 @@ AI-assisted, multi-surface design inside Proxima. The agent generates designs as
 **editable layered structures** (not flat images), and the human refines them on a
 canvas — direct manipulation (Figma-feel) + AI iteration (chat).
 
-> **Status:** active feature behind a server-owned flag. `scripts/dev` turns it on by
-> default; installed instances opt in with `PROXIMA_FEATURE_DESIGN_STUDIO=1` in
+> **Status:** shipped feature, on by default behind a server-owned flag (standing
+> decision 8). Owners can disable it with `PROXIMA_FEATURE_DESIGN_STUDIO=0` in
 > `~/.config/proxima/proxima.env` and a restart (the flag is read at boot). While the
 > flag is off, the backend answers 503 (`feature_disabled`) before any side effect and
 > the frontend omits Design navigation, commands, provider checks, and bridge actions.

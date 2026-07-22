@@ -41,7 +41,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "update_check": True,
     "update_repo": "labsiqbal/proxima",
     "update_token": None,
-    "feature_design_studio": False,
+    # Design Studio is part of the shipped product (standing decision 8): on by
+    # default; the switch stays as an owner escape hatch.
+    "feature_design_studio": True,
     # Graph workflows are the shipped authoring path. Keep the switch as an owner
     # recovery control, but default it on so Workflows is usable after install.
     "feature_workflow_graph": True,
