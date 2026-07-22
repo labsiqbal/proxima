@@ -747,6 +747,56 @@ button:disabled {
 	margin: 0 0 var(--space-2);
 	font-size: var(--text-sm);
 }
+/* Container settings (T9, slice 11): the project's code areas, each with its
+   detected remote and - only when one exists - the push-after-merge toggle. */
+.container-settings-card {
+	width: min(34rem, 92vw);
+	max-height: 86vh;
+	overflow: auto;
+}
+.container-areas {
+	list-style: none;
+	margin: 0 0 var(--space-3);
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.container-area {
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-sm);
+	padding: var(--space-2) var(--space-3);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.container-area-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.container-area-remote {
+	margin: 0;
+	font-size: var(--text-xs);
+	overflow-wrap: anywhere;
+}
+/* A checkbox row is a <label>, and the global `.modal-card label {display:grid}`
+   would detach the box from its text - win on specificity like `.wf-step-check`
+   and `.caps-modal` do, keeping checkbox + copy inline. */
+.modal-card label.container-area-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-2);
+	font-size: var(--text-sm);
+	cursor: pointer;
+}
+.container-area-toggle input {
+	margin-top: var(--space-1);
+}
+.container-area-hint {
+	display: block;
+	font-size: var(--text-xs);
+}
 .panel {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-lg);
@@ -6161,6 +6211,34 @@ div.result-media {
 }
 .changes-note.is-discarded {
 	color: var(--ui-danger-strong);
+}
+.changes-note.is-pushed {
+	color: var(--ui-success-strong);
+}
+/* Push-after-merge blocker (T9): the merge stands, only the push failed -
+   same alert framing as a merge clash, plus the exact command output. */
+.changes-push-failed {
+	border: 1px solid var(--ui-danger-border);
+	border-radius: var(--radius-sm);
+	background: var(--ui-danger-bg);
+	color: var(--ui-danger-strong);
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--text-sm);
+}
+.changes-push-failed p {
+	margin: var(--space-1) 0;
+}
+.changes-push-failed button {
+	margin: var(--space-1) 0;
+}
+.changes-push-error {
+	margin: var(--space-1) 0;
+	font-family: var(--font-mono, monospace);
+	font-size: var(--text-xs);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 12rem;
+	overflow-y: auto;
 }
 .changes-conflict {
 	border: 1px solid var(--ui-danger-border);

@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-145 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+147 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -16,11 +16,11 @@
 - [`routes/files.py`](#routes-files-py) — 30 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 12 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 9 endpoints
-- [`routes/projects.py`](#routes-projects-py) — 11 endpoints
+- [`routes/projects.py`](#routes-projects-py) — 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 20 endpoints
+- [`routes/work.py`](#routes-work-py) — 21 endpoints
 - [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
 
 
@@ -181,6 +181,7 @@
 | POST | `/api/projects/{slug}/areas` | `add_project_area` | Manually register (or correct) a code area - T1's hybrid override. |
 | POST | `/api/projects/{slug}/areas/detect` | `detect_project_areas` | Re-run code-area auto-detection on demand. Only auto rows follow the |
 | DELETE | `/api/projects/{slug}/areas/{area_id}` | `remove_project_area` | Remove a code area. The row becomes an 'excluded' tombstone (not a |
+| PATCH | `/api/projects/{slug}/areas/{area_id}` | `update_project_area` | Per-area settings - today that is the T9 push-after-merge toggle |
 
 
 ## routes/reviews.py
@@ -229,6 +230,7 @@
 | POST | `/api/jobs/{job_id}/approve` | `approve_job` |  |
 | GET | `/api/jobs/{job_id}/diff` | `get_job_diff` | The repo job's before/after change (worktree branch vs its base): |
 | POST | `/api/jobs/{job_id}/link-run` | `link_job_run` | Attach a project-scoped media run to a queued ad-hoc task. |
+| POST | `/api/jobs/{job_id}/push` | `push_job` | Retry (or run) the T9 push-after-merge for a merged repo job - |
 | POST | `/api/jobs/{job_id}/reject` | `reject_job` | The review surface's other door (slice 4, T1): rejecting a job at |
 | POST | `/api/jobs/{job_id}/start` | `start_job` |  |
 | GET | `/api/schedules` | `list_schedules` |  |
@@ -254,4 +256,4 @@
 
 
 ---
-_Generated 2026-07-22 08:04 UTC._
+_Generated 2026-07-22 08:45 UTC._

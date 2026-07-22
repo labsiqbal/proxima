@@ -594,6 +594,34 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
             )
 
 
+def _add_repo_remote_push(conn: sqlite3.Connection) -> None:
+    """BYO repo-remote connector, Phase-1 slice 11 (T9): per-area
+    push-after-merge opt-in + the push outcome on the job's worktree row.
+
+    - ``project_areas.push_on_merge`` - the per-code-area toggle, DEFAULT OFF
+      (T9: local-only stays the posture; a remote-less area never even offers
+      the toggle). An area column, not app config, because the decision is
+      per repo and the approve paths read it with the area row they already
+      have.
+    - ``job_worktrees.push_status/push_error/push_remote/push_remote_url`` -
+      the outcome of the one push a merged repo job may make. On the worktree
+      row (not the job) because push is a step of the same merge lifecycle
+      the row already tracks, and the review UI reads that row as a unit.
+      ``push_error`` keeps the exact failing command + output for the
+      job-level blocker card; a failed push never un-merges (the job row is
+      untouched - done stays done).
+    """
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_areas'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(project_areas)").fetchall()}
+        if "push_on_merge" not in cols:
+            conn.execute("ALTER TABLE project_areas ADD COLUMN push_on_merge INTEGER NOT NULL DEFAULT 0")
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='job_worktrees'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(job_worktrees)").fetchall()}
+        for col in ("push_status", "push_error", "push_remote", "push_remote_url"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE job_worktrees ADD COLUMN {col} TEXT")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -618,6 +646,7 @@ MIGRATIONS: list[Migration] = [
     (21, "add runs.continued_from_run_id + continuation_count: timeout auto-continuation chain (T5 slice 5)", _add_runs_continuation),
     (22, "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)", _add_script_trust),
     (23, "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)", _add_artifact_registry),
+    (24, "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)", _add_repo_remote_push),
 ]
 
 

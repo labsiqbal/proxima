@@ -45,6 +45,12 @@ export type JobDiff = {
 
 export const getJobDiff = (token: string, id: number) => api<JobDiff>(`/api/jobs/${id}/diff`, token)
 
+// Retry the push-after-merge for a locally merged repo job (T9): a failed
+// push never un-merged anything, so this only re-runs the host's own
+// `git push` and reports the fresh outcome on the worktree.
+export const retryJobPush = (token: string, id: number) =>
+  api<{ job_id: number; status: 'pushed' | 'failed'; error?: string; worktree: import('../types').JobWorktree }>(`/api/jobs/${id}/push`, token, { method: 'POST' })
+
 export const listJobs = (token: string, params: { status?: JobStatus; workflow_id?: number; project_id?: number; project_slug?: string | null; include_archived?: boolean; limit?: number; offset?: number } = {}) => {
   const q = new URLSearchParams()
   if (params.status) q.set('status', params.status)

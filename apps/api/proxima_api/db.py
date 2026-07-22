@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS project_areas (
   kind TEXT NOT NULL DEFAULT 'code',
   rel_path TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'auto',
+  -- BYO remote connector (T9, slice 11): push the merged main line to the
+  -- area's own git remote after a repo job's local merge. Explicit per-area
+  -- opt-in, DEFAULT OFF; only offered when the area has a detected remote.
+  push_on_merge INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(project_id, kind, rel_path)
@@ -254,6 +258,13 @@ CREATE TABLE IF NOT EXISTS job_worktrees (
   status TEXT NOT NULL DEFAULT 'active',
   merge_commit TEXT,
   error TEXT,
+  -- Push-after-merge outcome (T9, slice 11): NULL until a push is attempted;
+  -- 'pushed' or 'failed' after. push_error carries the exact failing command
+  -- + output for the job-level blocker card; a failed push never un-merges.
+  push_status TEXT,
+  push_error TEXT,
+  push_remote TEXT,
+  push_remote_url TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

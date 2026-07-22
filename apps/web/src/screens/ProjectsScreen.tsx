@@ -1,5 +1,6 @@
 import React from 'react'
 import { createProject, renameProject, deleteProject } from '../api/projects'
+import { ContainerSettingsModal } from '../components/projects/ContainerSettings'
 import { FolderLinker } from '../components/projects/FolderLinker'
 import { confirmDialog, promptDialog } from '../components/ui/Dialog'
 import type { Project } from '../types'
@@ -22,6 +23,8 @@ export function ProjectsScreen({ token, projects, activeProject, onActiveProject
 }) {
   const [query, setQuery] = React.useState('')
   const [adding, setAdding] = React.useState(false)
+  // The project whose container settings (code areas + push-after-merge) are open.
+  const [settingsFor, setSettingsFor] = React.useState<Project | null>(null)
   const [error, setError] = React.useState('')
   // The slug being acted on, so one card's spinner never freezes the whole grid.
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -135,9 +138,18 @@ export function ProjectsScreen({ token, projects, activeProject, onActiveProject
               <button className="ghost-button" disabled={!!busy} onClick={() => void rename(project)}>
                 {working ? 'Working…' : 'Rename'}
               </button>
+              <button className="ghost-button" disabled={!!busy} onClick={() => setSettingsFor(project)}>
+                Settings
+              </button>
             </div>
           </div>
         })}</div>}
+
+    {settingsFor && <ContainerSettingsModal
+      token={token}
+      project={settingsFor}
+      onClose={() => setSettingsFor(null)}
+    />}
 
     {adding && <AddProjectModal
       token={token}

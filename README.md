@@ -43,8 +43,10 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
   ![Task review gate](docs/screenshots/task-review.png)
 - **Repo jobs: diff review + local merge** - a job aimed at a code area runs in
   an isolated git worktree; you review its changes in place and approve to
-  merge, or reject with a reason. The merge is local - Proxima never pushes
-  anywhere on its own.
+  merge, or reject with a reason. The merge is local by default - Proxima never
+  pushes unless you flip a per-repo "push after merge" toggle (off by default),
+  and then it pushes with your machine's own `git`: bring-your-own credentials,
+  no tokens stored, no OAuth.
 - **Full-power chat** — streaming responses, tool-activity cards, slash
   commands, session continuity. Agent approval/permission prompts render as
   clickable cards; point the Claude Code runner at your live config and the

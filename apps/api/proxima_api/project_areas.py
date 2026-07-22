@@ -112,14 +112,16 @@ def sync_code_areas(conn: sqlite3.Connection, project_id: int, root: str | Path)
 
 def areas_payload(conn: sqlite3.Connection, project_id: int) -> dict:
     """The read surface later slices and the UI consume: active areas only
-    (excluded tombstones are bookkeeping, not part of the container)."""
+    (excluded tombstones are bookkeeping, not part of the container).
+    push_on_merge is the T9 per-area opt-in; the settings route pairs it with
+    the area's detected remote so the UI knows whether to offer the toggle."""
     rows = conn.execute(
-        "SELECT id, kind, rel_path, source FROM project_areas "
+        "SELECT id, kind, rel_path, source, push_on_merge FROM project_areas "
         "WHERE project_id = ? AND source != 'excluded' ORDER BY kind, rel_path",
         (project_id,),
     ).fetchall()
     code = [
-        {"id": r["id"], "rel_path": r["rel_path"], "source": r["source"]}
+        {"id": r["id"], "rel_path": r["rel_path"], "source": r["source"], "push_on_merge": bool(r["push_on_merge"])}
         for r in rows if r["kind"] == "code"
     ]
     ops = next(

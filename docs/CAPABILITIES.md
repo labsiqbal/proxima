@@ -234,7 +234,8 @@ With the graph feature off, the screen shows classic tasks only, exactly as befo
 **Why:** A job that touches a repo must never edit the primary tree directly (T1). It
 runs in a safe copy, the owner reviews the before/after diff, and approving merges the
 work **locally** into the branch it was cut from - no remote, no GitHub required
-(T1 local-first; push-after-merge is T9). **On by default since slice 4 shipped the
+(T1 local-first; the optional push-after-merge connector is the next section). **On by
+default since slice 4 shipped the
 review UI**; `feature_repo_worktrees` (`PROXIMA_FEATURE_REPO_WORKTREES`) remains the
 owner's escape hatch - while off, job behavior is exactly as above.
 **How:** a job may carry `target_area_id` - the ONE container area it works against
@@ -282,6 +283,37 @@ retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/r
 the worktree down unmerged - the project never sees the discarded change. After the
 merge the row shows what landed (base branch + merge commit) and keeps the change
 readable; slice 12's satpam consumes these same review states.
+
+### Repo-remote connector: BYO push-after-merge (Phase-1 slice 11, T9 - LIVE)
+
+**Why:** the local-first merge is the default posture, but a repo that lives on
+GitHub/GitLab/self-hosted eventually needs the merged work on its remote. T9 (captain
+ratified) graduates the merge without changing the review model: push happens AFTER
+the local approve+merge, and only for code areas that explicitly opted in.
+PR-as-review-surface stays out of Phase 1 - the review surface remains singular,
+in-app.
+**How - BYO to the letter (standing decision #9):** every remote operation shells out
+to the host's **own `git`** (`repo_remote.py`; non-interactive - terminal prompts and
+ssh asking for input are disabled, so a push that cannot authenticate fails with git's
+message instead of hanging). Proxima never brokers auth, stores no tokens, ships no
+OAuth flow; if the host's git can push, the connector works. **Per-area opt-in,
+auto-offered:** the container settings (Projects screen → Settings) list each code
+area with its detected remote (prefer `origin`); an area WITH a remote gets a "push
+after merge" toggle (`project_areas.push_on_merge`), **default OFF** - no remote, no
+toggle, and nothing is ever pushed without the explicit opt-in. **Lifecycle:** when a
+repo job's (or plan's) final approve lands the local merge and the target area's
+toggle is on, Proxima runs `git push <remote> <base_branch>` from the area's repo.
+**Failure semantics:** a failed push (diverged remote, auth expiry, network) NEVER
+un-merges - the job stays done-and-merged locally; the worktree row records
+`push_status='failed'` plus the exact command + git's own output in `push_error`, and
+the review surface shows a job-level blocker card with a **Retry push** action.
+**GitHub-first, not GitHub-only:** plain `git push` covers any remote; when the remote
+URL is GitHub the surfaced info is enriched with the parsed repo web link and whether
+the host's `gh` is signed in (informational only - no hard `gh` dependency).
+**Endpoints:** `GET /api/projects/{slug}/areas` + `/areas/detect` (each code area now
+carries `push_on_merge` + its detected `remote`), `PATCH /api/projects/{slug}/areas/{id}`
+(the toggle; enabling requires a detected remote), `POST /api/jobs/{id}/push` (retry,
+either engine). Worktree payloads carry `push_status/push_error/push_remote/push_web_url`.
 
 ### Long work: timeout auto-continuation (Phase-1 slice 5, T5 - LIVE)
 

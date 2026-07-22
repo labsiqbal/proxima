@@ -27,10 +27,22 @@ export type Project = {
 	role: string;
 	visibility: "private" | "shared";
 };
+// A code area's detected git remote (T9, slice 11). Only present on the
+// dedicated areas endpoints; web_url + gh_authenticated are GitHub-only
+// enrichment (BYO: the host's own git/gh, Proxima brokers nothing).
+export type AreaRemote = {
+	name: string;
+	url: string;
+	web_url: string | null;
+	gh_authenticated?: boolean;
+};
 // The project's work-container areas (T1, slice 1): git-repo subfolders as code
 // areas ("." = the root itself) plus the single ops area for everything else.
+// push_on_merge is the per-area T9 opt-in (default off); `remote` is undefined
+// on payloads that skip detection (project lists) and null when none exists -
+// and with no remote the push toggle is never offered.
 export type ProjectAreas = {
-	code_areas: { id: number; rel_path: string; source: string }[];
+	code_areas: { id: number; rel_path: string; source: string; push_on_merge?: boolean; remote?: AreaRemote | null }[];
 	ops_area: { id: number; rel_path: string } | null;
 };
 export type Runner = {
@@ -300,6 +312,13 @@ export type JobWorktree = {
 	merge_commit: string | null;
 	error: string | null;
 	worktree_path: string;
+	// Push-after-merge outcome (T9, slice 11): null until a push is attempted.
+	// push_error carries the exact failing command + output for the blocker
+	// card; push_web_url is the GitHub repo link when the remote is GitHub.
+	push_status?: "pushed" | "failed" | null;
+	push_error?: string | null;
+	push_remote?: string | null;
+	push_web_url?: string | null;
 };
 
 export type GraphJob = {
