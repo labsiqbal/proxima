@@ -334,18 +334,29 @@ class AcpProcess:
         self._started = False
 
 
+def _process_class(spec):
+    """Pick the driver for a runner spec. Default is the ACP subprocess driver;
+    a spec may opt into a different wire protocol (e.g. the Codex CLI's native
+    app-server) while keeping the same call surface. Runner-agnostic: the choice
+    lives in the spec, not in run-layer logic."""
+    if getattr(spec, "protocol", "acp") == "codex-app-server":
+        from .codex_appserver import CodexAppServerProcess
+        return CodexAppServerProcess
+    return AcpProcess
+
+
 class AcpManager:
-    """Owns one AcpProcess per (runner_id, home, cwd), started on demand.
+    """Owns one agent process per (runner_id, home, cwd), started on demand.
 
     Keyed by cwd because the agent writes files relative to the agent process's
     working directory — so each project needs its own process rooted there.
     """
 
     def __init__(self) -> None:
-        self._procs: dict[tuple[str, str, str], AcpProcess] = {}
+        self._procs: dict[tuple[str, str, str], Any] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, spec, home: str, cwd: str) -> AcpProcess:
+    async def get(self, spec, home: str, cwd: str) -> Any:
         key = (spec.id, home, cwd)
         async with self._lock:
             proc = self._procs.get(key)
@@ -357,7 +368,7 @@ class AcpManager:
                 logger.info("acp: tool config changed, recycling process for %s", home)
                 await proc.stop()
                 self._procs.pop(key, None)
-            proc = AcpProcess(spec, home, cwd)
+            proc = _process_class(spec)(spec, home, cwd)
             await proc.start()
             self._procs[key] = proc
             return proc

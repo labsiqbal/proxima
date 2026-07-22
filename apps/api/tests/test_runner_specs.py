@@ -28,9 +28,21 @@ def test_registry_has_expected_runners():
 def test_codex_spec():
     from proxima_api.runner_specs import runner_spec
     s = runner_spec("codex")
-    assert "codex-acp" in " ".join(s.spawn_argv)
+    # Codex now drives the owner's own CLI (`codex app-server`), NOT the Zed
+    # `@zed-industries/codex-acp` adapter whose bundled Codex core lags releases
+    # and gets rejected for newer models. See codex_appserver.py.
+    assert s.spawn_argv == ["codex", "app-server"]
+    assert "codex-acp" not in " ".join(s.spawn_argv)
+    assert s.protocol == "codex-app-server"
     assert s.home_env == "CODEX_HOME"
     assert s.binary == "codex"
+
+
+def test_only_codex_uses_app_server_protocol():
+    # Runner-agnostic: every other runner keeps the default ACP protocol; the
+    # native-app-server opt-in is a per-spec declaration, not run-layer logic.
+    for rid, spec in RUNNER_SPECS.items():
+        assert spec.protocol == ("codex-app-server" if rid == "codex" else "acp")
 
 
 def test_removed_runner_id_falls_back_and_is_not_selectable():

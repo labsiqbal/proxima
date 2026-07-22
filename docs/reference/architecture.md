@@ -598,9 +598,10 @@ it mid-flight.
 ## Runner abstraction
 
 The app never hardcodes one CLI as the boundary. A _runner spec_ maps an installed
-CLI to its command/argv, credential home, readiness check, and default-model
-behavior. Runs carry a `runner_id`; `default_runner()` resolves env → first _ready_
-runner → fallback. Agents emit a **generic event vocabulary** regardless of CLI:
+CLI to its command/argv, credential home, readiness check, wire `protocol`, and
+default-model behavior. Runs carry a `runner_id`; `default_runner()` resolves env →
+first _ready_ runner → fallback. Agents emit a **generic event vocabulary**
+regardless of CLI:
 
 ```json
 { "type": "assistant_delta", "text": "..." }
@@ -610,6 +611,21 @@ runner → fallback. Agents emit a **generic event vocabulary** regardless of CL
 { "type": "artifact", "path": "..." }
 { "type": "run.completed" }
 ```
+
+**Codex runner (native app-server, not the Zed ACP adapter).** Most runners speak
+ACP through a persistent subprocess (`acp.py`, `AcpProcess`). Codex is the
+exception: its spec sets `protocol="codex-app-server"` and spawns the owner's own
+`codex app-server` (stdio JSON-RPC), driven by `codex_appserver.CodexAppServerProcess`
+- a drop-in with the same call surface (`new_session`/`load_session`/`prompt`/
+`cancel`/…) that `AcpManager` returns for that spec. Its `thread`/`turn` events are
+translated into the same generic vocabulary above. This exists because
+`@zed-industries/codex-acp` statically bundles its own Codex core, which lags
+releases: the ChatGPT backend then rejects newer models (e.g. `gpt-5.6-sol`) against
+it with a misleading _"requires a newer version of Codex"_ even when the owner's
+`codex` CLI runs them fine, and the adapter offers no way to point at an external
+Codex. Driving the system CLI directly keeps the runner current with every Codex
+release; if that CLI is genuinely behind, the surfaced error now says so honestly
+and points at `codex update`.
 
 **Capability bundle (Phase-1 slice 9, T8).** Profile homes get skills from TWO
 sources through one symlink mechanism (`capabilities.py`): the runner's own host
