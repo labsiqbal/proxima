@@ -3736,6 +3736,14 @@ button:disabled {
 	padding: 24px;
 	text-align: center;
 }
+.wiki-create-error {
+	margin: 0;
+	padding: 8px 12px;
+	border-bottom: 1px solid color-mix(in srgb, var(--ui-danger) 35%, transparent);
+	background: color-mix(in srgb, var(--ui-danger) 12%, var(--ui-bg-editor));
+	color: var(--ui-danger);
+	font-size: var(--text-sm);
+}
 .wiki-pane-msg {
 	display: grid;
 	place-items: center;

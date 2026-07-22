@@ -671,7 +671,11 @@ Chat result cards and the iterate Result view keep using the live scan
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
-aggregation. Fed by Chat→Wiki (§5).
+aggregation. Fed by Chat→Wiki (§5). Opened from **Settings → Knowledge & Wiki**
+(Files / Graph / Search). Preview renders `[[wikilinks]]`; existing targets open
+the note, and **missing (red) links create the note on click** (title heading stub,
+open in edit beside the current note when nested) so owners are never stuck on a
+dead link.
 **Endpoints:** `/api/projects/{slug}/wiki/all`, `/api/wiki/all`, `/tree`, `/file`, `/fs/*`.
 
 ## 16. Terminal
