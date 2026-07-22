@@ -33,7 +33,7 @@ from collections import deque
 from contextlib import suppress
 from typing import Any
 
-from .acp import AcpError, UpdateHandler, config_sig
+from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.codex")
@@ -183,7 +183,7 @@ class CodexAppServerProcess:
             fut = self._pending.pop(msg["id"], None)
             if fut and not fut.done():
                 if "error" in msg:
-                    fut.set_exception(AcpError(json.dumps(msg["error"])))
+                    fut.set_exception(AcpError(format_rpc_error(msg["error"])))
                 else:
                     fut.set_result(msg.get("result"))
             return

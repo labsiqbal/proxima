@@ -27,6 +27,10 @@ Most runners speak ACP; the **Codex** runner drives the owner's own
 current system Codex CLI instead of a stale bundled adapter core - newer models
 like `gpt-5.6-sol` work as soon as `codex update` has them. Default resolves via
 `default_runner()` (env → first *ready* runner → fallback).
+Failed runs surface owner-facing reasons via `format_rpc_error` (API) and
+`formatRunError` (chat/UI): JSON-RPC dumps like Hermes
+`{code, message: "Internal error", data: {details: "No LLM provider…"}}` become the
+plain details line in the error bubble (and in stored `runs.error`), not a raw dict.
 Agent/app/script subprocesses share `subprocess_env` / `augmented_path`: common
 user-local bins are appended, and when the host has `python3` but no `python`, a
 workspace-local shim (`$PROXIMA_WORKSPACE_ROOT/shims/python` → python3) is

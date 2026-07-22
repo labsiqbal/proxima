@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .runner_specs import runner_spec
+from .acp import format_rpc_error
 from . import wiki_memory
 from . import app_settings
 from . import features
@@ -664,6 +665,7 @@ class RunWorker:
 
     def _fail_run_exception(self, run: dict[str, Any], detail: str) -> bool:
         """Persist an execution/setup exception iff the run is still live."""
+        detail = format_rpc_error(detail)
         db = self.app.state.worker_db
         run_id = _as_int(run["id"])
         session_id = _as_int(run["session_id"])
@@ -955,7 +957,7 @@ class RunWorker:
                 if crow and crow["parent_run_id"]:
                     synth_parent_id = _as_int(crow["parent_run_id"])
         except Exception as exc:
-            self._fail_run_exception(run, str(exc)[-2000:])
+            self._fail_run_exception(run, format_rpc_error(str(exc)[-2000:]))
             return
 
         def on_update(u: dict[str, Any]) -> None:
@@ -1246,7 +1248,7 @@ class RunWorker:
                 # card, not just a failed run. Fail-quiet inside.
                 self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
         except Exception as exc:
-            detail = str(exc)[-2000:]
+            detail = format_rpc_error(str(exc)[-2000:])
             self._fail_run_exception(run, detail)
         finally:
             if hb_task:

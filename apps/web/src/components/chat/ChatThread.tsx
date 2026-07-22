@@ -15,6 +15,7 @@ import { designFromImage, previewUrl } from "../../api/files";
 import { ApiError } from "../../api/client";
 import { IconSparkle, IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
+import { formatRunError } from "./runError";
 import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -731,7 +732,7 @@ function CollaborationCards({
 					) : bodyText.trim() ? (
 						<MessageContent content={bodyText} token={token} slug={slug} />
 					) : card.error ? (
-						<div className="collab-card-error">{card.error}</div>
+						<div className="collab-card-error">{formatRunError(card.error)}</div>
 					) : (
 						<div className="collab-card-empty">Waiting for this agent…</div>
 					);
@@ -1007,7 +1008,9 @@ export function ChatThread({
 									content={
 										message.role === "assistant"
 											? cleanAssistant(message.content)
-											: message.content
+											: message.role === "error"
+												? formatRunError(message.content)
+												: message.content
 									}
 									token={token}
 									slug={slug}
