@@ -399,10 +399,11 @@ def register(app, deps):
             # gated relay only protects its own port), while remote preview
             # works fine on loopback - the relay connects via 127.0.0.1.
             elif (d / "manage.py").is_file():
-                found.append({"dir": rel(d), "command": "python manage.py runserver 127.0.0.1:$PORT", "kind": "django"})
+                # python3 first: many hosts (Debian/Ubuntu, Nix) ship only python3.
+                found.append({"dir": rel(d), "command": "python3 manage.py runserver 127.0.0.1:$PORT", "kind": "django"})
             elif (d / "app.py").is_file() or (d / "main.py").is_file():
                 entry = "app.py" if (d / "app.py").is_file() else "main.py"
-                found.append({"dir": rel(d), "command": f"python {entry}", "kind": "python"})
+                found.append({"dir": rel(d), "command": f"python3 {entry}", "kind": "python"})
             elif (d / "index.html").is_file():
                 found.append({"dir": rel(d), "command": "python3 -m http.server $PORT --bind 127.0.0.1", "kind": "static · index.html"})
             for c in entries:

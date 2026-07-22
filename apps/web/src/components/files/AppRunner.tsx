@@ -77,10 +77,24 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   React.useEffect(() => {
     const seq = ++appsSeq.current
     detectApps(token, slug)
-      .then(r => { if (mountedRef.current && seq === appsSeq.current) setApps(r.apps) })
+      .then(r => {
+        if (!mountedRef.current || seq !== appsSeq.current) return
+        setApps(r.apps)
+        // One clear match and the form is still on defaults → fill it so Run
+        // does the right thing without an extra click (empty projects stay on npm).
+        if (r.apps.length === 1 && !initialDir && !initialCommand) {
+          const savedCmd = localStorage.getItem('proxima.appcmd.' + slug)
+          const savedDir = localStorage.getItem('proxima.appdir.' + slug)
+          const atDefault = (!savedCmd || savedCmd === 'npm run dev') && !savedDir
+          if (atDefault) {
+            setDir(r.apps[0].dir)
+            setCommand(r.apps[0].command)
+          }
+        }
+      })
       .catch(() => { if (mountedRef.current && seq === appsSeq.current) setApps([]) })
     return () => { appsSeq.current += 1 }
-  }, [token, slug])
+  }, [token, slug, initialDir, initialCommand])
   React.useEffect(() => {
     if (initialDir != null) setDir(initialDir)
     if (initialCommand) setCommand(initialCommand)
@@ -187,6 +201,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
           <span className="app-detected-dir">{a.dir || '(project root)'}</span><span className="app-detected-kind">{a.kind}</span>
         </button>)}</div>
       </div>}
+      {apps.length === 0 && <p className="app-runner-empty muted">No app detected here yet. Add a <code>package.json</code>, <code>app.py</code>/<code>main.py</code>, Django <code>manage.py</code>, or <code>index.html</code> — or type a command below.</p>}
       <div className="app-runner-power">
         <span>Owner-power execution</span>
         <small>Runs the selected command inside this project with your account permissions.</small>

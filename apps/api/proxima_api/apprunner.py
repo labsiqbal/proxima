@@ -69,9 +69,13 @@ _PORT_RE2 = re.compile(r"(?:listening|running|server).{0,20}?\bport\b[^\d]{0,4}(
 class AppManager:
     def __init__(self) -> None:
         self._apps: dict[str, dict[str, Any]] = {}
+        # Last self-exit payload per slug, kept until the next start so the UI
+        # can show failure logs after the process is reaped (status polls every 2s).
+        self._last_exit: dict[str, dict[str, Any]] = {}
 
     async def start(self, slug: str, cwd: str, command: str, port: int) -> None:
         await self.stop(slug)
+        self._last_exit.pop(slug, None)
         env = subprocess_env(
             allowlist_env="PROXIMA_APP_ENV_ALLOWLIST",
             inherit_env="PROXIMA_APP_INHERIT_ENV",
@@ -152,10 +156,12 @@ class AppManager:
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
-            return {"running": False}
+            return self._last_exit.get(slug) or {"running": False}
         if app["proc"].returncode is not None:  # exited on its own
             self._apps.pop(slug, None)
-            return {"running": False, "command": app["command"], "log": app["log"][-40:], "exited": True}
+            result = {"running": False, "command": app["command"], "log": app["log"][-40:], "exited": True}
+            self._last_exit[slug] = result
+            return result
         # "ready" = the effective port actually accepts connections. Do not mark a
         # long-running but non-listening process as ready; that opens a blank preview
         # and hides the real startup failure from the user.
