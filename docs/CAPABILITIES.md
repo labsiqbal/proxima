@@ -135,10 +135,13 @@ chat shows inline cards labelled with the actual agent/profile name and
 round/lane: collapsed by default (a cycling "thinking" shimmer while an agent
 works, a 2-line preview when done), click to expand one at a time. Brainstorm
 stacks cards vertically; Debate alternates them left/right per speaker so
-rounds read as a conversation. The synthesis is NOT a card — it streams into
-the parent bubble like a normal reply and lands as the final assistant message
-(synthesis only; per-agent detail lives in the cards). Child runs still do not
-save ordinary assistant messages; the card history replays from events.
+rounds read as a conversation. Leading runner banners and skills catalogs (e.g.
+Pi's `pi v… ## Skills` dump) are stripped from card bodies, previews, stored
+child outputs, and synthesis prompts so owners see the argument, not the path
+list. The synthesis is NOT a card — it streams into the parent bubble like a
+normal reply and lands as the final assistant message (synthesis only; per-agent
+detail lives in the cards). Child runs still do not save ordinary assistant
+messages; the card history replays from events.
 Settings groups these defaults under **Agents & Collaboration**. The mode
 resets after send, so there is no global Meeting Mode toggle.
 
@@ -151,8 +154,10 @@ assistant message, queues a `kind='message_review'` run, streams review deltas t
 inline sidecar, then stores a structured verdict, gaps/risks, unanswered-input notes,
 revised content, and suggested next move. The sidecar offers an `Auto` reviewer choice
 (defaulting to a different runner) plus a local profile picker override. It can be
-minimized to a compact summary. `Replace answer` overwrites the original assistant
-message while preserving the original in the review row for `Restore original`.
+minimized to a compact summary (the head control keeps a spaced accessible name
+such as `Validate, Pi · needs_work · 5 gaps. Expand`). `Replace answer` overwrites
+the original assistant message while preserving the original in the review row
+for `Restore original`.
 `Ask source to merge` queues a `kind='message_review_merge'` run by the source profile
 and writes its result back into the same sidecar, not as a normal chat message. Review
 output is never saved as a normal assistant message unless explicitly replacing the

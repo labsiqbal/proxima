@@ -39,6 +39,7 @@ from .prompt_collaborations import (
     final_header,
     format_final,
     loads_list,
+    strip_runner_preamble,
 )
 from . import graph as graph_mod
 from . import workflows as wf
@@ -523,6 +524,9 @@ class RunWorker:
             profile = self._collaboration_profile(_as_int(run.get("profile_id") or 0))
             outputs = loads_list(collab["child_outputs"])
             outputs = [o for o in outputs if _as_int(o.get("run_id") or 0) != run_id]
+            # Strip runner banners/skills dumps before they land in cards or later
+            # synthesis prompts (Pi often prefixes the real answer with a catalog).
+            clean_answer = strip_runner_preamble(answer)
             if not kind.endswith("_synthesis"):
                 outputs.append({
                     "run_id": run_id,
@@ -530,7 +534,7 @@ class RunWorker:
                     "profile_name": profile.get("name") or self._agent_name(run_id) or "Agent",
                     "runner_id": profile.get("runner_id") or run.get("runner_id"),
                     "role": run.get("collaboration_role") or "participant",
-                    "content": answer,
+                    "content": clean_answer,
                 })
                 db.execute(
                     "UPDATE prompt_collaborations SET child_outputs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -542,7 +546,7 @@ class RunWorker:
             ).rowcount > 0
             if completed:
                 self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason, "kind": kind, "collaboration_id": collab_id})
-                self._emit_collaboration_child_event("completed", run, "done", answer, collab=collab, profile=profile)
+                self._emit_collaboration_child_event("completed", run, "done", clean_answer, collab=collab, profile=profile)
             collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
             if not collab:
                 return True

@@ -599,6 +599,29 @@ export function collabCardAriaLabel(
 	return `${card.agentName}, ${card.roundLabel}, ${card.status}. ${action}`;
 }
 
+/**
+ * Drop leading runner banners/skills dumps (Pi often prefixes the real answer
+ * with `pi v… --- ## Skills - /path …`). Keeps collab previews scannable and
+ * matches server-side strip_runner_preamble for already-stored polluted rows.
+ */
+export function stripRunnerPreamble(text: string): string {
+	if (!text) return "";
+	let cleaned = text.trim();
+	const piBanner = /^\s*pi\s+v[\d.]+\b[\s\S]*?(?=##\s+(?!skills\b))/i;
+	const skillsHeading = /^\s*##\s+skills\b[\s\S]*?(?=##\s+(?!skills\b)|$)/i;
+	const updateNotice = /^\s*New version available:.*(?:\n|$)/gim;
+	for (let i = 0; i < 3; i += 1) {
+		const next = cleaned
+			.replace(piBanner, "")
+			.replace(skillsHeading, "")
+			.replace(updateNotice, "")
+			.replace(/^[ \t\r\n-]+/, "");
+		if (next === cleaned) break;
+		cleaned = next;
+	}
+	return cleaned.trim();
+}
+
 function CollaborationCards({
 	group,
 	token,
@@ -678,7 +701,8 @@ function CollaborationCards({
 				{cards.map((card) => {
 					const closed = collapsed.has(card.runId);
 					const isBrainstormCard = isCollapsibleMode;
-					const preview = (card.text || card.error || "Waiting for this agent…")
+					const bodyText = stripRunnerPreamble(card.text || "");
+					const preview = (bodyText || card.error || "Waiting for this agent…")
 						.replace(/\s+/g, " ")
 						.trim();
 					const cardClass = `collab-card ${card.status} ${closed ? "collapsed" : ""} ${isBrainstormCard ? "clickable" : ""} ${debateSide.get(card.runId) || ""}`;
@@ -699,8 +723,8 @@ function CollaborationCards({
 							preview || "No output yet."
 						)}
 						</div>
-					) : card.text.trim() ? (
-						<MessageContent content={card.text} token={token} slug={slug} />
+					) : bodyText.trim() ? (
+						<MessageContent content={bodyText} token={token} slug={slug} />
 					) : card.error ? (
 						<div className="collab-card-error">{card.error}</div>
 					) : (

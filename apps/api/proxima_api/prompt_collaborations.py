@@ -1,7 +1,36 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+# Some runners (notably Pi) print a version banner + full skills catalog before
+# the real answer. That noise poisons collab card previews and synthesis prompts.
+_PI_BANNER = re.compile(
+    r"(?is)^\s*pi\s+v[\d.]+\b.*?(?=##\s+(?!skills\b))"
+)
+_SKILLS_HEADING = re.compile(
+    r"(?is)^\s*##\s+skills\b.*?(?=##\s+(?!skills\b)|\Z)"
+)
+_UPDATE_NOTICE = re.compile(
+    r"(?im)^\s*New version available:.*(?:\n|$)"
+)
+
+
+def strip_runner_preamble(text: str | None) -> str:
+    """Drop leading runner banners/skills dumps; keep the real answer body."""
+    if not text:
+        return ""
+    cleaned = text.strip()
+    for _ in range(3):
+        nxt = _PI_BANNER.sub("", cleaned, count=1)
+        nxt = _SKILLS_HEADING.sub("", nxt, count=1)
+        nxt = _UPDATE_NOTICE.sub("", nxt)
+        nxt = nxt.lstrip(" \t\r\n-")
+        if nxt == cleaned:
+            break
+        cleaned = nxt
+    return cleaned.strip()
 
 
 def loads_list(raw: str | None) -> list[dict[str, Any]]:
@@ -89,7 +118,7 @@ def build_brainstorm_child_prompt(user_prompt: str, profile: dict[str, Any], ind
 
 def build_brainstorm_synthesis_prompt(user_prompt: str, outputs: list[dict[str, Any]]) -> str:
     parts = "\n\n".join(
-        f"## {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     return (
@@ -130,13 +159,13 @@ def build_debate_rebuttal_prompt(user_prompt: str, prior: dict[str, Any], profil
         "4. What your side concedes.\n\n"
         f"Participant: {profile_label(profile)}\n\n"
         f"Original user prompt:\n{user_prompt}\n\n"
-        f"First stance from {prior.get('profile_name')} ({prior.get('runner_id')}):\n{prior.get('content', '').strip()}"
+        f"First stance from {prior.get('profile_name')} ({prior.get('runner_id')}):\n{strip_runner_preamble(prior.get('content', ''))}"
     )
 
 
 def build_debate_followup_prompt(user_prompt: str, outputs: list[dict[str, Any]], profile: dict[str, Any], role: str) -> str:
     transcript = "\n\n".join(
-        f"## {collaboration_round_label('debate', o.get('role'))} — {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {collaboration_round_label('debate', o.get('role'))} — {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     if role == "counter_rebuttal":
@@ -157,7 +186,7 @@ def build_debate_followup_prompt(user_prompt: str, outputs: list[dict[str, Any]]
 
 def build_debate_synthesis_prompt(user_prompt: str, outputs: list[dict[str, Any]]) -> str:
     parts = "\n\n".join(
-        f"## {o.get('role')} — {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {o.get('role')} — {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     return (
