@@ -27,6 +27,16 @@ The contract, all four T9 points binding:
   surfaced info is enriched with the repo web link (parsed from the remote
   URL - pure string work) and, when the host's ``gh`` is authenticated,
   that fact; there is no hard ``gh`` dependency anywhere.
+
+Prompt-injection hardening (audit F3): the repo's own ``.git/config`` is
+writable by any agent working in the repo, so the push never trusts it alone.
+The remote URL the owner opted into is PINNED on ``project_areas`` when the
+toggle is enabled; at push time the config's current URL must still match or
+the push refuses (the blocker card says why; re-enabling the toggle re-pins).
+The push itself runs with ``-c credential.helper= -c core.hooksPath=/dev/null``
+so a helper or pre-push hook planted in the repo config cannot execute in the
+API process - auth stays ambient ssh (BatchMode); an https remote that needed
+a credential helper surfaces git's own auth failure as the blocker instead.
 """
 from __future__ import annotations
 
@@ -124,11 +134,36 @@ def detect_remote(repo: Path | str) -> dict[str, Any] | None:
     return info
 
 
+# Config overrides for the push invocation (audit F3): an agent in the repo
+# can plant `credential.helper = !cmd`, `core.hooksPath`, or a pre-push hook in
+# agent-writable git config; these -c flags (which take precedence over every
+# config file) reset the helper list and point hook lookup at a path that can
+# hold none, so nothing planted executes at push time.
+PUSH_CONFIG_OVERRIDES = ("-c", "credential.helper=", "-c", "core.hooksPath=/dev/null")
+
+
+def push_argv(remote_name: str, branch: str) -> list[str]:
+    """The exact git argv a push runs (minus the leading ``git``) - a pure
+    function so tests can assert the hardening flags are always present."""
+    return [*PUSH_CONFIG_OVERRIDES, "push", remote_name, branch]
+
+
 def push_toggle_on(conn: sqlite3.Connection, area_id: int | None) -> bool:
     if not area_id:
         return False  # area deleted since the job ran - nothing opted in
     row = conn.execute("SELECT push_on_merge FROM project_areas WHERE id = ?", (area_id,)).fetchone()
     return bool(row and row["push_on_merge"])
+
+
+def pinned_remote_url(conn: sqlite3.Connection, area_id: int | None) -> str | None:
+    """The remote URL the owner opted into when enabling the toggle, or None
+    when there is no pin (area gone, or an opt-in from before pinning)."""
+    if not area_id:
+        return None
+    row = conn.execute(
+        "SELECT push_remote_url FROM project_areas WHERE id = ?", (area_id,)
+    ).fetchone()
+    return row["push_remote_url"] if row and row["push_remote_url"] else None
 
 
 def _record(conn: sqlite3.Connection, wt_id: int, status: str, error: str | None,
@@ -144,7 +179,9 @@ def push_merged_branch(conn: sqlite3.Connection, wt: sqlite3.Row) -> dict[str, A
     """Push a merged job's base branch to its code area's remote and record
     the outcome on the worktree row. Never raises for a failed push - the
     failure IS the result (exact command + output), recorded for the blocker
-    card. The caller has already checked the toggle/retry authorization."""
+    card. The caller has already checked the toggle/retry authorization; the
+    pin check (push only to the URL approved at opt-in) happens HERE so every
+    push door - approve hook and retry alike - enforces it (audit F3)."""
     repo = Path(wt["repo_path"])
     remote = detect_remote(repo)
     if remote is None:
@@ -153,9 +190,31 @@ def push_merged_branch(conn: sqlite3.Connection, wt: sqlite3.Row) -> dict[str, A
         error = f"$ git remote get-url origin\nno git remote is configured for {repo}"
         _record(conn, wt["id"], "failed", error, None, None)
         return {"status": "failed", "error": error}
-    command = f"git push {remote['name']} {wt['base_branch']}"
+    # The pin check (audit F3): push only to the URL the owner opted into.
+    # A missing pin (area deleted, or an opt-in from before pinning) refuses
+    # too - there is no owner-approved target to compare against.
+    pinned = pinned_remote_url(conn, wt["area_id"])
+    if pinned is None:
+        error = (
+            "push refused: no pinned remote URL for this code area - re-enable "
+            "'push after merge' in the project's container settings to record "
+            "the push target, then retry"
+        )
+        _record(conn, wt["id"], "failed", error, remote["name"], remote["url"])
+        return {"status": "failed", "error": error}
+    if remote["url"] != pinned:
+        error = (
+            "push refused: the repo's remote URL changed since push after merge "
+            f"was enabled (approved {pinned}, .git/config now says {remote['url']}). "
+            "If this change is yours, re-enable the toggle in the project's "
+            "container settings to approve the new URL, then retry"
+        )
+        _record(conn, wt["id"], "failed", error, remote["name"], remote["url"])
+        return {"status": "failed", "error": error}
+    argv = push_argv(remote["name"], wt["base_branch"])
+    command = " ".join(["git", *argv])
     try:
-        res = _git(repo, "push", remote["name"], wt["base_branch"])
+        res = _git(repo, *argv)
     except (OSError, subprocess.TimeoutExpired) as exc:
         error = f"$ {command}\n{exc}"
         _record(conn, wt["id"], "failed", error, remote["name"], remote["url"])

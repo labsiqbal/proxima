@@ -300,9 +300,16 @@ OAuth flow; if the host's git can push, the connector works. **Per-area opt-in,
 auto-offered:** the container settings (Projects screen → Settings) list each code
 area with its detected remote (prefer `origin`); an area WITH a remote gets a "push
 after merge" toggle (`project_areas.push_on_merge`), **default OFF** - no remote, no
-toggle, and nothing is ever pushed without the explicit opt-in. **Lifecycle:** when a
-repo job's (or plan's) final approve lands the local merge and the target area's
-toggle is on, Proxima runs `git push <remote> <base_branch>` from the area's repo.
+toggle, and nothing is ever pushed without the explicit opt-in. Enabling the toggle
+**pins the remote URL** into `project_areas.push_remote_url` (audit F3): the push
+refuses if the repo's own `.git/config` - writable by any agent working in the repo -
+no longer matches the pinned URL (re-enable the toggle to approve a changed URL).
+**Lifecycle:** when a repo job's (or plan's) final approve lands the local merge and
+the target area's toggle is on, Proxima runs
+`git -c credential.helper= -c core.hooksPath=/dev/null push <remote> <base_branch>`
+from the area's repo - the `-c` overrides neutralize agent-planted credential helpers
+and pre-push hooks, so nothing in repo config can execute in the API process at push
+time (auth stays ambient ssh/BatchMode).
 **Failure semantics:** a failed push (diverged remote, auth expiry, network) NEVER
 un-merges - the job stays done-and-merged locally; the worktree row records
 `push_status='failed'` plus the exact command + git's own output in `push_error`, and
@@ -365,11 +372,16 @@ quota, heartbeats, and crash reaping - but never touch a runner/ACP, and never
 auto-continue.
 **Trust = content-hash binding (captain's decision):** a script's first run - or any
 run after its bytes changed - blocks with a one-time approval ask (the plan pauses in
-review; the node inspector shows **Approve script & run**). Approving records the
-script's sha256 in `script_trust`; unchanged trusted scripts then run with **no
-per-run approval** - that is the whole deterministic + free payoff. Approvals and
-blocks are visible in the step's timeline (`script.approval.required`,
-`script.trust.approved`) and the audit log.
+review; the node inspector shows **Approve script & run**). The approval card renders
+the script's **actual content + sha256** (fetched together from
+`GET .../nodes/{node_id}/script`), and the approve request echoes that hash back -
+the server refuses with 409 if the file changed after review, so the owner approves
+bytes, never a filename (audit F4). Approving records the sha256 in `script_trust`;
+unchanged trusted scripts then run with **no per-run approval** - that is the whole
+deterministic + free payoff. At run time the hashed bytes execute from a **private
+temp copy** taken at hash time, so a concurrent edit of the project file after the
+trust check cannot change what runs. Approvals and blocks are visible in the step's
+timeline (`script.approval.required`, `script.trust.approved`) and the audit log.
 **Reuse awareness:** agents write and maintain the scripts as ordinary job output,
 each starting with a header comment block (`# Description:` / `# Inputs:` /
 `# Outputs:`). Proxima auto-scans `scripts/` into a catalog (name + one-line
@@ -379,7 +391,9 @@ is given the same catalog and may emit script jobs - but only for scripts that e
 **UI:** script nodes render distinctly (dotted outline, `⚡ scripts/<command>` in the
 mono face, last output line on the card and Tasks list row); the canvas has a
 **+ Script** tool and the inspector edits command/args/contract/gate.
-**Endpoints:** `POST /api/graph/jobs/{id}/nodes/{node_id}/approve-script`.
+**Endpoints:** `GET /api/graph/jobs/{id}/nodes/{node_id}/script` (content + sha256
+for the approval card), `POST /api/graph/jobs/{id}/nodes/{node_id}/approve-script`
+(body carries `expected_sha256`; 409 on mismatch).
 
 ### Satpam supervision loop (Phase-1 slice 12, T10 - LIVE)
 

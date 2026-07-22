@@ -17,7 +17,9 @@ blocks instead of executing: the run fails with a ``script_approval_required:``
 error, the node pauses the plan in review, and the owner's one-time approval
 (`.../approve-script`) records the hash and reruns the node. An unchanged
 trusted script then runs with no per-run approval, which is the whole
-"deterministic + free" payoff.
+"deterministic + free" payoff. The bytes that were hashed are also the bytes
+that execute — copied to a private temp file at hash time — so a concurrent
+edit of the project file after the trust check cannot change what runs.
 
 Environment boundary: the subprocess gets a minimal environment (PATH, HOME,
 locale) rather than the server's, so scripts cannot read Proxima's own config
@@ -29,6 +31,9 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import stat
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -158,9 +163,15 @@ class ScriptRunner:
             self._fail(run, "run does not correspond to a script node in the plan")
             return
 
+        # One read decides everything: these exact bytes are hashed for the
+        # trust check AND are what executes (from a private copy below). The
+        # project file is never consulted again, so a concurrent swap between
+        # the trust check and exec cannot run unapproved content (audit F4).
         try:
             script_path = scripts_library.resolve_script(project_root, str(node["command"]))
-            digest = scripts_library.content_hash(script_path)
+            script_mode = script_path.stat().st_mode
+            script_bytes = script_path.read_bytes()
+            digest = scripts_library.hash_bytes(script_bytes)
         except (scripts_library.ScriptResolutionError, OSError) as exc:
             self._fail(run, str(exc))
             return
@@ -187,9 +198,20 @@ class ScriptRunner:
             self._fail(run, approval_required_error(rel_path, digest))
             return
 
+        # Execute the hashed bytes from a private temp copy (0700 dir): the
+        # agent-writable project file plays no further part, closing the
+        # hash-to-exec TOCTOU window. cwd stays the project container, so the
+        # script's own file access is unchanged. The copy keeps the original
+        # name (exec_argv picks the interpreter by suffix) and its owner
+        # exec bit (an executable script still runs via its shebang).
+        exec_dir = Path(tempfile.mkdtemp(prefix="proxima-script-"))
+        exec_copy = exec_dir / script_path.name
         try:
-            argv = scripts_library.exec_argv(script_path)
-        except scripts_library.ScriptResolutionError as exc:
+            exec_copy.write_bytes(script_bytes)
+            os.chmod(exec_copy, stat.S_IMODE(script_mode) & 0o700)
+            argv = scripts_library.exec_argv(exec_copy)
+        except (scripts_library.ScriptResolutionError, OSError) as exc:
+            shutil.rmtree(exec_dir, ignore_errors=True)
             self._fail(run, str(exc))
             return
 
@@ -255,6 +277,7 @@ class ScriptRunner:
             answer = stdout.decode("utf-8", errors="replace").strip()
             self._complete(run, answer, run_start_ts)
         finally:
+            shutil.rmtree(exec_dir, ignore_errors=True)
             heartbeat.cancel()
             try:
                 await heartbeat

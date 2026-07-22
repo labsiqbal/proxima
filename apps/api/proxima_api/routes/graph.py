@@ -25,8 +25,13 @@ from ..schemas import (
     GraphJobCreateRequest,
     GraphNodeAnswerRequest,
     GraphNodeOutputEditRequest,
+    GraphScriptApproveRequest,
     GraphTemplateSaveRequest,
 )
+
+# The approval card renders the script body; cap what one response carries so a
+# runaway file cannot flood the UI. The sha256 always covers the WHOLE file.
+MAX_SCRIPT_PREVIEW_BYTES = 100_000
 
 
 def _as_int(value: Any) -> int:
@@ -789,24 +794,10 @@ def register(app, deps):
         app.state.worker.graph_executor.dispatch_ready(job_id)
         return graph_job_payload(graph_job_or_404(job_id, user))
 
-    @app.post("/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script")
-    def approve_node_script(
-        job_id: int,
-        node_id: str,
-        user: dict[str, Any] = Depends(current_user),
-    ):
-        """The one-time, hash-bound script approval (T6 #5, captain's decision).
-
-        A script step blocked on trust and the plan is paused in review; this
-        records the script's CURRENT content hash as approved — recomputed from
-        the file now, never taken from the request or the stored error, so what
-        the owner approves is exactly what will run — then reruns the node the
-        same way an ordinary rerun does. Unchanged scripts never come back
-        here; an edited script's hash mismatch does.
-        """
-        require_graph()
-        job = graph_job_or_404(job_id, user)
-        ensure_correctable(job)
+    def _script_node_file(job: sqlite3.Row, node_id: str) -> tuple[str, bytes]:
+        """Resolve a graph job's script node to (rel_path, current bytes) or
+        raise the shared 4xx ladder. One read — hash and display must come
+        from the same bytes (audit F4)."""
         graph = normalize_graph(job["graph"] or "")
         node = _graph_node(graph, node_id)
         if node.get("type") != "script":
@@ -821,9 +812,66 @@ def register(app, deps):
         try:
             rel = scripts_library.normalize_script_rel_path(str(node["command"]))
             script_path = scripts_library.resolve_script(Path(project["path"]), rel)
-            digest = scripts_library.content_hash(script_path)
+            return rel, script_path.read_bytes()
         except (scripts_library.ScriptResolutionError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/graph/jobs/{job_id}/nodes/{node_id}/script")
+    def read_node_script(
+        job_id: int,
+        node_id: str,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """What the approval card shows (audit F4): the script's CURRENT bytes
+        and their sha256, read together, so the owner reviews the actual
+        content — never just a filename. The returned sha256 is what the
+        approve request must echo back."""
+        require_graph()
+        job = graph_job_or_404(job_id, user)
+        rel, data = _script_node_file(job, node_id)
+        shown = data[:MAX_SCRIPT_PREVIEW_BYTES]
+        return {
+            "script": f"scripts/{rel}",
+            "sha256": scripts_library.hash_bytes(data),
+            "content": shown.decode("utf-8", errors="replace"),
+            "truncated": len(data) > len(shown),
+            "trusted_sha256": scripts_library.trusted_hash(db(), _as_int(job["project_id"]), rel),
+        }
+
+    @app.post("/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script")
+    def approve_node_script(
+        job_id: int,
+        node_id: str,
+        payload: GraphScriptApproveRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """The one-time, hash-bound script approval (T6 #5, captain's decision).
+
+        A script step blocked on trust and the plan is paused in review; this
+        records the script's CURRENT content hash as approved — recomputed from
+        the file now, never taken from the stored error. The request carries
+        the sha256 the owner actually reviewed (the approval card fetched
+        content + hash together via GET .../script); if the file on disk no
+        longer matches, the approval is refused with 409 instead of silently
+        trusting whatever an agent wrote in the meantime (audit F4). Then the
+        node reruns the same way an ordinary rerun does. Unchanged scripts
+        never come back here; an edited script's hash mismatch does.
+        """
+        require_graph()
+        job = graph_job_or_404(job_id, user)
+        ensure_correctable(job)
+        rel, data = _script_node_file(job, node_id)
+        digest = scripts_library.hash_bytes(data)
+        if payload.expected_sha256 != digest:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "the script's content changed on disk after you reviewed it "
+                    f"(reviewed sha256 {payload.expected_sha256[:12]}…, current {digest[:12]}…) "
+                    "— re-open the approval card to review the current version"
+                ),
+            )
+        graph = normalize_graph(job["graph"] or "")
         conn = db()
         approval_run_id: int | None = None
         with app.state.db_lock:

@@ -118,6 +118,17 @@ def _seed_trust(app, client: TestClient, slug: str, rel_path: str, script_path: 
     )
 
 
+def _approve_script(client: TestClient, job_id: int, node_id: str = "run"):
+    """Approve the way the UI does (audit F4): fetch content + sha256 from the
+    script endpoint, then echo that hash back in the approve request."""
+    shown = client.get(f"/api/graph/jobs/{job_id}/nodes/{node_id}/script")
+    assert shown.status_code == 200, shown.text
+    return client.post(
+        f"/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script",
+        json={"expected_sha256": shown.json()["sha256"]},
+    )
+
+
 HELLO = "# Description: say hello\nprint('hello from script')\n"
 
 
@@ -160,7 +171,7 @@ def test_first_run_blocks_for_approval_then_approval_reruns_and_completes(tmp_pa
     assert "script.approval.required" in _event_types(app, first["id"])
 
     # The one-time approval binds the current bytes and reruns the step.
-    approved = client.post(f"/api/graph/jobs/{job_id}/nodes/run/approve-script")
+    approved = _approve_script(client, job_id)
     assert approved.status_code == 200, approved.text
     trust = app.state.worker_db.execute(
         "SELECT * FROM script_trust WHERE rel_path = 'hello.py'"
@@ -212,7 +223,7 @@ def test_changed_bytes_require_reapproval(tmp_path):
     assert node["error"].startswith("script_approval_required:")
 
     # Re-approval trusts the NEW bytes and the step then runs.
-    approved = client.post(f"/api/graph/jobs/{job_id}/nodes/run/approve-script")
+    approved = _approve_script(client, job_id)
     assert approved.status_code == 200, approved.text
     _execute_next(app)
     assert json.loads(_node(app, job_id, "run")["output"]) == "changed!"
@@ -227,9 +238,111 @@ def test_approve_script_requires_a_blocked_script_step(tmp_path):
     job_id = _create_and_start(client, _script_graph(), "proj")
     _execute_next(app)  # completes; job in final review, node done
 
-    res = client.post(f"/api/graph/jobs/{job_id}/nodes/run/approve-script")
+    res = _approve_script(client, job_id)
     assert res.status_code == 409
     assert "not blocked on a script approval" in res.text
+
+
+# ── approval integrity (audit F4) ────────────────────────────────────────
+
+
+def test_script_endpoint_shows_the_exact_content_and_hash(tmp_path):
+    app = _app(tmp_path)
+    client = _client(app)
+    folder = _project(client, tmp_path)
+    script = _write_script(folder, "hello.py", HELLO)
+    job_id = _create_and_start(client, _script_graph(), "proj")
+
+    shown = client.get(f"/api/graph/jobs/{job_id}/nodes/run/script")
+    assert shown.status_code == 200, shown.text
+    body = shown.json()
+    assert body["script"] == "scripts/hello.py"
+    assert body["content"] == HELLO
+    assert body["sha256"] == scripts_library.content_hash(script)
+    assert body["truncated"] is False
+    assert body["trusted_sha256"] is None  # never approved yet
+
+    # After an approval the endpoint reports the trusted hash too, so the UI
+    # can say "changed since last approved" on a later re-approval ask.
+    _execute_next(app)
+    assert _approve_script(client, job_id).status_code == 200
+    assert client.get(f"/api/graph/jobs/{job_id}/nodes/run/script").json()["trusted_sha256"] == body["sha256"]
+
+
+def test_approve_with_a_stale_hash_is_refused_and_records_no_trust(tmp_path):
+    """The sight-unseen window (audit F4): the owner reviewed version A, an
+    agent swaps in version B before the click - the approval must NOT bind B."""
+    app = _app(tmp_path)
+    client = _client(app)
+    folder = _project(client, tmp_path)
+    _write_script(folder, "hello.py", HELLO)
+    job_id = _create_and_start(client, _script_graph(), "proj")
+    _execute_next(app)  # blocks for approval
+
+    reviewed = client.get(f"/api/graph/jobs/{job_id}/nodes/run/script").json()
+    # The swap happens between the owner's review and the click.
+    _write_script(folder, "hello.py", "print('swapped after review')\n")
+    stale = client.post(
+        f"/api/graph/jobs/{job_id}/nodes/run/approve-script",
+        json={"expected_sha256": reviewed["sha256"]},
+    )
+    assert stale.status_code == 409
+    assert "changed on disk" in stale.text
+    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM script_trust").fetchone()["c"] == 0
+    assert _node(app, job_id, "run")["status"] == "failed"  # still blocked
+
+    # Reviewing the CURRENT content and approving that works - and runs it.
+    fresh = _approve_script(client, job_id)
+    assert fresh.status_code == 200, fresh.text
+    _execute_next(app)
+    assert json.loads(_node(app, job_id, "run")["output"]) == "swapped after review"
+
+
+def test_approve_without_the_reviewed_hash_is_rejected(tmp_path):
+    app = _app(tmp_path)
+    client = _client(app)
+    folder = _project(client, tmp_path)
+    _write_script(folder, "hello.py", HELLO)
+    job_id = _create_and_start(client, _script_graph(), "proj")
+    _execute_next(app)
+
+    assert client.post(f"/api/graph/jobs/{job_id}/nodes/run/approve-script").status_code == 422
+    assert client.post(
+        f"/api/graph/jobs/{job_id}/nodes/run/approve-script", json={"expected_sha256": "nope"}
+    ).status_code == 422
+
+
+def test_concurrent_swap_after_the_trust_check_runs_the_approved_bytes(tmp_path, monkeypatch):
+    """The hash-to-exec TOCTOU (audit F4): a concurrent agent replaces the
+    script AFTER the runner's trust check decided. The run must execute the
+    hashed (approved) bytes, never the swapped file."""
+    app = _app(tmp_path)
+    client = _client(app)
+    folder = _project(client, tmp_path)
+    script = _write_script(folder, "hello.py", "print('approved output')\n")
+    _seed_trust(app, client, "proj", "hello.py", script)
+    job_id = _create_and_start(client, _script_graph(), "proj")
+
+    real_exec = asyncio.create_subprocess_exec
+    seen: dict[str, Any] = {}
+
+    async def swap_then_exec(*argv, **kwargs):
+        # The attacker's move, timed inside the window: the trust check has
+        # passed, the interpreter has not started yet.
+        script.write_text("print('swapped in the window')\n", encoding="utf-8")
+        seen["argv"] = [str(a) for a in argv]
+        return await real_exec(*argv, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", swap_then_exec)
+    _execute_next(app)
+
+    node = _node(app, job_id, "run")
+    assert node["status"] == "done"
+    assert json.loads(node["output"]) == "approved output"
+    # The exec never points at the agent-reachable project file - it runs a
+    # private copy of the hashed bytes.
+    assert str(script) not in seen["argv"]
+    assert any(arg.endswith("hello.py") for arg in seen["argv"])
 
 
 # ── execution contract ───────────────────────────────────────────────────

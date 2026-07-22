@@ -77,7 +77,22 @@ run after its content changed — blocks until the owner approves the exact byte
 timeline). An unchanged approved script then runs without per-run prompts, and it
 can do anything the service user can. Because agents write these scripts, the
 approval moment is the place where a prompt-injected script body would have to get
-past the owner; approving without reading the script waives that control.
+past the owner. The approval surface holds that line mechanically (audit F4): the
+card shows the script's actual content + sha256 (read together), the approve request
+must echo that hash (409 if the file changed after review), and the run executes the
+hashed bytes from a private temp copy taken at hash time — so neither an
+edit-before-click nor a swap-after-hash can run content the owner never saw.
+
+## Push after merge (pinned target, hardened invocation)
+
+When a code area opts into push-after-merge, the remote URL is pinned at opt-in
+(`project_areas.push_remote_url`). The repo's own `.git/config` is agent-writable,
+so at push time the config's current URL must still match the pin or the push
+refuses (audit F3 — blocks `git remote set-url` exfiltration; re-enabling the
+toggle approves a new URL). The push runs as an exec array with
+`-c credential.helper= -c core.hooksPath=/dev/null` plus `GIT_TERMINAL_PROMPT=0`
+and ssh BatchMode, so credential helpers or pre-push hooks planted in repo config
+cannot execute in the API process; auth stays the host's ambient ssh.
 
 ## Filesystem Rules
 

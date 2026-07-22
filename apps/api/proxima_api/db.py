@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS project_areas (
   -- area's own git remote after a repo job's local merge. Explicit per-area
   -- opt-in, DEFAULT OFF; only offered when the area has a detected remote.
   push_on_merge INTEGER NOT NULL DEFAULT 0,
+  -- The remote URL the owner opted into, pinned when the toggle is enabled
+  -- (audit F3): the push refuses if the repo's own .git/config — writable by
+  -- any agent working in the repo — no longer points at this URL.
+  push_remote_url TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(project_id, kind, rel_path)
@@ -574,6 +578,9 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "message_reviews", "merge_transcript", "merge_transcript TEXT")
     _add_column(conn, "message_reviews", "source_original_content", "source_original_content TEXT")
     _add_column(conn, "message_reviews", "applied_at", "applied_at TEXT")
+    # Pinned push target (audit F3) - pre-existing opt-ins have no pin, so the
+    # push refuses until the owner re-enables the toggle (which pins the URL).
+    _add_column(conn, "project_areas", "push_remote_url", "push_remote_url TEXT")
     _cleanup_orphan_agent_sessions(conn)
 
 

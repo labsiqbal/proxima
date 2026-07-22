@@ -56,10 +56,28 @@ export const answerGraphNode = (token: string, jobId: number, nodeId: string, an
     body: JSON.stringify({ answer }),
   })
 
+// What the approval card renders (audit F4): the script's current bytes and
+// their sha256, read together server-side, so the owner reviews actual content.
+export type GraphNodeScript = {
+  script: string
+  sha256: string
+  content: string
+  truncated: boolean
+  trusted_sha256: string | null
+}
+
+export const getGraphNodeScript = (token: string, jobId: number, nodeId: string) =>
+  api<GraphNodeScript>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/script`, token)
+
 // The one-time, hash-bound script approval (T6): trusts the script's CURRENT
 // content and reruns the blocked step. Unchanged scripts never ask again.
-export const approveGraphNodeScript = (token: string, jobId: number, nodeId: string) =>
-  api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/approve-script`, token, { method: 'POST' })
+// expectedSha256 is the hash the owner reviewed — the server refuses (409)
+// if the file on disk changed since it was shown (audit F4).
+export const approveGraphNodeScript = (token: string, jobId: number, nodeId: string, expectedSha256: string) =>
+  api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/approve-script`, token, {
+    method: 'POST',
+    body: JSON.stringify({ expected_sha256: expectedSha256 }),
+  })
 
 export const approveGraphJob = (token: string, jobId: number) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/approve`, token, { method: 'POST' })

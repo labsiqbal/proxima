@@ -247,6 +247,7 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 | `rel_path` | TEXT | NO |  |  |
 | `source` | TEXT | NO | `'auto'` |  |
 | `push_on_merge` | INTEGER | NO | `0` |  |
+| `push_remote_url` | TEXT | yes |  |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -459,4 +460,4 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 
 
 ---
-_Generated 2026-07-22 10:59 UTC._
+_Generated 2026-07-22 12:10 UTC._

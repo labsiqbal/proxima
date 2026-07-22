@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-152 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+153 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,7 +14,7 @@
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 32 endpoints
-- [`routes/graph.py`](#routes-graph-py) — 13 endpoints
+- [`routes/graph.py`](#routes-graph-py) — 14 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 9 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
@@ -146,9 +146,10 @@
 | PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/answer` | `answer_node_decision` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
-| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script` | `approve_node_script` | The one-time, hash-bound script approval (T6 #5, captain's decision). |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script` | `approve_node_script` |  |
 | PATCH | `/api/graph/jobs/{job_id}/nodes/{node_id}/output` | `edit_node_output` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/rerun` | `rerun_node` |  |
+| GET | `/api/graph/jobs/{job_id}/nodes/{node_id}/script` | `read_node_script` | What the approval card shows (audit F4): the script's CURRENT bytes |
 | POST | `/api/graph/jobs/{job_id}/save-template` | `save_graph_template` |  |
 | POST | `/api/graph/jobs/{job_id}/start` | `start_graph_job` |  |
 | GET | `/api/graph/templates` | `list_graph_templates` |  |
@@ -261,4 +262,4 @@
 
 
 ---
-_Generated 2026-07-22 10:59 UTC._
+_Generated 2026-07-22 12:10 UTC._

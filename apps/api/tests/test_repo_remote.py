@@ -280,7 +280,9 @@ def test_failed_push_never_unmerges_and_surfaces_the_exact_command(tmp_path: Pat
     assert wt["status"] == "merged" and wt["merge_commit"]
     assert (repo / "agent-change.txt").exists()  # the merge stands
     assert wt["push_status"] == "failed"
-    assert "$ git push origin main" in wt["push_error"]  # the exact command
+    # The exact command - including the F3 hardening flags that neutralize
+    # agent-planted credential helpers and hooks.
+    assert "$ git -c credential.helper= -c core.hooksPath=/dev/null push origin main" in wt["push_error"]
     assert "rejected" in wt["push_error"]  # + git's own output
     assert _git(bare, "rev-parse", "main") == raced  # never forced
 
@@ -329,6 +331,126 @@ def test_push_failure_when_remote_vanished_after_opt_in(tmp_path: Path):
     assert wt["status"] == "merged"
     assert wt["push_status"] == "failed"
     assert "no git remote" in wt["push_error"]
+
+
+# ── push target pinning + invocation hardening (audit F3) ────────────────
+
+
+def test_enabling_the_toggle_pins_the_remote_url(tmp_path: Path):
+    repo = _scratch_repo(tmp_path / "repo")
+    bare = _bare_remote(repo, tmp_path / "bare.git")
+    c = _client(_app(tmp_path))
+    assert c.post("/api/projects/link", json={"path": str(repo), "slug": "r"}).status_code == 201
+    area_id = c.get("/api/projects/r/areas").json()["code_areas"][0]["id"]
+
+    enabled = c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True})
+    assert enabled.status_code == 200
+    assert enabled.json()["push_remote_url"] == str(bare)
+    assert c.get("/api/projects/r/areas").json()["code_areas"][0]["push_remote_url"] == str(bare)
+    # Disabling clears the pin - a later re-enable re-reads and re-approves.
+    assert c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": False}).status_code == 200
+    assert c.get("/api/projects/r/areas").json()["code_areas"][0]["push_remote_url"] is None
+
+
+def test_push_refuses_when_the_remote_url_changed_after_opt_in(tmp_path: Path):
+    """The exfiltration vector (audit F3): a prompt-injected agent rewrites
+    the repo's own .git/config to point somewhere else. The push must refuse
+    instead of obeying the config - and the merge still stands."""
+    repo = _scratch_repo(tmp_path / "repo")
+    bare = _bare_remote(repo, tmp_path / "bare.git")
+    app = _app(tmp_path)
+    c = _client(app)
+    job, area_id = _repo_job(c, "r", repo)
+    assert c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True}).status_code == 200
+    _merge_ready(c, app, job)
+    # The agent's move: redirect origin to an attacker-controlled target.
+    attacker = tmp_path / "attacker.git"
+    _git(attacker.parent, "init", "-q", "--bare", "-b", "main", str(attacker))
+    _git(repo, "remote", "set-url", "origin", str(attacker))
+
+    approved = c.post(f"/api/jobs/{job['id']}/approve")
+    assert approved.status_code == 200 and approved.json()["status"] == "done"
+    wt = approved.json()["worktree"]
+    assert wt["status"] == "merged"  # never un-merged
+    assert wt["push_status"] == "failed"
+    assert "push refused" in wt["push_error"]
+    assert str(bare) in wt["push_error"] and str(attacker) in wt["push_error"]
+    # Nothing reached the attacker's remote.
+    assert _git(attacker, "for-each-ref") == ""
+
+    # The owner restores the approved remote and retries: push lands.
+    _git(repo, "remote", "set-url", "origin", str(bare))
+    resolved = c.post(f"/api/jobs/{job['id']}/push")
+    assert resolved.status_code == 200 and resolved.json()["status"] == "pushed"
+    assert _git(bare, "rev-parse", "main") == wt["merge_commit"]
+
+
+def test_push_refuses_without_a_pinned_url(tmp_path: Path):
+    """An opt-in with no pin (pre-pinning row, or the area was deleted) has no
+    owner-approved target - the push refuses rather than trusting .git/config."""
+    repo = _scratch_repo(tmp_path / "repo")
+    _bare_remote(repo, tmp_path / "bare.git")
+    app = _app(tmp_path)
+    c = _client(app)
+    job, area_id = _repo_job(c, "r", repo)
+    # Simulate a legacy opt-in: toggle on, but no pinned URL recorded.
+    app.state.db.execute("UPDATE project_areas SET push_on_merge = 1 WHERE id = ?", (area_id,))
+    _merge_ready(c, app, job)
+
+    approved = c.post(f"/api/jobs/{job['id']}/approve")
+    assert approved.status_code == 200 and approved.json()["status"] == "done"
+    wt = approved.json()["worktree"]
+    assert wt["status"] == "merged"
+    assert wt["push_status"] == "failed"
+    assert "no pinned remote URL" in wt["push_error"]
+    assert "re-enable" in wt["push_error"]
+
+    # Re-enabling through the settings route pins the URL; retry then works.
+    assert c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True}).status_code == 200
+    resolved = c.post(f"/api/jobs/{job['id']}/push")
+    assert resolved.status_code == 200 and resolved.json()["status"] == "pushed"
+
+
+def test_planted_hooks_and_helpers_never_execute_at_push_time(tmp_path: Path):
+    """The exec vector (audit F3): an agent plants a pre-push hook (both the
+    default hooks dir and a config-redirected one). The hardened invocation
+    must push successfully WITHOUT running any of it."""
+    repo = _scratch_repo(tmp_path / "repo")
+    bare = _bare_remote(repo, tmp_path / "bare.git")
+    app = _app(tmp_path)
+    c = _client(app)
+    job, area_id = _repo_job(c, "r", repo)
+    assert c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True}).status_code == 200
+    _merge_ready(c, app, job)
+
+    marker = tmp_path / "hook-ran"
+    hook_body = f"#!/bin/sh\ntouch {marker}\nexit 1\n"  # exit 1 would also block the push
+    default_hook = repo / ".git" / "hooks" / "pre-push"
+    default_hook.write_text(hook_body, encoding="utf-8")
+    default_hook.chmod(0o755)
+    planted_dir = tmp_path / "planted-hooks"  # outside the worktree: config
+    planted_dir.mkdir()                       # redirection, not a dirty repo
+    planted_hook = planted_dir / "pre-push"
+    planted_hook.write_text(hook_body, encoding="utf-8")
+    planted_hook.chmod(0o755)
+    _git(repo, "config", "core.hooksPath", str(planted_dir))
+    _git(repo, "config", "credential.helper", "!false")
+
+    approved = c.post(f"/api/jobs/{job['id']}/approve")
+    assert approved.status_code == 200, approved.text
+    wt = approved.json()["worktree"]
+    assert wt["push_status"] == "pushed", wt["push_error"]
+    assert not marker.exists()  # no planted hook ever ran
+    assert _git(bare, "rev-parse", "main") == wt["merge_commit"]
+
+
+def test_push_argv_always_carries_the_neutralizing_flags():
+    assert repo_remote.PUSH_CONFIG_OVERRIDES == (
+        "-c", "credential.helper=", "-c", "core.hooksPath=/dev/null",
+    )
+    argv = repo_remote.push_argv("origin", "main")
+    assert argv[:4] == list(repo_remote.PUSH_CONFIG_OVERRIDES)
+    assert argv[4:] == ["push", "origin", "main"]
 
 
 def test_graph_plan_approve_pushes_after_merge(tmp_path: Path):
