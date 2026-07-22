@@ -158,7 +158,10 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
       {worktree.error && <p className="changes-conflict-detail">{worktree.error}</p>}
       <p>Nothing in your project was changed. Fix the reason above in the project folder, then approve again.</p>
     </div>}
-    {jobStatus === 'review' && worktree.status === 'active' && <p className="changes-note">
+    {/* Only frame the approve act when this surface can actually take it. A failed
+        or mid-gate plan still has status=review + an active worktree, but the next
+        step is fix/rerun (or open the plan) — the blocked note below covers that. */}
+    {canDecide && jobStatus === 'review' && worktree.status === 'active' && <p className="changes-note">
       This job worked in an isolated copy of the code. Approve to bring the changes
       into <code>{worktree.base_branch}</code> — your project is untouched until then.
     </p>}

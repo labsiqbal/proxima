@@ -6,7 +6,7 @@ import { GraphCanvas } from '../components/workflows/GraphCanvas'
 import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
 import { ChangesReview } from '../components/tasks/ChangesReview'
 import { worktreeStateLabel } from '../components/tasks/diff'
-import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, targetBadge } from '../components/tasks/planProjection'
+import { lastOutputLine, orderedPlanJobs, planBranches, planMergeBlockedNote, planProgress, targetBadge } from '../components/tasks/planProjection'
 import { usePolling } from '../hooks/usePolling'
 
 const PAGE = 25
@@ -275,7 +275,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                         worktree={row.plan.worktree}
                         rejectedReason={row.plan.rejected_reason}
                         canDecide={row.plan.node_states.every(node => node.status === 'done')}
-                        decideBlockedNote="Some jobs in this plan still need their own review — open the plan to approve them first."
+                        decideBlockedNote={planMergeBlockedNote(row.plan)}
                         onApprove={() => approveGraphJob(token, row.plan.id)}
                         onChanged={() => void load(0, false)}
                       />}

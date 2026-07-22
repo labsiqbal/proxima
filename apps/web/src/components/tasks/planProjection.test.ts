@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, planStatusLabel, planStatusTone, targetBadge } from './planProjection'
+import { lastOutputLine, orderedPlanJobs, planBranches, planMergeBlockedNote, planProgress, planStatusLabel, planStatusTone, targetBadge } from './planProjection'
 import type { GraphJob, GraphNodeDefinition, WorkflowGraph } from '../../types'
 
 const node = (id: string, extra: Partial<GraphNodeDefinition> = {}): GraphNodeDefinition => ({
@@ -172,5 +172,32 @@ describe('planStatusLabel / planStatusTone', () => {
     expect(planStatusLabel(base('queued', {}))).toBe('Draft — editable')
     expect(planStatusLabel(base('running', { only: 'running' }))).toBe('Running…')
     expect(planStatusLabel(base('done', { only: 'done' }))).toBe('Done')
+  })
+})
+
+describe('planMergeBlockedNote', () => {
+  const base = (nodeStatuses: Record<string, string>, questions: Record<string, string> = {}) => {
+    const plan = job({ nodes: [node('only')], edges: [] }, nodeStatuses)
+    for (const [nodeId, question] of Object.entries(questions)) {
+      const state = plan.node_states.find(row => row.node_id === nodeId)
+      if (state) state.question = question
+    }
+    return plan
+  }
+
+  it('is null when every step is done (ready to merge)', () => {
+    expect(planMergeBlockedNote(base({ only: 'done' }))).toBeNull()
+  })
+
+  it('points at fix/rerun when a step failed', () => {
+    expect(planMergeBlockedNote(base({ only: 'failed' }))).toMatch(/failed.*fix or rerun/i)
+  })
+
+  it('points at the open question when a step is on a decision hold', () => {
+    expect(planMergeBlockedNote(base({ only: 'review' }, { only: 'Which area?' }))).toMatch(/answer/i)
+  })
+
+  it('points at step review when a gate is still open', () => {
+    expect(planMergeBlockedNote(base({ only: 'review' }))).toMatch(/step still needs your review/i)
   })
 })

@@ -8,7 +8,7 @@ import type { GraphTemplate } from '../types'
 // templates. The Sequential recipe editor that used to live here is retired — a linear
 // recipe is just a graph with no branches, and the canvas authors those too. The linear
 // ENGINE remains for pre-existing jobs and sessions; what is gone is its authoring UI.
-export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob, graphEditorActive, onGraphBack }: {
+export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob, graphEditorActive, onGraphBack, graphBackLabel = 'Recipes' }: {
   mode?: 'graph' | 'scheduled'
   onModeChange?: (mode: 'graph' | 'scheduled') => void
   /** The feature-gated graph canvas. Absent when the graph engine is disabled. */
@@ -18,6 +18,8 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   /** True while the graph editor has a workflow open — the tab row then shows Back. */
   graphEditorActive?: boolean
   onGraphBack?: () => void
+  /** Where Back returns: Tasks when a plan was opened from the Tasks list, else Recipes. */
+  graphBackLabel?: string
 }) {
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   const [error, setError] = React.useState('')
@@ -41,7 +43,7 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   }, [mode, token])
 
   const modeNav = <div className="workflow-mode-row">
-    {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label="Recipes" onClick={onGraphBack} />}
+    {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label={graphBackLabel} onClick={onGraphBack} />}
     <div className="workflow-mode-nav seg" role="tablist" aria-label="Recipe view">
     <button className={mode === 'graph' ? 'active' : ''} role="tab" aria-selected={mode === 'graph'} onClick={() => onModeChange?.('graph')}>Editor</button>
     <button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button>

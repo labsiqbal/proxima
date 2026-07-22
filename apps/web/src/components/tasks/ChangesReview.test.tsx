@@ -178,10 +178,21 @@ describe('ChangesReview', () => {
   it('holds the verdict when the plan still has unapproved jobs', async () => {
     render(<ChangesReview
       token="token" jobId={7} jobStatus="review" worktree={worktree}
-      canDecide={false} decideBlockedNote="Some jobs in this plan still need their own review — open the plan to approve them first."
+      canDecide={false} decideBlockedNote="A step failed — open the plan to fix or rerun it before approving."
       onApprove={vi.fn()} onChanged={vi.fn()}
     />)
-    expect(await screen.findByText(/still need their own review/)).toBeInTheDocument()
+    expect(await screen.findByText(/step failed.*fix or rerun/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Approve & merge changes/ })).not.toBeInTheDocument()
+    // Do not frame an approve act the owner cannot take yet.
+    expect(screen.queryByText(/Approve to bring the changes/)).not.toBeInTheDocument()
+  })
+
+  it('frames the approve act only when this surface can decide', async () => {
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="review" worktree={worktree}
+      canDecide onApprove={vi.fn()} onChanged={vi.fn()}
+    />)
+    expect(await screen.findByText(/Approve to bring the changes/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Approve & merge changes/ })).toBeInTheDocument()
   })
 })

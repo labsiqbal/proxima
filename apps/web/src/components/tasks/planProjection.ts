@@ -143,3 +143,26 @@ export function planStatusTone(job: Pick<GraphJob, 'status' | 'node_states'>): s
   }
   return job.status
 }
+
+/**
+ * Why the Tasks-row merge surface cannot approve yet.
+ *
+ * Final approve is the local merge, but only once every step is done. The graph
+ * engine also parks failed / decision-hold steps under job status `review`, so
+ * a single static "still need review" line misleads when the real next step is
+ * fix/rerun or answer a question. Null when every node is done (ready to merge).
+ */
+export function planMergeBlockedNote(job: Pick<GraphJob, 'node_states'>): string | null {
+  const states = job.node_states ?? []
+  if (states.length > 0 && states.every(state => state.status === 'done')) return null
+  if (states.some(state => state.status === 'failed')) {
+    return 'A step failed — open the plan to fix or rerun it before approving.'
+  }
+  if (states.some(state => state.status === 'review' && state.question)) {
+    return 'A step is waiting on your answer — open the plan to reply before approving.'
+  }
+  if (states.some(state => state.status === 'review')) {
+    return 'A step still needs your review — open the plan to approve it first.'
+  }
+  return 'Some jobs in this plan are not finished yet — open the plan to continue.'
+}
