@@ -14,6 +14,20 @@ are no invites, memberships, roles, or team-user flows.
 Proxima ships no provider credentials. It uses the runner CLIs already installed
 and authenticated on the host.
 
+### Recommended tools (optional)
+
+Proxima never installs or vendors binaries, but it probes PATH for a small
+recommended toolbelt ([`bundled-skills/recommended-tools.json`](../bundled-skills/recommended-tools.json))
+and advertises the present ones to agents. Install any you want your agents to use:
+
+```bash
+pip install markitdown        # document (PDF/Office/HTML) -> Markdown conversion
+npm install -g lavish-axi     # rich HTML artifacts from plans/reports
+# gh: https://cli.github.com  # GitHub CLI
+```
+
+Missing tools only show as a quiet hint in Settings → Agents; nothing blocks.
+
 ## Linux user install
 
 From the repo root:

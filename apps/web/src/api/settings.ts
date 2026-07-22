@@ -79,3 +79,10 @@ export const saveImageGenSettings = (token: string, body: ImageGenSettingsUpdate
 
 export const testImageGenSettings = (token: string, body: ImageGenSettingsUpdate) =>
   api<{ ok?: boolean; ready?: boolean; detail: string; higgsfield?: HiggsfieldStatus; codex?: CodexReady }>('/api/settings/image-gen/test', token, { method: 'POST', body: JSON.stringify(body) })
+
+// Capability bundle (T8): recommended host tools, PATH-probed server-side.
+// Advisory only - Proxima never installs binaries.
+export type RecommendedTool = { bin: string; use: string; install: string; present: boolean }
+
+export const getRecommendedTools = (token: string) =>
+  api<{ tools: RecommendedTool[] }>('/api/tools/recommended', token)

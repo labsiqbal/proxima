@@ -2700,6 +2700,40 @@ button:disabled {
 	}
 }
 
+/* ── Recommended tools (Settings · capability bundle, T8) ─────────── */
+.tools-list {
+	display: grid;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+.tools-row {
+	display: grid;
+	grid-template-columns: 110px 1fr max-content;
+	gap: var(--space-3);
+	align-items: baseline;
+}
+.tools-row code {
+	font-size: var(--text-sm);
+	color: var(--ui-text-primary);
+}
+.tools-use {
+	font-size: var(--text-sm);
+	color: var(--ui-text-secondary);
+}
+.tools-status {
+	font-size: var(--text-sm);
+	color: var(--ui-text-tertiary);
+}
+.tools-status.present {
+	color: var(--ui-success-strong);
+}
+@media (max-width: 560px) {
+	.tools-row {
+		grid-template-columns: 1fr;
+		gap: 2px;
+	}
+}
+
 /* ── Icon polish: file tree rows, chevron, copy button ────────────── */
 .tree-row {
 	display: flex;

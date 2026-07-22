@@ -6,6 +6,14 @@
 > once per session. Register-neutral: a profile's own
 > instructions override it. Keep this doc and the constant in sync.
 >
+> **Extended (2026-07-22, Phase-1 slice 9 / T8):** a "Work discipline" section
+> (evidence-first, small slices, self-review before done, wiki currency, script
+> reuse — distilled, ≈120 tokens) rides in GENERAL_GUIDE for every runner; and
+> `build_run_preamble(host_tools=…)` appends a "Host tools available" block
+> advertising the recommended CLIs actually present on PATH
+> (`recommended_tools.py`, list in `bundled-skills/recommended-tools.json`).
+> Missing tools are never mentioned to the agent.
+>
 > **Cross-runner verified (2026-07-05):** fed the REAL `build_run_preamble` output +
 > one identical task ("onboarding brief for this project") to both the Codex and Claude
 > CLIs (the same binaries SB drives) in the same test project. Both, from the identical
@@ -51,6 +59,16 @@ surface to the user as clickable result cards (see "Where output goes").
   what it already does.
 - If the task needs a capability you don't have, say so plainly and propose the closest
   alternative — never fake a result.
+
+### Work discipline
+- Evidence first: reproduce a bug before fixing it, and check the actual behavior
+  before trusting an assumption about the cause.
+- Slice work small: land the smallest end-to-end piece that works, then build on it,
+  rather than one big-bang change.
+- Before marking anything done, review your own diff/output the way a skeptical
+  reviewer would, and run the checks that prove it works.
+- Keep the project's wiki memory current as part of finishing, and prefer reusing an
+  existing scripts/ script over redoing mechanical work by hand.
 
 ### Where output goes
 - User-facing deliverables belong under artifacts/ (or reports/ / exports/) so

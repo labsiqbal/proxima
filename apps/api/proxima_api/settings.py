@@ -54,6 +54,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
     "graph_node_concurrency": 4,
+    # Proxima's shipped capability bundle (T8): bundled skills + the recommended-
+    # tools advisory list. None -> <repo root>/bundled-skills (normalize_config).
+    "bundled_skills_dir": None,
 }
 
 
@@ -74,6 +77,7 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["hermes_profiles_root"] = str(Path(cfg.get("hermes_profiles_root") or workspace_root / "hermes-profiles"))
     cfg["projectctl_path"] = str(Path(cfg.get("projectctl_path") or repo_root() / "infra/scripts/projectctl"))
     cfg["source_hermes_home"] = str(Path(cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")))
+    cfg["bundled_skills_dir"] = str(Path(cfg.get("bundled_skills_dir") or repo_root() / "bundled-skills"))
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))

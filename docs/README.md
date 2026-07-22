@@ -33,6 +33,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
 | [DESIGN-STUDIO.md](DESIGN-STUDIO.md) | Design Studio: agent contract, scene schema, flag | by hand |
+| [../bundled-skills/README.md](../bundled-skills/README.md) | The shipped capability bundle: bundled skills, opt-out, recommended-tools list | by hand |
 | [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
 
 **Operations & contributing:** [installation.md](installation.md) ·

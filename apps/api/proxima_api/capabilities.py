@@ -10,6 +10,12 @@ Two layers:
   detect_for_runner(spec)          → what the runner has on this host (read-only)
   apply_capabilities(spec, home, …) → make the selected subset live in a profile home
 
+Skills have TWO sources (T8): the runner's own host dir, and Proxima's shipped
+capability bundle (`bundled-skills/` at the repo root, or wherever config points).
+The bundle is content-pluggable — any folder there with a SKILL.md is a skill, no
+list in code — and its skills flow through the same selection + symlink mechanism
+as host skills, under ids `bundled/<name>`, for every runner with a skills dir.
+
 Everything here is defensive: a missing dir, malformed config, or unreadable file
 degrades to "nothing detected"/"nothing applied" — it must never break a run.
 
@@ -120,6 +126,41 @@ def _detect_dir_skills(base: Path) -> list[dict[str, Any]]:
     return out
 
 
+# ── bundled skills (Proxima's shipped capability bundle, T8) ─────────────────
+
+# Bundled skills are namespaced under this group so they never collide with a
+# same-named host skill, and so the existing grouped (`category/skill`) symlink
+# + prune machinery handles them with no new code paths.
+BUNDLED_GROUP = "bundled"
+
+
+def detect_bundled_skills(bundle_dir: str | Path | None) -> list[dict[str, Any]]:
+    """Skills shipped with Proxima, read from the bundle directory. Content-
+    pluggable: any direct subfolder with a SKILL.md is a skill (flat only —
+    the bundle keeps no category nesting); there is no skill list in code."""
+    out: list[dict[str, Any]] = []
+    if not bundle_dir:
+        return out
+    base = Path(bundle_dir)
+    if not base.is_dir():
+        return out
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return out
+    for d in entries:
+        try:
+            if not d.is_dir() or d.name.startswith(".") or not (d / "SKILL.md").is_file():
+                continue
+            sid = f"{BUNDLED_GROUP}/{d.name}"
+            meta = _read_skill_meta(d, d.name)
+            out.append({"id": sid, "name": meta["name"], "description": meta["description"],
+                        "source": str(d), "group": BUNDLED_GROUP, "bundled": True})
+        except OSError:
+            continue
+    return out
+
+
 # ── MCP detection (per-runner config format) ─────────────────────────────────
 
 def _mcp_from_claude(host: Path) -> list[dict[str, Any]]:
@@ -181,8 +222,10 @@ def _skills_rel(rid: str) -> str | None:
     return SKILL_SUBPATH.get(rid)
 
 
-def detect_for_runner(spec: Any, source_override: str | None = None) -> dict[str, list[dict[str, Any]]]:
-    """What this runner has on the host right now. `{skills: [...], mcp: [...]}`."""
+def detect_for_runner(spec: Any, source_override: str | None = None,
+                      bundle_dir: str | Path | None = None) -> dict[str, list[dict[str, Any]]]:
+    """What this runner has on the host right now, plus Proxima's bundled skills
+    when a bundle dir is given. `{skills: [...], mcp: [...]}`."""
     host = _host_dir(spec, source_override)
     rid = getattr(spec, "id", "")
     skills: list[dict[str, Any]] = []
@@ -190,7 +233,7 @@ def detect_for_runner(spec: Any, source_override: str | None = None) -> dict[str
     try:
         rel = _skills_rel(rid)
         if rel:
-            skills = _detect_dir_skills(host / rel)
+            skills = _detect_dir_skills(host / rel) + detect_bundled_skills(bundle_dir)
         if rid == "claude-code":
             mcp = _mcp_from_claude(host)
         elif rid == "codex":
@@ -239,12 +282,14 @@ def _selected(detected: list[dict[str, Any]], sel_ids: list[str] | None, key: st
 # ── public: activation ───────────────────────────────────────────────────────
 
 def apply_capabilities(spec: Any, home: Path, selection: dict[str, Any] | None,
-                       source_override: str | None = None) -> dict[str, list[str]]:
+                       source_override: str | None = None,
+                       bundle_dir: str | Path | None = None) -> dict[str, list[str]]:
     """Make the selected skills + MCP live in a profile's seeded home.
 
     Skills: symlink each selected skill dir into <home>/skills/<id> (own-the-folder:
-    stays in sync with the host copy; no duplication). Symlinks not in the selection
-    are pruned. MCP: rewrite the runner's config in the home to the selected subset.
+    stays in sync with the host copy; no duplication). Bundled skills ride the same
+    path under `bundled/<name>`. Symlinks not in the selection are pruned. MCP:
+    rewrite the runner's config in the home to the selected subset.
 
     Idempotent. Returns what was applied for logging/debug. Never raises.
     """
@@ -252,7 +297,7 @@ def apply_capabilities(spec: Any, home: Path, selection: dict[str, Any] | None,
     rid = getattr(spec, "id", "")
     applied = {"skills": [], "mcp": []}
     try:
-        detected = detect_for_runner(spec, source_override)
+        detected = detect_for_runner(spec, source_override, bundle_dir)
         sel = selection or {}
         skill_ids = sel.get("skills") if isinstance(sel.get("skills"), list) else None
         mcp_names = sel.get("mcp") if isinstance(sel.get("mcp"), list) else None

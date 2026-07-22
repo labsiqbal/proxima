@@ -63,6 +63,8 @@ app = create_app(
         "source_hermes_home": os.environ.get("PROXIMA_SOURCE_HERMES_HOME") or None,
         "hermes_bin": os.environ.get("PROXIMA_HERMES_BIN") or None,
         "refresh_credentials": env_bool("PROXIMA_REFRESH_CREDENTIALS", True),
+        # Capability bundle (T8): unset -> <repo root>/bundled-skills via normalize_config.
+        "bundled_skills_dir": os.environ.get("PROXIMA_BUNDLED_SKILLS_DIR") or None,
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", 900),
         "run_continuation_limit": env_int(
             "PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])

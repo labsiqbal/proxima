@@ -41,7 +41,35 @@ Hermes (`config.yaml`). Selection is re-applied idempotently before each run so 
 installed host skills appear automatically. Pi still uses its runner-global home;
 `claude_live_home` profiles likewise use the host config directly.
 **Endpoints:** `GET/POST /api/profiles`, `PATCH/DELETE /api/profiles/{id}`,
-`GET /api/runners/{id}/capabilities`.
+`GET /api/runners/{id}/capabilities`, `GET /api/tools/recommended`.
+
+### Baked-in capability bundle (Phase-1 slice 9, T8 - LIVE)
+
+**Why:** batteries-included instructions/skills, BYO credentials and binaries: every
+Proxima user gets a curated skill set and work-discipline defaults without installing
+anything, while Proxima never ships or manages binaries.
+**How - three layers:**
+- **Discipline pack (runner-agnostic, always on):** `GENERAL_GUIDE` in
+  `wiki_memory.py` carries a compact "Work discipline" section (evidence-first,
+  slice small, self-review before done, keep wiki memory current, prefer existing
+  scripts) in every session preamble. Lean by design - a section, not a dump.
+- **Bundled skills (runner-native, opt-out-able):** `bundled-skills/` at the repo
+  root is a SECOND source in the existing skill-symlink mechanism
+  (`capabilities.py:detect_bundled_skills`). Content-pluggable: any folder there
+  with a `SKILL.md` is a skill - no list in code. Bundled skills get ids
+  `bundled/<name>`, are symlinked into every profile home whose runner has a skills
+  dir, and opt out per profile through the same `profiles.capabilities` selection
+  JSON as host skills. First content: the owner's **masterplan** skill (vendored
+  from labsiqbal/masterplan, MIT - see `bundled-skills/masterplan/PROVENANCE.md`).
+  Live-home claude profiles are untouched (nothing seeded or symlinked - the user's
+  real `~/.claude` rules). Config: `bundled_skills_dir` /
+  `PROXIMA_BUNDLED_SKILLS_DIR` (default `<repo>/bundled-skills`).
+- **Tools detect-and-advertise (never vendored):** `bundled-skills/recommended-tools.json`
+  lists recommended host CLIs (markitdown, lavish-axi, gh - data, not code).
+  `recommended_tools.py` probes PATH at run setup; PRESENT tools get a one-liner in
+  the run preamble ("`markitdown` - available for …"). Missing tools surface only
+  as a quiet hint in Settings → Agents ("Recommended tools" panel) and never block
+  a run.
 
 ## 3. Chat (the core loop)
 

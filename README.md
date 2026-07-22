@@ -76,6 +76,11 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 - **Multi-runner profiles** — each agent profile picks a runner (Claude Code,
   Codex, Hermes, Pi) with an isolated credential home, its own instructions,
   and per-profile skills/MCP selection detected from your host.
+- **Baked-in capability bundle** — every profile ships with
+  [`bundled-skills/`](bundled-skills/README.md) (opt-out per profile), starting
+  with the [masterplan](https://github.com/labsiqbal/masterplan) skill (MIT),
+  plus a distilled work-discipline preamble and detect-and-advertise for
+  recommended host CLIs (binaries stay bring-your-own).
 - **Schedules** — five-field cron for saved Recipes, with overlap
   policy and a "Run now" that exercises the real spawn path.
 - **Self-update, audit log, themes & PWA** — one-click update from GitHub
@@ -155,6 +160,7 @@ Open your HTTPS MagicDNS URL on any device and install the PWA.
 ```text
 apps/api/        FastAPI backend (chat, runners/ACP, terminal, files, wiki, jobs)
 apps/web/        React/Vite PWA
+bundled-skills/  the shipped capability bundle (skills + recommended-tools list)
 infra/scripts/   optional host/project helper scripts
 infra/systemd/   service templates
 docs/            architecture, install, security, backup docs

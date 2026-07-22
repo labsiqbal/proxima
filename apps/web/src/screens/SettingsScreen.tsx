@@ -17,6 +17,8 @@ import {
   savePermissionSettings,
   getRunSettings,
   saveRunSettings,
+  getRecommendedTools,
+  type RecommendedTool,
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
@@ -83,6 +85,28 @@ function TurnQuotaPanel({ token }: { token: string }) {
       <div className="seg sm">{TURN_QUOTA_MINUTES.map(m => <button key={m} type="button" className={seconds === m * 60 ? 'active' : ''} disabled={busy} onClick={() => { setSeconds(m * 60); void save(m * 60) }}>{m}m</button>)}</div>
     </div>
     {error && <p className="error-text">{error}</p>}
+  </div>
+}
+
+function RecommendedToolsPanel({ token }: { token: string }) {
+  const [tools, setTools] = React.useState<RecommendedTool[]>([])
+  React.useEffect(() => {
+    let alive = true
+    getRecommendedTools(token).then(r => { if (alive) setTools(r.tools) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [token])
+  if (!tools.length) return null
+  const present = tools.filter(t => t.present).length
+  return <div className="panel">
+    <div className="panel-head"><h3>Recommended tools</h3><span>{present}/{tools.length} on PATH</span></div>
+    <p className="muted">Host CLIs Proxima advertises to agents when found on PATH. Bring your own - nothing is installed for you, and a missing tool never blocks a run.</p>
+    <div className="tools-list">
+      {tools.map(t => <div className="tools-row" key={t.bin}>
+        <code>{t.bin}</code>
+        <span className="tools-use">{t.use}</span>
+        <span className={`tools-status ${t.present ? 'present' : ''}`}>{t.present ? 'available' : t.install ? `not found · ${t.install}` : 'not found'}</span>
+      </div>)}
+    </div>
   </div>
 }
 
@@ -482,7 +506,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : activeSection === 'agents'
-      ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
+      ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : activeSection === 'media'
