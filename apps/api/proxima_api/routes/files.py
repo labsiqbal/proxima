@@ -394,13 +394,17 @@ def register(app, deps):
                 script = next((s for s in ("dev", "start", "serve", "preview") if s in scripts), None)
                 if script:
                     found.append({"dir": rel(d), "command": f"npm run {script}", "kind": f"node · npm run {script}"})
+            # Suggested commands bind loopback on purpose: a broadly-bound dev
+            # server is reachable by any LAN/tailnet device with NO auth (the
+            # gated relay only protects its own port), while remote preview
+            # works fine on loopback - the relay connects via 127.0.0.1.
             elif (d / "manage.py").is_file():
-                found.append({"dir": rel(d), "command": "python manage.py runserver 0.0.0.0:$PORT", "kind": "django"})
+                found.append({"dir": rel(d), "command": "python manage.py runserver 127.0.0.1:$PORT", "kind": "django"})
             elif (d / "app.py").is_file() or (d / "main.py").is_file():
                 entry = "app.py" if (d / "app.py").is_file() else "main.py"
                 found.append({"dir": rel(d), "command": f"python {entry}", "kind": "python"})
             elif (d / "index.html").is_file():
-                found.append({"dir": rel(d), "command": "python3 -m http.server $PORT", "kind": "static · index.html"})
+                found.append({"dir": rel(d), "command": "python3 -m http.server $PORT --bind 127.0.0.1", "kind": "static · index.html"})
             for c in entries:
                 try:
                     if c.is_dir() and c.name not in SKIP and not c.name.startswith("."):

@@ -6947,6 +6947,19 @@ div.result-media {
 .app-runner-dock .app-runner-head .spacer {
 	flex: 1;
 }
+/* The previewed dev server is bound beyond loopback: reachable by other
+   LAN/tailnet devices with no auth - keep this loud until the bind is fixed. */
+.app-bind-warning {
+	padding: 8px 14px;
+	border-bottom: 1px solid var(--ui-warning);
+	background: var(--ui-warning-bg);
+	color: var(--ui-warning);
+	font-size: var(--text-xs);
+	line-height: 1.5;
+}
+.app-bind-warning code {
+	font-size: var(--text-xs);
+}
 .vp-seg {
 	display: inline-flex;
 	border: 1px solid var(--ui-stroke-secondary);

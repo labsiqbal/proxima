@@ -201,6 +201,18 @@ def test_preview_auth_sets_host_scoped_cookie_without_apps_domain(tmp_path):
     assert not cookie["proxima_preview"]["secure"]
 
 
+def _a_non_loopback_local_ip() -> str | None:
+    """Some non-loopback address of this host (LAN/tailnet), if it has one.
+    UDP connect sends no packet; the kernel just picks the routed source IP."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 1))  # TEST-NET-1, never actually contacted
+            ip = s.getsockname()[0]
+        return None if ip.startswith("127.") else ip
+    except OSError:
+        return None
+
+
 def test_app_start_reports_preview_port_and_relay_serves_the_app(tmp_path):
     with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
         token = client.post("/auth/auto").json()["token"]
@@ -223,7 +235,16 @@ def test_app_start_reports_preview_port_and_relay_serves_the_app(tmp_path):
             assert status.get("ready") is True
             assert isinstance(status.get("preview_port"), int)
             assert status["preview_port"] != status["port"]
+            # The audit's F1 reproduction must now fail: the loopback-bound dev
+            # server is NOT reachable on a non-loopback address (no unauth read
+            # of the project tree from another LAN/tailnet device) …
+            assert not status.get("broad_bind")
+            off_host_ip = _a_non_loopback_local_ip()
+            if off_host_ip:
+                with pytest.raises(OSError):
+                    socket.create_connection((off_host_ip, status["port"]), timeout=1).close()
 
+            # … but the same app IS previewable through the capability-gated relay.
             preview_cookie = client.post("/api/preview-auth", headers=auth).cookies["proxima_preview"]
             page = httpx.get(f"http://127.0.0.1:{status['preview_port']}/",
                              cookies={"proxima_preview": preview_cookie}, timeout=10)
@@ -234,3 +255,72 @@ def test_app_start_reports_preview_port_and_relay_serves_the_app(tmp_path):
         # Relay is reaped with the app: its port must stop accepting connections.
         with pytest.raises(httpx.TransportError):
             httpx.get(f"http://127.0.0.1:{status['preview_port']}/", timeout=2)
+
+
+def test_detect_apps_suggested_commands_bind_loopback(tmp_path):
+    """Audit F1: the product's own suggestions must not open the project tree to
+    the LAN - every suggested server command binds 127.0.0.1 explicitly."""
+    with TestClient(_app(tmp_path)) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post("/api/projects", json={"slug": "demo", "name": "Demo"}, headers=auth).status_code == 201
+        client.put("/api/projects/demo/file", params={"path": "site/index.html"},
+                   json={"content": "<h1>hi</h1>"}, headers=auth)
+        client.put("/api/projects/demo/file", params={"path": "django/manage.py"},
+                   json={"content": "#"}, headers=auth)
+        apps = {a["kind"]: a["command"] for a in client.get("/api/projects/demo/apps", headers=auth).json()["apps"]}
+        assert apps["static · index.html"] == "python3 -m http.server $PORT --bind 127.0.0.1"
+        assert apps["django"] == "python manage.py runserver 127.0.0.1:$PORT"
+
+
+def _wait_ready(client, auth) -> dict:
+    import time
+    status: dict = {}
+    for _ in range(80):
+        status = client.get("/api/projects/demo/app/status", headers=auth).json()
+        if status.get("ready"):
+            return status
+        time.sleep(0.05)
+    return status
+
+
+def test_broadly_bound_dev_server_surfaces_warning(tmp_path):
+    """A command Proxima cannot rewrite may still bind all interfaces; app status
+    must flag it (broad_bind) so the UI can warn the owner."""
+    with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post("/api/projects", json={"slug": "demo", "name": "Demo"}, headers=auth).status_code == 201
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            app_port = int(probe.getsockname()[1])
+        # No --bind: python's http.server listens on all interfaces (the F1 shape).
+        assert client.post("/api/projects/demo/app/start", headers=auth,
+                           json={"command": "python3 -m http.server $PORT",
+                                 "port": app_port, "dir": ""}).json()["ok"]
+        try:
+            status = _wait_ready(client, auth)
+            assert status.get("ready") is True
+            assert status.get("broad_bind") is True
+        finally:
+            assert client.post("/api/projects/demo/app/stop", headers=auth).json()["ok"]
+
+
+def test_app_subprocess_defaults_host_to_loopback(tmp_path):
+    """Frameworks that honor $HOST must inherit a loopback default from Proxima."""
+    with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post("/api/projects", json={"slug": "demo", "name": "Demo"}, headers=auth).status_code == 201
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            app_port = int(probe.getsockname()[1])
+        assert client.post("/api/projects/demo/app/start", headers=auth,
+                           json={"command": 'echo "host=$HOST" && python3 -m http.server $PORT --bind 127.0.0.1',
+                                 "port": app_port, "dir": ""}).json()["ok"]
+        try:
+            status = _wait_ready(client, auth)
+            assert status.get("ready") is True
+            assert "host=127.0.0.1" in (status.get("log") or [])
+        finally:
+            assert client.post("/api/projects/demo/app/stop", headers=auth).json()["ok"]
