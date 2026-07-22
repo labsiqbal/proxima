@@ -36,6 +36,19 @@ def test_list_tree_returns_sorted_dirs_first(tmp_path):
     assert {"name": "a.txt", "type": "file", "size": 5} in entries
 
 
+def test_list_tree_missing_path_returns_empty(tmp_path):
+    """Optional folders (design versions/assets) may not exist yet — list is empty, not an error."""
+    root = _project(tmp_path)
+    assert fsapi.list_tree(root, "artifacts/design/new_id/versions") == []
+    assert fsapi.list_tree(root, "does-not-exist") == []
+
+
+def test_list_tree_file_path_still_errors(tmp_path):
+    root = _project(tmp_path)
+    with pytest.raises(fsapi.FsError, match="not a directory"):
+        fsapi.list_tree(root, "a.txt")
+
+
 def test_list_reference_files_returns_nested_path_only_entries(tmp_path):
     root = tmp_path / "proj"
     (root / "src" / "components").mkdir(parents=True)

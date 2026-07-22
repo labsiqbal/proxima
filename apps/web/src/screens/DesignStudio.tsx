@@ -1226,6 +1226,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       try { localStorage.setItem(lastDesignKey, scene.id) } catch { /* storage disabled */ }
     }
   }, [stage, scene?.id, lastDesignKey])
+  // History menu is design-scoped: close + clear when the open scene changes so a
+  // previous design's saved-version list never lingers over a fresh canvas.
+  React.useEffect(() => {
+    setVersionMenu(false)
+    setVersions([])
+  }, [scene?.id])
   const restoredRef = React.useRef(false)
   React.useEffect(() => {
     // openedTargetRef is set once a deep-link (openSession/openDesignId) has been

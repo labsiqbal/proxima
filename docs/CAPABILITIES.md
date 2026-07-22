@@ -642,7 +642,8 @@ Never two separate approval states.
 **Registry queries replace the item cap:** paginated newest-first list with
 project/type/status/date filters, text search, and facet counts; each record has a
 permanent per-project address (`/api/archive/{project}/{slug}` — the UI's
-`#archive/<project>/<slug>` permalink) with version history and prev/next.
+`#archive/<project>/<slug>` permalink) with same-path version history plus
+project-level newer/older record navigation (by produce date, not version).
 Chat result cards and the iterate Result view keep using the live scan
 (`GET /api/projects/{slug}/artifacts`, unchanged).
 
