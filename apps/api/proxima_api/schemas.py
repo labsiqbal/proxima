@@ -116,6 +116,13 @@ class GraphNodeOutputEditRequest(BaseModel):
     value: Any
 
 
+class GraphScriptApproveRequest(BaseModel):
+    # The owner approves BYTES, not a filename (audit F4): the approval card
+    # fetched content + sha256 together, and the approve echoes that hash back
+    # so the server can refuse (409) when the file changed since it was shown.
+    expected_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+
+
 class GraphNodeAnswerRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=4000)
 

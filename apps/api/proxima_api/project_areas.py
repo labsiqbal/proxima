@@ -116,12 +116,17 @@ def areas_payload(conn: sqlite3.Connection, project_id: int) -> dict:
     push_on_merge is the T9 per-area opt-in; the settings route pairs it with
     the area's detected remote so the UI knows whether to offer the toggle."""
     rows = conn.execute(
-        "SELECT id, kind, rel_path, source, push_on_merge FROM project_areas "
+        "SELECT id, kind, rel_path, source, push_on_merge, push_remote_url FROM project_areas "
         "WHERE project_id = ? AND source != 'excluded' ORDER BY kind, rel_path",
         (project_id,),
     ).fetchall()
     code = [
-        {"id": r["id"], "rel_path": r["rel_path"], "source": r["source"], "push_on_merge": bool(r["push_on_merge"])}
+        {
+            "id": r["id"], "rel_path": r["rel_path"], "source": r["source"],
+            "push_on_merge": bool(r["push_on_merge"]),
+            # The URL pinned at opt-in (audit F3) - what a push will insist on.
+            "push_remote_url": r["push_remote_url"],
+        }
         for r in rows if r["kind"] == "code"
     ]
     ops = next(

@@ -79,9 +79,18 @@ def resolve_script(project_root: Path, rel_path: str) -> Path:
     return target
 
 
+def hash_bytes(data: bytes) -> str:
+    """The sha256 the trust model binds an approval to — of the exact bytes.
+
+    Callers that also SHOW or EXECUTE the content must hash the same in-memory
+    bytes they use, not re-read the file: a second read is a TOCTOU window an
+    agent editing the file concurrently could win (audit F4)."""
+    return hashlib.sha256(data).hexdigest()
+
+
 def content_hash(path: Path) -> str:
-    """The sha256 the trust model binds an approval to — of the exact bytes."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """Convenience wrapper: hash a file's current bytes in one read."""
+    return hash_bytes(Path(path).read_bytes())
 
 
 def parse_header(text: str) -> dict[str, str]:

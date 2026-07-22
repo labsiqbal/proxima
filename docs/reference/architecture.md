@@ -156,9 +156,12 @@ as a subprocess (exec array, container root as cwd, minimal env), feeds it the t
 hand-off as JSON on stdin plus `{{var}}`-substituted CLI args, and validates stdout
 against the node's output contract through the ordinary `graph_advancers.py` path.
 Execution is gated by hash-bound trust (`script_trust`, `scripts_library.py`): an
-unapproved or changed script blocks the node with a `script_approval_required` error
-and the one-time `POST …/approve-script` approval records the file's sha256 and
-reruns the step. `scripts_library.scan_catalog` also feeds the reuse-awareness
+unapproved or changed script blocks the node with a `script_approval_required` error;
+the approval card fetches content + sha256 together (`GET …/nodes/{node_id}/script`)
+and the one-time `POST …/approve-script` approval echoes that hash (409 if the file
+changed after review — audit F4), records the sha256, and reruns the step. The
+runner hashes and executes the same in-memory bytes via a private temp copy, so a
+concurrent swap of the project file cannot run unapproved content. `scripts_library.scan_catalog` also feeds the reuse-awareness
 surfaces: the script catalog is injected into every project run preamble
 (`wiki_memory.build_run_preamble`) and into the plan slicer's prompt
 (`workflows.architect_system`).
@@ -208,8 +211,11 @@ A `job` may bind to exactly one area via `target_area_id` (T1); a code-area targ
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
 A code area with a detected git remote may opt into push-after-merge via
-`project_areas.push_on_merge` (T9, slice 11, default off); `repo_remote.py` shells
-out to the host's own `git`/`gh` (BYO - no brokered auth, no stored tokens) and the
+`project_areas.push_on_merge` (T9, slice 11, default off); enabling pins the remote
+URL into `project_areas.push_remote_url` (audit F3) and the push refuses on a
+mismatch with the repo's current `.git/config`. `repo_remote.py` shells
+out to the host's own `git`/`gh` (BYO - no brokered auth, no stored tokens; the push
+neutralizes repo-config credential helpers and hooks via `-c` overrides) and the
 push outcome lands on the `job_worktrees` row (`push_status/push_error/...`).
 Artifact scanning still ignores areas; the slicer that sets the binding at slice
 time is slice 3.
@@ -447,8 +453,10 @@ POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
     the branch the worktree was cut from (T1 local-first)
     ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn
     │  down - then, ONLY if the code area's push_on_merge toggle is on (T9,
-    │  slice 11, default off), `git push <remote> <base_branch>` via the
-    │  host's own git. A failed push never un-merges and never fails the
+    │  slice 11, default off) AND the repo's remote URL still matches the one
+    │  pinned at opt-in (audit F3), a hardened `git push` via the host's own
+    │  git (credential helpers + hooks neutralized). A failed or refused push
+    │  never un-merges and never fails the
     │  approve: push_status='failed' + the exact command output land on the
     │  job_worktrees row and surface as a blocker card with a retry action
     │  (POST /api/jobs/{id}/push, either engine).

@@ -6505,6 +6505,24 @@ div.result-media {
 .graph-script-approval .primary-button {
 	align-self: flex-start;
 }
+/* The bytes under review (audit F4): the exact content the approval trusts. */
+.graph-script-content {
+	margin: 0;
+	padding: var(--space-2);
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface-subtle);
+	font-family: var(--font-mono);
+	font-size: var(--text-xs);
+	max-height: 260px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.graph-script-hash {
+	color: var(--ui-text-secondary);
+	overflow-wrap: anywhere;
+}
 
 .job-step-output {
 	background: var(--ui-surface-subtle);

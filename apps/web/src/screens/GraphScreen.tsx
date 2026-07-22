@@ -23,6 +23,7 @@ import { listProjectAreas } from '../api/projects'
 import { IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
 import { SatpamCard } from '../components/tasks/SatpamCard'
+import { ScriptApprovalCard } from '../components/workflows/ScriptApprovalCard'
 import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
@@ -1140,20 +1141,18 @@ export function GraphScreen({
                 >{busy === 'answer' ? 'Sending…' : 'Answer & resume'}</button>
               </div>}
               {/* A script blocked on trust is not a malfunction — it is the one-time
-                  approval surface (T6). The banner replaces the raw error, and the
-                  approve action records the hash and reruns the step. */}
-              {definition.type === 'script' && selectedState?.status === 'failed' && selectedState.error?.startsWith('script_approval_required') ? <div className="graph-script-approval">
-                <p>
-                  This step wants to run <code>scripts/{definition.command}</code>, and this
-                  version of the script hasn't been approved yet. Approve it once and it runs
-                  without asking — until the file's content changes again.
-                </p>
-                <button
-                  className="primary-button"
-                  disabled={!!busy}
-                  onClick={() => void act('approve-script', () => approveGraphNodeScript(token, job.id, definition.id), 'Script approved — the step is running again.')}
-                >{busy === 'approve-script' ? 'Approving…' : 'Approve script & run'}</button>
-              </div>
+                  approval surface (T6). The card shows the script's actual content +
+                  sha256 (audit F4: approve bytes, not a filename); approving echoes
+                  that hash so a swapped file is refused, then reruns the step. */}
+              {definition.type === 'script' && selectedState?.status === 'failed' && selectedState.error?.startsWith('script_approval_required') ? <ScriptApprovalCard
+                token={token}
+                jobId={job.id}
+                nodeId={definition.id}
+                command={definition.command ?? ''}
+                approving={busy === 'approve-script'}
+                disabled={!!busy}
+                onApprove={sha256 => void act('approve-script', () => approveGraphNodeScript(token, job.id, definition.id, sha256), 'Script approved — the step is running again.')}
+              />
               : selectedState?.error && <p className="error-text">{selectedState.error}</p>}
               {selectedState?.output != null ? <pre className="graph-output">{outputText(selectedState)}</pre> : <p className="muted">No validated output yet.</p>}
               {['review', 'done'].includes(job.status) && selectedState && ['done', 'review', 'failed'].includes(selectedState.status) && <>

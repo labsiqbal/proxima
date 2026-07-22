@@ -215,15 +215,20 @@ def register(app, deps):
                     status_code=409,
                     detail="this code area has no git remote - add one with your own git (git remote add ...) and re-open settings",
                 )
+        # Enabling PINS the remote URL the owner is opting into (audit F3):
+        # the push-time target must still match it, so an agent rewriting the
+        # repo's own .git/config cannot silently redirect a later push.
+        # Disabling clears the pin - re-enabling re-reads and re-pins.
+        pinned_url = remote["url"] if payload.push_on_merge and remote else None
         db().execute(
-            "UPDATE project_areas SET push_on_merge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (1 if payload.push_on_merge else 0, area_id),
+            "UPDATE project_areas SET push_on_merge = ?, push_remote_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if payload.push_on_merge else 0, pinned_url, area_id),
         )
         db().execute(
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.push_on_merge', 'project', ?, ?)",
-            (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge})),
+            (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url})),
         )
-        return {"id": area_id, "rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "remote": remote}
+        return {"id": area_id, "rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url, "remote": remote}
 
     @app.delete("/api/projects/{slug}/areas/{area_id}")
     def remove_project_area(slug: str, area_id: int, user: dict[str, Any] = Depends(current_user)):

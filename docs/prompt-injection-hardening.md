@@ -97,14 +97,26 @@ any other project file — a prompt-injected run can write one. The controls:
 
 - a script executes as a plan step only after the owner's one-time approval of its
   exact bytes (sha256 recorded in `script_trust`); any content change re-blocks it;
+- the approval card shows the script's actual content + sha256, and the approve
+  request must echo that hash — a file edited after review is refused (409), and
+  the run executes the hashed bytes from a private temp copy, so a concurrent
+  swap after the trust check cannot run unapproved content (audit F4);
 - execution uses an exec array (node args cannot shell-inject), the project
   container as cwd, and a minimal env (`PATH`/`HOME`/locale — no server secrets);
 - the script path is jailed to `scripts/` at plan validation and at resolution
   (no `..`/absolute/symlink escape).
 
 The approval is the boundary, not a sandbox: an approved script runs with the
-service user's OS privileges, so the owner should read a script before approving
-it. See `docs/security-boundaries.md`.
+service user's OS privileges, so the owner should read the content the card shows
+before approving it. See `docs/security-boundaries.md`.
+
+## Push after merge (repo-remote connector)
+
+A prompt-injected agent in a worktree can edit the repo's own `.git/config`, so
+the T9 push never trusts it alone (audit F3): the remote URL is pinned at opt-in
+and a mismatch at push time refuses the push, and the invocation runs with
+`-c credential.helper= -c core.hooksPath=/dev/null` so planted helpers/hooks
+cannot execute at push time. Details in `docs/security-boundaries.md`.
 
 ## Developer mode (future)
 
