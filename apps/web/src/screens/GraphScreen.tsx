@@ -46,6 +46,7 @@ import type {
   WorkflowGraph,
   WorkflowInput,
 } from '../types'
+import { planStatusLabel, planStatusTone } from '../components/tasks/planProjection'
 import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
@@ -53,19 +54,6 @@ const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
 function outputText(state?: GraphNodeState): string {
   if (state?.output == null) return ''
   return typeof state.output === 'string' ? state.output : JSON.stringify(state.output, null, 2)
-}
-
-/** Plan statuses phrased as what the owner can do next — "kok gak bisa diedit?" should
- *  be answered by the label itself, not by trial and error. */
-function planStatusLabel(status: GraphJob['status']): string {
-  switch (status) {
-    case 'queued': return 'Draft — editable'
-    case 'running': return 'Running…'
-    case 'review': return 'Needs your review'
-    case 'done': return 'Done'
-    case 'failed': return 'Failed'
-    default: return statusLabel(status)
-  }
 }
 
 const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -741,7 +729,7 @@ export function GraphScreen({
                 <span className="graph-card-glyph" aria-hidden="true"><i /><i /><i /></span>
                 <span className="graph-card-meta">
                   <strong>{item.title}</strong>
-                  <small className={`graph-card-status st-${item.status}`}>{planStatusLabel(item.status)}</small>
+                  <small className={`graph-card-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</small>
                 </span>
               </button>
               <div className="graph-card-actions">
@@ -833,7 +821,7 @@ export function GraphScreen({
       />}
       <h1>{job?.title ?? 'Recipes'}</h1>
       {job && <>
-        <span className={`graph-status st-${job.status}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job.status)}</span>
+        <span className={`graph-status st-${planStatusTone(job)}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
       </>}
       {dirty && <span className="graph-dirty">Unsaved edits</span>}

@@ -240,5 +240,10 @@ describe("HomeScreen Ops task composer", () => {
 			await screen.findByText("1 task needs your attention"),
 		).toBeInTheDocument();
 		expect(screen.getByText("Older review")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", {
+				name: "1 task needs your attention: Older review",
+			}),
+		).toBeInTheDocument();
 	});
 });

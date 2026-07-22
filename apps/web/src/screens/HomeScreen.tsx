@@ -130,6 +130,11 @@ export function HomeScreen({
 						<button
 							type="button"
 							className="ops-attention-main"
+							aria-label={
+								firstReview
+									? `${reviewCount} ${reviewCount === 1 ? "task needs" : "tasks need"} your attention: ${firstReview.title}`
+									: `${reviewCount} ${reviewCount === 1 ? "task needs" : "tasks need"} your attention`
+							}
 							onClick={() =>
 								firstReview
 									? onOpenJob(firstReview.id, firstReview.engine)

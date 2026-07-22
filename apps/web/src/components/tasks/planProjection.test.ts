@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, targetBadge } from './planProjection'
+import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, planStatusLabel, planStatusTone, targetBadge } from './planProjection'
 import type { GraphJob, GraphNodeDefinition, WorkflowGraph } from '../../types'
 
 const node = (id: string, extra: Partial<GraphNodeDefinition> = {}): GraphNodeDefinition => ({
@@ -141,5 +141,36 @@ describe('lastOutputLine', () => {
     expect(lastOutputLine('   ')).toBeNull()
     expect(lastOutputLine({ not: 'text' })).toBeNull()
     expect(lastOutputLine(null)).toBeNull()
+  })
+})
+
+describe('planStatusLabel / planStatusTone', () => {
+  const base = (status: GraphJob['status'], nodeStatuses: Record<string, string>, questions: Record<string, string> = {}) => {
+    const plan = job({ nodes: [node('only')], edges: [] }, nodeStatuses)
+    plan.status = status
+    for (const [nodeId, question] of Object.entries(questions)) {
+      const state = plan.node_states.find(row => row.node_id === nodeId)
+      if (state) state.question = question
+    }
+    return plan
+  }
+
+  it('says fix-or-rerun (and tones failed) when a review plan has a failed step', () => {
+    const plan = base('review', { only: 'failed' })
+    expect(planStatusLabel(plan)).toBe('Step failed — fix or rerun')
+    expect(planStatusTone(plan)).toBe('failed')
+  })
+
+  it('distinguishes answer holds, step review gates, and ready-to-approve', () => {
+    expect(planStatusLabel(base('review', { only: 'review' }, { only: 'Which area?' }))).toBe('Needs your answer')
+    expect(planStatusLabel(base('review', { only: 'review' }))).toBe('A step needs your review')
+    expect(planStatusLabel(base('review', { only: 'done' }))).toBe('Ready to approve')
+    expect(planStatusTone(base('review', { only: 'done' }))).toBe('review')
+  })
+
+  it('keeps the simple labels for non-review statuses', () => {
+    expect(planStatusLabel(base('queued', {}))).toBe('Draft — editable')
+    expect(planStatusLabel(base('running', { only: 'running' }))).toBe('Running…')
+    expect(planStatusLabel(base('done', { only: 'done' }))).toBe('Done')
   })
 })

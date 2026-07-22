@@ -106,3 +106,40 @@ export function planProgress(job: GraphJob): string {
   const done = jobs.filter(node => states.get(node.id) === 'done').length
   return `${done}/${jobs.length}`
 }
+
+/**
+ * Plan statuses phrased as what the owner can do next.
+ *
+ * The graph engine parks failed nodes under job status `review` so the owner
+ * can rerun/correct. The bare word "review" is therefore ambiguous — inspect
+ * node_states and say the real next step.
+ */
+export function planStatusLabel(job: Pick<GraphJob, 'status' | 'node_states'>): string {
+  switch (job.status) {
+    case 'queued': return 'Draft — editable'
+    case 'running': return 'Running…'
+    case 'review': {
+      const states = job.node_states ?? []
+      if (states.some(state => state.status === 'failed')) return 'Step failed — fix or rerun'
+      if (states.some(state => state.status === 'review' && state.question)) return 'Needs your answer'
+      if (states.some(state => state.status === 'review')) return 'A step needs your review'
+      if (states.length > 0 && states.every(state => state.status === 'done')) return 'Ready to approve'
+      return 'Needs your review'
+    }
+    case 'done': return 'Done'
+    case 'failed': return 'Failed'
+    default: return job.status.replaceAll('_', ' ')
+  }
+}
+
+/**
+ * Visual tone for the status chip. Failed steps keep job.status=`review` so
+ * the owner can act, but the chip should still read as a problem, not a soft
+ * "please approve" yellow.
+ */
+export function planStatusTone(job: Pick<GraphJob, 'status' | 'node_states'>): string {
+  if (job.status === 'review' && (job.node_states ?? []).some(state => state.status === 'failed')) {
+    return 'failed'
+  }
+  return job.status
+}

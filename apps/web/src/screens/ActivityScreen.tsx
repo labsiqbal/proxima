@@ -22,7 +22,7 @@ const relTime = (value?: string | null): string => {
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 const progress = (job: Job) => { const total = job.steps_state.length; const done = job.steps_state.filter(step => step.status === 'done').length; return total ? `${done}/${total}` : '—' }
-const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] | string }) => <span className={`job-pill ${status}`}>{status}</span>
+const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] | string }) => <span className={`job-pill ${status}`}>{' '}{status}</span>
 const BOARD: { key: JobStatus; label: string }[] = [
   { key: 'queued', label: 'Queued' },
   { key: 'running', label: 'Running' },
@@ -196,9 +196,9 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
 
   const planCell = (plan: GraphJob) => <>
     {plan.title}
-    <span className="job-pill plan">plan</span>
-    {plan.graph.nodes.some(node => node.target_ambiguous) && <span className="plan-target is-open" title="A job in this plan still needs a work area before it can start.">where?</span>}
-    {plan.worktree && <span className="plan-target is-repo" title="This plan works in the repo — it ran in an isolated copy whose changes you review before they land."><span className="plan-repo-mark" aria-hidden="true">⎇</span>{worktreeStateLabel(plan.worktree.status)}</span>}
+    <span className="job-pill plan">{' '}plan</span>
+    {plan.graph.nodes.some(node => node.target_ambiguous) && <span className="plan-target is-open" title="A job in this plan still needs a work area before it can start.">{' '}where?</span>}
+    {plan.worktree && <span className="plan-target is-repo" title="This plan works in the repo — it ran in an isolated copy whose changes you review before they land."><span className="plan-repo-mark" aria-hidden="true">⎇</span>{' '}{worktreeStateLabel(plan.worktree.status)}</span>}
   </>
 
   return <section className="tasks-view">
@@ -238,7 +238,11 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
         })}</div>
       : <div className="job-list">
           {rows.length === 0
-            ? <div className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{mode === 'review' ? 'Nothing waiting for review.' : 'No tasks yet. Slice a plan from Chat or press New task — both land here.'}</p></div></div>
+            ? <div className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{mode === 'review'
+                ? (activeProject ? `Nothing waiting for review in ${activeProject.name}.` : 'Nothing waiting for review.')
+                : (activeProject
+                  ? `No tasks in ${activeProject.name} yet. Slice a plan from Chat or press New task — both land here. Switch project to see tasks from another folder.`
+                  : 'No tasks yet. Slice a plan from Chat or press New task — both land here.')}</p></div></div>
             : <>
               <div className="job-row job-row-head">
                 <span className="jr-title">Task</span><span className="jr-wf">Type</span><span className="jr-status">Status</span><span className="jr-prog">Jobs</span><span className="jr-time">Created</span>
@@ -253,7 +257,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                   </button>
                 : <div className={`plan-row stagger-item${expanded.has(row.plan.id) ? ' open' : ''}`} style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id}>
                     <button className="job-row plan-row-head" aria-expanded={expanded.has(row.plan.id)} onClick={() => toggleExpanded(row.plan.id)}>
-                      <span className="jr-title"><span className={`chevron${expanded.has(row.plan.id) ? ' open' : ''}`}>▸</span>{planCell(row.plan)}</span>
+                      <span className="jr-title"><span className={`chevron${expanded.has(row.plan.id) ? ' open' : ''}`} aria-hidden="true">▸</span>{planCell(row.plan)}</span>
                       <span className="jr-wf muted">Plan</span>
                       <span className="jr-status"><StatusPill status={row.plan.status} /></span>
                       <span className="jr-prog muted">{planProgress(row.plan)}</span>
