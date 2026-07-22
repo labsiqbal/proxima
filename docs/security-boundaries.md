@@ -114,6 +114,13 @@ preview switches between `localhost` and `127.0.0.1`, remote preview uses a shor
 preview-only capability, reverse proxies strip Cookie/Authorization and upstream
 `Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
 
+Remote preview without an apps domain opens one **relay listener per running app**
+(`PROXIMA_PREVIEW_BIND`, default `0.0.0.0` so LAN/Tailscale clients can reach it; the
+listener answers 403 without the preview capability and closes with the app). This is a
+deliberate network surface: what it exposes is the previewed dev server, never the
+Proxima API or owner session. Strict loopback-only installs should set
+`PROXIMA_PREVIEW_BIND=127.0.0.1` or `off`.
+
 There is no command classifier presented as a security boundary. The owner confirmation,
 environment filtering, project cwd, preview credential isolation, and optional OS-level
 service separation are the current pragmatic controls.

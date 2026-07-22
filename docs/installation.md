@@ -118,6 +118,7 @@ PROXIMA_APP_ENV_ALLOWLIST=
 PROXIMA_RUNNER_INHERIT_ENV=0
 PROXIMA_APP_INHERIT_ENV=0
 PROXIMA_MAX_UPLOAD_MB=100
+PROXIMA_PREVIEW_BIND=0.0.0.0
 ```
 
 Notes:
@@ -136,6 +137,11 @@ Notes:
   corresponding comma-separated allowlist. Full inheritance is a compatibility escape
   hatch and should remain off when opening unfamiliar projects.
 - Uploads default to 100 MB per file; adjust `PROXIMA_MAX_UPLOAD_MB` if needed.
+- `PROXIMA_PREVIEW_BIND` is the interface for per-app preview relay ports (Run &
+  Preview from a remote browser without an apps domain). Default `0.0.0.0` so
+  LAN/Tailscale clients can reach previews; the ports are gated by a short-lived
+  preview capability. Set `127.0.0.1` or `off` for strict loopback-only installs.
+  Firewalled hosts must allow the ephemeral relay ports for remote preview to work.
 
 Restart after backend/config changes:
 

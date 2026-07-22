@@ -500,12 +500,19 @@ file references — with the in-browser **Terminal** as the raw escape hatch.
 **Why:** Launch a project's dev server and preview it in-app — from the **Preview**
 tool on the right rail, from an app-type artifact, or from the recipe test bench.
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
-environment; an authenticated reverse proxy serves it. Local direct preview uses the
-other loopback hostname so the Proxima cookie is not sent across ports. Remote preview
-uses a short-lived preview-only cookie, never the owner API token. Both proxies strip
-cookies/auth before forwarding and strip upstream `Set-Cookie`. Same-origin fallback
-and generated HTML use an opaque iframe sandbox. This is credential-leak mitigation,
-not OS/container isolation; the command still runs as the Proxima service user.
+environment. The preview must be served root-relative on its own origin (SPA HTML uses
+absolute asset paths and HMR opens a WebSocket to the page origin), so each vantage gets
+one: local direct preview uses the other loopback hostname so the Proxima cookie is not
+sent across ports; remote preview uses the app's **preview relay port** on the Proxima
+host (reported as `preview_port` in app status; bind interface via
+`PROXIMA_PREVIEW_BIND`, `off` disables) or, with an apps domain configured, the
+`preview-<slug>.<apps_domain>` subdomain. Relay and subdomain proxy share one engine:
+HTTP + WebSocket forwarding, Host rewritten to the local dev port (Vite-style
+allowed-host checks pass), gated by a short-lived preview-only cookie — never the owner
+API token — and they strip cookies/auth before forwarding and strip upstream
+`Set-Cookie`. Same-origin fallback and generated HTML use an opaque iframe sandbox.
+This is credential-leak mitigation, not OS/container isolation; the command still runs
+as the Proxima service user.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

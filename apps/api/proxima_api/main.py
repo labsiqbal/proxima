@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,6 +21,7 @@ from .preview_proxy import (
     PREVIEW_COOKIE,
     PREVIEW_TOKEN_TTL_SECONDS,
     PreviewProxyMiddleware,
+    PreviewRelayManager,
     mint_preview_token,
     valid_preview_token,
 )
@@ -134,6 +135,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await worker.stop()
     await app.state.acp_manager.shutdown()
     await app.state.app_manager.shutdown()
+    await app.state.preview_relays.shutdown()
 
 
 def create_app(config: dict[str, Any] | None = None) -> FastAPI:
@@ -227,16 +229,30 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         return valid_preview_token(preview_secret, token)
 
     @app.post("/api/preview-auth")
-    def preview_auth(user: dict[str, Any] = Depends(current_user)):
-        # A preview capability can load preview subdomains but is useless against the
+    def preview_auth(request: Request, user: dict[str, Any] = Depends(current_user)):
+        # A preview capability can load previews but is useless against the
         # main API. Never reuse or copy the owner's bearer/session token here.
         token = mint_preview_token(preview_secret)
         resp = JSONResponse({"ok": True})
+        # Host-only cookie for the UI's own host: authorizes the per-app preview
+        # relay ports (cookies are host-scoped but port-blind, so the browser
+        # sends it to http://<this-host>:<relay port>/ and its subresources).
+        resp.set_cookie(PREVIEW_COOKIE, token, path="/", httponly=True,
+                        secure=request.url.scheme == "https", samesite="lax",
+                        max_age=PREVIEW_TOKEN_TTL_SECONDS)
         if cfg.get("apps_domain"):
             resp.set_cookie(PREVIEW_COOKIE, token, domain="." + cfg["apps_domain"], path="/",
                             httponly=True, secure=True, samesite="lax",
                             max_age=PREVIEW_TOKEN_TTL_SECONDS)
         return resp
+
+    # Port-based preview origins for installs without an apps domain (LAN/Tailscale):
+    # each running app gets its own credential-stripping listener; see preview_proxy.py.
+    app.state.preview_relays = PreviewRelayManager(
+        cfg.get("preview_bind_host"),
+        port_for=lambda slug: app.state.app_manager.port(slug),
+        validate_token=_valid_preview_token,
+    )
 
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
     # app's dev port, HTTP + WebSocket). Gated by the proxima_preview cookie (no CF Access on
@@ -295,6 +311,9 @@ def _config_from_env() -> dict[str, Any]:
         # that rides the tunnel; unset ⇒ local-only preview (no subdomain routing). The
         # cf_* creds let the app create/remove that subdomain hostname on the tunnel.
         "apps_domain": os.environ.get("PROXIMA_APPS_DOMAIN") or None,
+        # Interface for per-app preview relay ports (remote preview without an apps
+        # domain). "off" disables relays for strict loopback-only installs.
+        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
         # Browser-tab label (e.g. "STAGING") so staging/prod aren't confused. Unset ⇒ none.
         "env_name": (os.environ.get("PROXIMA_ENV_NAME") or "").strip() or None,
         "cf_api_token": os.environ.get("PROXIMA_CF_API_TOKEN") or None,
