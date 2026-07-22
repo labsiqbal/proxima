@@ -17,6 +17,16 @@ const stored = (key: string, fallback: number) => {
 
 const LEFT_MIN = 200, LEFT_MAX = 480
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+function focusableIn(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return []
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => {
+    if (el.getAttribute('aria-hidden') === 'true') return false
+    const style = window.getComputedStyle(el)
+    return style.display !== 'none' && style.visibility !== 'hidden'
+  })
+}
+
 export function AppShell(props: {
   children: React.ReactNode
   activeProfile: Profile | null
@@ -47,15 +57,77 @@ export function AppShell(props: {
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
+  const sidebarRef = React.useRef<HTMLElement>(null)
+  const menuBtnRef = React.useRef<HTMLButtonElement>(null)
+  const drawerWasOpen = React.useRef(false)
+
+  const openSearch = React.useCallback(() => {
+    setDrawerOpen(false)
+    setMenuOpen(false)
+    setSearchOpen(true)
+  }, [])
 
   React.useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setDrawerOpen(false); setMenuOpen(false); setSearchOpen(false)
+      if (event.key === 'Escape') {
+        // Close the topmost overlay first so Escape does not wipe everything at once.
+        if (searchOpen) { setSearchOpen(false); return }
+        if (menuOpen) { setMenuOpen(false); return }
+        if (drawerOpen) { setDrawerOpen(false); return }
+        return
+      }
+      // Desktop and mobile keyboard path into Search (Ctrl/Cmd+K), including from the chat box.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        openSearch()
+      }
     }
     window.addEventListener('keydown', dismiss)
     return () => window.removeEventListener('keydown', dismiss)
-  }, [])
+  }, [drawerOpen, menuOpen, searchOpen, openSearch])
+
+  // When the mobile drawer opens, move focus inside it and trap Tab until it closes.
+  // When it closes, return focus to the Menu button that opened it.
+  React.useEffect(() => {
+    if (drawerOpen) {
+      drawerWasOpen.current = true
+      const id = window.requestAnimationFrame(() => {
+        const items = focusableIn(sidebarRef.current)
+        const closeBtn = items.find(el => el.getAttribute('aria-label') === 'Close menu') || items[0]
+        closeBtn?.focus()
+      })
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key !== 'Tab' || !sidebarRef.current) return
+        const items = focusableIn(sidebarRef.current)
+        if (items.length === 0) return
+        const first = items[0]
+        const last = items[items.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (event.shiftKey) {
+          if (active === first || !sidebarRef.current.contains(active)) {
+            event.preventDefault()
+            last.focus()
+          }
+        } else if (active === last || !sidebarRef.current.contains(active)) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+      window.addEventListener('keydown', onKey)
+      return () => {
+        window.cancelAnimationFrame(id)
+        window.removeEventListener('keydown', onKey)
+      }
+    }
+    if (drawerWasOpen.current) {
+      drawerWasOpen.current = false
+      const active = document.activeElement
+      if (!active || active === document.body || sidebarRef.current?.contains(active)) {
+        menuBtnRef.current?.focus()
+      }
+    }
+  }, [drawerOpen])
+
   React.useEffect(() => { localStorage.setItem('proxima.leftWidth', String(leftWidth)) }, [leftWidth])
   React.useEffect(() => { localStorage.setItem('proxima.leftCollapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
 
@@ -99,7 +171,7 @@ export function AppShell(props: {
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
-        <button className="tool-btn" onClick={() => setSearchOpen(true)} aria-label="Search" title="Search"><IconSearch size={17} /></button>
+        <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         <span className="top-bar-spacer" />
         <div className="user-menu-wrap">
           <button className={`tool-btn user-avatar-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(open => !open)} aria-label="Account actions" aria-expanded={menuOpen} aria-controls="account-actions" title={props.user.username}><span className="avatar xs">{props.user.username[0]?.toUpperCase()}</span></button>
@@ -117,8 +189,15 @@ export function AppShell(props: {
           </>}
         </div>
       </header>
-      <MobileTopbar activeProject={props.activeProject} onMenu={() => setDrawerOpen(true)} onNewChat={props.onNewChat} />
-      <aside className={`sidebar ${drawerOpen ? 'is-open' : ''}`}>
+      <MobileTopbar
+        activeProject={props.activeProject}
+        drawerOpen={drawerOpen}
+        onMenu={() => setDrawerOpen(true)}
+        onSearch={openSearch}
+        onNewChat={props.onNewChat}
+        menuButtonRef={menuBtnRef}
+      />
+      <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
         <Sidebar {...props} onClose={() => setDrawerOpen(false)} />
       </aside>
       <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
