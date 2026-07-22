@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ToolDock } from './ToolDock'
@@ -83,5 +83,18 @@ describe('ToolDock', () => {
     expect(await screen.findByTestId('preview-stub')).toBeVisible()
     await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
     expect(screen.queryByTestId('preview-stub')).not.toBeInTheDocument()
+  })
+
+  it('opens the Files panel when proxima:reveal-file fires', async () => {
+    // Path expand/highlight is covered in WorkspaceTree tests; here we only
+    // assert the dock owns the event and surfaces the Files tool.
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: 'artifacts/note.md' } }))
+    })
+    const panel = await screen.findByLabelText('Tool panel')
+    expect(panel).toHaveAttribute('aria-hidden', 'false')
+    const filesTab = panel.querySelector('.tool-panel-tab.active')
+    expect(filesTab?.textContent).toMatch(/Files/)
   })
 })

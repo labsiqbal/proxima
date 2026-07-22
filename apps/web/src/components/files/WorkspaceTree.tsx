@@ -75,7 +75,7 @@ function Level({ dir, depth, t }: { dir: string; depth: number; t: Ctl }) {
           {open && <Level dir={path} depth={depth + 1} t={t} />}
         </div>
       }
-      return <button key={path} className={`tree-row file ${t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path)} onContextMenu={e => t.openMenu(e, path, false)}>
+      return <button key={path} data-path={path} className={`tree-row file ${t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path)} onContextMenu={e => t.openMenu(e, path, false)}>
         <span className="tree-ico"><IconFile size={15} /></span>
         <span className="tree-name">{entry.name}</span>
       </button>
@@ -95,6 +95,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   const [busy, setBusy] = React.useState(false)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
+  const treeScrollRef = React.useRef<HTMLDivElement | null>(null)
   const refresh = () => setRefreshKey(k => k + 1)
   React.useEffect(() => {
     mountedRef.current = true
@@ -112,6 +113,45 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     window.addEventListener('proxima:files-changed', onChange)
     return () => window.removeEventListener('proxima:files-changed', onChange)
   }, [])
+
+  // "Reveal in Files" (and any external activePath): expand every ancestor so the
+  // highlighted row is actually visible, not buried under a collapsed folder.
+  // Close any inline editor too - it is absolute-positioned over the tree and
+  // would hide the highlight Reveal is supposed to show. Archive already has
+  // Open for content.
+  // Re-run when `fs` changes too: the reset effect above clears `expanded`, and
+  // a same-path reveal after a project switch would otherwise stay collapsed.
+  React.useEffect(() => {
+    if (!activePath) return
+    setEditing(null)
+    const parts = activePath.split('/').filter(Boolean)
+    if (parts.length <= 1) return
+    setExpanded(s => {
+      const next = new Set(s)
+      let acc = ''
+      for (let i = 0; i < parts.length - 1; i++) {
+        acc = acc ? `${acc}/${parts[i]}` : parts[i]
+        next.add(acc)
+      }
+      return next
+    })
+  }, [activePath, fs])
+
+  // After ancestors expand and their children load, scroll the highlighted row
+  // into view inside the tree scroller (not the whole page).
+  React.useEffect(() => {
+    if (!activePath) return
+    const scroller = treeScrollRef.current
+    if (!scroller) return
+    const frame = window.requestAnimationFrame(() => {
+      const row = scroller.querySelector(`[data-path="${CSS.escape(activePath)}"]`)
+      // jsdom has no scrollIntoView; real browsers do.
+      if (row && typeof (row as HTMLElement).scrollIntoView === 'function') {
+        ;(row as HTMLElement).scrollIntoView({ block: 'nearest' })
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activePath, expanded, refreshKey])
   React.useEffect(() => {
     if (!menu) return
     const close = () => setMenu(null)
@@ -187,7 +227,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
       <button title="New folder" aria-label="New folder" onClick={() => startCreate('', 'dir')} disabled={busy}><IconFolderPlus size={16} /></button>
     </div></div>
     {treeError && <p className="tree-error">{treeError}</p>}
-    <div className="tree-scroll" onContextMenu={e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) }}><Level dir="" depth={0} t={t} /></div>
+    <div className="tree-scroll" ref={treeScrollRef} onContextMenu={e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) }}><Level dir="" depth={0} t={t} /></div>
     {!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} path={editing} onClose={() => setEditing(null)} /></React.Suspense>}
     {menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
       <button onClick={() => { startCreate(menuDir, 'file'); setMenu(null) }} disabled={busy}>New File</button>
