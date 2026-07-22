@@ -51,6 +51,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
 │  AppManager    per-project dev-server processes  ── PreviewProxy (subdomains)  │
+│                                                  ── PreviewRelay (per-app port)│
 │  Terminal      PTY shell over WebSocket                                         │
 └───────────────────────────────┬───────────────────────────────────────────────┘
                                  │  sqlite3 (WAL, one connection per thread)
@@ -533,13 +534,22 @@ materializes a `job` for each — respecting `overlap_policy` (skip / allow).
 ### 8. Run & Preview app
 
 `POST /api/projects/{slug}/app/start` → `AppManager` launches one owner-confirmed dev
-process for the project with a filtered environment. Locally the iframe uses the other
-loopback hostname, avoiding host-cookie reuse across ports. When `apps_domain` is
-configured, `PreviewProxyMiddleware` serves a `preview-<slug>.<apps_domain>` subdomain
-gated by a one-hour, signed `proxima_preview` capability that is unrelated to the owner
-API session. HTTP proxy paths remove Cookie/Authorization before forwarding and ignore
-upstream `Set-Cookie`; same-origin/generated HTML previews omit `allow-same-origin`.
-These are lightweight self-hosted mitigations, not OS isolation of the project process.
+process for the project with a filtered environment. A preview only works served
+root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
+origin), so the transport depends on the vantage. Locally the iframe uses the other
+loopback hostname, avoiding host-cookie reuse across ports. Remotely,
+`PreviewRelayManager` starts a per-app listener on the Proxima host
+(`preview_port` in app status; interface via `preview_bind_host` /
+`PROXIMA_PREVIEW_BIND`, `off` disables) — the app's own origin by port. When
+`apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
+`preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
+(`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to
+`127.0.0.1:<dev port>`, gated by a one-hour, signed `proxima_preview` capability that
+is unrelated to the owner API session (minted host-scoped by `POST /api/preview-auth`,
+so the browser also sends it to relay ports — cookies ignore ports). Proxy paths remove
+Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
+same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
+self-hosted mitigations, not OS isolation of the project process.
 
 ### 9. Update check & self-update
 

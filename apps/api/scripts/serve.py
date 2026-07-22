@@ -90,6 +90,9 @@ app = create_app(
         # Per-app remote preview: <slug>.<apps_domain> rides the tunnel; cf_* creds
         # let the app create/remove that hostname. Unset ⇒ local-only preview.
         "apps_domain": os.environ.get("PROXIMA_APPS_DOMAIN") or None,
+        # Interface for per-app preview relay ports (remote preview without an apps
+        # domain). "off" disables relays for strict loopback-only installs.
+        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
         # Browser-tab label (e.g. "STAGING") so staging/prod tabs aren't confused.
         "env_name": (os.environ.get("PROXIMA_ENV_NAME") or "").strip() or None,
         "cf_api_token": os.environ.get("PROXIMA_CF_API_TOKEN") or None,

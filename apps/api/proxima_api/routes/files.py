@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
     AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest,
 )
+
+logger = logging.getLogger("proxima.api")
 
 
 def register(app, deps):
@@ -419,6 +422,12 @@ def register(app, deps):
             if not cwd.is_dir():
                 raise HTTPException(status_code=400, detail="folder not found")
         await app.state.app_manager.start(slug, str(cwd), payload.command, int(payload.port or 5180))
+        # Preview relay: the app's own remote-reachable origin (best-effort; the
+        # app still runs without it and localhost preview needs no relay).
+        try:
+            await app.state.preview_relays.start(slug)
+        except OSError:
+            logger.exception("preview relay start failed for %s", slug)
         # Provision the remote-preview subdomain in the background (best-effort; app
         # start never waits on / fails from Cloudflare). No-op if CF isn't configured.
         if cf_hostnames.configured(app.state.config):
@@ -430,14 +439,23 @@ def register(app, deps):
     async def app_stop(slug: str, user: dict[str, Any] = Depends(current_user)):
         _project_root(slug, user)
         await app.state.app_manager.stop(slug)
+        await app.state.preview_relays.stop(slug)
         if cf_hostnames.configured(app.state.config):
             asyncio.create_task(cf_hostnames.deprovision(app.state.config, slug))
         return {"ok": True}
 
     @app.get("/api/projects/{slug}/app/status")
-    def app_status(slug: str, user: dict[str, Any] = Depends(current_user)):
+    async def app_status(slug: str, user: dict[str, Any] = Depends(current_user)):
         _project_root(slug, user)
-        return app.state.app_manager.status(slug)
+        status = app.state.app_manager.status(slug)
+        if status.get("running"):
+            relay_port = app.state.preview_relays.port(slug)
+            if relay_port:
+                status["preview_port"] = relay_port
+        else:
+            # The app exited on its own — reap its relay so the port is released.
+            await app.state.preview_relays.stop(slug)
+        return status
 
     # Project code is owner-triggered but still untrusted. Never pass Proxima/API
     # credentials into it and never let it set cookies on the Proxima origin.
