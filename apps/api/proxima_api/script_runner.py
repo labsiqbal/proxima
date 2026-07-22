@@ -40,6 +40,7 @@ from typing import Any
 
 from . import app_settings, scripts_library
 from .graph import normalize_graph
+from .runners import augmented_path
 from .workflows import substitute
 
 logger = logging.getLogger("proxima.script_runner")
@@ -229,6 +230,8 @@ class ScriptRunner:
         stdin_bytes = json.dumps(inputs, ensure_ascii=False).encode("utf-8")
 
         env = {key: os.environ[key] for key in _ENV_KEEP if key in os.environ}
+        # Same PATH augmentation as agent runners (local bins + python→python3 shim).
+        env["PATH"] = augmented_path(env.get("PATH"))
         timeout = app_settings.get_run_timeout_seconds(db, cfg)
         heartbeat = asyncio.create_task(
             self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10))

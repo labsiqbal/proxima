@@ -27,6 +27,11 @@ Most runners speak ACP; the **Codex** runner drives the owner's own
 current system Codex CLI instead of a stale bundled adapter core - newer models
 like `gpt-5.6-sol` work as soon as `codex update` has them. Default resolves via
 `default_runner()` (env → first *ready* runner → fallback).
+Agent/app/script subprocesses share `subprocess_env` / `augmented_path`: common
+user-local bins are appended, and when the host has `python3` but no `python`, a
+workspace-local shim (`$PROXIMA_WORKSPACE_ROOT/shims/python` → python3) is
+prepended so plan steps and scripts that still call `python` do not die with
+command-not-found on Debian/Ubuntu-style hosts.
 **Endpoints:** `GET /api/runners/detect` (installed/ready status).
 
 ## 2. Profiles (agent personas)

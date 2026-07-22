@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
-from proxima_api.runners import RunnerDefinition, detect_runners, hermes_status, subprocess_env
+from proxima_api.runners import (
+    RunnerDefinition,
+    augmented_path,
+    detect_runners,
+    ensure_python_compat_shim,
+    hermes_status,
+    subprocess_env,
+)
 
 
 def _make_hermes_bin(tmp_path: Path) -> str:
@@ -177,3 +185,46 @@ def test_app_subprocess_env_requires_explicit_allowlist(monkeypatch):
 
     assert env["PROJECT_PUBLIC_URL"] == "https://example.test"
     assert "OPENAI_API_KEY" not in env
+
+
+def test_python_compat_shim_when_only_python3(tmp_path, monkeypatch):
+    """Hosts with python3 but no python get a workspace shim on PATH."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    py3 = bindir / "python3"
+    py3.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    py3.chmod(0o755)
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    path = augmented_path(str(bindir))
+    assert shutil_which_python(path) is not None
+    assert path.split(":")[0].endswith("/shims")
+    shim = Path(path.split(":")[0]) / "python"
+    assert shim.exists()
+    assert os.path.realpath(shim) == os.path.realpath(py3)
+
+
+def test_python_compat_shim_not_added_when_python_exists(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    py = bindir / "python"
+    py.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    py.chmod(0o755)
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    assert ensure_python_compat_shim(str(bindir)) is None
+    path = augmented_path(str(bindir))
+    assert not path.startswith(str(tmp_path / "ws" / "shims"))
+
+
+def test_python_compat_shim_skipped_without_python3(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    assert ensure_python_compat_shim(str(bindir)) is None
+
+
+def shutil_which_python(path: str) -> str | None:
+    import shutil
+
+    return shutil.which("python", path=path)

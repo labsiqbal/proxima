@@ -26,6 +26,12 @@ export function WikiSearch({ notes, onOpen }: { notes: RawNote[]; onOpen: (path:
   return <div className="wiki-search">
     <input autoFocus placeholder="Search all notes…" value={q} onChange={e => setQ(e.target.value)} />
     <div className="wiki-results">
+      {!q.trim() && notes.length === 0 && (
+        <p className="muted">No notes to search yet. Create one in Files — index.md and log.md are catalog/journal and stay out of search.</p>
+      )}
+      {!q.trim() && notes.length > 0 && (
+        <p className="muted">Type to search note titles and content.</p>
+      )}
       {q.trim() && results.length === 0 && <p className="muted">No matches.</p>}
       {results.slice(0, 50).map((r) => {
         const path = r.path as string

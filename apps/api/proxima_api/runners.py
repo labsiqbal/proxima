@@ -87,11 +87,63 @@ RUNNER_REGISTRY: tuple[RunnerDefinition, ...] = tuple(
 )
 
 
+def compat_shim_root() -> Path:
+    """Workspace-local directory for host-compat command shims.
+
+    Lives under PROXIMA_WORKSPACE_ROOT (default ~/.local/share/proxima) so shims
+    stay with runtime data and never touch the owner's real ~/.local/bin.
+    """
+    root = os.environ.get("PROXIMA_WORKSPACE_ROOT") or str(Path.home() / ".local" / "share" / "proxima")
+    return Path(root) / "shims"
+
+
+def ensure_python_compat_shim(path_env: str) -> str | None:
+    """If `python` is missing but `python3` exists, expose `python` via a shim dir.
+
+    Many Linux hosts (Debian/Ubuntu, Nix-adjacent setups) ship only `python3`.
+    Agent plan steps and project scripts still invoke `python`, which then fails
+    with command-not-found even though the interpreter is installed. Return the
+    shim directory to prepend, or None when no shim is needed/possible.
+    """
+    if os.name == "nt":
+        return None
+    if shutil.which("python", path=path_env):
+        return None
+    python3 = shutil.which("python3", path=path_env)
+    if not python3:
+        return None
+
+    shim_dir = compat_shim_root()
+    try:
+        shim_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    target = shim_dir / "python"
+    try:
+        real_py3 = os.path.realpath(python3)
+        if target.is_symlink() or target.exists():
+            if target.is_symlink() and os.path.realpath(target) == real_py3:
+                return str(shim_dir)
+            target.unlink(missing_ok=True)
+        target.symlink_to(real_py3)
+        return str(shim_dir)
+    except OSError:
+        try:
+            target.write_text(f"#!/bin/sh\nexec '{python3}' \"$@\"\n", encoding="utf-8")
+            target.chmod(0o755)
+            return str(shim_dir)
+        except OSError:
+            return None
+
+
 def augmented_path(path_env: str | None = None) -> str:
     """PATH used by non-interactive service processes.
 
     GUI/server processes often miss Homebrew/user-local bins. Add the common
-    local paths without replacing the provided environment.
+    local paths without replacing the provided environment. When the host has
+    python3 but not python, prepend a workspace shim so agent/app subprocesses
+    can still run `python`.
     """
 
     base = path_env or os.environ.get("PATH", "")
@@ -114,6 +166,11 @@ def augmented_path(path_env: str | None = None) -> str:
     for extra in extras:
         if extra not in parts:
             parts.append(extra)
+    # Build the candidate path first so the python probe does not see our shim.
+    candidate = os.pathsep.join(parts)
+    shim_dir = ensure_python_compat_shim(candidate)
+    if shim_dir and shim_dir not in parts:
+        parts.insert(0, shim_dir)
     return os.pathsep.join(parts)
 
 
