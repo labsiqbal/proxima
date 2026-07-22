@@ -36,6 +36,9 @@
 	--space-6: 24px;
 	--space-8: 32px;
 	--topbar-h: 52px;
+	--mobile-topbar-h: 58px;
+	--toolrail-w: 46px;
+	--toolpanel-w: 480px;
 	--graph-inspector-width: 21rem;
 	--graph-chat-width: 22rem;
 	--graph-canvas-min-height: 28rem;
@@ -176,7 +179,7 @@ button:disabled {
 .app-shell {
 	position: relative;
 	display: grid;
-	grid-template-columns: var(--left-w, 294px) minmax(0, 1fr);
+	grid-template-columns: var(--left-w, 294px) minmax(0, 1fr) var(--toolrail-w);
 	grid-template-rows: var(--topbar-h) minmax(0, 1fr);
 	height: 100vh;
 	min-height: 0;
@@ -192,6 +195,10 @@ button:disabled {
 }
 .app-shell > .main-pane {
 	grid-column: 2;
+	grid-row: 2;
+}
+.app-shell > .tool-rail {
+	grid-column: 3;
 	grid-row: 2;
 }
 .sidebar {
@@ -1536,7 +1543,7 @@ button:disabled {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		min-height: 58px;
+		min-height: var(--mobile-topbar-h);
 		border-bottom: 1px solid var(--ui-stroke-secondary);
 		background: var(--ui-surface-translucent, var(--ui-surface));
 		backdrop-filter: blur(8px);
@@ -1589,6 +1596,22 @@ button:disabled {
 	.main-pane {
 		flex: 1;
 		min-height: 0;
+		padding-right: var(--toolrail-w);
+	}
+	/* The shell is a flex column here, so the tool rail pins to the right edge
+	   below the mobile top bar; the panel takes most of the viewport. */
+	.tool-rail {
+		position: fixed;
+		z-index: 15;
+		top: var(--mobile-topbar-h);
+		right: 0;
+		bottom: 0;
+		width: var(--toolrail-w);
+	}
+	.tool-panel {
+		position: fixed;
+		top: var(--mobile-topbar-h);
+		width: min(var(--toolpanel-w), calc(100vw - var(--toolrail-w) - var(--space-4)));
 	}
 	.thread {
 		padding: 18px 14px 48px;
@@ -2764,21 +2787,9 @@ button:disabled {
 	width: 22px;
 	height: 22px;
 }
-/* Compact inline variant of the sidebar switcher — same classes, so active/focus
-   styling stays shared; only the geometry changes up here. */
-.top-bar .workspace-switch.top-bar-switch {
-	display: inline-flex;
-	gap: var(--space-1);
-	margin-right: var(--space-4);
-}
-.top-bar .workspace-switch.top-bar-switch button {
-	height: 26px;
-	padding-inline: var(--space-3);
-}
 /* Desktop owns the top-bar copy; the drawer keeps these for mobile. */
 @media (min-width: 768px) {
-	.sidebar-inner > .sidebar-head,
-	.sidebar-inner > .workspace-switch {
+	.sidebar-inner > .sidebar-head {
 		display: none;
 	}
 	/* The brand head used to give the nav its headroom; without it the first menu
@@ -2828,6 +2839,165 @@ button:disabled {
 }
 .ghost-button.danger:hover {
 	background: var(--ui-danger-bg-2);
+}
+
+/* ── Tool dock: right icon rail + overlay panel (Terminal / Files / Preview) ──
+   Tools open above the current screen instead of replacing it, so the plan or
+   chat being read keeps its place. The panel slides in from the right edge. */
+.tool-rail {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-3) 0;
+	border-left: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-bg-sidebar);
+}
+.tool-rail-btn {
+	display: inline-grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--ui-text-tertiary);
+	transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.tool-rail-btn:hover {
+	background: var(--ui-row-hover-background);
+	color: var(--ui-text-primary);
+}
+.tool-rail-btn.active {
+	background: var(--ui-row-active-background);
+	color: var(--ui-accent);
+}
+.tool-rail-btn:focus-visible {
+	outline: 2px solid var(--ui-accent);
+	outline-offset: 2px;
+}
+.tool-rail-sep {
+	width: 18px;
+	height: 1px;
+	background: var(--ui-stroke-secondary);
+}
+.tool-rail-gear {
+	margin-top: auto;
+}
+.tool-panel {
+	position: absolute;
+	top: var(--topbar-h);
+	bottom: 0;
+	right: var(--toolrail-w);
+	z-index: 24;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	width: min(var(--toolpanel-w), 74%);
+	border-left: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface);
+	box-shadow: -18px 0 40px var(--ui-scrim);
+	transform: translateX(calc(100% + var(--toolrail-w) + var(--space-4)));
+	transition: transform var(--t) var(--ease);
+	visibility: hidden;
+}
+.tool-panel.open {
+	transform: none;
+	visibility: visible;
+}
+.tool-panel-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+}
+.tool-panel-tabs {
+	display: flex;
+	gap: var(--space-1);
+	flex: 1;
+}
+.tool-panel-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-sm);
+	font-weight: 600;
+	transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.tool-panel-tab:hover {
+	background: var(--ui-row-hover-background);
+	color: var(--ui-text-secondary);
+}
+.tool-panel-tab.active {
+	background: var(--ui-row-active-background);
+	color: var(--ui-text-primary);
+}
+.tool-panel-body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.tool-pane {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	flex-direction: column;
+}
+.tool-pane-hint {
+	padding: var(--space-4);
+}
+/* Files tool: the shared workspace tree, shaped for the panel. Its inline
+   editor is absolutely positioned, so the pane is the positioning context —
+   an opened file fills the panel and Close returns to the tree. */
+.tool-files {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+	min-width: 0;
+}
+.tool-files .tree-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: var(--space-2) var(--space-3);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+}
+.tool-files .tree-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--space-2);
+}
+/* The Run & Preview rows were built for wide docks; the panel is narrow on any
+   viewport, so reuse the stacked layout the dock only uses on mobile. */
+.tool-pane .app-runner-bar {
+	flex-wrap: wrap;
+}
+.tool-pane .app-runner-bar .ui-select,
+.tool-pane .app-runner-bar .app-port,
+.tool-pane .app-runner-bar .app-dir {
+	width: 100%;
+	flex: 1 1 100%;
+}
+.tool-pane .app-runner-bar button {
+	flex: 1;
+}
+.tool-pane .app-runner-power {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-1);
+}
+.tool-pane .app-runner-power small {
+	text-align: left;
 }
 
 /* Global search modal */
@@ -10985,35 +11155,15 @@ div.result-media {
 }
 .sidebar-inner { gap: var(--space-2); padding: var(--space-2); }
 .sidebar-head { min-height: var(--shell-control-height); }
-.workspace-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--ui-text-primary) 5%, transparent);
-}
-.workspace-switch button {
-  display: flex; align-items: center; justify-content: center; gap: var(--space-2);
-  min-width: 0; height: calc(var(--shell-control-height) - var(--space-2));
-  border: 0; border-radius: calc(var(--radius-sm) - var(--space-1));
-  background: transparent; color: var(--ui-text-tertiary); font-size: var(--text-sm);
-}
-.workspace-switch button.active { background: var(--ui-row-active-background); color: var(--ui-text-primary); box-shadow: inset 0 0 0 1px var(--ui-stroke-secondary); }
 .shell-navigation { display: grid; gap: var(--space-2); }
 .primary-nav { border-top: 0; }
 .recent-groups { min-height: 0; overflow: auto; }
 .nav-item { border-radius: var(--radius-sm); padding-block: var(--space-2); }
-.nav-item:focus-visible,
-.workspace-switch button:focus-visible {
+.nav-item:focus-visible {
   outline: 2px solid var(--ui-accent); outline-offset: 2px;
 }
 @media (min-width: 768px) {
-  /* Scoped to the sidebar's copy: the top-bar switcher shares these classes and must
-     keep its labels when the rail collapses — the whole point of moving it up there. */
-  .app-shell.left-rail .sidebar .workspace-switch span,
   .app-shell.left-rail .recent-groups { display: none; }
-  .app-shell.left-rail .sidebar .workspace-switch { grid-template-columns: 1fr; background: transparent; }
 }
 
 /* Ops task launcher */

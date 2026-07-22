@@ -63,21 +63,23 @@ Visual system for Proxima. Documents the **existing** implementation in `apps/we
 
 ## Layout
 
-- **App shell:** CSS grid — left sidebar (`--left-w` ~294px) and the main pane. `.main-pane` scrolls; content is centered and uses the available width.
-- **Responsive (structural, not fluid type):** sidebar becomes a drawer + `.mobile-topbar` ≤767px; kanban 4→2→1 cols; home grid 2→1 col; the job-flow + side panel stack ≤860px.
-- **Ops Home:** a single integrated Task Composer leads. Project/folder, Agent, attachments, image/design intents, and execution policy belong inside its chrome; destination dashboard cards do not render beneath it. At most one compact review-attention strip follows.
+- **App shell:** CSS grid — left sidebar (`--left-w` ~294px), the main pane, and a slim right tool rail (`--toolrail-w`). `.main-pane` scrolls; content is centered and uses the available width. Tool panels overlay the main pane from the right instead of claiming a grid column.
+- **Responsive (structural, not fluid type):** sidebar becomes a drawer + `.mobile-topbar` ≤767px while the tool rail pins to the right edge; kanban 4→2→1 cols; the job-flow + side panel stack ≤860px.
+- **New task launcher:** a single integrated Task Composer leads. Project/folder, Agent, attachments, image/design intents, and execution policy belong inside its chrome; destination dashboard cards do not render beneath it. At most one compact review-attention strip follows.
 - **Density on demand:** roomy by default; tables/logs/data go dense only where the task needs it.
 
-## Ops Home
+## New task launcher
 
-Home is the task-first Ops surface, not a decorative command center. Its primary action creates a real project-scoped durable task through a dedicated composer without Code collaboration pills. Project, Scheduled, Deliverables, and task monitoring live in their dedicated destinations rather than duplicate Home cards. Home may show one truthful compact review-attention strip and never mixes ordinary Code sessions into Ops. The surface follows the active theme and shared token/component vocabulary.
+The launcher (behind the Tasks screen's `+ New task`) is task-first, not a decorative command center. Its primary action creates a real project-scoped durable task through a dedicated composer. Project, Scheduled, Deliverables, and task monitoring live in their dedicated destinations rather than duplicate launcher cards. The launcher may show one truthful compact review-attention strip. The surface follows the active theme and shared token/component vocabulary.
 
 **Do:** prioritize the brief, project context, truthful state, clear focus, and compact supporting information. **Don't:** add synthetic telemetry, always-dark command-center chrome, identical marketing cards, gradient text, or effects that compete with the task.
 
-## Compact Ops / Code shell
+## Single-workspace shell ("Deck")
 
-Proxima uses a compact two-region desktop shell: subdued navigation on the left and a centered working surface. The Ops/Code switch changes working register without changing the underlying job or chat lifecycle. Ops is task-first and calm; Code preserves the current chat session. A New session control in the Code header is the explicit action that clears the current session.
+Proxima uses one compact workspace: subdued flow-ordered navigation on the left (Chat, Tasks, Recipes, Projects, Artifacts, feature-gated Design), a centered working surface, and a right icon rail holding the technical tools (Terminal, Files, Preview) as on-demand overlay panels. There is no Ops/Code switch; Chat is the front door and the default landing view. A New chat control in the chat header is the explicit action that clears the current session.
 
-The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, one Workflows destination, Artifacts, feature-gated Design, and an Advanced group for Video. Workflows itself contains Sequential, feature-gated Advanced, and Scheduled modes. Code contains New session, Projects, Terminal, and recent sessions. Tasks is the permanent Ops execution/review index and each task opens a dedicated workspace. Agents and Settings stay in the account/profile menu; Wiki is under Settings → Knowledge & Wiki. Artifacts are project-owned outputs; Design is a separate, gated canvas destination.
+Recipes owns the plan canvas (Editor) and Scheduled modes; the old Sequential recipe editor is retired — a linear recipe is a graph without branches, authored on the same canvas. Tasks is the permanent execution/review index and each task opens a dedicated workspace. Agents and Settings stay in the account/profile menu; Wiki is under Settings → Knowledge & Wiki. Artifacts are project-owned outputs; Design is a separate, gated canvas destination.
 
-The left navigation can collapse or resize by pointer or keyboard; mobile uses a drawer and a narrow single-column Ops dashboard.
+Primary surfaces stay jargon-free: "agent" and "tools", never "runner"/"MCP"/"profile", env-var names, or raw stack traces — that detail lives in Settings and the docs.
+
+The left navigation can collapse or resize by pointer or keyboard; mobile uses a drawer, and the tool rail stays reachable on the right edge.

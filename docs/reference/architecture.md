@@ -192,7 +192,7 @@ artifacts.
 in a `session` (a chat thread) which accumulates `messages` and spawns `runs` (one
 agent turn each); a run emits ordered `events` that stream to the UI. Repeatable work
 is a `workflow` (recipe, steps as JSON); one execution is a `job` (frozen step
-snapshot + state); a `schedule` fires jobs on cron. Ad-hoc Ops tasks are 1-step
+snapshot + state); a `schedule` fires jobs on cron. Ad-hoc tasks are 1-step
 jobs (the old kanban `tasks` table was dropped by migration 17). `agent_sessions`
 maps a chat to its per-home ACP session.
 A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
@@ -546,9 +546,9 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner. It owns the Workflows Editor/Scheduled modes and embeds the graph surface under the single Workflows destination. Ops Task Composer creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Ops project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
+`App.tsx` remains the single view owner. It owns the Recipes Editor/Scheduled modes and embeds the graph surface under the single Recipes destination (view id `workflows`). The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, account actions, and terminal-compatible content mounting. `App.tsx` tracks the selected workspace plus each workspace's last destination; `Sidebar` renders Ops-specific or Code-specific navigation. Global Projects/Agents/Settings preserve the selected workspace. Terminal is classified as Code-only and remains mount-once/hide; Tasks and task detail are Ops-owned destinations. The removed generic right panel does not affect destination-owned layouts: Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Tasks, Recipes, Projects, Artifacts, gated Design) and the default landing view is `chat`. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 Generic frontend refresh loops use one non-overlapping polling hook. It pauses while
 the document is hidden and refreshes once when the tab becomes visible, avoiding

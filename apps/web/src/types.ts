@@ -390,9 +390,7 @@ export type View =
 	| "activity"
 	| "task"
 	| "graph"
-	| "terminal"
 	| "design"
-	| "linc-projects"
 	| "profiles"
 	| "runners"
 	| "settings";

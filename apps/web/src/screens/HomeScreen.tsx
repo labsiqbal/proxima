@@ -83,10 +83,10 @@ export function HomeScreen({
 						{greeting}
 						{ownerName ? `, ${ownerName}` : ""}
 					</p>
-					<h1>What should Ops take care of?</h1>
+					<h1>What should Proxima take care of?</h1>
 					<p>
-						Delegate an outcome, then leave it running. Ops will bring you back
-						for review when your decision is needed.
+						Delegate an outcome, then leave it running. Proxima will bring you
+						back for review when your decision is needed.
 					</p>
 					<TaskComposer
 						token={token}

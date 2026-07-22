@@ -9,7 +9,7 @@ PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 ```
 
 Set the value to `0` and restart the API only when a recovery/debug session needs to
-make graph planning, routes, schedules, and worker dispatch inert. Workflows normally
+make graph planning, routes, schedules, and worker dispatch inert. Recipes normally
 opens the graph Editor directly.
 
 ## What it provides

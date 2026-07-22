@@ -27,10 +27,10 @@ export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
   const close = () => { if (!busy) onCancel() }
 
   return <div className="modal-scrim" onClick={close}><div className="modal-card graph-template-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true">
-    <h3>Save as reusable workflow</h3>
+    <h3>Save as Recipe</h3>
     <label>Name<input autoFocus value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
     <label>Category <span className="muted">(optional)</span><input value={category} disabled={busy} placeholder="e.g. content" onChange={event => setCategory(event.target.value)} /></label>
-    <label>Description <span className="muted">(optional)</span><textarea rows={2} value={description} disabled={busy} placeholder="What this workflow does" onChange={event => setDescription(event.target.value)} /></label>
+    <label>Description <span className="muted">(optional)</span><textarea rows={2} value={description} disabled={busy} placeholder="What this recipe does" onChange={event => setDescription(event.target.value)} /></label>
 
     <p className="eyebrow">Inputs <span className="muted">(optional)</span></p>
     <p className="muted graph-field-note">
@@ -66,7 +66,7 @@ export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
         category: category.trim() || 'other',
         // A half-typed row is noise, not a declaration.
         inputs: inputs.filter(item => item.id.trim() && item.label.trim()),
-      })}>{busy ? 'Saving…' : 'Save template'}</button>
+      })}>{busy ? 'Saving…' : 'Save as Recipe'}</button>
     </div>
   </div></div>
 }

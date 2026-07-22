@@ -549,7 +549,7 @@ function buildCollaborationGroups(
 				parentRunId,
 				mode,
 				agentName: String(p.agent_name || "Agent"),
-				runnerId: String(p.runner_id || "runner"),
+				runnerId: String(p.runner_id || "agent"),
 				role: String(p.role || "participant"),
 				roundLabel: String(p.round_label || "Agent response"),
 				status: String(p.status || "queued"),

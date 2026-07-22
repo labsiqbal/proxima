@@ -337,7 +337,7 @@ export function GraphScreen({
     if (!plan) return
     if (plan.edges.some(edge => edge.from === from && edge.to === to)) return
     if (wouldCycle(plan, from, to)) {
-      setError('That connection would make the workflow loop back on itself.')
+      setError('That connection would make the plan loop back on itself.')
       return
     }
     setError('')
@@ -521,7 +521,7 @@ export function GraphScreen({
     setError('')
     try {
       const created = await createGraphJob(token, {
-        title: 'Untitled workflow',
+        title: 'Untitled plan',
         graph: {
           nodes: [
             { id: 'trigger', type: 'trigger', trigger_kind: 'manual', name: 'When I run it', instruction: '', output_kind: 'json' },
@@ -693,7 +693,7 @@ export function GraphScreen({
           onChange={value => { const project = projects.find(item => item.slug === value); if (project) onActiveProject?.(project) }}
           options={projects.map(project => ({ value: project.slug, label: project.name }))}
         />}
-        <h1>Workflows</h1>
+        <h1>Recipes</h1>
         <div className="graph-header-actions">
           <button className="ghost-button" onClick={() => void refreshList()}>Refresh</button>
         </div>
@@ -704,7 +704,7 @@ export function GraphScreen({
       <div className="graph-start">
         <div className="graph-start-inner">
           {activeProject && <p className="muted graph-project-tag">Building in <strong>{activeProject.name}</strong> · runs stay in this project</p>}
-          <h1>What should this workflow do?</h1>
+          <h1>What should this plan do?</h1>
           <p className="muted graph-sub">Describe it and the agent draws the graph — independent branches run in parallel. Nothing's locked; you can rearrange everything on the canvas.</p>
           <div className="graph-prompt" onKeyDown={event => {
             if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter' && heroText.trim()) {
@@ -716,9 +716,9 @@ export function GraphScreen({
               rows={3}
               items={mentionItems}
               value={heroText}
-              placeholder="Describe your workflow — e.g. riset topik dari {{brief}}, tulis post X dan LinkedIn secara paralel, gabungkan jadi satu bundle"
+              placeholder="Describe your plan — e.g. research a topic from {{brief}}, write the X and LinkedIn posts in parallel, bundle the results"
               onChange={setHeroText}
-              ariaLabel="Workflow brief"
+              ariaLabel="Plan brief"
             />
             <div className="graph-prompt-bar">
               <button className="ghost-button" disabled={!!busy} onClick={() => void newPlan()}>Blank canvas</button>
@@ -763,9 +763,9 @@ export function GraphScreen({
                 drafts.length === 0
                   ? <p className="muted graph-none">Nothing in progress.</p>
                   : drafts.map(planCard))}
-              {column('templates', 'Templates', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
+              {column('templates', 'Recipes', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
                 templates.length === 0
-                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save template</em>.</p>
+                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save as Recipe</em>.</p>
                   : templates.map(template => <div key={template.id} className="graph-card">
                       <button className="graph-card-main" disabled={!!busy} onClick={() => {
                         if (template.inputs?.length) setRunningTemplate(template)
@@ -826,7 +826,7 @@ export function GraphScreen({
         }}
         options={projects.map(project => ({ value: project.slug, label: project.name }))}
       />}
-      <h1>{job?.title ?? 'Graph workflows'}</h1>
+      <h1>{job?.title ?? 'Recipes'}</h1>
       {job && <>
         <span className={`graph-status st-${job.status}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job.status)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
@@ -834,13 +834,13 @@ export function GraphScreen({
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
       <div className="graph-header-actions">
         {job && plan && job.status !== 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save template</button>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save as Recipe</button>
           <button className="ghost-button" onClick={() => void duplicatePlan()} disabled={!!busy}>
             {busy === 'duplicate' ? 'Copying…' : 'Duplicate to edit'}
           </button>
         </>}
         {job?.status === 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save template</button>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save as Recipe</button>
           {/* Plan-level actions belong to the plan, not to whichever node happens
               to be selected — which is also what lets the inspector close. */}
           <button className="ghost-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>
@@ -908,8 +908,8 @@ export function GraphScreen({
           mentionItems={mentionItems}
           initialMessage={initialAuthorText ?? undefined}
           onInitialConsumed={() => setInitialAuthorText(null)}
-          idleHint="Describe the workflow and the agent draws the graph; ask for changes and it redraws it. Branches run at once. Separate from Code, scoped to this plan."
-          placeholder="Describe or change the workflow…"
+          idleHint="Describe the plan and the agent draws the graph; ask for changes and it redraws it. Branches run at once. This chat stays scoped to this plan."
+          placeholder="Describe or change the plan…"
         />
       </aside>}
       {chatOpen && job && plan && <div className="graph-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" onPointerDown={dragChat} />}
@@ -961,7 +961,7 @@ export function GraphScreen({
                   placeholder="A file in this project's scripts/ folder — e.g. fetch-data.sh"
                   onChange={event => updateSelected({ command: event.target.value })}
                 /></label>
-                <label>Arguments <span className="muted">(one per line; {'{{input}}'} fills from the workflow input)</span><textarea
+                <label>Arguments <span className="muted">(one per line; {'{{input}}'} fills from the plan input)</span><textarea
                   rows={3}
                   value={(definition.args ?? []).join('\n')}
                   onChange={event => updateSelected({ args: event.target.value.split('\n') })}
@@ -1047,16 +1047,16 @@ export function GraphScreen({
                   })
                   return <details className="graph-skills" onToggle={event => { if ((event.target as HTMLDetailsElement).open) loadSkills(runnerId) }}>
                     <summary>Skills <span className="muted">({chosen.length ? `${chosen.length} suggested` : 'optional'})</span></summary>
-                    <p className="muted graph-field-note">Suggested to the agent in its prompt. What is actually enabled comes from the agent profile.</p>
+                    <p className="muted graph-field-note">Suggested to the agent in its prompt. What is actually enabled comes from the agent's own setup.</p>
                     {detected == null
                       ? <p className="muted">{runnerId ? 'Loading detected skills…' : 'Pick an agent first.'}</p>
                       : detected.length === 0 && unknown.length === 0
-                        ? <p className="muted">No skills detected for this runner.</p>
+                        ? <p className="muted">No skills detected for this agent.</p>
                         : <>
                           {detected.map(skill => <label className="graph-check" key={skill.id} title={skill.description || undefined}>
                             <input type="checkbox" checked={chosen.includes(skill.id)} onChange={event => toggle(skill.id, event.target.checked)} />{skill.name || skill.id}
                           </label>)}
-                          {unknown.map(id => <label className="graph-check graph-skill-unknown" key={id} title="Not detected for this runner">
+                          {unknown.map(id => <label className="graph-check graph-skill-unknown" key={id} title="Not detected for this agent">
                             <input type="checkbox" checked onChange={() => toggle(id, false)} />{id} <span className="muted">(not detected)</span>
                           </label>)}
                         </>}
@@ -1094,7 +1094,7 @@ export function GraphScreen({
               </div>
             </div> : <div className="graph-run-detail">
               <p>{definition.type === 'trigger'
-                ? 'Manual trigger — this workflow starts when you press start.'
+                ? 'Manual trigger — this plan starts when you press start.'
                 : definition.type === 'script'
                   ? `⚡ Runs the saved script scripts/${definition.command}${definition.args?.length ? ` with: ${definition.args.join(' ')}` : ''} — no AI involved.`
                   : definition.instruction || 'No instruction.'}</p>

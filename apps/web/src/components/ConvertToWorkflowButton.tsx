@@ -4,17 +4,17 @@ import { useEventStream } from "../hooks/useEventStream";
 import type { GraphWorkflowDraft, RunEvent, WorkflowDraft } from "../types";
 import { IconWorkflows } from "./shell/icons";
 
-// A per-session action: promote this chat into a reusable workflow. Kicks off a
+// A per-session action: slice this chat into a runnable plan. Kicks off a
 // run (202) and waits for the async `workflow.draft` event on the session stream,
-// then hands the draft up so the app can open it in the Workflows editor (unsaved).
+// then hands the draft up so the app can open it in the Recipes editor (unsaved).
 export function ConvertToWorkflowButton({
 	token,
 	sessionId,
 	profileId,
 	onDraft,
 	onError,
-	label = "To workflow",
-	busyLabel = "Building workflow…",
+	label = "Slice into plan",
+	busyLabel = "Slicing into plan…",
 	engine = "auto",
 }: {
 	token: string;
@@ -58,8 +58,8 @@ export function ConvertToWorkflowButton({
 				setPending(false);
 				onError?.(
 					event.type === "run.failed"
-						? "Workflow draft failed."
-						: "Workflow draft cancelled.",
+						? "Plan draft failed."
+						: "Plan draft cancelled.",
 				);
 				return;
 			}
@@ -98,7 +98,7 @@ export function ConvertToWorkflowButton({
 			onClick={() => void start()}
 			disabled={pending}
 			aria-label={pending ? busyLabel : label}
-			title={engine === "graph" ? "Turn this conversation into a reviewable workflow graph" : "Turn this conversation into a reusable workflow"}
+			title="Slice this conversation into a plan of runnable jobs"
 		>
 			<IconWorkflows size={15} />
 			<span className="chat-action-label">{pending ? busyLabel : label}</span>

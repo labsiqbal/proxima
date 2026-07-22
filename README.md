@@ -1,11 +1,11 @@
 # Proxima
 
 Your self-hosted **cockpit for the AI agents you already own** — delegate tasks,
-chat, run reviewable workflow graphs on a schedule, and design, all in one private
+chat, run reviewable plans on a schedule, and design, all in one private
 control plane on **your own machine**. Bring your own agent CLI: **Claude Code,
 Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
 
-![Ops home — delegate a task](docs/screenshots/ops-home.png)
+![New task — delegate an outcome](docs/screenshots/ops-home.png)
 
 ## What it is
 
@@ -17,19 +17,21 @@ no credentials**. The work it orchestrates is domain-neutral: content, ops,
 research, and code all flow through the same tasks, workflows, reviews, and
 artifacts.
 
-Two workspaces, one cockpit:
+One workspace, organized around the flow **Chat → Tasks → Recipes**:
 
-- **Ops** — delegate an outcome and review the result: task composer, durable
-  jobs with review gates, workflow graphs, schedules, artifacts, Design Studio.
-- **Code** — work alongside the agent: chat with tool approvals, multi-agent
-  modes, and a real in-browser terminal.
+- **Chat** is the front door — think it through with the agent, then *Slice into
+  plan*. **Tasks** holds the resulting plans and one-off jobs with their review
+  gates. **Recipes** keeps the plans worth repeating, on demand or on a schedule.
+- **Projects** and **Artifacts** hold the work itself, and the technical tools —
+  a real in-browser terminal, a file tree, and live app preview — sit on a right
+  rail, one click away in any context.
 
 ## Features
 
 - **Single-user cockpit** — set one owner password on first run, then use a
   persistent owner session. Run it for yourself, see your work organized, never
   lose context.
-- **Ops tasks with review gates** — describe an outcome, pick an agent and a
+- **Tasks with review gates** — describe an outcome, pick an agent and a
   **Guarded** or **Autonomous** policy; the task runs as a durable job and
   pauses for your review before it counts as done.
 
@@ -40,13 +42,13 @@ Two workspaces, one cockpit:
   agent inherits your real skills, plugins, rules, MCP servers, and memory.
 
   ![Chat with a tool-approval card](docs/screenshots/chat-approval.png)
-- **Workflow graphs** — describe a process and an agent draws the DAG on an
-  n8n-style canvas; nodes carry typed output contracts (`text` / `json` /
+- **Plans & Recipes** — describe a process and an agent draws the plan as a DAG
+  on an n8n-style canvas; nodes carry typed output contracts (`text` / `json` /
   `artifact-ref`), per-node agents, and review gates. Correct one node's output
-  and every dependent node reruns deterministically. Promote a good chat into a
-  graph with one click, save it as a template, run it on cron.
+  and every dependent node reruns deterministically. Slice a good chat into a
+  plan with one click, save it as a Recipe, run it on cron.
 
-  ![Workflow graph run](docs/screenshots/workflow-graph-run.png)
+  ![Plan run on the canvas](docs/screenshots/workflow-graph-run.png)
 - **Multi-agent collaboration** — per-prompt **Brainstorm** (parallel idea
   lanes + synthesis) and **Debate** (alternating rounds + judge), plus a
   **Validate** sidecar where a different runner pressure-tests a finished
@@ -74,7 +76,7 @@ Two workspaces, one cockpit:
 - **Multi-runner profiles** — each agent profile picks a runner (Claude Code,
   Codex, Hermes, Pi) with an isolated credential home, its own instructions,
   and per-profile skills/MCP selection detected from your host.
-- **Schedules** — five-field cron for saved workflow templates, with overlap
+- **Schedules** — five-field cron for saved Recipes, with overlap
   policy and a "Run now" that exercises the real spawn path.
 - **Self-update, audit log, themes & PWA** — one-click update from GitHub
   Releases, an audit trail of meaningful actions, six themes, installable on

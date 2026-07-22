@@ -244,29 +244,33 @@ Everything remains private until the user explicitly publishes it.
 
 ## Target Navigation
 
+Decided (Phase 1, T3 "Deck"): one workspace, flow-ordered primary nav, with the
+technical tools demoted to a right rail.
+
 Primary:
 
 ```text
-Home
 Chat
-Design
-Workflows
-Activity
+Tasks
+Recipes
+Projects
 Artifacts
+Design (feature-gated)
 ```
 
-Utility/Profile:
+Tool rail (overlay panels, any context):
 
 ```text
-Files
-Wiki
-Projects
-Agents
 Terminal
-Integrations
-Remote Access
-Settings
-Debug Logs
+Files
+Preview
+```
+
+Utility/Profile (account menu):
+
+```text
+Agents
+Settings (incl. Wiki, runner detail, Integrations, Remote Access, Debug Logs)
 ```
 
 ## Open Product Details

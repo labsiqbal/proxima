@@ -79,7 +79,7 @@ describe("HomeScreen Ops task composer", () => {
 		const user = userEvent.setup();
 		render(<HomeScreen {...base} />);
 		await screen.findByRole("heading", {
-			name: "What should Ops take care of?",
+			name: "What should Proxima take care of?",
 		});
 		const submit = screen.getByRole("button", { name: "Start task" });
 		expect(submit).toBeDisabled();
@@ -186,7 +186,7 @@ describe("HomeScreen Ops task composer", () => {
 			/>,
 		);
 		await screen.findByRole("heading", {
-			name: "What should Ops take care of?",
+			name: "What should Proxima take care of?",
 		});
 		expect(
 			screen.queryByRole("button", { name: "Normal" }),
@@ -211,7 +211,7 @@ describe("HomeScreen Ops task composer", () => {
 	it("keeps destination dashboards off the launcher", async () => {
 		render(<HomeScreen {...base} />);
 		await screen.findByRole("heading", {
-			name: "What should Ops take care of?",
+			name: "What should Proxima take care of?",
 		});
 		expect(screen.queryByText("Scheduled")).not.toBeInTheDocument();
 		expect(screen.queryByText("Deliverables")).not.toBeInTheDocument();

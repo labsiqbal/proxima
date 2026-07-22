@@ -204,7 +204,7 @@ export function TaskComposer({
 					slug={activeProject?.slug}
 					features={features}
 					disabled={!activeProject || !activeProfile}
-					placeholder="How can Ops help today?"
+					placeholder="Describe the outcome you want…"
 					textareaLabel="Task brief"
 					promptModes={false}
 					generateKinds={["image", "design"]}

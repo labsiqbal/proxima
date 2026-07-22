@@ -218,17 +218,15 @@ export function MessageReviewSidecar({
 	};
 
 	const reviewerLabel = selected?.reviewer_profiles?.length
-		? selected.reviewer_profiles
-				.map((p) => `${p.name} (${p.runner_id})`)
-				.join(", ")
+		? selected.reviewer_profiles.map((p) => p.name).join(", ")
 		: "Auto reviewer";
 	const reviewerValue = reviewerProfileId == null ? "" : String(reviewerProfileId);
 	const reviewerOptions = [
-		{ value: "", label: "Auto-pick", badge: "Different runner" },
+		{ value: "", label: "Auto-pick", badge: "Different agent" },
 		...profiles.map((p) => ({
 			value: String(p.id),
 			label: p.name,
-			badge: p.runner_id || "runner",
+			badge: p.runner_id || "agent",
 		})),
 	];
 	const onReviewerChange = (value: string) => {
