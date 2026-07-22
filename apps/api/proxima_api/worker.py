@@ -41,6 +41,7 @@ from .prompt_collaborations import (
     loads_list,
 )
 from . import graph as graph_mod
+from . import workflows as wf
 from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImports]
 from .graph_executor import GRAPH_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
@@ -702,6 +703,108 @@ class RunWorker:
                 return
             self._mark_job_failed(job, error)
 
+    def _continue_after_timeout(self, run: dict[str, Any]) -> dict[str, Any]:
+        """Timeout auto-continuation for job runs (Phase-1 slice 5, T5). The caller
+        holds db_lock and has already marked the timed-out run failed and salvaged
+        its streamed text.
+
+        Returns ``{}`` when this run is not a continuable job turn (chat, goal,
+        draft, and other non-job runs keep their pre-slice-5 timeout behavior),
+        ``{"capped": True, "limit": n}`` when the chain has used all its automatic
+        continuations (the caller then fails the job loudly), or the enqueued
+        continuation's ``{"run_id", "continuation", "limit"}``.
+
+        The continuation is a genuine resume: same session (the persistent ACP
+        session keeps the agent's context), same job binding (so a repo job's cwd
+        resolves to the same worktree), and a "continue from where it stopped"
+        prompt - never a re-brief.
+        """
+        db = self.app.state.worker_db
+        run_id = _as_int(run["id"])
+        session_id = _as_int(run["session_id"])
+        srow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not srow or not srow["job_id"]:
+            return {}
+        job = db.execute("SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)).fetchone()
+        if not job or job["status"] != "running":
+            return {}
+        kind = str(run.get("kind") or "")
+        is_node_run = kind == GRAPH_NODE_RUN_KIND
+        if kind not in ("", "chat") and not is_node_run:
+            return {}  # drafts/media/other special runs never continue
+        used = _as_int(run.get("continuation_count") or 0)
+        limit = app_settings.get_continuation_limit(self.app.state.config)
+        if used >= limit:
+            return {"capped": True, "limit": limit}
+        attempt = None
+        if is_node_run:
+            attempt = db.execute(
+                "SELECT id, node_id, status, version FROM node_states WHERE run_id = ? AND job_id = ?",
+                (run_id, job["id"]),
+            ).fetchone()
+            if not attempt or attempt["status"] != "running":
+                return {}  # a rerun/cancel superseded this attempt; don't resurrect it
+        cur = db.execute(
+            "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, "
+            "model, hermes_home, kind, continued_from_run_id, continuation_count) "
+            "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                run.get("project_id"),
+                run["user_id"],
+                run["profile_id"],
+                run["runner_id"],
+                wf.build_continuation_prompt(used + 1, limit),
+                run.get("model"),
+                run.get("hermes_home"),
+                kind or "chat",
+                run_id,
+                used + 1,
+            ),
+        )
+        new_run_id = _as_int(cur.lastrowid)
+        if attempt is not None:
+            # Re-attach the still-running node to its continuation run, so the
+            # graph advancers accept the continuation's result as this attempt.
+            reattached = state.guarded_node_transition(
+                db,
+                _as_int(attempt["id"]),
+                "running",
+                ("running",),
+                _as_int(attempt["version"]),
+                run_id=new_run_id,
+                expected_run_id=run_id,
+            )
+            if not reattached:
+                # Lost the race to a concurrent cancel/rerun - drop the continuation.
+                db.execute(
+                    "UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+                    (new_run_id,),
+                )
+                return {}
+        else:
+            # Keep the linear step's run pointer on the live run so the Tasks UI
+            # (and slice 12's satpam) follow the continuation, not the dead turn.
+            steps = _json_array(job["steps_state"])
+            idx = _as_int(job["current_step_idx"])
+            if 0 <= idx < len(steps):
+                steps[idx]["run_id"] = new_run_id
+                db.execute(
+                    "UPDATE jobs SET steps_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (json.dumps(steps), job["id"]),
+                )
+        payload = {
+            "runner": run["runner_id"],
+            "job": job["id"],
+            "continuation": used + 1,
+            "continuation_limit": limit,
+            "continued_from_run_id": run_id,
+        }
+        if attempt is not None:
+            payload["node_id"] = attempt["node_id"]
+        self.add_event(new_run_id, session_id, run.get("project_id"), "run.queued", payload)
+        return {"run_id": new_run_id, "continuation": used + 1, "limit": limit}
+
     def _produced_artifacts(self, job: dict[str, Any] | sqlite3.Row, since_iso: str | None) -> list[dict[str, Any]]:
         """What this step produced (files modified since it started), typed for preview."""
         db = self.app.state.worker_db
@@ -875,7 +978,10 @@ class RunWorker:
                 self.active_runs,
             )
             hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
-            timeout = _as_int(cfg.get("run_timeout_seconds") or 600)
+            # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
+            # every entrypoint), config/env is the fallback. Read per run so a
+            # settings change takes effect without a restart.
+            timeout = app_settings.get_run_timeout_seconds(db, cfg)
             # Session kind is authoritative: a design session's runs are always framed as
             # design server-side, so a message that reaches it by any path is handled as a
             # design edit — never misread as a generic request (defense behind the UI gating).
@@ -1048,24 +1154,54 @@ class RunWorker:
                 await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
             except Exception:
                 logging.getLogger("proxima.worker").exception("failed to recycle agent process after timeout")
+            reason = "Hermes runner timed out"
             with self.app.state.db_lock:
                 failed = db.execute(
-                    "UPDATE runs SET status = 'failed', error = 'Hermes runner timed out', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                    (run_id,),
+                    "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                    (reason, run_id),
                 ).rowcount > 0
                 if not failed:
                     return
                 if str(run.get("kind", "")).startswith("message_review"):
-                    self._fail_message_review(run_id, session_id, project_id, "Hermes runner timed out")
+                    self._fail_message_review(run_id, session_id, project_id, reason)
                     return
                 if str(run.get("kind", "")).startswith("collab_"):
-                    self._fail_collaboration_run(run_id, session_id, project_id, "Hermes runner timed out")
+                    self._fail_collaboration_run(run_id, session_id, project_id, reason)
                     return
                 salvaged = self._reconstruct_text(run_id)
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
-                self.add_event(run_id, session_id, project_id, "run.failed", {"error": "Hermes runner timed out"})
-            self._fail_job(session_id, "Hermes runner timed out", run_id)
+                # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,
+                # not abandoned - a continuation run is enqueued in the SAME
+                # session (context carries via the persistent ACP session) and,
+                # for repo jobs, the same worktree (cwd binds to the job). At the
+                # cap: honest stop - the job fails loudly with a plain-language
+                # reason and the plan pauses for review, never a silent stall.
+                outcome = self._continue_after_timeout(run)
+                if outcome.get("run_id"):
+                    reason = (
+                        f"Hermes runner timed out after {timeout}s - "
+                        f"auto-continuing ({outcome['continuation']}/{outcome['limit']})"
+                    )
+                    db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
+                    self.add_event(run_id, session_id, project_id, "run.failed", {
+                        "error": reason,
+                        "continued_by_run_id": outcome["run_id"],
+                        "continuation": outcome["continuation"],
+                        "continuation_limit": outcome["limit"],
+                    })
+                    return  # the job stays running; the continuation picks the work up
+                if outcome.get("capped"):
+                    reason = (
+                        f"Stopped: this job kept hitting the {timeout}s turn limit and has used "
+                        f"all {outcome['limit']} automatic continuations. The work done so far is "
+                        "saved (conversation context and file changes persist). Review the job, "
+                        "then split it into smaller jobs or raise the turn quota in Settings "
+                        "and restart it."
+                    )
+                    db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
+                self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
+            self._fail_job(session_id, reason, run_id)
         except Exception as exc:
             detail = str(exc)[-2000:]
             self._fail_run_exception(run, detail)

@@ -257,6 +257,13 @@ def _config_from_env() -> dict[str, Any]:
         max_upload_mb = max(1, int(os.environ.get("PROXIMA_MAX_UPLOAD_MB", "100")))
     except ValueError:
         max_upload_mb = 100
+
+    def env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+
     return {
         "database_path": os.environ.get("PROXIMA_DB_PATH", str(workspace_root / "proxima.db")),
         "workspace_root": str(workspace_root),
@@ -264,6 +271,14 @@ def _config_from_env() -> dict[str, Any]:
         "web_dist_path": os.environ.get("PROXIMA_WEB_DIST") or None,
         "max_upload_bytes": max_upload_mb * 1024 * 1024,
         "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split() or None,
+        # Turn quota + worker knobs, mirrored from serve.py (T5): before this the
+        # env overrides only existed via scripts/serve.py and this entrypoint was
+        # stuck at the defaults. The in-app run_timeout_seconds setting overrides
+        # these at run time on both entrypoints (app_settings.get_run_timeout_seconds).
+        "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["run_timeout_seconds"])),
+        "run_continuation_limit": env_int("PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])),
+        "run_worker_concurrency": env_int("PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])),
+        "graph_node_concurrency": env_int("PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])),
         # Proxima is single-user by design: one owner and no team management. The
         # network gate remains primary; the owner password/session is defense-in-depth.
         "single_user": True,

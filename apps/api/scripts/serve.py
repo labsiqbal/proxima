@@ -64,6 +64,9 @@ app = create_app(
         "hermes_bin": os.environ.get("PROXIMA_HERMES_BIN") or None,
         "refresh_credentials": env_bool("PROXIMA_REFRESH_CREDENTIALS", True),
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", 900),
+        "run_continuation_limit": env_int(
+            "PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])
+        ),
         "max_upload_bytes": env_int("PROXIMA_MAX_UPLOAD_MB", 100) * 1024 * 1024,
         "run_worker_poll_interval_ms": env_int("PROXIMA_RUN_WORKER_POLL_MS", 250),
         # Graph fan-out is bounded by both of these: the graph budget decides how

@@ -122,6 +122,9 @@ live in the composer before a prompt is submitted.
 
 **Why:** Give a goal; the agent keeps advancing across turns until done.
 **How:** `/goal` sets an objective; the advance hook carries prior-step context.
+Phase-1 note (T5): for repo work the plan/job path with timeout auto-continuation
+(§8 Long work) supersedes the goal loop as the long-run mechanism; goal mode remains
+a chat-side feature as-is (its timeout behavior is unchanged by slice 5).
 **Endpoints:** `POST /api/sessions/{id}/goal`, `/goal/cancel`.
 
 ## 5. Chat → Wiki (knowledge continuity)
@@ -140,7 +143,9 @@ enabled by default and emits a normalized `{nodes,edges}` DAG with typed outputs
 review gates, and **per-job work bindings** (Phase-1 slice 3, T1/T2): the prompt
 carries the project's registered code areas, and every job is tagged with one `target`
 (a code area or `ops`) plus the derived `touches_repo` marker — an unclear binding is
-marked ambiguous with a question for the owner instead of a guess. The draft lands as
+marked ambiguous with a question for the owner instead of a guess. The slicer is
+explicitly instructed to size each job to complete within ONE turn quota (T5 slice 5:
+continuation is the safety net, not the plan). The draft lands as
 a queued plan the owner reviews/edits and starts directly; saving it as a reusable
 Recipe is an optional, separate action (before or after the run). The feature flag
 remains an owner recovery switch; the legacy ordered-step path is retained only for
@@ -249,6 +254,37 @@ retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/r
 the worktree down unmerged - the project never sees the discarded change. After the
 merge the row shows what landed (base branch + merge commit) and keeps the change
 readable; slice 12's satpam consumes these same review states.
+
+### Long work: timeout auto-continuation (Phase-1 slice 5, T5 - LIVE)
+
+**Why:** A single agent turn is hard-capped by the turn quota. Before slice 5 a job
+turn that hit the cap was killed and the job failed (or a goal silently stalled) even
+though the work was mid-flight (T5). Long work must survive the per-turn cap.
+**How:** when a **job run** (linear step or plan/graph node) hits the quota
+(`asyncio.TimeoutError`), the worker salvages the streamed text as before, then
+enqueues a **continuation run in the SAME session** - the persistent ACP session
+carries the agent's full context - and, for repo jobs, the same worktree (cwd binds to
+the job, so file edits persist). The continuation prompt is a **genuine resume**
+("inspect the current state of your work and continue from where it stopped"), never a
+re-brief. Graph nodes stay `running` and are re-attached to the continuation run
+(guarded `running→running` run-id swap), so advancers accept its result as the same
+attempt. The chain is capped at **`run_continuation_limit` (config, default 5) per
+turn chain**; at the cap the stop is honest and loud: the run/job fails with a
+plain-language reason (split the job or raise the quota) and a **plan pauses for
+review** - a timed-out job never sits in limbo. Chains are durable on the run rows
+(`runs.continued_from_run_id`, `runs.continuation_count`): slice 12's satpam reads a
+high continuation count as a confused-agent signal and owns the restart-clean
+decision - discarding a worktree is **never** an automatic timeout response.
+Chat, goal-mode, collaboration, and review runs keep their pre-slice-5 timeout
+behavior unchanged.
+**Turn quota (first-class):** `run_timeout_seconds` is an **in-app setting**
+(Settings → Agents → Turn quota, stored in `app_settings`, default 900s, bounds
+60-7200s). Because it is DB-backed it takes effect on BOTH entrypoints -
+`scripts/serve.py` and plain `uvicorn proxima_api.main:app` - and the env overrides
+(`PROXIMA_RUN_TIMEOUT_SECONDS`, `PROXIMA_RUN_CONTINUATION_LIMIT`) are now mirrored on
+both as fallback defaults. The plan slicer is instructed to size every job to fit ONE
+turn quota - continuation is the safety net, not the plan.
+**Endpoints:** `GET/PUT /api/settings/runs`.
 
 ## 9. Schedules (cron)
 
@@ -427,8 +463,9 @@ though the current Home renders only the review-attention data. Global **Search*
 ## 19. Reliability (cross-cutting)
 
 Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
-salvage, orphaned-run cleanup, run timeout (configurable `run_timeout_seconds`, default
-900s) + cancel-on-timeout, and daily DB backup (`proxima-backup` timer with
+salvage, orphaned-run cleanup, a per-turn quota (`run_timeout_seconds` — an in-app
+setting, default 900s; see §8 Long work) with cancel-on-timeout plus capped
+auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 `VACUUM INTO`). Setup failures are finalized immediately instead of waiting for the
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.

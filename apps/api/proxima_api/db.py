@@ -135,6 +135,14 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at TEXT,
   heartbeat_at TEXT,
   error TEXT,
+  -- Timeout auto-continuation chain (Phase-1 slice 5, T5). A job run that hits
+  -- the per-turn quota enqueues a continuation run in the same session (and
+  -- worktree, for repo jobs): continued_from_run_id links back to the timed-out
+  -- run, continuation_count is this run's ordinal in the chain (0 = original
+  -- turn). The chain is capped by run_continuation_limit; slice 12's satpam
+  -- reads high counts as a confused-agent signal.
+  continued_from_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+  continuation_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS prompt_collaborations (

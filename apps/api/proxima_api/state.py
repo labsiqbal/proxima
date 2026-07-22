@@ -60,7 +60,9 @@ REVIEW: Mapping[str, set[str]] = {
 NODE: Mapping[str, set[str]] = {
     "pending": {"ready", "stale", "skipped"},
     "ready": {"running", "stale", "skipped"},
-    "running": {"done", "review", "failed", "stale"},
+    # running->running = timeout continuation re-attaching the node to its
+    # freshly queued continuation run (run_id swap + version bump, T5 slice 5).
+    "running": {"done", "review", "failed", "stale", "running"},
     "review": {"done", "failed", "stale"},
     "done": {"done", "stale"},  # done->done = human output correction + version bump
     "failed": {"ready", "done", "stale"},
