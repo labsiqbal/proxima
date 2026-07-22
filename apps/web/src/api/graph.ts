@@ -48,6 +48,14 @@ export const rerunGraphNode = (token: string, jobId: number, nodeId: string) =>
 export const approveGraphNode = (token: string, jobId: number, nodeId: string) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/approve`, token, { method: 'POST' })
 
+// Decision-hold (slice 12): answer a parked node's DECISION_NEEDED question.
+// Works while the plan is running - independent branches never waited.
+export const answerGraphNode = (token: string, jobId: number, nodeId: string, answer: string) =>
+  api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/answer`, token, {
+    method: 'POST',
+    body: JSON.stringify({ answer }),
+  })
+
 // The one-time, hash-bound script approval (T6): trusts the script's CURRENT
 // content and reruns the blocked step. Unchanged scripts never ask again.
 export const approveGraphNodeScript = (token: string, jobId: number, nodeId: string) =>

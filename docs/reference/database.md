@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 22 tables. Applied migration version: **24**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -210,6 +210,9 @@ SQLite (WAL mode). 22 tables. Applied migration version: **24**. This is the exa
 | `version` | INTEGER | NO | `0` |  |
 | `started_at` | TEXT | yes |  |  |
 | `finished_at` | TEXT | yes |  |  |
+| `question` | TEXT | yes |  |  |
+| `answer` | TEXT | yes |  |  |
+| `contract_failures` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -317,6 +320,42 @@ SQLite (WAL mode). 22 tables. Applied migration version: **24**. This is the exa
 **Indexes:** `idx_runs_session` — (session_id, id); `idx_runs_status` — (status, id)
 
 
+### satpam_interventions
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `node_id` | TEXT | yes |  |  |
+| `action` | TEXT | NO |  |  |
+| `detection` | TEXT | NO |  |  |
+| `status` | TEXT | NO | `'applied'` |  |
+| `reason` | TEXT | NO |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `resolved_at` | TEXT | yes |  |  |
+
+**Indexes:** `idx_satpam_interventions_job` — (job_id, id)
+
+
+### satpam_watch
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `session_id` | INTEGER | NO |  | → `sessions.id` (ON DELETE CASCADE) |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `node_id` | TEXT | yes |  |  |
+| `last_turn` | INTEGER | NO | `0` |  |
+| `diff_signature` | TEXT | yes |  |  |
+| `stall_turns` | INTEGER | NO | `0` |  |
+| `output_signature` | TEXT | yes |  |  |
+| `loop_turns` | INTEGER | NO | `0` |  |
+| `steer_count` | INTEGER | NO | `0` |  |
+| `steer_pending` | TEXT | yes |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
 ### schedules
 
 | Column | Type | Null | Default | Key / FK |
@@ -420,4 +459,4 @@ SQLite (WAL mode). 22 tables. Applied migration version: **24**. This is the exa
 
 
 ---
-_Generated 2026-07-22 08:45 UTC._
+_Generated 2026-07-22 09:42 UTC._

@@ -285,6 +285,26 @@ export type GraphNodeState = {
 	error?: string | null;
 	version: number;
 	run_id?: number | null;
+	// Decision-hold (slice 12): a node that surfaced a genuine open decision
+	// parks in 'review' with the question; the owner's answer re-runs it.
+	question?: string | null;
+	answer?: string | null;
+	contract_failures?: number;
+};
+
+// One satpam supervision action on a job (slice 12, T10): steer (automatic
+// corrective prompt), restart (automatic for non-repo work; 'pending' is the
+// repo-job approval card), or escalate (plan paused with a plain-language why).
+export type SatpamIntervention = {
+	id: number;
+	job_id: number;
+	node_id: string | null;
+	action: "steer" | "restart" | "escalate";
+	detection: "stalled" | "looping" | "confused";
+	status: "applied" | "pending" | "approved" | "dismissed";
+	reason: string;
+	created_at: string;
+	resolved_at: string | null;
 };
 
 export type GraphTemplate = {
@@ -334,6 +354,8 @@ export type GraphJob = {
 	graph: WorkflowGraph;
 	node_states: GraphNodeState[];
 	worktree?: JobWorktree;
+	// Satpam supervision timeline (slice 12); attached only when non-empty.
+	satpam?: SatpamIntervention[];
 	// The owner's one-line why from the reject-at-review action (slice 4);
 	// set only when status became 'failed' through a rejection.
 	rejected_reason?: string | null;
@@ -389,6 +411,8 @@ export type Job = {
 	input: any;
 	steps_state: JobStep[];
 	worktree?: JobWorktree;
+	// Satpam supervision timeline (slice 12); attached only when non-empty.
+	satpam?: SatpamIntervention[];
 	// The owner's one-line why from the reject-at-review action (slice 4).
 	rejected_reason?: string | null;
 	schedule_id: number | null;

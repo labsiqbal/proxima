@@ -38,6 +38,7 @@ resolution) and ``discarded`` (torn down without merging) as the off-ramps.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -190,6 +191,39 @@ def compute_diff(cwd: Path | str, base: str, head: str = "HEAD") -> dict[str, An
         "patch_truncated": truncated,
         "summary": summary,
     }
+
+
+def work_signature(wt: Path | str) -> str:
+    """Cheap durable fingerprint of a worktree's work state, for the satpam's
+    stall check (slice 12, T10): the branch head, the uncommitted status, the
+    tracked content changes, and each untracked file's size+mtime. Read-only -
+    three git calls plus stats, no snapshot commit - so the supervision loop
+    can take it every sweep without touching the agent's work. Untracked files
+    use stat rather than content on purpose: the bias is toward missing a
+    stall over ever flagging a healthy, progressing job."""
+    head = _git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
+    status = _git(wt, "status", "--porcelain", "-uall", check=False).stdout
+    tracked_diff = _git(wt, "diff", "HEAD", "--no-color", check=False).stdout
+    untracked: list[str] = []
+    for line in status.splitlines():
+        if not line.startswith("?? "):
+            continue
+        target = Path(wt) / line[3:]
+        try:
+            st = target.stat()
+            untracked.append(f"{line[3:]}\0{st.st_size}\0{st.st_mtime_ns}")
+        except OSError:
+            untracked.append(f"{line[3:]}\0gone")
+    material = "\n".join([head, status, tracked_diff, *untracked])
+    return hashlib.sha256(material.encode("utf-8", errors="replace")).hexdigest()
+
+
+def fresh_signature(base_commit: str) -> str:
+    """The signature a just-cut worktree has: at its base commit, nothing
+    uncommitted, nothing untracked. The satpam's implicit baseline for a
+    chain's first evaluation - a first turn that leaves the worktree in this
+    state did no repo work at all."""
+    return hashlib.sha256("\n".join([base_commit, "", ""]).encode("utf-8", errors="replace")).hexdigest()
 
 
 def merge_job_branch(repo: Path | str, branch: str, base_branch: str, message: str) -> str:
@@ -359,6 +393,38 @@ def discard_job_worktree(conn: sqlite3.Connection, job_id: int) -> None:
             "UPDATE job_worktrees SET status = 'discarded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (wt["id"],),
         )
+
+
+def recut_job_worktree(conn: sqlite3.Connection, cfg: dict[str, Any], job: sqlite3.Row | dict[str, Any]) -> sqlite3.Row | None:
+    """Discard the job's worktree and cut a FRESH one from the repo's current
+    HEAD - the satpam's approved restart-clean (slice 12, T10). Unlike
+    ``ensure_job_worktree`` this deliberately does not reuse a discarded row:
+    restart-clean means the agent's uncommitted/unmerged work is gone and the
+    job re-runs from a clean base. Raises WorktreeError (dirty repo, detached
+    HEAD, ...) with an owner-facing reason when the fresh cut is refused."""
+    resolved = repo_area_for_job(conn, job)
+    if resolved is None:
+        return None
+    area, repo = resolved
+    job_id = int(job["id"])
+    discard_job_worktree(conn, job_id)
+    dest = worktrees_root(cfg) / f"job-{job_id}"
+    info = create_worktree(repo, dest, job_branch(job_id))
+    conn.execute(
+        """
+        INSERT INTO job_worktrees(job_id, area_id, repo_path, worktree_path, branch, base_branch, base_commit, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+        ON CONFLICT(job_id) DO UPDATE SET
+          area_id = excluded.area_id, repo_path = excluded.repo_path,
+          worktree_path = excluded.worktree_path, branch = excluded.branch,
+          base_branch = excluded.base_branch, base_commit = excluded.base_commit,
+          status = 'active', merge_commit = NULL, error = NULL,
+          push_status = NULL, push_error = NULL, push_remote = NULL, push_remote_url = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        """,
+        (job_id, area["id"], str(repo), str(dest), job_branch(job_id), info["base_branch"], info["base_commit"]),
+    )
+    return job_worktree_row(conn, job_id)
 
 
 def worktree_payload(wt: sqlite3.Row) -> dict[str, Any]:

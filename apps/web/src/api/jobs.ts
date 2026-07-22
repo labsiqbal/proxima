@@ -27,6 +27,14 @@ export const approveJob = (token: string, id: number, body?: { edited_output?: s
 export const rejectJob = (token: string, id: number, reason: string) =>
   api<Job>(`/api/jobs/${id}/reject`, token, { method: 'POST', body: JSON.stringify({ reason }) })
 
+// Satpam restart approval (slice 12): a repo job's restart-clean discards the
+// worktree, so the satpam only queues it - these are the owner's two verdicts.
+export const approveSatpamRestart = (token: string, jobId: number, interventionId: number) =>
+  api<Job>(`/api/jobs/${jobId}/satpam/${interventionId}/approve`, token, { method: 'POST' })
+
+export const dismissSatpamRestart = (token: string, jobId: number, interventionId: number) =>
+  api<Job>(`/api/jobs/${jobId}/satpam/${interventionId}/dismiss`, token, { method: 'POST' })
+
 // A repo job's reviewable change: per-file statuses plus one unified patch.
 // Readable while the job works, at review, and after the merge (read off the
 // code area's own history).

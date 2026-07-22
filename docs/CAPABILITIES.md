@@ -381,6 +381,54 @@ mono face, last output line on the card and Tasks list row); the canvas has a
 **+ Script** tool and the inspector edits command/args/contract/gate.
 **Endpoints:** `POST /api/graph/jobs/{id}/nodes/{node_id}/approve-script`.
 
+### Satpam supervision loop (Phase-1 slice 12, T10 - LIVE)
+
+**Why:** the heartbeat/reaper catches DEAD runs; nothing caught an agent that is alive
+but unproductive - burning continuation turns while producing no repo change, repeating
+itself, or guessing at a decision that belongs to the owner (T10; firstmate/watcher
+supervision patterns ported to Proxima's primitives, captain ratified).
+**How - ONE fleet-level loop** (`satpam.py`, a sibling of `RunReaper` on the worker
+loop's cadence, self-paced by its Settings interval): each sweep evaluates every
+running job's active **continuation chain** (slice 5's `continuation_count` is the
+turn boundary - one evaluation per continuation turn, not per token) against DURABLE
+signals only - DB rows and worktree diff signatures, never the agent's stream, and
+never an LLM call. Fail-quiet by contract: a supervision error is logged and swallowed,
+never crashing the worker or a run.
+**Detection ladder:** *dead* - heartbeat/reaper, unchanged (the satpam consumes its
+outcome); *stalled* - a repo chain whose continuation turns leave the worktree
+signature (`worktrees.work_signature`: branch head + uncommitted status + tracked diff
++ untracked stats) unchanged N turns in a row; *looping* - consecutive turns whose
+salvaged output + repo state hash identically N turns in a row; *confused* - the
+continuation cap (slice 5) or repeated output-contract validation failure
+(`node_states.contract_failures`, second strike escalates).
+**Action ladder (automation line, captain ratified):** (a) **steer** - one corrective
+prompt into the job's next continuation turn (amended in place on the queued run, or
+held in `satpam_watch.steer_pending` for the next one): AUTOMATIC, logged; (b)
+**restart-clean** - cancel the stuck attempt and re-run fresh (a new node session for
+plans; step one with fresh context for classic tasks): AUTOMATIC only for NON-repo
+work; for repo work it is a **pending approval card** in Tasks (restart discards the
+worktree - destructive, owner-gated; approve re-cuts fresh from the repo's current
+HEAD and re-runs the plan's repo slice); (c) **pause + escalate** - the chain is
+cancelled and the job parks in review with a plain-language what-happened record.
+Steer→restart→escalate is per stuck episode; a restart that did not help escalates
+rather than thrashing.
+**Decision-hold (T10 #4):** the node prompt defines a structured output-contract
+marker - a reply starting **`DECISION_NEEDED: <question>`** - for a genuine open owner
+decision. The node parks in the existing `review` state with the question on
+`node_states.question`; its dependents hold on their own (their dependency never
+reaches `done`) while **independent DAG branches keep dispatching**; only when they
+drain does the plan park. Answering (`…/answer`, usable while the plan RUNS) stores
+`node_states.answer` and re-runs the node with the decision in its prompt.
+**No silent interventions (T10 #5):** every action is a `satpam_interventions` row
+(shown as the task's "Watchdog log" in TaskWorkspace and on the Recipes canvas, with
+the pending-restart approval card on top) plus a `satpam.*` timeline event
+(`satpam.steered` / `satpam.restart.queued` / `satpam.restarted` / `satpam.escalated`).
+Thresholds are a Settings panel (Agents → Watchdog): N no-progress turns (default 2)
+and the sweep cadence (default 60s), bounds-checked in `app_settings`.
+**Endpoints:** `GET/PUT /api/settings/satpam`,
+`POST /api/jobs/{id}/satpam/{intervention_id}/approve|dismiss`,
+`POST /api/graph/jobs/{id}/nodes/{node_id}/answer`.
+
 ## 9. Schedules (cron)
 
 **Why:** Recurring agents — daily report, watch-and-summarize — while you sleep.
@@ -594,7 +642,8 @@ though the current Home renders only the review-attention data. Global **Search*
 
 ## 20. Reliability (cross-cutting)
 
-Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
+Heartbeat/reaper for hung runs, the satpam supervision loop for alive-but-unproductive
+ones (see §8 Satpam), per-session serialization, graceful shutdown, output
 salvage, orphaned-run cleanup, a per-turn quota (`run_timeout_seconds` — an in-app
 setting, default 900s; see §8 Long work) with cancel-on-timeout plus capped
 auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with

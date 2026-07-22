@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import artifact_registry, features, repo_remote, scripts_library, state, worktrees
+from .. import artifact_registry, features, repo_remote, satpam, scripts_library, state, worktrees
 from ..graph import (
     GraphValidationError,
     descendant_node_ids,
@@ -23,6 +23,7 @@ from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: 
 from ..schemas import (
     GraphDefinitionUpdateRequest,
     GraphJobCreateRequest,
+    GraphNodeAnswerRequest,
     GraphNodeOutputEditRequest,
     GraphTemplateSaveRequest,
 )
@@ -98,6 +99,11 @@ def register(app, deps):
         wt = worktrees.job_worktree_row(db(), payload["id"])
         if wt:
             payload["worktree"] = worktrees.worktree_payload(wt)
+        # Satpam interventions (slice 12): the plan's supervision timeline,
+        # incl. any pending restart approval card. Attached only when non-empty.
+        satpam_rows = satpam.interventions_payload(db(), payload["id"])
+        if satpam_rows:
+            payload["satpam"] = satpam_rows
         if payload.get("project_id"):
             project = db().execute(
                 "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
@@ -718,6 +724,69 @@ def register(app, deps):
                 raise exc
         if dispatch:
             app.state.worker.graph_executor.dispatch_ready(job_id)
+        return graph_job_payload(graph_job_or_404(job_id, user))
+
+    @app.post("/api/graph/jobs/{job_id}/nodes/{node_id}/answer")
+    def answer_node_decision(
+        job_id: int,
+        node_id: str,
+        payload: GraphNodeAnswerRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Answer a decision-held node's question (slice 12, T10 #4). The node
+        parked in review via its DECISION_NEEDED output; the owner's answer is
+        stored and the node re-runs with the decision in its prompt. Unlike the
+        correction routes this works while the plan is still RUNNING - that is
+        the point: independent branches kept dispatching during the hold."""
+        require_graph()
+        job = graph_job_or_404(job_id, user)
+        graph = normalize_graph(job["graph"] or "")
+        _graph_node(graph, node_id)
+        answer_text = payload.answer.strip()
+        if not answer_text:
+            raise HTTPException(status_code=400, detail="an answer is required")
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM node_states WHERE job_id = ? AND node_id = ?",
+                    (job_id, node_id),
+                ).fetchone()
+                if not row or row["status"] != "review" or not row["question"]:
+                    raise HTTPException(status_code=409, detail="node has no open decision")
+                staled = state.guarded_node_transition(
+                    conn,
+                    _as_int(row["id"]),
+                    "stale",
+                    ("review",),
+                    _as_int(row["version"]),
+                    run_id=None,
+                    error=None,
+                    clear_started=True,
+                    clear_finished=True,
+                )
+                if not staled:
+                    raise HTTPException(status_code=409, detail="node changed concurrently")
+                conn.execute(
+                    "UPDATE node_states SET answer = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (answer_text, _as_int(row["id"])),
+                )
+                mark_descendants_stale(conn, graph, job_id, node_id)
+                if job["status"] in ("review", "done"):
+                    state.guarded_transition(
+                        conn,
+                        "jobs",
+                        job_id,
+                        "running",
+                        (str(job["status"]),),
+                        set_extra="updated_at=CURRENT_TIMESTAMP, finished_at=NULL",
+                    )
+                conn.execute("COMMIT")
+            except Exception as exc:
+                _rollback(conn)
+                raise exc
+        app.state.worker.graph_executor.dispatch_ready(job_id)
         return graph_job_payload(graph_job_or_404(job_id, user))
 
     @app.post("/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script")

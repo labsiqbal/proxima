@@ -6159,6 +6159,114 @@ div.result-media {
 	color: var(--ui-danger-strong);
 	font-weight: 700;
 }
+/* Decision-hold (slice 12, T10): a plan job parked on an owner question. */
+.plan-decision {
+	display: inline-flex;
+	align-items: center;
+	border-radius: var(--radius-full);
+	padding: 1px var(--space-2);
+	font-size: var(--text-2xs);
+	font-weight: 600;
+	color: var(--ui-warning);
+	border: 1px solid color-mix(in srgb, var(--ui-warning) 35%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+	white-space: nowrap;
+}
+
+/* Satpam supervision (slice 12, T10): the watchdog's owner-facing surfaces —
+   the pending repo-restart approval card, the per-task intervention log
+   (TaskWorkspace + Recipes canvas), and the decision-answer card. */
+.satpam-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-2) 0;
+}
+.satpam-kicker {
+	margin: 0;
+	font-size: var(--text-2xs);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--ui-text-tertiary);
+}
+.satpam-pending {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: 1px solid color-mix(in srgb, var(--ui-warning) 40%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+	border-radius: var(--radius-md);
+	padding: var(--space-3);
+}
+.satpam-pending .satpam-kicker {
+	color: var(--ui-warning);
+}
+.satpam-reason {
+	margin: 0;
+	font-size: var(--text-sm);
+	color: var(--ui-text-primary);
+}
+.satpam-actions {
+	display: flex;
+	gap: var(--space-2);
+}
+.satpam-log {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	border: 1px solid var(--ui-stroke-tertiary);
+	background: var(--ui-surface-subtle);
+	border-radius: var(--radius-sm);
+	padding: var(--space-2) var(--space-3);
+}
+.satpam-row {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	font-size: var(--text-xs);
+	min-width: 0;
+}
+.satpam-icon {
+	flex: none;
+}
+.satpam-what {
+	flex: none;
+	font-weight: 600;
+	color: var(--ui-text-secondary);
+	white-space: nowrap;
+}
+.satpam-row.escalate .satpam-what {
+	color: var(--ui-danger-strong);
+}
+.satpam-why {
+	color: var(--ui-text-tertiary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.satpam-decision {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: 1px solid color-mix(in srgb, var(--ui-warning) 40%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+	border-radius: var(--radius-md);
+	padding: var(--space-3);
+	margin: var(--space-2) 0;
+}
+.satpam-question {
+	margin: 0;
+	font-size: var(--text-sm);
+	font-weight: 600;
+	color: var(--ui-text-primary);
+}
+.satpam-decision textarea {
+	resize: vertical;
+}
+.satpam-decision .primary-button {
+	align-self: flex-start;
+}
 .plan-canvas {
 	display: flex;
 	height: 320px;

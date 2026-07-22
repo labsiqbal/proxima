@@ -622,6 +622,71 @@ def _add_repo_remote_push(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE job_worktrees ADD COLUMN {col} TEXT")
 
 
+def _add_satpam_supervision(conn: sqlite3.Connection) -> None:
+    """Satpam supervision loop, Phase-1 slice 12 (T10): one fleet-level watchman
+    over all running jobs, reading durable signals only.
+
+    - ``satpam_watch`` - the watchman's per-chain memory: last continuation turn
+      evaluated, the progress fingerprints it compares turn to turn (worktree
+      diff signature, salvaged-output hash), consecutive no-progress counters,
+      and a pending steer note for the next continuation turn.
+    - ``satpam_interventions`` - the owner-visible record of every action
+      (steer / restart / escalate; no silent interventions), including the
+      'pending' repo-job restart that waits for in-app approval.
+    - ``node_states.question/answer`` - decision-hold: a node whose agent
+      surfaced a genuine open decision parks in review with the question; the
+      owner's answer is injected into the node's re-run.
+    - ``node_states.contract_failures`` - output-contract validation failures
+      across attempts; repeated failure is a 'confused' escalation signal.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS satpam_watch (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          node_id TEXT,
+          last_turn INTEGER NOT NULL DEFAULT 0,
+          diff_signature TEXT,
+          stall_turns INTEGER NOT NULL DEFAULT 0,
+          output_signature TEXT,
+          loop_turns INTEGER NOT NULL DEFAULT 0,
+          steer_count INTEGER NOT NULL DEFAULT 0,
+          steer_pending TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(session_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS satpam_interventions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          node_id TEXT,
+          action TEXT NOT NULL,
+          detection TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'applied',
+          reason TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          resolved_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_satpam_interventions_job ON satpam_interventions(job_id, id)"
+    )
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='node_states'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(node_states)").fetchall()}
+        if "question" not in cols:
+            conn.execute("ALTER TABLE node_states ADD COLUMN question TEXT")
+        if "answer" not in cols:
+            conn.execute("ALTER TABLE node_states ADD COLUMN answer TEXT")
+        if "contract_failures" not in cols:
+            conn.execute("ALTER TABLE node_states ADD COLUMN contract_failures INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -647,6 +712,7 @@ MIGRATIONS: list[Migration] = [
     (22, "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)", _add_script_trust),
     (23, "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)", _add_artifact_registry),
     (24, "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)", _add_repo_remote_push),
+    (25, "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)", _add_satpam_supervision),
 ]
 
 

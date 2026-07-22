@@ -61,6 +61,24 @@ export const getRunSettings = (token: string) =>
 export const saveRunSettings = (token: string, run_timeout_seconds: number) =>
   api<{ run_timeout_seconds: number; continuation_limit: number }>('/api/settings/runs', token, { method: 'PUT', body: JSON.stringify({ run_timeout_seconds }) })
 
+// Satpam supervision thresholds (slice 12, T10): N consecutive no-progress
+// continuation turns before the watchman acts, and its sweep cadence.
+export type SatpamSettings = {
+  stall_turns: number
+  check_seconds: number
+  default_stall_turns: number
+  min_stall_turns: number
+  max_stall_turns: number
+  default_check_seconds: number
+  min_check_seconds: number
+  max_check_seconds: number
+}
+
+export const getSatpamSettings = (token: string) =>
+  api<SatpamSettings>('/api/settings/satpam', token)
+export const saveSatpamSettings = (token: string, body: { stall_turns: number; check_seconds: number }) =>
+  api<{ stall_turns: number; check_seconds: number }>('/api/settings/satpam', token, { method: 'PUT', body: JSON.stringify(body) })
+
 export type CollaborationSettings = {
   brainstorm_agents: 2 | 3
   debate_rounds: 2 | 3 | 4

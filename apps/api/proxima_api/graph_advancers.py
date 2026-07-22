@@ -9,11 +9,27 @@ from typing import Any
 from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[reportMissingModuleSource]
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
 
-from . import features, state
-from .graph import normalize_graph, parse_output_contract
+from . import features, satpam, state
+from .graph import normalize_graph, parse_output_contract, ready_node_ids
 from .graph_executor import GraphExecutor  # pyright: ignore[reportMissingImports]
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
+
+# Decision-hold (Phase-1 slice 12, T10 #4): the structured output-contract
+# marker a node agent uses to surface a genuine open owner decision instead of
+# guessing. The node parks in 'review' with the question attached; dependents
+# hold (their dependency never reaches 'done'), independent branches keep
+# dispatching, and the owner's answer re-runs the node.
+DECISION_MARKER = "DECISION_NEEDED:"
+
+
+def parse_decision_question(answer: str) -> str | None:
+    """The question in a DECISION_NEEDED reply, or None for ordinary output."""
+    stripped = answer.strip()
+    if not stripped.upper().startswith(DECISION_MARKER):
+        return None
+    question = stripped[len(DECISION_MARKER):].strip()
+    return (question or "The agent flagged an open decision but did not state the question.")[:1000]
 
 
 class NodeOutputError(ValueError):
@@ -191,6 +207,19 @@ class GraphAdvancers:
         )
         return True
 
+    def _forward_progress(self, db: Any, graph: Mapping[str, Any], job_id: int) -> bool:
+        """Can this plan still move without owner input? True when any node is
+        in flight or the dispatcher could start one. A node parked in review
+        (decision-hold) blocks only its own dependents - they never enter
+        ``ready_node_ids`` because their dependency is not 'done'."""
+        rows = db.execute(
+            "SELECT node_id, status FROM node_states WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        statuses = {str(r["node_id"]): str(r["status"]) for r in rows}
+        if any(s in ("ready", "running") for s in statuses.values()):
+            return True
+        return bool(ready_node_ids(graph, statuses))
+
     @staticmethod
     def _emit_update(
         run: Mapping[str, Any],
@@ -246,6 +275,57 @@ class GraphAdvancers:
 
                 graph = normalize_graph(attempt["job_graph"] or "")
                 node = _node_by_id(graph, str(attempt["node_id"]))
+
+                # Decision-hold (slice 12, T10 #4): a genuine open decision parks
+                # THIS node in review with the question - the job stays running
+                # while independent branches can still move, and parks only when
+                # they drain. Dependents hold on their own: this node never
+                # reaches 'done', so they never become ready.
+                question = parse_decision_question(answer)
+                if question is not None:
+                    parked = state.guarded_node_transition(
+                        db,
+                        _as_int(attempt["node_state_id"]),
+                        "review",
+                        ("running",),
+                        _as_int(attempt["node_version"]),
+                        error=None,
+                        mark_finished=True,
+                        expected_run_id=run_id,
+                    )
+                    if not parked:
+                        db.execute("COMMIT")
+                        return False
+                    db.execute(
+                        "UPDATE node_states SET question = ?, answer = NULL, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (question, _as_int(attempt["node_state_id"])),
+                    )
+                    job_status = str(attempt["job_status"])
+                    if job_status == "running":
+                        if self._forward_progress(
+                            db, graph, _as_int(attempt["job_id"])
+                        ):
+                            dispatch_job_id = _as_int(attempt["job_id"])
+                        else:
+                            state.guarded_transition(
+                                db,
+                                "jobs",
+                                _as_int(attempt["job_id"]),
+                                "review",
+                                ("running",),
+                                set_extra="updated_at=CURRENT_TIMESTAMP",
+                            )
+                            job_status = "review"
+                    db.execute("COMMIT")
+                    self._emit_update(
+                        run, attempt, "review", add_event,
+                        question=question, job_status=job_status,
+                    )
+                    if dispatch_job_id is not None:
+                        self.executor.dispatch_ready(dispatch_job_id)
+                    return True
+
                 job_context = {
                     "job_id": attempt["job_id"],
                     "project_id": attempt["project_id"],
@@ -257,11 +337,41 @@ class GraphAdvancers:
                 except NodeOutputError as exc:
                     error = str(exc)
                     failed = self._pause_failed_attempt(attempt, run, error)
+                    contract_failures = 0
+                    if failed:
+                        # 'Confused' signal (slice 12): count contract failures
+                        # across this node's attempts; a repeat becomes an
+                        # owner-facing escalation record, not just a failed node.
+                        db.execute(
+                            "UPDATE node_states SET contract_failures = contract_failures + 1, "
+                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (_as_int(attempt["node_state_id"]),),
+                        )
+                        contract_failures = _as_int(db.execute(
+                            "SELECT contract_failures FROM node_states WHERE id = ?",
+                            (_as_int(attempt["node_state_id"]),),
+                        ).fetchone()["contract_failures"])
                     db.execute("COMMIT")
                     if failed:
                         self._emit_update(
                             run, attempt, "failed", add_event, error=error[:1000]
                         )
+                        if contract_failures >= satpam.CONTRACT_FAILURES_ESCALATE:
+                            satpam.record_escalation(
+                                self.app,
+                                job_id=_as_int(attempt["job_id"]),
+                                node_id=str(attempt["node_id"]),
+                                detection=satpam.DETECTION_CONFUSED,
+                                reason=(
+                                    f"This job's output failed its declared contract {contract_failures} "
+                                    "times - the agent seems confused about what to produce. The plan "
+                                    "is paused: review the job, sharpen its instruction or output "
+                                    "contract, then rerun it."
+                                ),
+                                run_id=run_id,
+                                session_id=_as_int(run["session_id"]),
+                                project_id=run.get("project_id"),
+                            )
                     return failed
 
                 serialized = json.dumps(value, ensure_ascii=False)
@@ -303,7 +413,22 @@ class GraphAdvancers:
                     # Only a job that is still running may pull more work forward.
                     # If a sibling already paused it, this node's dependents wait
                     # for the owner to resolve that pause.
-                    dispatch_job_id = _as_int(attempt["job_id"])
+                    if self._forward_progress(db, graph, _as_int(attempt["job_id"])):
+                        dispatch_job_id = _as_int(attempt["job_id"])
+                    else:
+                        # Nothing left can move without the owner - a sibling is
+                        # parked (decision-hold) and its dependents are all that
+                        # remain. The independent branches have drained; park the
+                        # plan instead of idling in 'running' forever.
+                        state.guarded_transition(
+                            db,
+                            "jobs",
+                            _as_int(attempt["job_id"]),
+                            "review",
+                            ("running",),
+                            set_extra="updated_at=CURRENT_TIMESTAMP",
+                        )
+                        job_status = "review"
                 db.execute("COMMIT")
             except Exception as exc:
                 if db.in_transaction:

@@ -68,6 +68,14 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 - **Long work survives** - agent turns get a configurable time budget, and a
   turn that times out mid-task auto-continues with its real context (up to 5
   genuine resumes) before stopping honestly and pausing the plan for you.
+- **A watchdog over running jobs** - a supervision loop (the *satpam*) checks
+  every continuation turn for real progress from durable signals only (repo
+  changes, non-repeating output; no extra AI calls). A stuck job gets one
+  corrective nudge, then a clean restart - automatic only for non-repo work,
+  while restarting a repo job always asks you first - and a job that surfaces a
+  genuine open decision pauses just that branch with the question while
+  independent branches keep running. Every intervention is visible in the
+  task's log; nothing happens silently.
 - **Multi-agent collaboration** — per-prompt **Brainstorm** (parallel idea
   lanes + synthesis) and **Debate** (alternating rounds + judge), plus a
   **Validate** sidecar where a different runner pressure-tests a finished

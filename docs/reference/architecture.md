@@ -63,6 +63,8 @@ Owner ── Profile ── Runner ── Project / Workspace
 
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
+`run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
+supervision loop over alive-but-unproductive jobs),
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
@@ -219,6 +221,12 @@ permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
 via `file_missing`. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
+Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
+per-chain memory - last continuation turn evaluated, progress fingerprints,
+no-progress counters, a pending steer note) and `satpam_interventions` (the
+owner-visible record of every steer/restart/escalate, including the pending repo
+restart awaiting approval); decision-hold rides on `node_states`
+(`question`/`answer`/`contract_failures`, migration 25).
 Full column-level detail: [database.md](database.md).
 
 ## Key flows
@@ -275,9 +283,10 @@ the continuation via a guarded `running→running` run-id swap in `node_states`.
 chain (`runs.continued_from_run_id` / `runs.continuation_count`) is capped by
 `run_continuation_limit` (config, default 5); at the cap the job fails loudly with a
 plain-language reason and a plan pauses for review — never a silent stall. Chat,
-goal, collaboration, and review runs keep the plain fail-on-timeout path. Slice 12's
-satpam reads continuation counts as a confused-agent signal; restart-clean (worktree
-discard) stays a supervisor/owner decision, never automatic.
+goal, collaboration, and review runs keep the plain fail-on-timeout path. The
+satpam (slice 12, flow 6c) reads continuation counts as a confused-agent signal
+and records the cap as an escalation; restart-clean (worktree discard) stays a
+supervisor/owner decision, never automatic.
 
 ### 2. Per-prompt Brainstorm / Debate
 
@@ -465,8 +474,8 @@ page (`TaskWorkspace`, approve = `POST /api/jobs/{id}/approve`). It shows the pe
 list and unified change from `GET /api/jobs/{id}/diff`, keeps the merged result
 readable afterwards, surfaces a conflict as a plain needs-attention banner (job parked
 in review, retry offered), and gates the reject door behind a required one-line
-reason. UI copy is de-jargonized ("isolated copy", "changes"); slice 12's satpam
-consumes these same review states.
+reason. UI copy is de-jargonized ("isolated copy", "changes"); the satpam (slice 12,
+flow 6c) consumes these same review states.
 
 **Graph plans reuse this same machinery per job-in-plan (slice 3).** When the flag is
 on and a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`
@@ -479,6 +488,41 @@ repo, while ops siblings run at the project root, where their artifact outputs b
 The final `POST /api/graph/jobs/{id}/approve` is the merge point, with the identical
 guarded-merge/park-in-review contract as the linear approve. Flag off: none of this
 runs and target tags are inert metadata.
+
+### 6c. Satpam supervision loop (slice 12, T10, live)
+
+```text
+worker.loop() ──every sweep (satpam_check_seconds, Settings)──► Satpam.tick()
+     │ (reaper cadence sibling: reaper owns DEAD runs, satpam owns alive-but-stuck)
+     ▼
+running jobs' continuation chains (runs.continuation_count > last evaluated turn)
+     │  durable signals ONLY: worktree signature · salvaged-output hash · counters
+     ▼
+detection: stalled (no repo change ×N) · looping (identical output ×N)
+           confused (continuation cap · repeated contract failure)
+     │
+     ├─ a. STEER (automatic, logged) ──► corrective note into the NEXT continuation
+     ├─ b. RESTART-CLEAN ─ non-repo: automatic (fresh session/step-one re-run)
+     │                     repo: PENDING approval card ──owner──► discard worktree,
+     │                     re-cut from HEAD, re-run the plan's repo slice
+     └─ c. PAUSE + ESCALATE ──► chain cancelled, job parks in review w/ plain reason
+     every action: satpam_interventions row + satpam.* timeline event (no silence)
+```
+
+One fleet-level loop, hosted in `worker.loop()` next to the reaper gate and
+self-paced by its Settings cadence — the seam mirrors firstmate's single watcher
+and adds no per-job processes. It never reads an agent stream and never calls an
+LLM; evaluation happens once per continuation turn (slice 5's chain ordinals are
+the turn boundary), so a job that finishes inside its first turn is never even
+read. Fail-quiet by contract: any internal error logs and the sweep moves on.
+**Decision-hold (T10 #4):** the node prompt defines the `DECISION_NEEDED: <question>`
+output-contract marker. The graph advancer parks such a node in the existing
+`review` state with the question on `node_states.question` while the JOB stays
+`running`: independent DAG branches keep dispatching (the one-parked-node-freezes-
+the-plan rule is relaxed exactly here), dependents hold naturally because their
+dependency never reaches `done`, and when the independents drain the plan parks.
+`POST /api/graph/jobs/{id}/nodes/{node_id}/answer` (usable while the plan runs)
+stores the answer, re-runs the node with the decision in its prompt, and resumes.
 
 ### 7. Schedule (cron)
 
@@ -566,6 +610,8 @@ runner.
 + **Bounded run worker** — `run_worker_concurrency` caps parallel agent runs.
 + **Crash recovery** — on startup, runs left `running` by a previous shutdown are
   failed (their in-memory ACP state is gone); orphaned jobs are reaped.
++ **Supervision** — the satpam loop (flow 6c) catches alive-but-unproductive jobs
+  from durable signals on the reaper's cadence sibling; fail-quiet, no LLM calls.
 + **Backups** — versioned migrations `VACUUM INTO` a snapshot before applying; a
   daily timer backs up independently.
 

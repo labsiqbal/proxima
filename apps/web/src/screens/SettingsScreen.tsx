@@ -17,6 +17,8 @@ import {
   savePermissionSettings,
   getRunSettings,
   saveRunSettings,
+  getSatpamSettings,
+  saveSatpamSettings,
   getRecommendedTools,
   type RecommendedTool,
 } from '../api/settings'
@@ -83,6 +85,45 @@ function TurnQuotaPanel({ token }: { token: string }) {
     <div className="settings-rows">
       <span className="srow-label">Per-turn limit</span>
       <div className="seg sm">{TURN_QUOTA_MINUTES.map(m => <button key={m} type="button" className={seconds === m * 60 ? 'active' : ''} disabled={busy} onClick={() => { setSeconds(m * 60); void save(m * 60) }}>{m}m</button>)}</div>
+    </div>
+    {error && <p className="error-text">{error}</p>}
+  </div>
+}
+
+// Satpam supervision thresholds (slice 12, T10 #5): N no-progress turns before
+// the watchdog acts, and how often it sweeps. Conservative defaults; the
+// choices are deliberately coarse — supervision tuning is not a science fair.
+const SATPAM_TURNS = [1, 2, 3, 5] as const
+const SATPAM_CADENCE = [30, 60, 120, 300] as const
+
+function SatpamPanel({ token }: { token: string }) {
+  const [stallTurns, setStallTurns] = React.useState(2)
+  const [checkSeconds, setCheckSeconds] = React.useState(60)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => {
+    let alive = true
+    getSatpamSettings(token).then(r => {
+      if (alive) { setStallTurns(r.stall_turns); setCheckSeconds(r.check_seconds) }
+    }).catch(() => undefined)
+    return () => { alive = false }
+  }, [token])
+  const save = async (nextTurns: number, nextSeconds: number) => {
+    setBusy(true); setError('')
+    try {
+      const r = await saveSatpamSettings(token, { stall_turns: nextTurns, check_seconds: nextSeconds })
+      setStallTurns(r.stall_turns); setCheckSeconds(r.check_seconds)
+    } catch (err) { setError(String(err)) } finally { setBusy(false) }
+  }
+  return <div className="panel"><div className="panel-head"><h3>Watchdog</h3><span>satpam</span></div>
+    <p className="muted">A background watchdog checks every running job's continuation turns for real progress (repo changes, non-repeating output). A stuck job gets one corrective nudge, then a clean restart — automatic only for non-repo work; restarting a repo job always asks you first. Every action shows in the task's log.</p>
+    <div className="settings-rows">
+      <span className="srow-label">Act after</span>
+      <div className="seg sm">{SATPAM_TURNS.map(n => <button key={n} type="button" className={stallTurns === n ? 'active' : ''} disabled={busy} onClick={() => { setStallTurns(n); void save(n, checkSeconds) }}>{n} turn{n > 1 ? 's' : ''}</button>)}</div>
+    </div>
+    <div className="settings-rows">
+      <span className="srow-label">Check every</span>
+      <div className="seg sm">{SATPAM_CADENCE.map(s => <button key={s} type="button" className={checkSeconds === s ? 'active' : ''} disabled={busy} onClick={() => { setCheckSeconds(s); void save(stallTurns, s) }}>{s < 60 ? `${s}s` : `${s / 60}m`}</button>)}</div>
     </div>
     {error && <p className="error-text">{error}</p>}
   </div>
@@ -501,7 +542,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
     </div></div>
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <button className={`toggle-pill ${notif ? 'on' : ''}`} onClick={() => void toggleNotif()} disabled={notifBusy}><span className="toggle-knob" />{notifBusy ? 'Requesting…' : notif ? 'On' : 'Off'}</button> : <p className="muted">Not supported in this browser.</p>}</div>
-  const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><PermissionsPanel token={token} /></>
+  const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><SatpamPanel token={token} /><PermissionsPanel token={token} /></>
 
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>

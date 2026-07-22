@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-147 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+152 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -13,14 +13,14 @@
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
-- [`routes/files.py`](#routes-files-py) — 30 endpoints
-- [`routes/graph.py`](#routes-graph-py) — 12 endpoints
+- [`routes/files.py`](#routes-files-py) — 32 endpoints
+- [`routes/graph.py`](#routes-graph-py) — 13 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 9 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 21 endpoints
+- [`routes/work.py`](#routes-work-py) — 23 endpoints
 - [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
 
 
@@ -131,6 +131,8 @@
 | PUT | `/api/settings/permissions` | `set_permission_settings` |  |
 | GET | `/api/settings/runs` | `get_run_settings` | Turn quota (T5): the per-turn run timeout as a first-class in-app |
 | PUT | `/api/settings/runs` | `set_run_settings` |  |
+| GET | `/api/settings/satpam` | `get_satpam_settings` | Satpam supervision thresholds (slice 12, T10): N consecutive |
+| PUT | `/api/settings/satpam` | `set_satpam_settings` |  |
 
 
 ## routes/graph.py
@@ -142,6 +144,7 @@
 | GET | `/api/graph/jobs/{job_id}` | `get_graph_job` |  |
 | POST | `/api/graph/jobs/{job_id}/approve` | `approve_graph_job` |  |
 | PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/answer` | `answer_node_decision` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script` | `approve_node_script` | The one-time, hash-bound script approval (T6 #5, captain's decision). |
 | PATCH | `/api/graph/jobs/{job_id}/nodes/{node_id}/output` | `edit_node_output` |  |
@@ -232,6 +235,8 @@
 | POST | `/api/jobs/{job_id}/link-run` | `link_job_run` | Attach a project-scoped media run to a queued ad-hoc task. |
 | POST | `/api/jobs/{job_id}/push` | `push_job` | Retry (or run) the T9 push-after-merge for a merged repo job - |
 | POST | `/api/jobs/{job_id}/reject` | `reject_job` | The review surface's other door (slice 4, T1): rejecting a job at |
+| POST | `/api/jobs/{job_id}/satpam/{intervention_id}/approve` | `approve_satpam_restart` | Approve a satpam restart-clean of a REPO job (slice 12, T10 rung b): |
+| POST | `/api/jobs/{job_id}/satpam/{intervention_id}/dismiss` | `dismiss_satpam_restart` | Decline a pending satpam restart: the job keeps running as-is (the |
 | POST | `/api/jobs/{job_id}/start` | `start_job` |  |
 | GET | `/api/schedules` | `list_schedules` |  |
 | POST | `/api/schedules` | `create_schedule` |  |
@@ -256,4 +261,4 @@
 
 
 ---
-_Generated 2026-07-22 08:45 UTC._
+_Generated 2026-07-22 09:42 UTC._

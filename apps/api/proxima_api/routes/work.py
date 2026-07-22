@@ -18,6 +18,7 @@ from ..auth import iso_now
 from .. import artifact_registry
 from .. import features
 from .. import repo_remote
+from .. import satpam
 from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
@@ -202,6 +203,12 @@ def register(app, deps):
         wt = worktrees.job_worktree_row(db(), d["id"])
         if wt:
             d["worktree"] = worktrees.worktree_payload(wt)
+        # Satpam interventions (slice 12): the job's supervision timeline, incl.
+        # any pending restart approval card. Only attached when non-empty so
+        # untouched jobs keep their exact pre-slice payload.
+        satpam_rows = satpam.interventions_payload(db(), d["id"])
+        if satpam_rows:
+            d["satpam"] = satpam_rows
         return d
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
@@ -566,6 +573,34 @@ def register(app, deps):
             logging.getLogger("proxima.worktrees").exception(
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
+        return _job_payload(_job_or_404(job_id, user))
+
+    @app.post("/api/jobs/{job_id}/satpam/{intervention_id}/approve")
+    def approve_satpam_restart(job_id: int, intervention_id: int, user: dict[str, Any] = Depends(current_user)):
+        """Approve a satpam restart-clean of a REPO job (slice 12, T10 rung b):
+        discarding a worktree is destructive, so the satpam only queued the
+        card - this is the owner's explicit go. The worktree is re-cut fresh
+        and the stuck work goes back through the dispatcher. A refused cut
+        (dirty repo, detached HEAD) leaves the card pending with the reason."""
+        _job_or_404(job_id, user)
+        try:
+            app.state.worker.satpam.execute_restart(job_id, intervention_id)
+        except satpam.SatpamRestartError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _job_payload(_job_or_404(job_id, user))
+
+    @app.post("/api/jobs/{job_id}/satpam/{intervention_id}/dismiss")
+    def dismiss_satpam_restart(job_id: int, intervention_id: int, user: dict[str, Any] = Depends(current_user)):
+        """Decline a pending satpam restart: the job keeps running as-is (the
+        continuation cap stays the backstop) and the card is closed."""
+        _job_or_404(job_id, user)
+        updated = db().execute(
+            "UPDATE satpam_interventions SET status = ?, resolved_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND job_id = ? AND action = ? AND status = ?",
+            (satpam.STATUS_DISMISSED, intervention_id, job_id, satpam.ACTION_RESTART, satpam.STATUS_PENDING),
+        ).rowcount
+        if not updated:
+            raise HTTPException(status_code=409, detail="this restart is no longer pending")
         return _job_payload(_job_or_404(job_id, user))
 
     @app.delete("/api/jobs/{job_id}")
