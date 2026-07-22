@@ -2,6 +2,7 @@ import React from 'react'
 import type { Job, JobStatus, JobStep } from '../types'
 import { getJob, approveJob, deleteJob } from '../api/jobs'
 import { ChangesReview } from '../components/tasks/ChangesReview'
+import { SatpamCard } from '../components/tasks/SatpamCard'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
 import { IconTrash } from '../components/shell/icons'
@@ -132,6 +133,7 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
             <button className="primary-button" onClick={() => void approve()} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve → Done'}</button>
           </div>)}
     {error && <div className="error-bar">{error}</div>}
+    <SatpamCard token={token} jobId={job.id} interventions={job.satpam} onChanged={updated => { setJob(updated); onChanged?.() }} />
     {job.worktree && <ChangesReview
       token={token}
       jobId={job.id}

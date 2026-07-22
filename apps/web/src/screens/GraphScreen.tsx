@@ -1,5 +1,6 @@
 import React from 'react'
 import {
+  answerGraphNode,
   approveGraphJob,
   approveGraphNode,
   approveGraphNodeScript,
@@ -21,6 +22,7 @@ import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
 import { IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
+import { SatpamCard } from '../components/tasks/SatpamCard'
 import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
@@ -198,6 +200,7 @@ export function GraphScreen({
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const [outputEdit, setOutputEdit] = React.useState('')
+  const [answerText, setAnswerText] = React.useState('')
   const [error, setError] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -316,6 +319,7 @@ export function GraphScreen({
   const definition = plan?.nodes.find(node => node.id === selectedId)
   const selectedState = job && selectedId ? stateFor(job, selectedId) : undefined
   React.useEffect(() => { setOutputEdit(outputText(selectedState)) }, [selectedState?.id, selectedState?.version])
+  React.useEffect(() => { setAnswerText('') }, [selectedState?.id])
 
   function updateSelected(patch: Partial<GraphNodeDefinition>) {
     if (!definition || !plan) return
@@ -861,6 +865,7 @@ export function GraphScreen({
 
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
+    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} onChanged={() => void loadJob(job.id)} />}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace" style={{
@@ -1120,6 +1125,20 @@ export function GraphScreen({
                 <div><dt>Attempt</dt><dd>{selectedState?.run_id ?? '—'}</dd></div>
               </dl>
               {selectedState?.inputs != null && <details><summary>Resolved inputs</summary><pre>{JSON.stringify(selectedState.inputs, null, 2)}</pre></details>}
+              {/* Decision-hold (slice 12): the node parked itself with a genuine
+                  open question. Answering re-runs it with the decision — usable
+                  while the plan is RUNNING, because independent branches never
+                  stopped and the answer should not wait for them. */}
+              {selectedState?.status === 'review' && selectedState.question && <div className="satpam-decision">
+                <p className="graph-eyebrow">The agent needs a decision</p>
+                <p className="satpam-question">{selectedState.question}</p>
+                <textarea rows={3} value={answerText} onChange={event => setAnswerText(event.target.value)} placeholder="Your decision…" />
+                <button
+                  className="primary-button"
+                  disabled={!!busy || !answerText.trim()}
+                  onClick={() => void act('answer', () => answerGraphNode(token, job.id, definition.id, answerText.trim()), 'Decision sent — the job is re-running with it.')}
+                >{busy === 'answer' ? 'Sending…' : 'Answer & resume'}</button>
+              </div>}
               {/* A script blocked on trust is not a malfunction — it is the one-time
                   approval surface (T6). The banner replaces the raw error, and the
                   approve action records the hash and reruns the step. */}

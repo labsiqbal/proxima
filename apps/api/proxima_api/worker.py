@@ -46,6 +46,7 @@ from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImpo
 from .graph_executor import GRAPH_NODE_RUN_KIND, SCRIPT_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .script_runner import ScriptRunner  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
+from .satpam import Satpam
 from .run_summaries import RunSummaries
 from .run_advancers import RunAdvancers
 from .run_prompting import RunPrompting, extract_vision_images
@@ -76,6 +77,9 @@ class RunWorker:
     def __init__(self, app: FastAPI):
         self.app = app
         self.reaper = RunReaper(app, self._fail_interrupted)
+        # Slice 12 (T10): the reaper's sibling. The reaper owns dead runs; the
+        # satpam watches alive-but-unproductive ones on the same loop cadence.
+        self.satpam = Satpam(app)
         self.summaries = RunSummaries(app)
         self.advancers = RunAdvancers(app)
         self.graph_executor = GraphExecutor(app)
@@ -130,6 +134,9 @@ class RunWorker:
                     last_reap = now
                     self.reap_stale_runs(stale_seconds)
                     self.reap_orphaned_jobs()
+                # The satpam sweep (slice 12) self-paces on its Settings cadence
+                # and is fail-quiet internally - it never breaks the worker loop.
+                self.satpam.maybe_tick(now)
                 claimed = False
                 while len(self.run_tasks) < concurrency:
                     run = self.claim_run()
@@ -746,6 +753,16 @@ class RunWorker:
             ).fetchone()
             if not attempt or attempt["status"] != "running":
                 return {}  # a rerun/cancel superseded this attempt; don't resurrect it
+        # Slice 12 (T10 rung a): a pending satpam steer rides into exactly this
+        # continuation turn. Consumed here (cleared below) so it fires once.
+        steer_note = None
+        try:
+            wrow = db.execute(
+                "SELECT steer_pending FROM satpam_watch WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            steer_note = wrow["steer_pending"] if wrow else None
+        except sqlite3.Error:
+            logging.getLogger("proxima.satpam").exception("steer lookup failed (fail-quiet)")
         cur = db.execute(
             "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, "
             "model, hermes_home, kind, continued_from_run_id, continuation_count) "
@@ -756,7 +773,7 @@ class RunWorker:
                 run["user_id"],
                 run["profile_id"],
                 run["runner_id"],
-                wf.build_continuation_prompt(used + 1, limit),
+                wf.build_continuation_prompt(used + 1, limit, steer=steer_note),
                 run.get("model"),
                 run.get("hermes_home"),
                 kind or "chat",
@@ -795,6 +812,15 @@ class RunWorker:
                     "UPDATE jobs SET steps_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (json.dumps(steps), job["id"]),
                 )
+        if steer_note:
+            try:
+                db.execute(
+                    "UPDATE satpam_watch SET steer_pending = NULL, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE session_id = ?",
+                    (session_id,),
+                )
+            except sqlite3.Error:
+                logging.getLogger("proxima.satpam").exception("steer clear failed (fail-quiet)")
         payload = {
             "runner": run["runner_id"],
             "job": job["id"],
@@ -1210,6 +1236,11 @@ class RunWorker:
                     db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
                 self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
             self._fail_job(session_id, reason, run_id)
+            if outcome.get("capped"):
+                # Slice 12 (T10 'confused' rung): the honest stop above is also a
+                # satpam escalation record, so the cap surfaces as an owner-facing
+                # card, not just a failed run. Fail-quiet inside.
+                self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
         except Exception as exc:
             detail = str(exc)[-2000:]
             self._fail_run_exception(run, detail)

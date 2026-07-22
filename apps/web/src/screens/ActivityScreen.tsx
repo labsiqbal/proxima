@@ -97,6 +97,9 @@ function PlanJobs({ plan, profiles, onOpenPlan }: {
             {row.node.type === 'script' && <span className="plan-script" title="A saved script runs this step — no AI involved">⚡ scripts/{row.node.command}</span>}
             <TargetChip node={row.node} />
             {row.node.type === 'script' && lastOutputLine(row.output) && <span className="plan-script-out" title={lastOutputLine(row.output) ?? undefined}>{lastOutputLine(row.output)}</span>}
+            {/* Decision-hold (slice 12): this job is waiting on the owner's
+                answer — the rest of the plan may well still be running. */}
+            {row.question && <span className="plan-decision" title={row.question}>needs your answer</span>}
             {row.error && <span className="plan-job-error" title={row.error}>!</span>}
             <StatusPill status={row.status} />
           </li>)}

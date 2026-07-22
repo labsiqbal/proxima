@@ -84,6 +84,7 @@ def resolved_node_inputs(
 def build_node_prompt(
     node: Mapping[str, Any],
     inputs: Mapping[str, Any],
+    decision: Mapping[str, Any] | None = None,
 ) -> str:
     """Build an isolated node prompt with explicit, typed data hand-off.
 
@@ -92,6 +93,10 @@ def build_node_prompt(
     able to express any recipe a linear one could, and a declared input is useless if
     the author cannot refer to it by name. The whole input is still handed over as
     typed data below — substitution is for writing readable instructions, not hand-off.
+
+    ``decision`` is the decision-hold hand-back (slice 12, T10): when the owner has
+    answered a question this node surfaced via DECISION_NEEDED, the re-run carries
+    the question + decision so the agent honors it instead of re-asking.
     """
     job_input = dict(inputs.get("job_input", {}))
     contract: dict[str, Any] = {"kind": node.get("output_kind") or "text"}
@@ -112,11 +117,25 @@ def build_node_prompt(
     skills_block = (
         f"SUGGESTED SKILLS/TOOLS for this node: {', '.join(skill_ids)}\n\n" if skill_ids else ""
     )
+    decision_block = ""
+    if decision and decision.get("answer"):
+        decision_block = (
+            "OWNER DECISION (the owner already answered this node's open question - "
+            "honor it, do not re-ask):\n"
+            f"Question: {decision.get('question') or '(unrecorded)'}\n"
+            f"Decision: {decision['answer']}\n\n"
+        )
     return (
         "⟦MODE: GRAPH WORKFLOW NODE⟧ Execute this node autonomously. Do not ask the "
         "user or emit a <question-form>; if essential access or information is missing, "
-        "reply starting with 'BLOCKED:'.\n\n"
+        "reply starting with 'BLOCKED:'. If you hit a genuine open product decision that "
+        "only the owner can make (a real fork in the work, not a detail you can decide), "
+        "reply with ONE line starting 'DECISION_NEEDED: <the question>' and nothing else - "
+        "the plan pauses this branch, asks the owner, and re-runs this node with the "
+        "decision. Never guess an owner decision and never use it for questions you can "
+        "resolve yourself.\n\n"
         f"NODE: {node.get('name') or node.get('id')} ({node.get('id')})\n\n"
+        f"{decision_block}"
         f"INSTRUCTION:\n{instruction}\n\n"
         f"EXPECTED OUTPUT:\n{expected}\n\n"
         f"{rules_block}"
@@ -394,10 +413,19 @@ class GraphExecutor:
                         ),
                     )
                     session_id = int(session_cur.lastrowid)
+                    # Decision-hold hand-back (slice 12): a node re-running after
+                    # the owner answered its DECISION_NEEDED question carries the
+                    # decision in its prompt.
+                    decision = None
+                    if node_state.get("answer"):
+                        decision = {
+                            "question": node_state.get("question"),
+                            "answer": node_state.get("answer"),
+                        }
                     prompt = (
                         build_script_run_summary(node)
                         if is_script
-                        else build_node_prompt(node, inputs)
+                        else build_node_prompt(node, inputs, decision=decision)
                     )
                     run_cur = db.execute(
                         """

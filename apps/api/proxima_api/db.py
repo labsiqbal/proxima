@@ -308,11 +308,57 @@ CREATE TABLE IF NOT EXISTS node_states (
   version INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   finished_at TEXT,
+  -- Decision-hold (Phase-1 slice 12, T10): a node whose agent surfaced a genuine
+  -- open decision parks in 'review' with the question here; the owner's answer is
+  -- stored alongside and injected into the node's re-run prompt. contract_failures
+  -- counts output-contract validation failures across attempts (a satpam
+  -- "confused" signal: repeated invalid output escalates).
+  question TEXT,
+  answer TEXT,
+  contract_failures INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(job_id, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status);
+-- Satpam supervision (Phase-1 slice 12, T10). satpam_watch is the watchman's
+-- per-chain memory: one row per job session it has evaluated, holding the last
+-- continuation turn seen, the durable progress fingerprints it compares turn to
+-- turn (worktree diff signature, salvaged-output hash), the consecutive
+-- no-progress counters, and a pending steer note for the next continuation.
+-- Rows are bookkeeping, deleted freely on restart; interventions are the record.
+CREATE TABLE IF NOT EXISTS satpam_watch (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  node_id TEXT,
+  last_turn INTEGER NOT NULL DEFAULT 0,
+  diff_signature TEXT,
+  stall_turns INTEGER NOT NULL DEFAULT 0,
+  output_signature TEXT,
+  loop_turns INTEGER NOT NULL DEFAULT 0,
+  steer_count INTEGER NOT NULL DEFAULT 0,
+  steer_pending TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id)
+);
+-- The durable, owner-visible record of every satpam action (T10 #5: no silent
+-- interventions): steer (applied automatically), restart (applied for non-repo
+-- work; 'pending' = the repo-job approval card), escalate (pause + plain-language
+-- card). One row per action, kept for audit after resolution.
+CREATE TABLE IF NOT EXISTS satpam_interventions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  node_id TEXT,
+  action TEXT NOT NULL,
+  detection TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'applied',
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_satpam_interventions_job ON satpam_interventions(job_id, id);
 -- One-time script approvals (Phase-1 slice 6, T6): a library script runs as a
 -- deterministic plan step only after the owner approved its exact bytes once.
 -- One row per (project, scripts/-relative path) holding the approved sha256;

@@ -32,13 +32,17 @@ cards · projects + **link existing folders** · agent profiles as personas
 (per-profile instructions) · files + live preview · wiki + graph · dark/light +
 design tokens · daily integrity-checked DB backup.
 
-**Phase 1 (slices 1-9):** single workspace around the flow (Chat → Tasks →
-Recipes, tools on a right rail) · project work containers (code areas + ops
-area) · run-first plans with per-job targets · repo jobs in isolated worktrees
-with in-app diff review + local merge · turn-timeout auto-continuation ·
-deterministic script nodes with hash-bound trust · durable Archive registry
-(lineage, synced approval, permalinks) · bundled capability pack (masterplan
-skill + work-discipline preamble).
+**Phase 1 — COMPLETE (slices 1-12):** single workspace around the flow (Chat →
+Tasks → Recipes, tools on a right rail) · project work containers (code areas +
+ops area) · run-first plans with per-job targets · repo jobs in isolated
+worktrees with in-app diff review + local merge · turn-timeout
+auto-continuation · deterministic script nodes with hash-bound trust · durable
+Archive registry (lineage, synced approval, permalinks) · bundled capability
+pack (masterplan skill + work-discipline preamble) · flow-centric positioning
+with the honest two-sentence security note · BYO repo-remote connector
+(per-area push-after-merge, default off) · satpam supervision loop (stalled/
+looping/confused detection, steer → gated restart-clean → escalate,
+decision-hold with independent branches continuing).
 
 ---
 

@@ -88,6 +88,63 @@ def get_continuation_limit(config: dict[str, Any] | None) -> int:
         return 5
 
 
+# ── satpam supervision settings (Phase-1 slice 12, T10) ────────────────────
+
+SATPAM_STALL_TURNS_KEY = "satpam_stall_turns"
+SATPAM_CHECK_SECONDS_KEY = "satpam_check_seconds"
+# Conservative defaults (T10 #6): N=2 consecutive no-progress continuation
+# turns before the satpam acts; one evaluation sweep per minute. Bounds keep a
+# typo from making the watchman hyperactive (N=0 would flag every turn) or
+# blind (a day-long cadence supervises nothing).
+SATPAM_STALL_TURNS_DEFAULT = 2
+SATPAM_STALL_TURNS_MIN = 1
+SATPAM_STALL_TURNS_MAX = 10
+SATPAM_CHECK_SECONDS_DEFAULT = 60
+SATPAM_CHECK_SECONDS_MIN = 15
+SATPAM_CHECK_SECONDS_MAX = 3600
+
+
+def _bounded_int(raw: str | None, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+    return value if lo <= value <= hi else default
+
+
+def get_satpam_settings(conn) -> dict[str, int]:
+    """The satpam's tunable thresholds: N (consecutive no-progress continuation
+    turns before it acts) and the sweep cadence in seconds."""
+    return {
+        "stall_turns": _bounded_int(
+            get_setting(conn, SATPAM_STALL_TURNS_KEY),
+            SATPAM_STALL_TURNS_DEFAULT, SATPAM_STALL_TURNS_MIN, SATPAM_STALL_TURNS_MAX,
+        ),
+        "check_seconds": _bounded_int(
+            get_setting(conn, SATPAM_CHECK_SECONDS_KEY),
+            SATPAM_CHECK_SECONDS_DEFAULT, SATPAM_CHECK_SECONDS_MIN, SATPAM_CHECK_SECONDS_MAX,
+        ),
+    }
+
+
+def set_satpam_settings(conn, stall_turns: int, check_seconds: int) -> dict[str, int]:
+    if not isinstance(stall_turns, int) or isinstance(stall_turns, bool) or not (
+        SATPAM_STALL_TURNS_MIN <= stall_turns <= SATPAM_STALL_TURNS_MAX
+    ):
+        raise ValueError(
+            f"stall_turns must be an integer between {SATPAM_STALL_TURNS_MIN} and {SATPAM_STALL_TURNS_MAX}"
+        )
+    if not isinstance(check_seconds, int) or isinstance(check_seconds, bool) or not (
+        SATPAM_CHECK_SECONDS_MIN <= check_seconds <= SATPAM_CHECK_SECONDS_MAX
+    ):
+        raise ValueError(
+            f"check_seconds must be an integer between {SATPAM_CHECK_SECONDS_MIN} and {SATPAM_CHECK_SECONDS_MAX}"
+        )
+    set_setting(conn, SATPAM_STALL_TURNS_KEY, str(stall_turns))
+    set_setting(conn, SATPAM_CHECK_SECONDS_KEY, str(check_seconds))
+    return {"stall_turns": stall_turns, "check_seconds": check_seconds}
+
+
 # ── image-generation config ────────────────────────────────────────────────
 
 IMAGE_GEN_KEY = "image_gen"

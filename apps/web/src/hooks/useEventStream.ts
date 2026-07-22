@@ -41,6 +41,8 @@ export function useEventStream(token: string, sessionId: number | null, onEvent:
       'collaboration.child.completed', 'collaboration.child.failed', 'collaboration.child.cancelled',
       'message_review.queued', 'message_review.started', 'message_review.completed',
       'message_review.failed', 'message_review.applied', 'message_review.restored',
+      'graph.node.update', 'job.update',
+      'satpam.steered', 'satpam.restart.queued', 'satpam.restarted', 'satpam.escalated',
     ]
     for (const type of types) {
       source.addEventListener(type, event => emit((event as MessageEvent).data))

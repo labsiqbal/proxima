@@ -12,6 +12,8 @@ export type PlanJobRow = {
   // The node's validated output, for the compact result surfaces (a script
   // row shows its last output line, T6). Null while nothing has run.
   output: unknown
+  // Decision-hold (slice 12): the open question a parked node is waiting on.
+  question: string | null
 }
 
 /**
@@ -60,6 +62,7 @@ export function orderedPlanJobs(job: GraphJob): PlanJobRow[] {
       status: states.get(node.id)?.status ?? 'pending',
       error: (states.get(node.id)?.error as string | null) ?? null,
       output: states.get(node.id)?.output ?? null,
+      question: states.get(node.id)?.status === 'review' ? states.get(node.id)?.question ?? null : null,
     }))
 }
 

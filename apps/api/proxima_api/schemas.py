@@ -116,6 +116,10 @@ class GraphNodeOutputEditRequest(BaseModel):
     value: Any
 
 
+class GraphNodeAnswerRequest(BaseModel):
+    answer: str = Field(min_length=1, max_length=4000)
+
+
 class ScheduleCreateRequest(BaseModel):
     workflow_id: int
     cron: str = Field(min_length=1)

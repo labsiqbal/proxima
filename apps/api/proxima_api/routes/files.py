@@ -167,6 +167,32 @@ def register(app, deps):
             "continuation_limit": app_settings.get_continuation_limit(app.state.config),
         }
 
+    @app.get("/api/settings/satpam")
+    def get_satpam_settings(user: dict[str, Any] = Depends(current_user)):
+        """Satpam supervision thresholds (slice 12, T10): N consecutive
+        no-progress continuation turns before it acts, and the sweep cadence."""
+        current = app_settings.get_satpam_settings(db())
+        return {
+            **current,
+            "default_stall_turns": app_settings.SATPAM_STALL_TURNS_DEFAULT,
+            "min_stall_turns": app_settings.SATPAM_STALL_TURNS_MIN,
+            "max_stall_turns": app_settings.SATPAM_STALL_TURNS_MAX,
+            "default_check_seconds": app_settings.SATPAM_CHECK_SECONDS_DEFAULT,
+            "min_check_seconds": app_settings.SATPAM_CHECK_SECONDS_MIN,
+            "max_check_seconds": app_settings.SATPAM_CHECK_SECONDS_MAX,
+        }
+
+    @app.put("/api/settings/satpam")
+    def set_satpam_settings(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
+        try:
+            return app_settings.set_satpam_settings(
+                db(),
+                int(payload.get("stall_turns")),
+                int(payload.get("check_seconds")),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "invalid satpam settings") from exc
+
     @app.get("/api/settings/collaboration")
     def get_collaboration_settings(user: dict[str, Any] = Depends(current_user)):
         return app_settings.get_collaboration_settings(db())

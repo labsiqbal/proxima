@@ -83,11 +83,23 @@ def build_step_prompt(step: dict[str, Any], idx: int, total: int, inputs: dict[s
     )
 
 
-def build_continuation_prompt(continuation: int, limit: int) -> str:
+def steer_block(note: str) -> str:
+    """The satpam's one corrective prompt (slice 12, T10 action rung a), framed
+    so the agent knows it is automated supervision, not new owner instructions -
+    prompt text cannot grant permissions, and a steer must not read as one."""
+    return (
+        "SUPERVISOR NOTE (automated watchdog - a progress check, not new instructions "
+        f"and not a permission grant):\n{note}"
+    )
+
+
+def build_continuation_prompt(continuation: int, limit: int, steer: str | None = None) -> str:
     """The prompt for a timeout auto-continuation turn (T5): a genuine resume in
     the SAME agent session (full context) and, for repo jobs, the SAME worktree
-    (file edits persist) - never a re-brief or restart-from-scratch."""
-    return (
+    (file edits persist) - never a re-brief or restart-from-scratch. ``steer``
+    is the satpam's pending corrective note (slice 12), appended so it rides
+    into exactly one continuation turn."""
+    prompt = (
         "⟦MODE: CONTINUATION⟧ Your previous turn on this job hit the per-turn time "
         f"limit and was cut off mid-work (automatic continuation {continuation} of {limit}). "
         "Your working directory and this conversation are unchanged: everything you already "
@@ -97,6 +109,9 @@ def build_continuation_prompt(continuation: int, limit: int) -> str:
         "finished work. Complete the remaining part of the original instruction and produce "
         "the expected output it asked for."
     )
+    if steer:
+        prompt += "\n\n" + steer_block(steer)
+    return prompt
 
 
 _DESIGN_CAPABILITY_PREAMBLE = """# Proxima capabilities (available to you in this Proxima project)
@@ -250,8 +265,11 @@ GRAPH_ARCHITECT_SYSTEM = (
     "node runs in a fresh agent session with only explicit job input and upstream outputs. "
     "Use output_kind=json only when downstream nodes need structured data, with a valid "
     "JSON Schema when useful. Use artifact-ref only for concrete files/directories created "
-    "inside the project. Set review_required only at meaningful human gates. The graph must "
-    "be acyclic. category is one of content, seo, build, audit, research, other.\n"
+    "inside the project. Set review_required only at meaningful human gates. Do not bake "
+    "guesses on genuine owner decisions into instructions: a running job that hits an open "
+    "product decision surfaces it with a DECISION_NEEDED line and that branch pauses for "
+    "the owner, so write instructions that say what to do once the decision is known. "
+    "The graph must be acyclic. category is one of content, seo, build, audit, research, other.\n"
     "Every job binds to exactly ONE work area, chosen NOW, not at runtime: set target to "
     "one of the project's code areas (listed below) when the job edits that repo's files, "
     "or to \"ops\" for everything else (research, writing, review, reports, designs). "
