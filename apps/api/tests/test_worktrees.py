@@ -30,6 +30,7 @@ from proxima_api.worktrees import (
     WorktreeError,
     compute_diff,
     create_worktree,
+    is_snapshot_noise,
     job_branch,
     merge_job_branch,
     remove_worktree,
@@ -156,6 +157,67 @@ def test_snapshot_and_compute_diff(tmp_path: Path):
     assert diff["head_commit"] == sha
     assert not diff["patch_truncated"]
     assert "2 files changed" in diff["summary"]
+
+
+def test_is_snapshot_noise_matches_cache_and_bytecode():
+    assert is_snapshot_noise("__pycache__/app.cpython-312.pyc")
+    assert is_snapshot_noise("pkg/__pycache__/mod.pyc")
+    assert is_snapshot_noise("app.pyc")
+    assert is_snapshot_noise(".pytest_cache/v/cache/nodeids")
+    assert is_snapshot_noise(".DS_Store")
+    assert not is_snapshot_noise("app.py")
+    assert not is_snapshot_noise("src/main.py")
+    assert not is_snapshot_noise("dist/bundle.js")  # intentional build output stays reviewable
+
+
+def test_snapshot_skips_pycache_bytecode(tmp_path: Path):
+    """Running Python in a worktree must not smuggle __pycache__ into the review."""
+    repo = _scratch_repo(tmp_path / "repo")
+    dest = tmp_path / "wt"
+    info = create_worktree(repo, dest, job_branch(70))
+    (dest / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    cache = dest / "__pycache__"
+    cache.mkdir()
+    (cache / "app.cpython-312.pyc").write_bytes(b"\x00bytecode")
+    (dest / ".pytest_cache").mkdir()
+    (dest / ".pytest_cache" / "README.md").write_text("cache\n", encoding="utf-8")
+
+    sha = snapshot_worktree(dest, "work with runtime noise")
+    assert sha != info["base_commit"]
+    tracked = _git(dest, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+    assert "app.py" in tracked
+    assert not any("__pycache__" in p or p.endswith(".pyc") for p in tracked)
+    assert not any(".pytest_cache" in p for p in tracked)
+
+    diff = compute_diff(dest, info["base_commit"], "HEAD")
+    assert {(f["path"], f["status"]) for f in diff["files"]} == {("app.py", "A")}
+    assert "__pycache__" not in diff["patch"]
+    assert ".pyc" not in diff["patch"]
+    # Snapshot never committed the noise, so git shortstat still matches.
+    assert diff["summary"].startswith("1 file changed")
+
+    # Noise alone must not create an empty/no-op failure or a junk commit.
+    (cache / "app.cpython-312.pyc").write_bytes(b"\x01recompiled")
+    assert snapshot_worktree(dest, "noise only") == sha
+
+
+def test_compute_diff_hides_already_committed_bytecode(tmp_path: Path):
+    """Historical snapshots that already committed .pyc still render clean."""
+    repo = _scratch_repo(tmp_path / "repo")
+    dest = tmp_path / "wt"
+    info = create_worktree(repo, dest, job_branch(71))
+    (dest / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    cache = dest / "__pycache__"
+    cache.mkdir()
+    (cache / "app.cpython-312.pyc").write_bytes(b"\x00bytecode")
+    # Bypass snapshot filtering to simulate the pre-fix pollution path.
+    _git(dest, "add", "-A")
+    _git(dest, "commit", "-q", "-m", "polluted snapshot")
+
+    diff = compute_diff(dest, info["base_commit"], "HEAD")
+    assert {(f["path"], f["status"]) for f in diff["files"]} == {("app.py", "A")}
+    assert "__pycache__" not in diff["patch"]
+    assert diff["summary"] == "1 file changed"
 
 
 def test_merge_success_lands_on_base_branch(tmp_path: Path):

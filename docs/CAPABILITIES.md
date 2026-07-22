@@ -260,7 +260,10 @@ crash leftovers are cleaned idempotently by job id. With the flag on, the run wo
 sets the run's cwd to the active worktree (a missing worktree fails the run loudly -
 never a silent fallback to the primary tree). Diff and merge operate on commits:
 outstanding edits are snapshotted onto the job branch first, so partial work also
-survives crashes (feeds T5 continuation, slice 5). Final approve = guarded `--no-ff`
+survives crashes (feeds T5 continuation, slice 5). Snapshot commits drop runtime
+cache/bytecode (`__pycache__`, `*.pyc`, pytest/mypy/ruff caches, …) even when the
+target repo has no `.gitignore`, and the review diff hides those paths if an older
+snapshot already committed them. Final approve = guarded `--no-ff`
 merge: refuses a dirty repo or switched-away base branch, aborts on conflicts and
 parks the job in `review` with the surfaced error (worktree kept; approve again after
 resolving) - never forced. Success records `merge_commit` on the job's worktree row

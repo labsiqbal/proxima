@@ -58,6 +58,21 @@ _GIT_IDENTITY = (
     "-c", "user.email=proxima@localhost",
     "-c", "commit.gpgsign=false",
 )
+# Runtime cache/bytecode agents often create while running code. These must
+# never enter a review snapshot or pollute the owner's base branch on merge -
+# even when the target repo has no .gitignore. Keep this list to clear junk
+# only (not intentional build outputs like dist/).
+_SNAPSHOT_NOISE_DIR_NAMES = frozenset({
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".eggs",
+})
+_SNAPSHOT_NOISE_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db"})
+_SNAPSHOT_NOISE_SUFFIXES = (".pyc", ".pyo", ".pyd")
 
 
 class WorktreeError(RuntimeError):
@@ -148,41 +163,138 @@ def create_worktree(repo: Path, dest: Path, branch: str) -> dict[str, str]:
     return {"base_branch": base_branch, "base_commit": head.stdout.strip()}
 
 
+def is_snapshot_noise(path: str | None) -> bool:
+    """True for runtime cache/bytecode paths that must not enter a review commit."""
+    if not path:
+        return False
+    normalized = path.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    if name in _SNAPSHOT_NOISE_FILE_NAMES:
+        return True
+    if name.endswith(_SNAPSHOT_NOISE_SUFFIXES):
+        return True
+    return any(part in _SNAPSHOT_NOISE_DIR_NAMES for part in normalized.split("/"))
+
+
+def _staged_paths(wt: Path | str) -> list[str]:
+    out = _git(wt, "diff", "--cached", "--name-only", "-z", check=False).stdout
+    return [p for p in out.split("\0") if p]
+
+
+def _unstage_snapshot_noise(wt: Path | str) -> None:
+    """Drop cache/bytecode from the index after ``git add -A``.
+
+    Untracked noise becomes untracked again; already-tracked noise stays
+    tracked but its staged edits are left out of the checkpoint commit so a
+    recompiled ``.pyc`` cannot keep polluting the job branch.
+    """
+    noise = [p for p in _staged_paths(wt) if is_snapshot_noise(p)]
+    if not noise:
+        return
+    # Batch to stay well under OS arg limits on huge trees.
+    step = 100
+    for i in range(0, len(noise), step):
+        _git(wt, "reset", "-q", "HEAD", "--", *noise[i:i + step], check=False)
+
+
+def _filter_noise_from_patch(patch: str) -> str:
+    """Strip unified-diff file sections whose path is snapshot noise."""
+    if not patch:
+        return patch
+    kept: list[str] = []
+    section: list[str] = []
+    section_noise = False
+
+    def flush() -> None:
+        nonlocal section, section_noise
+        if section and not section_noise:
+            kept.extend(section)
+        section = []
+        section_noise = False
+
+    for line in patch.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            flush()
+            section = [line]
+            # "diff --git a/path b/path" - prefer the b/ side (new path).
+            parts = line.rstrip("\n").split(" ")
+            b_path = ""
+            for part in parts:
+                if part.startswith("b/"):
+                    b_path = part[2:]
+            section_noise = is_snapshot_noise(b_path)
+            continue
+        if section:
+            section.append(line)
+        else:
+            # Preamble before the first file section (rare for git diff).
+            kept.append(line)
+    flush()
+    return "".join(kept)
+
+
+def _diff_summary(files: list[dict[str, Any]]) -> str:
+    """Owner-facing shortstat that matches the filtered file list."""
+    n = len(files)
+    if n == 0:
+        return ""
+    return f"{n} file{'s' if n != 1 else ''} changed"
+
+
 def snapshot_worktree(wt: Path | str, message: str) -> str:
     """Commit any outstanding work in the worktree; return the head sha.
 
     Diff and merge both deal in commits, so this runs before either - and it
     is what makes partial agent work durable (T5). No outstanding changes ⇒
-    no commit.
+    no commit. Runtime cache/bytecode is staged then dropped so a missing
+    .gitignore cannot smuggle ``__pycache__`` into the review or merge.
     """
     if _porcelain(wt):
         _git(wt, "add", "-A")
-        commit = _git(wt, "commit", "--no-verify", "-m", message, check=False, identity=True)
-        if commit.returncode != 0 and _porcelain(wt):
-            detail = (commit.stderr or commit.stdout or "").strip()[-500:]
-            raise WorktreeError(f"could not snapshot worktree changes: {detail}")
+        _unstage_snapshot_noise(wt)
+        if _staged_paths(wt):
+            commit = _git(wt, "commit", "--no-verify", "-m", message, check=False, identity=True)
+            if commit.returncode != 0 and _staged_paths(wt):
+                detail = (commit.stderr or commit.stdout or "").strip()[-500:]
+                raise WorktreeError(f"could not snapshot worktree changes: {detail}")
     return _git(wt, "rev-parse", "HEAD").stdout.strip()
 
 
 def compute_diff(cwd: Path | str, base: str, head: str = "HEAD") -> dict[str, Any]:
     """The job's before/after change, in the shape the review UI renders:
-    per-file status (rename-aware) plus one unified patch."""
+    per-file status (rename-aware) plus one unified patch.
+
+    Cache/bytecode paths are omitted even when an older snapshot already
+    committed them, so the review surface stays scannable.
+    """
     files: list[dict[str, Any]] = []
+    raw_file_count = 0
     tokens = _git(cwd, "diff", "--name-status", "-z", "-M", base, head).stdout.split("\0")
     i = 0
     while i < len(tokens) and tokens[i]:
         status = tokens[i]
         if status[0] in ("R", "C"):
-            files.append({"path": tokens[i + 2], "old_path": tokens[i + 1], "status": status[0]})
+            path, old_path = tokens[i + 2], tokens[i + 1]
             i += 3
         else:
-            files.append({"path": tokens[i + 1], "old_path": None, "status": status[0]})
+            path, old_path = tokens[i + 1], None
             i += 2
-    patch = _git(cwd, "diff", "-M", "--no-color", base, head).stdout
+        raw_file_count += 1
+        if is_snapshot_noise(path) or is_snapshot_noise(old_path):
+            continue
+        files.append({"path": path, "old_path": old_path, "status": status[0]})
+    patch = _filter_noise_from_patch(_git(cwd, "diff", "-M", "--no-color", base, head).stdout)
     truncated = len(patch.encode("utf-8", errors="replace")) > MAX_PATCH_BYTES
     if truncated:
         patch = patch.encode("utf-8", errors="replace")[:MAX_PATCH_BYTES].decode("utf-8", errors="replace")
-    summary = _git(cwd, "diff", "--shortstat", "-M", base, head).stdout.strip()
+    # Keep git's insert/delete shortstat when nothing was filtered; otherwise the
+    # counts would still include hidden bytecode and mislead the owner.
+    if raw_file_count == len(files):
+        summary = _git(cwd, "diff", "--shortstat", "-M", base, head).stdout.strip()
+    else:
+        summary = _diff_summary(files)
     return {
         "base_commit": base,
         "head_commit": _git(cwd, "rev-parse", head).stdout.strip(),

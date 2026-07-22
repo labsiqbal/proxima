@@ -448,8 +448,11 @@ POST /api/jobs/{id}/start
 RunWorker: the run's cwd = the worktree (missing worktree fails the run
     loudly - never a silent fallback to the primary tree)
     ▼
-GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch,
-    then per-file status + unified patch vs base_commit (slice-4 review surface)
+GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch
+    (runtime cache/bytecode like __pycache__/*.pyc is dropped from the
+    checkpoint so a missing .gitignore cannot pollute review or merge),
+    then per-file status + unified patch vs base_commit (slice-4 review surface;
+    the same noise paths are omitted from the rendered file list/patch)
     ▼
 POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
     the branch the worktree was cut from (T1 local-first)
