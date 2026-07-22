@@ -6,7 +6,7 @@ run them safely, and keep the good runs as repeatable recipes - code, content,
 and ops, all on **your own machine**. Bring your own agent CLI: **Claude Code,
 Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
 
-![New task — delegate an outcome](docs/screenshots/ops-home.png)
+![One workspace — Chat is the front door](docs/screenshots/deck-chat.png)
 
 ## What it is
 
@@ -47,6 +47,8 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
   pushes unless you flip a per-repo "push after merge" toggle (off by default),
   and then it pushes with your machine's own `git`: bring-your-own credentials,
   no tokens stored, no OAuth.
+
+  ![Repo job diff review](docs/screenshots/task-diff-review.png)
 - **Full-power chat** — streaming responses, tool-activity cards, slash
   commands, session continuity. Agent approval/permission prompts render as
   clickable cards; point the Claude Code runner at your live config and the
@@ -62,9 +64,12 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 
   ![Plan run on the canvas](docs/screenshots/workflow-graph-run.png)
 - **Script steps** - a plan node can be a deterministic script instead of an
-  agent turn. Scripts live in the project's `scripts/` folder and each script's
-  content hash is approved once, so repeated non-AI work costs nothing and
-  can't change under you silently.
+  agent turn. Scripts live in the project's `scripts/` folder; the first run
+  pauses on a one-time approval card showing the script's exact content and
+  sha256, and those approved bytes are trusted until the file changes - so
+  repeated non-AI work costs nothing and can't change under you silently.
+
+  ![Hash-bound script approval](docs/screenshots/script-approval.png)
 - **Long work survives** - agent turns get a configurable time budget, and a
   turn that times out mid-task auto-continues with its real context (up to 5
   genuine resumes) before stopping honestly and pausing the plan for you.
