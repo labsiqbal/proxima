@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import heapq
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
@@ -29,6 +29,9 @@ _NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger"})
 # adding one is a new kind here, not a new execution path.
 _TRIGGER_KINDS: frozenset[str] = frozenset({"manual"})
 TRIGGER_OUTPUT_KIND: OutputKind = "json"
+# The sentinel target for work that does not touch a repo: the project's ops
+# area (T1). Every other target names a registered code area's rel_path.
+OPS_TARGET = "ops"
 
 
 class GraphValidationError(ValueError):
@@ -119,6 +122,53 @@ def _parse_skill_ids(raw: Mapping[str, Any], node_id: str) -> list[str]:
         if text and text not in seen:
             seen.append(text)
     return seen
+
+
+def _apply_target_tags(node: dict[str, Any], raw: Mapping[str, Any], node_id: str) -> None:
+    """Normalize a node's T1/T2 work-binding tags in place.
+
+    ``target`` names the ONE container area this job works against — a code
+    area's rel_path (``.``, ``apps/web``, …) or the literal ``ops``. Whether the
+    named area actually exists is a database question the routes settle with
+    :func:`plan_target_problems`; this module only owns the shape.
+
+    ``touches_repo`` is always DERIVED from the target here, never trusted from
+    the input — an authored value that disagreed with its target would let a
+    repo job dodge its worktree.
+
+    An ambiguous target is a first-class state, not a guess: the slicer sets
+    ``target_ambiguous`` (with an optional ``target_question``) and the plan
+    refuses to start until the owner picks a target. Nodes with no target at
+    all are pre-slice-3 plans and behave exactly as before (no repo binding).
+    """
+    target = raw.get("target")
+    if target is not None and not isinstance(target, str):
+        raise GraphValidationError(f"node '{node_id}' target must be a string or null")
+    target = (target or "").strip() or None
+
+    question = raw.get("target_question")
+    if question is not None and not isinstance(question, str):
+        raise GraphValidationError(f"node '{node_id}' target_question must be a string or null")
+    question = (question or "").strip() or None
+
+    # Ambiguity means "ask instead of guessing" (T1), so a chosen target and the
+    # ambiguous flag are mutually exclusive: setting the target IS the resolution.
+    ambiguous = target is None and (bool(raw.get("target_ambiguous")) or question is not None)
+
+    if target is not None:
+        node["target"] = target
+    else:
+        node.pop("target", None)
+    if ambiguous:
+        node["target_ambiguous"] = True
+        if question is not None:
+            node["target_question"] = question
+        else:
+            node.pop("target_question", None)
+    else:
+        node.pop("target_ambiguous", None)
+        node.pop("target_question", None)
+    node["touches_repo"] = target is not None and target != OPS_TARGET
 
 
 def _parse_profile_id(raw: Mapping[str, Any], node_id: str) -> int | None:
@@ -232,6 +282,9 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             node.pop("expected_output", None)
             node.pop("rules", None)
             node.pop("skill_ids", None)
+            # A trigger does no work, so it binds to no area.
+            for field in ("target", "target_ambiguous", "target_question", "touches_repo"):
+                node.pop(field, None)
         else:
             contract = parse_output_contract(raw_node)
             node["output_kind"] = contract.kind
@@ -258,6 +311,7 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
                 node["skill_ids"] = skills
             else:
                 node.pop("skill_ids", None)
+            _apply_target_tags(node, raw_node, node_id)
 
         for axis in ("x", "y"):
             coordinate = _parse_coordinate(raw_node, node_id, axis)
@@ -432,6 +486,82 @@ def descendant_node_ids(graph: Mapping[str, Any], node_id: str) -> list[str]:
         seen.add(candidate)
         stack.extend(reversed(downstream[candidate]))
     return [candidate for candidate in node_order if candidate in seen]
+
+
+def plan_target_problems(
+    graph: Mapping[str, Any], code_area_paths: Iterable[str]
+) -> list[str]:
+    """Owner-facing reasons this plan's targets do not fit the project.
+
+    ``code_area_paths`` are the project's registered code-area rel_paths (T1's
+    read surface). A target must name one of them or ``ops``; anything else is a
+    slicer hallucination or a stale area and must be fixed before the plan can
+    bind work to a path. Ambiguous targets are NOT problems here — they are a
+    legitimate authored state that blocks start, not creation (see
+    :func:`unresolved_target_questions`).
+    """
+    known = set(code_area_paths)
+    problems: list[str] = []
+    for node in graph.get("nodes", []):
+        target = node.get("target")
+        if target is None or target == OPS_TARGET or target in known:
+            continue
+        known_hint = ", ".join(sorted(known)) if known else "none registered"
+        problems.append(
+            f"job '{node.get('name') or node['id']}' targets unknown code area "
+            f"'{target}' (project code areas: {known_hint}; or use 'ops')"
+        )
+    return problems
+
+
+def unresolved_target_questions(graph: Mapping[str, Any]) -> list[str]:
+    """The open where-does-this-run questions that block a plan from starting.
+
+    T1's rule: the target cannot be discovered at runtime, so an ambiguous
+    binding surfaces as a question for the owner instead of a guess by the
+    slicer. Returned in graph order so the start refusal reads like the plan.
+    """
+    questions: list[str] = []
+    for node in graph.get("nodes", []):
+        if not node.get("target_ambiguous"):
+            continue
+        name = node.get("name") or node["id"]
+        question = node.get("target_question") or "which area should this job work in?"
+        questions.append(f"job '{name}': {question}")
+    return questions
+
+
+def repo_target_paths(graph: Mapping[str, Any]) -> list[str]:
+    """Distinct code-area targets of this plan's repo jobs, in graph order."""
+    seen: list[str] = []
+    for node in graph.get("nodes", []):
+        target = node.get("target")
+        if node.get("touches_repo") and target and target not in seen:
+            seen.append(target)
+    return seen
+
+
+def node_touches_repo(graph_raw: Mapping[str, Any] | str | None, node_id: str) -> bool:
+    """Whether one node of a stored job graph is a repo job.
+
+    Tolerant by design — this feeds the worker's cwd seam, where the answer for
+    anything unparseable or unknown must be "no repo binding" (project-root cwd,
+    the pre-slice-3 behavior), never an exception that kills the run.
+    """
+    if not graph_raw:
+        return False
+    if isinstance(graph_raw, str):
+        try:
+            decoded = json.loads(graph_raw)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        graph_raw = decoded
+    for node in graph_raw.get("nodes", []) or []:
+        if isinstance(node, Mapping) and node.get("id") == node_id:
+            return bool(node.get("touches_repo"))
+    return False
 
 
 def ready_node_ids(

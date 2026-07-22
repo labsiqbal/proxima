@@ -8,8 +8,15 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import features, state
-from ..graph import GraphValidationError, descendant_node_ids, normalize_graph
+from .. import features, state, worktrees
+from ..graph import (
+    GraphValidationError,
+    descendant_node_ids,
+    normalize_graph,
+    plan_target_problems,
+    repo_target_paths,
+    unresolved_target_questions,
+)
 from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: ignore[reportMissingImports]
 from ..schemas import (
     GraphDefinitionUpdateRequest,
@@ -83,6 +90,12 @@ def register(app, deps):
             node["checkpoint"] = _decode_json(node.get("checkpoint"), None)
             nodes.append(node)
         payload["node_states"] = nodes
+        # Repo plans (slice 2): surface the worktree lifecycle exactly as the
+        # linear job payload does. Absent row (flag-off installs, non-repo
+        # plans) ⇒ payload unchanged.
+        wt = worktrees.job_worktree_row(db(), payload["id"])
+        if wt:
+            payload["worktree"] = worktrees.worktree_payload(wt)
         if payload.get("project_id"):
             project = db().execute(
                 "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
@@ -114,6 +127,33 @@ def register(app, deps):
         if not row:
             raise HTTPException(status_code=404, detail="workflow not found")
         return row
+
+    def require_valid_targets(graph: Mapping[str, Any], project_id: int | None) -> None:
+        """Reject a plan whose job targets cannot bind to this project (T1/T2).
+
+        The target is pinned at slice time precisely so it CANNOT be discovered
+        at runtime — so a target naming a non-registered area is a hard 422 at
+        the moment the plan is created or edited, when the owner can still fix
+        it. Ambiguous targets pass here: they are surfaced questions, and they
+        block start instead (see start_graph_job).
+        """
+        code_paths: list[str] = []
+        if project_id is not None:
+            code_paths = [
+                r["rel_path"] for r in db().execute(
+                    "SELECT rel_path FROM project_areas WHERE project_id = ? "
+                    "AND kind = 'code' AND source != 'excluded'",
+                    (project_id,),
+                ).fetchall()
+            ]
+        elif repo_target_paths(graph):
+            raise HTTPException(
+                status_code=422,
+                detail="this plan has repo jobs but no project - link it to a project so its code areas exist",
+            )
+        problems = plan_target_problems(graph, code_paths)
+        if problems:
+            raise HTTPException(status_code=422, detail="; ".join(problems))
 
     def insert_node_states(
         conn: sqlite3.Connection, job_id: int, graph: Mapping[str, Any]
@@ -215,6 +255,7 @@ def register(app, deps):
             workflow_id = workflow["id"]
             if project_id is None:
                 project_id = workflow["project_id"]
+        require_valid_targets(graph, project_id)
         visibility = "project" if project_id else "private"
         conn = db()
         with app.state.db_lock:
@@ -402,6 +443,7 @@ def register(app, deps):
             graph = normalize_graph(payload.graph)
         except GraphValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        require_valid_targets(graph, job["project_id"])
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
@@ -430,6 +472,53 @@ def register(app, deps):
         job = graph_job_or_404(job_id, user)
         if job["status"] != "queued":
             return graph_job_payload(job)
+        graph = normalize_graph(job["graph"] or "")
+        # T1: an ambiguous target surfaces as the owner's question, never a
+        # runtime guess. Flag-independent - it is a property of the plan.
+        questions = unresolved_target_questions(graph)
+        if questions:
+            raise HTTPException(
+                status_code=409,
+                detail="this plan has an unresolved question - pick a work area first: "
+                + "; ".join(questions),
+            )
+        # Repo jobs reserve their path (slice 2 wiring, flag-gated): cut the
+        # plan's worktree BEFORE claiming running, so a refused cut (dirty
+        # repo, detached HEAD, no commits) surfaces loudly and leaves the plan
+        # queued for a clean retry - same ordering as the linear start.
+        if features.enabled(app.state.config, features.REPO_WORKTREES):
+            repo_targets = repo_target_paths(graph)
+            if len(repo_targets) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="this plan's repo jobs target more than one code area "
+                    f"({', '.join(repo_targets)}) - a plan works one code area; split the others into their own plan",
+                )
+            if repo_targets:
+                area = db().execute(
+                    "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' "
+                    "AND rel_path = ? AND source != 'excluded'",
+                    (job["project_id"], repo_targets[0]),
+                ).fetchone()
+                if not area:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"code area '{repo_targets[0]}' is no longer registered in this project",
+                    )
+                # Pin the plan's one repo area on the job row: that is what the
+                # whole slice-2 surface (worktree cut, diff, merge, teardown)
+                # keys off, so graph plans reuse it without a parallel path.
+                db().execute(
+                    "UPDATE jobs SET target_area_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (_as_int(area["id"]), job_id),
+                )
+                job = graph_job_or_404(job_id, user)
+                try:
+                    worktrees.ensure_job_worktree(db(), app.state.config, job)
+                except worktrees.WorktreeError as exc:
+                    raise HTTPException(
+                        status_code=409, detail=f"cannot start repo plan: {exc}"
+                    ) from exc
         claimed = db().execute(
             "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, "
             "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued' AND engine='graph'",
@@ -642,6 +731,21 @@ def register(app, deps):
         ).fetchone()
         if incomplete:
             raise HTTPException(status_code=409, detail="all graph nodes must be done")
+        # Repo plan (slice 2, flag-gated): the final approve is the merge point
+        # (T1 local-first) - land the plan's branch on its base branch before
+        # the plan closes. Refusals and conflicts surface as 409 and PARK the
+        # plan in review (worktree kept for resolution); approve again after
+        # resolving to retry. Same contract as the linear approve.
+        if features.enabled(app.state.config, features.REPO_WORKTREES):
+            wt = worktrees.job_worktree_row(db(), job_id)
+            if wt and wt["status"] in ("active", "conflict", "merging"):
+                try:
+                    worktrees.merge_job_worktree(db(), job, wt)
+                except worktrees.WorktreeError as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"merge blocked - plan stays in review: {exc}",
+                    ) from exc
         approved = state.guarded_transition(
             db(),
             "jobs",

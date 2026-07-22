@@ -27,6 +27,12 @@ export type Project = {
 	role: string;
 	visibility: "private" | "shared";
 };
+// The project's work-container areas (T1, slice 1): git-repo subfolders as code
+// areas ("." = the root itself) plus the single ops area for everything else.
+export type ProjectAreas = {
+	code_areas: { id: number; rel_path: string; source: string }[];
+	ops_area: { id: number; rel_path: string } | null;
+};
 export type Runner = {
 	id: string;
 	displayName: string;
@@ -206,6 +212,16 @@ export type GraphNodeDefinition = {
 	// Skill hints for the runner — suggestions in the prompt, not a capability grant;
 	// the node's agent profile still decides what is actually enabled.
 	skill_ids?: string[];
+	// The ONE work area this job binds to (T1/T2, slice 3): a project code area's
+	// rel_path (".", "apps/web", …) or "ops". Absent on pre-slice-3 plans.
+	target?: string | null;
+	// Derived server-side from target — never authored. True means the job runs
+	// against the target repo (isolated worktree when the repo flag is on).
+	touches_repo?: boolean;
+	// The slicer could not decide where this job works: the plan surfaces the
+	// question and refuses to start until the owner picks a target.
+	target_ambiguous?: boolean;
+	target_question?: string | null;
 	output_kind: GraphOutputKind;
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;
@@ -266,6 +282,19 @@ export type GraphTemplate = {
 	inputs?: WorkflowInput[];
 };
 
+// A repo job's isolated-worktree lifecycle (slice 2), attached to job payloads
+// only when a worktree row exists — flag-off installs never see it.
+export type JobWorktree = {
+	area_id: number | null;
+	branch: string;
+	base_branch: string;
+	base_commit: string;
+	status: "active" | "merging" | "merged" | "conflict" | "discarded";
+	merge_commit: string | null;
+	error: string | null;
+	worktree_path: string;
+};
+
 export type GraphJob = {
 	id: number;
 	project_id?: number | null;
@@ -278,6 +307,7 @@ export type GraphJob = {
 	engine: "graph";
 	graph: WorkflowGraph;
 	node_states: GraphNodeState[];
+	worktree?: JobWorktree;
 	created_at?: string;
 	updated_at?: string;
 };
@@ -329,6 +359,7 @@ export type Job = {
 	current_step_idx: number;
 	input: any;
 	steps_state: JobStep[];
+	worktree?: JobWorktree;
 	schedule_id: number | null;
 	created_by: number | null;
 	created_at: string;

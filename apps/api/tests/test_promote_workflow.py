@@ -102,7 +102,7 @@ def test_promote_enqueues_graph_architect_run_by_default(tmp_path):
         "SELECT kind, prompt FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)
     ).fetchone()
     assert run["kind"] == "workflow_graph_draft"
-    assert "DAG plan" in run["prompt"]
+    assert "DAG of jobs" in run["prompt"]
     assert "review_required" in run["prompt"]
 
 
@@ -121,3 +121,42 @@ def test_promote_can_force_linear_while_graph_feature_is_enabled(tmp_path):
         "SELECT kind FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)
     ).fetchone()
     assert run["kind"] == "workflow_draft"
+
+
+def test_graph_promote_prompt_lists_the_projects_code_areas(tmp_path):
+    """The slicer can only bind jobs to areas it is told exist (T1/T2)."""
+    repo = tmp_path / "myrepo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    c, app = _client(tmp_path, link_roots=[str(tmp_path)])
+    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+    assert linked.status_code == 201, linked.text
+    job = c.post(
+        "/api/jobs", json={"project_slug": "myrepo", "input": {"brief": "fix the bug"}}
+    ).json()
+
+    response = c.post(f"/api/sessions/{job['session_id']}/promote-workflow", json={})
+
+    assert response.status_code == 202, response.text
+    prompt = app.state.db.execute(
+        "SELECT prompt FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+        (job["session_id"],),
+    ).fetchone()["prompt"]
+    assert "PROJECT WORK AREAS" in prompt
+    assert '"."' in prompt  # the linked repo registered as the root code area
+    assert '"target"' in prompt and "target_question" in prompt
+
+
+def test_graph_promote_without_code_areas_pins_targets_to_ops(tmp_path):
+    c, app = _client(tmp_path)
+    job = c.post("/api/jobs", json={"input": {"brief": "plan a launch"}}).json()
+
+    response = c.post(f"/api/sessions/{job['session_id']}/promote-workflow", json={})
+
+    assert response.status_code == 202, response.text
+    prompt = app.state.db.execute(
+        "SELECT prompt FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+        (job["session_id"],),
+    ).fetchone()["prompt"]
+    assert "no registered code areas" in prompt
+    assert 'must be "ops"' in prompt

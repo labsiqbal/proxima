@@ -560,3 +560,57 @@ def test_flag_off_run_executes_in_the_project_path_as_today(tmp_path: Path):
     cwd, payload, repo = _run_repo_job_and_capture_cwd(tmp_path, repo_worktrees=False)
     assert str(Path(cwd).resolve()) == str(repo.resolve())
     assert "worktree" not in payload
+
+
+def test_graph_repo_node_runs_in_worktree_and_ops_node_in_project(tmp_path: Path):
+    """Slice 3's per-job binding, end-to-end on the LIVE worker: in one plan,
+    the touches-repo node executes inside the plan's isolated worktree while
+    its ops sibling executes at the project root (where its outputs belong).
+    The fake ACP agent reports its real cwd as each node's output."""
+    script = tmp_path / "fake_acp.py"
+    script.write_text(FAKE_CWD_ACP_SCRIPT)
+    repo = _scratch_repo(tmp_path / "myrepo")
+    saved = _install_fake_runner(script)
+    try:
+        app = _app(
+            tmp_path,
+            start_worker=True,
+            start_scheduler=False,
+            run_worker_poll_interval_ms=20,
+            feature_repo_worktrees=True,
+            feature_workflow_graph=True,
+        )
+        with TestClient(app) as c:
+            tok = c.post("/auth/auto").json()["token"]
+            c.headers.update({"Authorization": f"Bearer {tok}"})
+            p = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+            assert p.status_code == 201, p.text
+            plan = c.post("/api/graph/jobs", json={
+                "title": "Fix + report",
+                "project_slug": "myrepo",
+                "graph": {"nodes": [
+                    {"id": "fix", "name": "Fix", "instruction": "fix it", "target": "."},
+                    {"id": "report", "name": "Report", "instruction": "report it",
+                     "target": "ops", "depends_on": ["fix"]},
+                ]},
+            })
+            assert plan.status_code == 201, plan.text
+            plan_id = plan.json()["id"]
+            assert c.post(f"/api/graph/jobs/{plan_id}/start").status_code == 200
+            deadline = time.time() + 20
+            status = "running"
+            while time.time() < deadline:
+                status = c.get(f"/api/graph/jobs/{plan_id}").json()["status"]
+                if status in ("review", "done", "failed"):
+                    break
+                time.sleep(0.05)
+            assert status == "review", f"plan did not reach review: {status}"
+            payload = c.get(f"/api/graph/jobs/{plan_id}").json()
+            states = {n["node_id"]: n for n in payload["node_states"]}
+            fix_cwd = str(states["fix"]["output"]).split("ran-in:", 1)[1].strip()
+            report_cwd = str(states["report"]["output"]).split("ran-in:", 1)[1].strip()
+            wt_path = str(Path(payload["worktree"]["worktree_path"]).resolve())
+            assert str(Path(fix_cwd).resolve()) == wt_path
+            assert str(Path(report_cwd).resolve()) == str(repo.resolve())
+    finally:
+        _restore_fake_runner(*saved)

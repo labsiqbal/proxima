@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -7,19 +8,20 @@ from fastapi.testclient import TestClient
 from proxima_api.main import create_app
 
 
-def _app(tmp_path, *, enabled: bool):
-    return create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "ws"),
-            "projectctl_path": "/usr/bin/true",
-            "seed_users": [
-                {"username": "bob", "role": "member", "os_user": "bob"}
-            ],
-            "feature_workflow_graph": enabled,
-            "start_worker": False,
-        }
-    )
+def _app(tmp_path, *, enabled: bool, **overrides):
+    config = {
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "link_roots": [str(tmp_path)],
+        "seed_users": [
+            {"username": "bob", "role": "member", "os_user": "bob"}
+        ],
+        "feature_workflow_graph": enabled,
+        "start_worker": False,
+    }
+    config.update(overrides)
+    return create_app(config)
 
 
 def _client(app) -> TestClient:
@@ -411,3 +413,222 @@ def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
     assert patched.status_code == 422
     assert "acyclic" in patched.json()["detail"]
     assert created.status_code == 422
+
+
+# ── per-job targets + repo plans (Phase-1 slice 3, T1/T2) ────────────────
+
+
+def _scratch_repo(path) -> None:
+    """A real git repo with one commit on branch main (worktree cuts need one)."""
+    import subprocess
+
+    path.mkdir(parents=True, exist_ok=True)
+
+    def git(*args: str) -> None:
+        res = subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+            cwd=str(path), capture_output=True, text=True,
+        )
+        assert res.returncode == 0, f"git {args}: {res.stderr}"
+
+    git("init", "-q", "-b", "main")
+    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+
+
+def _link_project(client: TestClient, path, slug: str) -> dict[str, Any]:
+    response = client.post("/api/projects/link", json={"path": str(path), "slug": slug})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _tagged_graph() -> dict[str, Any]:
+    return {
+        "nodes": [
+            {"id": "fix", "name": "Fix the bug", "instruction": "fix", "target": "."},
+            {"id": "report", "name": "Write report", "instruction": "write",
+             "target": "ops", "depends_on": ["fix"]},
+        ]
+    }
+
+
+def test_plan_targets_are_validated_against_the_projects_areas(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    _scratch_repo(tmp_path / "myrepo")
+    _link_project(client, tmp_path / "myrepo", "myrepo")
+
+    created = client.post(
+        "/api/graph/jobs",
+        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
+    )
+    assert created.status_code == 201, created.text
+    nodes = {n["id"]: n for n in created.json()["graph"]["nodes"]}
+    assert nodes["fix"]["touches_repo"] is True
+    assert nodes["report"]["touches_repo"] is False
+
+    ghost = {"nodes": [{"id": "a", "name": "A", "instruction": "x", "target": "apps/ghost"}]}
+    rejected = client.post(
+        "/api/graph/jobs", json={"title": "Ghost", "graph": ghost, "project_slug": "myrepo"}
+    )
+    assert rejected.status_code == 422
+    assert "apps/ghost" in rejected.json()["detail"]
+
+    # A repo job needs a project: without one there are no code areas to bind to.
+    homeless = client.post("/api/graph/jobs", json={"title": "Homeless", "graph": ghost})
+    assert homeless.status_code == 422
+    assert "no project" in homeless.json()["detail"]
+
+    # The same gate guards plan edits, not just creation.
+    plan_id = created.json()["id"]
+    edited = client.patch(f"/api/graph/jobs/{plan_id}/graph", json={"graph": ghost})
+    assert edited.status_code == 422
+
+
+def test_ambiguous_target_blocks_start_with_the_owners_question(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {"id": "study", "name": "Study layout", "instruction": "study",
+             "target_ambiguous": True, "target_question": "does this touch the web app?"},
+        ]
+    }
+    plan = client.post("/api/graph/jobs", json={"title": "Ambiguous", "graph": graph}).json()
+
+    refused = client.post(f"/api/graph/jobs/{plan['id']}/start")
+
+    assert refused.status_code == 409
+    assert "does this touch the web app?" in refused.json()["detail"]
+    assert client.get(f"/api/graph/jobs/{plan['id']}").json()["status"] == "queued"
+
+    # Picking a target IS the resolution; the plan then starts.
+    resolved = {"nodes": [{**graph["nodes"][0], "target": "ops", "target_ambiguous": False}]}
+    assert client.patch(
+        f"/api/graph/jobs/{plan['id']}/graph", json={"graph": resolved}
+    ).status_code == 200
+    assert client.post(f"/api/graph/jobs/{plan['id']}/start").json()["status"] == "running"
+
+
+def test_flag_off_regression_repo_tagged_plan_runs_without_worktrees(tmp_path):
+    """feature_repo_worktrees off (the default): a target-tagged plan executes
+    exactly as before slice 3 - no worktree row, no target pinned on the job."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    _scratch_repo(tmp_path / "myrepo")
+    _link_project(client, tmp_path / "myrepo", "myrepo")
+    plan = client.post(
+        "/api/graph/jobs",
+        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
+    ).json()
+
+    started = client.post(f"/api/graph/jobs/{plan['id']}/start")
+
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == "running"
+    assert "worktree" not in started.json()
+    assert app.state.db.execute(
+        "SELECT 1 FROM job_worktrees WHERE job_id = ?", (plan["id"],)
+    ).fetchone() is None
+    job_row = app.state.db.execute(
+        "SELECT target_area_id FROM jobs WHERE id = ?", (plan["id"],)
+    ).fetchone()
+    assert job_row["target_area_id"] is None
+
+
+def test_repo_plan_reserves_its_worktree_and_merges_on_final_approve(tmp_path):
+    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    client = _client(app)
+    _scratch_repo(tmp_path / "myrepo")
+    _link_project(client, tmp_path / "myrepo", "myrepo")
+    plan = client.post(
+        "/api/graph/jobs",
+        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
+    ).json()
+
+    started = client.post(f"/api/graph/jobs/{plan['id']}/start")
+
+    assert started.status_code == 200, started.text
+    payload = started.json()
+    assert payload["worktree"]["status"] == "active"
+    assert payload["worktree"]["base_branch"] == "main"
+    worktree_dir = Path(payload["worktree"]["worktree_path"])
+    assert worktree_dir.is_dir()
+    pinned = app.state.db.execute(
+        "SELECT target_area_id FROM jobs WHERE id = ?", (plan["id"],)
+    ).fetchone()
+    assert pinned["target_area_id"] is not None
+
+    # The agent's work lands in the worktree; the final approve merges it home.
+    (worktree_dir / "fix.txt").write_text("patched\n", encoding="utf-8")
+    _complete_running_node(app, plan["id"], "fixed")
+    _complete_running_node(app, plan["id"], "reported")
+    assert client.get(f"/api/graph/jobs/{plan['id']}").json()["status"] == "review"
+
+    approved = client.post(f"/api/graph/jobs/{plan['id']}/approve")
+
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "done"
+    assert approved.json()["worktree"]["status"] == "merged"
+    assert (tmp_path / "myrepo" / "fix.txt").read_text(encoding="utf-8") == "patched\n"
+    assert not worktree_dir.exists()
+
+
+def test_repo_plan_with_two_code_areas_refuses_to_start(tmp_path):
+    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    client = _client(app)
+    container = tmp_path / "container"
+    _scratch_repo(container / "web")
+    _scratch_repo(container / "api")
+    _link_project(client, container, "container")
+    graph = {
+        "nodes": [
+            {"id": "a", "name": "A", "instruction": "x", "target": "web"},
+            {"id": "b", "name": "B", "instruction": "y", "target": "api"},
+        ]
+    }
+    plan = client.post(
+        "/api/graph/jobs", json={"title": "Two repos", "graph": graph, "project_slug": "container"}
+    ).json()
+
+    refused = client.post(f"/api/graph/jobs/{plan['id']}/start")
+
+    assert refused.status_code == 409
+    assert "one code area" in refused.json()["detail"]
+    assert client.get(f"/api/graph/jobs/{plan['id']}").json()["status"] == "queued"
+
+
+def test_recipe_promotion_round_trip_keeps_job_targets(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    _scratch_repo(tmp_path / "myrepo")
+    _link_project(client, tmp_path / "myrepo", "myrepo")
+    plan = client.post(
+        "/api/graph/jobs",
+        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
+    ).json()
+
+    saved = client.post(
+        f"/api/graph/jobs/{plan['id']}/save-template",
+        json={"name": "Fix recipe", "category": "build"},
+    )
+    assert saved.status_code == 201, saved.text
+    template = saved.json()
+    template_nodes = {n["id"]: n for n in template["graph"]["nodes"]}
+    assert template_nodes["fix"]["target"] == "."
+    assert template_nodes["fix"]["touches_repo"] is True
+
+    rerun = client.post(
+        "/api/graph/jobs",
+        json={
+            "title": "Fix again",
+            "graph": template["graph"],
+            "workflow_id": template["id"],
+            "project_slug": "myrepo",
+        },
+    )
+    assert rerun.status_code == 201, rerun.text
+    rerun_nodes = {n["id"]: n for n in rerun.json()["graph"]["nodes"]}
+    assert rerun_nodes["fix"]["target"] == "."
+    assert rerun_nodes["fix"]["touches_repo"] is True

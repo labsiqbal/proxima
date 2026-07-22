@@ -131,20 +131,29 @@ live in the composer before a prompt is submitted.
 → `wiki-note/commit` writes the markdown + rebuilds the wiki index.
 **Endpoints:** `POST /api/sessions/{id}/wiki-note/draft`, `/wiki-note/commit`.
 
-## 6. Chat → Workflow (Convert to Workflow)
+## 6. Chat → Plan (slice a goal into runnable jobs)
 
-**Why:** Turn a proven conversation into a reusable recipe.
-**How:** `promote-workflow` has an architect agent decompose the chat. The graph path
-is enabled by default and emits a
-normalized `{nodes,edges}` DAG with typed outputs and review gates; the user must review
-or edit the queued frozen plan before explicitly starting it. The feature flag remains
-an owner recovery switch; the legacy ordered-step path is retained only for existing data.
+**Why:** Turn a conversation into a **directly runnable plan** — a DAG of jobs — not
+just a saved recipe (run-first, recipe-later: T2).
+**How:** `promote-workflow` has an architect agent slice the chat. The graph path is
+enabled by default and emits a normalized `{nodes,edges}` DAG with typed outputs,
+review gates, and **per-job work bindings** (Phase-1 slice 3, T1/T2): the prompt
+carries the project's registered code areas, and every job is tagged with one `target`
+(a code area or `ops`) plus the derived `touches_repo` marker — an unclear binding is
+marked ambiguous with a question for the owner instead of a guess. The draft lands as
+a queued plan the owner reviews/edits and starts directly; saving it as a reusable
+Recipe is an optional, separate action (before or after the run). The feature flag
+remains an owner recovery switch; the legacy ordered-step path is retained only for
+existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
 ## 7. Workflows (graphs) + schedules
 
 **Why:** Codify a repeatable multi-step process the agent can execute — with branches,
-per-node agents and review gates, not just a straight line.
+per-node agents and review gates, not just a straight line. A saved template (Recipe)
+is the **optional promotion of a plan** (run-first, recipe-later): plans run without
+one, and "Save as Recipe" works before or after the run, from the canvas or from a
+Tasks plan row.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
 edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
@@ -166,11 +175,26 @@ advance.
 **Why:** Every execution — a workflow run or an ad-hoc 1-step task — as one trackable
 pipeline.
 **How:** classic `engine='linear'` jobs use a frozen step snapshot and run
-sequentially in one ACP session (context carries free). Gated graph jobs share the
-job lifecycle but keep per-node state in `node_states` and are intentionally excluded
-from the linear Tasks list. Live-polls while running; auto-archive after 30 days.
-Old kanban tasks were migrated to 1-step jobs.
+sequentially in one ACP session (context carries free). Graph jobs (**plans**) share
+the job lifecycle but keep per-node state in `node_states` and are listed via the
+graph API. Live-polls while running; auto-archive after 30 days. Old kanban tasks
+were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
+
+### Tasks screen = plans + their jobs (Phase-1 slice 3, T2)
+
+**Why:** One index of everything running or awaiting the owner — a sliced plan and a
+one-off task are the same idea at different sizes.
+**How:** the Tasks screen lists graph plans alongside classic tasks. A plan row
+expands into its **ordered job list** (name, target badge, touches-repo marker, live
+status); an unanswered target question shows as a `where?` chip and the plan cannot
+start until it is answered. **List and graph are two projections of one plan**:
+branch-less plans render as a plain list, branching plans offer the read-only
+dependency canvas as a toggle (the editor's own `GraphCanvas`, reused). Plan rows
+carry **Open plan** (the canvas, where review acts live) and **Save as Recipe**
+(promotes the plan's graph to a reusable template via the existing save mechanics).
+With the graph feature off, the screen shows classic tasks only, exactly as before.
+**Endpoints:** `GET /api/graph/jobs` (+ the linear list above), `POST /api/graph/jobs/{id}/save-template`.
 
 ### Repo jobs: isolated worktrees + local merge (Phase-1 slice 2 - flag-gated, off by default)
 
@@ -200,6 +224,14 @@ worktree down.
 readable after the merge), `POST /api/jobs/{id}/approve` (merge point),
 `POST /api/jobs` (`target_area_id`). Job payloads carry a `worktree` object
 (branch, base, status `active/merging/merged/conflict/discarded`, merge_commit, error).
+
+**Graph plans (slice 3):** the same machinery wired per job-in-plan. With the flag on,
+starting a plan with repo jobs pins their single code-area target to the job row and
+cuts the worktree before the plan claims running (multi-area plans refuse to start —
+Phase-1 is one worktree per plan); the worker runs each node in the worktree **only if
+that node touches the repo** (ops jobs run at the project root), and the plan's final
+approve is the merge point. Flag off: target tags are inert metadata and plans run
+exactly as before.
 
 ## 9. Schedules (cron)
 

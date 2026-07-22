@@ -40,6 +40,7 @@ from .prompt_collaborations import (
     format_final,
     loads_list,
 )
+from . import graph as graph_mod
 from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImports]
 from .graph_executor import GRAPH_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
@@ -781,9 +782,25 @@ class RunWorker:
                     (jrow["job_id"],),
                 ).fetchone()
                 if wt:
-                    if not Path(wt["worktree_path"]).is_dir():
-                        raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
-                    cwd = wt["worktree_path"]
+                    # Graph plans bind per JOB-IN-PLAN (slice 3): only a node
+                    # tagged touches_repo works in the worktree; its ops
+                    # siblings keep the project root, where their outputs
+                    # (artifacts, files) actually belong. Linear jobs bind at
+                    # the job level, exactly as slice 2 shipped.
+                    in_worktree = True
+                    if str(run.get("kind") or "") == GRAPH_NODE_RUN_KIND:
+                        node_row = db.execute(
+                            "SELECT ns.node_id, j.graph FROM node_states ns "
+                            "JOIN jobs j ON j.id = ns.job_id WHERE ns.run_id = ?",
+                            (run_id,),
+                        ).fetchone()
+                        in_worktree = bool(node_row) and graph_mod.node_touches_repo(
+                            node_row["graph"], str(node_row["node_id"])
+                        )
+                    if in_worktree:
+                        if not Path(wt["worktree_path"]).is_dir():
+                            raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
+                        cwd = wt["worktree_path"]
             Path(cwd).mkdir(parents=True, exist_ok=True)
 
             # Collaboration synthesis streams into the PARENT run's bubble too, so
