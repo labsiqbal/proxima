@@ -178,7 +178,16 @@ export function App() {
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
-    if (v === 'workflows') setWorkflowMode('graph')
+    if (v === 'workflows') {
+      setWorkflowMode('graph')
+      // Sidebar Recipes means the Recipes home. Re-clicking while a plan is open
+      // (including one reached from Tasks) used to no-op on the canvas — bump the
+      // same back signal the in-editor Back control uses so the list returns.
+      if (view === 'workflows' && graphStage === 'editor') {
+        setGraphCameFrom(null)
+        setGraphBackNonce(n => n + 1)
+      }
+    }
     // Chat in the nav means the conversation front door — never a recipe's
     // iteration thread, which belongs to Recipes.
     if (v === 'chat' && activeSession?.workflow_id) {

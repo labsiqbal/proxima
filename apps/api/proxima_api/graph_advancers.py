@@ -362,11 +362,14 @@ class GraphAdvancers:
                                 job_id=_as_int(attempt["job_id"]),
                                 node_id=str(attempt["node_id"]),
                                 detection=satpam.DETECTION_CONFUSED,
+                                # Event-framed reason: this row survives on the
+                                # job after the owner reruns/merges, so it must
+                                # not claim "the plan is paused" as live state.
                                 reason=(
                                     f"This job's output failed its declared contract {contract_failures} "
-                                    "times - the agent seems confused about what to produce. The plan "
-                                    "is paused: review the job, sharpen its instruction or output "
-                                    "contract, then rerun it."
+                                    "times - the agent seemed confused about what to produce. "
+                                    "Review the job, sharpen its instruction or output contract, "
+                                    "then rerun the failed step."
                                 ),
                                 run_id=run_id,
                                 session_id=_as_int(run["session_id"]),

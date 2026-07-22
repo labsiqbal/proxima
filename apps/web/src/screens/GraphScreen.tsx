@@ -854,7 +854,7 @@ export function GraphScreen({
 
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
-    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} onChanged={() => void loadJob(job.id)} />}
+    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={() => void loadJob(job.id)} />}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace" style={{
