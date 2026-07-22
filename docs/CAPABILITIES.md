@@ -176,7 +176,11 @@ a chat-side feature as-is (its timeout behavior is unchanged by slice 5).
 
 **Why:** Distill a conversation into a durable wiki note.
 **How:** `wiki-note/draft` spawns a run that produces a `wiki.draft` event → preview
-→ `wiki-note/commit` writes the markdown + rebuilds the wiki index.
+→ `wiki-note/commit` writes the markdown into **that chat session's project wiki** +
+rebuilds the wiki index. After approve, the chat shows an in-app status line with
+the saved path (desktop notifications stay background-only). The chat header and
+shell project follow the open session so Save to wiki / Files / @-mentions cannot
+point at a different project than the conversation.
 **Endpoints:** `POST /api/sessions/{id}/wiki-note/draft`, `/wiki-note/commit`.
 
 ## 6. Chat → Plan (slice a goal into runnable jobs)

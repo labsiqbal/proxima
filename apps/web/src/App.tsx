@@ -264,13 +264,38 @@ export function App() {
     if (sessionSeq === sessionsSeq.current) setSessions(sessionBody.sessions)
     setRunners(runnerBody.runners)
     setActiveProfile(current => current && profileBody.profiles.some(p => p.id === current.id) ? current : profileBody.profiles.find(p => p.is_default) || profileBody.profiles[0] || null)
-    // Every chat lives in a project. Default to the user's personal project (their
-    // private one), not a "No project" limbo. Keep the current pick if still valid.
-    setActiveProject(current => current && projectBody.projects.some(p => p.slug === current.slug)
-      ? current
-      : projectBody.projects.find(p => p.visibility === 'private') || projectBody.projects[0] || null)
-    if (sessionSeq === sessionsSeq.current) setActiveSession(current => current && sessionBody.sessions.some(s => s.id === current.id && sessionEnabled(s)) ? current : sessionBody.sessions.find(sessionEnabled) || null)
+    // Couple the open chat and shell project in one pass. Picking them independently
+    // left Files/header/@-mentions on project A while the conversation (and Save to
+    // wiki) used project B after boot.
+    let nextSession: ChatSession | null | undefined
+    if (sessionSeq === sessionsSeq.current) {
+      setActiveSession(current => {
+        nextSession = current && sessionBody.sessions.some(s => s.id === current.id && sessionEnabled(s))
+          ? current
+          : sessionBody.sessions.find(sessionEnabled) || null
+        return nextSession
+      })
+    }
+    setActiveProject(current => {
+      if (nextSession?.project_slug) {
+        const fromSession = projectBody.projects.find(p => p.slug === nextSession!.project_slug)
+        if (fromSession) return fromSession
+      }
+      // No open chat (or chat has no project): keep the current pick if still valid,
+      // else the owner's personal/private project - never a "No project" limbo.
+      if (current && projectBody.projects.some(p => p.slug === current.slug)) return current
+      return projectBody.projects.find(p => p.visibility === 'private') || projectBody.projects[0] || null
+    })
   }, [token, sessionEnabled])
+
+  // Defensive: any path that sets a session without flipping the shell project still
+  // realigns Files/header context to the conversation's project.
+  React.useEffect(() => {
+    if (!activeSession?.project_slug) return
+    if (activeProject?.slug === activeSession.project_slug) return
+    const match = projects.find(p => p.slug === activeSession.project_slug)
+    if (match) setActiveProject(match)
+  }, [activeSession?.id, activeSession?.project_slug, activeProject?.slug, projects])
 
   // On first load, treat existing sessions as already seen (only NEW activity dots).
   React.useEffect(() => {

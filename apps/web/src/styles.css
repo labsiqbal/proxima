@@ -5886,6 +5886,7 @@ div.result-media {
 	font-size: var(--text-sm);
 	white-space: pre-wrap;
 }
+.chat-notice,
 .graph-notice {
 	padding: var(--space-2) var(--space-4);
 	border-bottom: 1px solid var(--ui-stroke-secondary);
