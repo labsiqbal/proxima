@@ -590,6 +590,15 @@ function renderableCollaborationCards(
 		.sort((a, b) => a.order - b.order);
 }
 
+/** Head control label for a collab card - never includes body text. */
+export function collabCardAriaLabel(
+	card: { agentName: string; roundLabel: string; status: string },
+	closed: boolean,
+): string {
+	const action = closed ? "Expand" : "Collapse";
+	return `${card.agentName}, ${card.roundLabel}, ${card.status}. ${action}`;
+}
+
 function CollaborationCards({
 	group,
 	token,
@@ -673,16 +682,12 @@ function CollaborationCards({
 						.replace(/\s+/g, " ")
 						.trim();
 					const cardClass = `collab-card ${card.status} ${closed ? "collapsed" : ""} ${isBrainstormCard ? "clickable" : ""} ${debateSide.get(card.runId) || ""}`;
+					// Mouse users can still click the collapsed preview body; keyboard
+					// focus stays on the head button (the only real control).
 					const toggleOnClick = (event: React.MouseEvent<HTMLDivElement>) => {
 						if (!isBrainstormCard) return;
 						const target = event.target as HTMLElement;
 						if (target.closest("a, button, input, textarea, select")) return;
-						toggle(card.runId);
-					};
-					const toggleOnKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
-						if (!isBrainstormCard) return;
-						if (event.key !== "Enter" && event.key !== " ") return;
-						event.preventDefault();
 						toggle(card.runId);
 					};
 					const busy = ["queued", "running"].includes(card.status);
@@ -701,44 +706,43 @@ function CollaborationCards({
 					) : (
 						<div className="collab-card-empty">Waiting for this agent…</div>
 					);
+					const headLabel = collabCardAriaLabel(card, closed);
 					return (
 						<div
 							key={card.runId}
 							className={cardClass}
 							onClick={toggleOnClick}
-							onKeyDown={toggleOnKey}
-							role={isBrainstormCard ? "button" : undefined}
-							tabIndex={isBrainstormCard ? 0 : undefined}
-							aria-expanded={isBrainstormCard ? !closed : undefined}
 						>
-							{isBrainstormCard ? (
-								<div className="collab-card-head">
-									<span className="collab-card-title">
-										<strong>{card.agentName}</strong>
-										<span>{card.roundLabel}</span>
+							{/* Head is the real control so body text never becomes the name. */}
+							<button
+								className="collab-card-head"
+								type="button"
+								onClick={(event) => {
+									event.stopPropagation();
+									toggle(card.runId);
+								}}
+								aria-expanded={!closed}
+								aria-label={headLabel}
+							>
+								{!isBrainstormCard && (
+									<span className="collab-card-caret" aria-hidden="true">
+										{closed ? "▸" : "▾"}
 									</span>
-									<span className="collab-card-controls">
-										<em>{card.status}</em>
-										<span className="collab-card-action">
+								)}
+								<span className="collab-card-title">
+									<strong>{card.agentName}</strong>
+									{/* Leading space keeps fallback names from reading as "DefaultIdea lane 1". */}
+									<span> {card.roundLabel}</span>
+								</span>
+								<span className="collab-card-controls">
+									<em>{card.status}</em>
+									{isBrainstormCard && (
+										<span className="collab-card-action" aria-hidden="true">
 											{closed ? "Expand" : "Collapse"}
 										</span>
-									</span>
-								</div>
-							) : (
-								<button
-									className="collab-card-head"
-									type="button"
-									onClick={() => toggle(card.runId)}
-									aria-expanded={!closed}
-								>
-									<span className="collab-card-caret">{closed ? "▸" : "▾"}</span>
-									<span className="collab-card-title">
-										<strong>{card.agentName}</strong>
-										<span>{card.roundLabel}</span>
-									</span>
-									<em>{card.status}</em>
-								</button>
-							)}
+									)}
+								</span>
+							</button>
 							{!isBrainstormCard && (
 								<div className="collab-card-meta">{card.runnerId}</div>
 							)}

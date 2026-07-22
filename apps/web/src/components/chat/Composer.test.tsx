@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Composer } from "./Composer";
+import { Composer, slashCommandAriaLabel } from "./Composer";
 
 const mocks = vi.hoisted(() => ({
 	getCommandCatalog: vi.fn(),
@@ -206,5 +206,71 @@ describe("Composer project-file references", () => {
 		await user.keyboard("{Enter}");
 		expect(textarea).toHaveValue("Open artifacts/design/launch ");
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+});
+
+describe("Composer slash commands", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.getCommandCatalog.mockResolvedValue({
+			groups: [
+				{
+					label: "proxima",
+					commands: [
+						{
+							name: "/help",
+							description: "Show Proxima chat commands",
+							surface: "proxima",
+							unavailableMessage: null,
+						},
+						{
+							name: "/status",
+							description: "Show current user/project/runner status",
+							surface: "proxima",
+							unavailableMessage: null,
+						},
+					],
+				},
+			],
+		});
+		mocks.listReferenceFiles.mockResolvedValue({ files: [], truncated: false });
+		mocks.listArtifacts.mockResolvedValue({ artifacts: [] });
+	});
+
+	it("spaces slash-command accessible names",
+		() => {
+			expect(
+				slashCommandAriaLabel({
+					name: "/help",
+					description: "Show Proxima chat commands",
+					surface: "proxima",
+				}),
+			).toBe("/help Show Proxima chat commands (proxima)");
+		},
+	);
+
+	it("lists commands with readable names and inserts on pick", async () => {
+		const user = userEvent.setup();
+		renderComposer();
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+
+		await waitFor(() => expect(mocks.getCommandCatalog).toHaveBeenCalled());
+		await user.type(textarea, "/");
+
+		const list = await screen.findByRole("listbox", { name: "Chat commands" });
+		expect(list).toBeInTheDocument();
+		const help = screen.getByRole("option", {
+			name: "/help Show Proxima chat commands (proxima)",
+		});
+		expect(help).toBeInTheDocument();
+		expect(
+			screen.queryByRole("option", {
+				name: "/helpShow Proxima chat commandsproxima",
+			}),
+		).not.toBeInTheDocument();
+
+		// mousedown pick keeps the draft insertion without submitting.
+		fireEvent.mouseDown(help);
+		expect(textarea).toHaveValue("/help ");
 	});
 });
