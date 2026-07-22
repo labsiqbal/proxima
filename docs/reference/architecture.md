@@ -542,7 +542,10 @@ stores the answer, re-runs the node with the decision in its prompt, and resumes
 
 `schedules` rows carry a 5-field cron + overlap policy. The scheduler loop wakes each
 minute, finds _due_ schedules (matching the current minute, not a backlog), and
-materializes a `job` for each — respecting `overlap_policy` (skip / allow).
+materializes a `job` for each — respecting `overlap_policy` (skip / allow). A scheduled
+graph recipe goes through the same `bind_graph_job_repo_worktree` path as manual plan
+start (pin `target_area_id`, cut isolated worktree); a refused cut fails the job with
+an owner-facing reason instead of running unisolated.
 
 ### 8. Run & Preview app
 

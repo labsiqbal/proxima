@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .auth import iso_now
-from . import features, workflows as wf
+from . import features, worktrees, workflows as wf
 from .graph import normalize_graph
 
 
@@ -105,7 +105,13 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | 
 
     if graph_job_id is not None:
         # Outside the lock: dispatch_ready takes it itself and opens its own transaction.
-        app.state.worker.graph_executor.dispatch_ready(graph_job_id)
+        # Skip dispatch when bind_graph_job_repo_worktree already failed the job
+        # (still return the id so Run now / Tasks can surface the refusal).
+        status = app.state.worker_db.execute(
+            "SELECT status FROM jobs WHERE id = ?", (graph_job_id,)
+        ).fetchone()
+        if status and status["status"] == "running":
+            app.state.worker.graph_executor.dispatch_ready(graph_job_id)
         return graph_job_id
     if wfrow["graph"]:
         return None          # a graph the executor refused to spawn; it logged why
@@ -172,6 +178,24 @@ def _insert_scheduled_graph_job(
             "INSERT INTO node_states(job_id, node_id, status, output_kind) VALUES (?, ?, 'pending', ?)",
             (job_id, node["id"], node["output_kind"]),
         )
+    # Same repo isolation as POST /api/graph/jobs/{id}/start: pin target_area_id
+    # and cut the worktree BEFORE dispatch, so a scheduled recipe never writes
+    # into the live code area. A refused cut fails the job in place (visible in
+    # Tasks) rather than leaving a running plan with no isolation.
+    job = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    try:
+        worktrees.bind_graph_job_repo_worktree(db, app.state.config, job)
+    except worktrees.WorktreeError as exc:
+        logging.getLogger("proxima.scheduler").warning(
+            "schedule %s graph job %s could not bind worktree: %s",
+            sched["id"], job_id, exc,
+        )
+        db.execute(
+            "UPDATE jobs SET status='failed', rejected_reason=?, finished_at=CURRENT_TIMESTAMP, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (f"cannot start repo plan: {exc}", job_id),
+        )
+        return job_id
     return job_id
 
 

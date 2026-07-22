@@ -6396,6 +6396,9 @@ div.result-media {
 .changes-note.is-discarded {
 	color: var(--ui-danger-strong);
 }
+.changes-note.is-failed {
+	color: var(--ui-danger-strong);
+}
 .changes-note.is-pushed {
 	color: var(--ui-success-strong);
 }

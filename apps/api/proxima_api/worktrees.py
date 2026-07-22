@@ -405,6 +405,68 @@ def repo_area_for_job(conn: sqlite3.Connection, job: sqlite3.Row | dict[str, Any
     return area, (root if area["rel_path"] == "." else root / area["rel_path"])
 
 
+def bind_graph_job_repo_worktree(
+    conn: sqlite3.Connection,
+    cfg: dict[str, Any],
+    job: sqlite3.Row | dict[str, Any],
+) -> sqlite3.Row | None:
+    """Pin ``target_area_id`` and cut the isolated worktree for a graph job.
+
+    Shared by ``POST /api/graph/jobs/{id}/start`` and the scheduler's graph
+    spawn so a cron / Run-now recipe cannot drift from a manual start and write
+    into the live code area. No-op when ``feature_repo_worktrees`` is off or the
+    graph has no repo targets. Returns the ``job_worktrees`` row when one was
+    cut, else None.
+
+    Raises ``WorktreeError`` with an owner-facing message when the plan cannot
+    start safely (unresolved area, multi-area graph, missing area, dirty repo).
+    """
+    from . import features
+    from .graph import normalize_graph, repo_target_paths, unresolved_target_questions
+
+    if not features.enabled(cfg, features.REPO_WORKTREES):
+        return None
+    job_id = int(job["id"])
+    project_id = job["project_id"]
+    if not project_id:
+        return None
+    graph = normalize_graph(job["graph"] or "")
+    questions = unresolved_target_questions(graph)
+    if questions:
+        raise WorktreeError(
+            "this plan has an unresolved question - pick a work area first: "
+            + "; ".join(questions)
+        )
+    repo_targets = repo_target_paths(graph)
+    if not repo_targets:
+        return None
+    if len(repo_targets) > 1:
+        raise WorktreeError(
+            "this plan's repo jobs target more than one code area "
+            f"({', '.join(repo_targets)}) - a plan works one code area; "
+            "split the others into their own plan"
+        )
+    area = conn.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' "
+        "AND rel_path = ? AND source != 'excluded'",
+        (project_id, repo_targets[0]),
+    ).fetchone()
+    if not area:
+        raise WorktreeError(
+            f"code area '{repo_targets[0]}' is no longer registered in this project"
+        )
+    # Pin the plan's one repo area on the job row: that is what the whole
+    # slice-2 surface (worktree cut, diff, merge, teardown) keys off.
+    conn.execute(
+        "UPDATE jobs SET target_area_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (int(area["id"]), job_id),
+    )
+    refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if refreshed is None:
+        raise WorktreeError("job disappeared while binding its worktree")
+    return ensure_job_worktree(conn, cfg, refreshed)
+
+
 def ensure_job_worktree(conn: sqlite3.Connection, cfg: dict[str, Any], job: sqlite3.Row | dict[str, Any]) -> sqlite3.Row | None:
     """Get-or-create the job's isolated worktree. Returns its row, or None for
     a non-repo job. Raises WorktreeError with an owner-facing reason when the

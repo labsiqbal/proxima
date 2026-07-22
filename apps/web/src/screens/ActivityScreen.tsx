@@ -265,6 +265,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                     </button>
                     {expanded.has(row.plan.id) && <div className="plan-detail">
                       <PlanJobs plan={row.plan} profiles={profiles} onOpenPlan={onOpenPlan} />
+                      {row.plan.status === 'failed' && row.plan.rejected_reason && <p className="changes-note is-failed" role="status">{row.plan.rejected_reason}</p>}
                       {/* The repo-plan review surface (slice 4): the diff lives in
                           this EXPANDING row (T4 — no side panel, no popup), and the
                           plan's final approve here is the local merge point. */}
@@ -279,6 +280,13 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                         onApprove={() => approveGraphJob(token, row.plan.id)}
                         onChanged={() => void load(0, false)}
                       />}
+                      {/* No-worktree plans (ops/text-only, or a repo run that never
+                          bound an area) still need a Tasks-row final approve so the
+                          owner is not forced into the canvas just to close review. */}
+                      {!row.plan.worktree && row.plan.status === 'review' && row.plan.node_states.length > 0 && row.plan.node_states.every(node => node.status === 'done') && <div className="changes-review plan-final-approve">
+                        <p className="changes-note">All steps finished. Approve to mark this plan done — no code changes to merge.</p>
+                        <button className="primary-button" onClick={() => void approveGraphJob(token, row.plan.id).then(() => void load(0, false))}>Approve final result</button>
+                      </div>}
                       <div className="plan-actions">
                         <button className="ghost-button" onClick={() => onOpenPlan(row.plan.id)}>Open plan</button>
                         <button className="ghost-button" onClick={() => setSavingPlan(row.plan)}>Save as Recipe</button>

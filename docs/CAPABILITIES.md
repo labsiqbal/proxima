@@ -214,9 +214,11 @@ branches. The linear engine remains for pre-existing jobs; `IterateStage` is sti
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
 **Schedules** target saved graph templates: a due tick (or **Run now**) spawns the same
-`engine='graph'` job a manual create + start produces. With the graph feature flag off,
-a graph schedule is skipped with a logged warning rather than left as a job nothing will
-advance.
+`engine='graph'` job a manual create + start produces — including repo isolation
+(`target_area_id` + worktree cut via the shared `bind_graph_job_repo_worktree` path).
+A refused cut fails the scheduled job in place with an owner-facing reason rather than
+running unisolated against the live code area. With the graph feature flag off, a graph
+schedule is skipped with a logged warning rather than left as a job nothing will advance.
 **Endpoints:** graph routes (§Graph workflow engine), `GET/POST /api/schedules`,
 `POST /api/schedules/{id}/run`; legacy linear rows keep `GET/PATCH /api/workflows/{id}`.
 
@@ -486,10 +488,11 @@ and the sweep cadence (default 60s), bounds-checked in `app_settings`.
 **Run now** fires a schedule on demand and opens the task it spawned, so the owner can
 prove a schedule before leaving it to fire unattended. It reuses the tick's own
 `_spawn_scheduled_job`, so it exercises the real cron target (workflow, project,
-profile, stored input) instead of a lookalike; it passes no minute key, so a manual run
-cannot claim — and thereby swallow — the scheduler's slot for that minute. It works on a
-disabled schedule (`enabled` gates the tick, and trying a schedule out is exactly when it
-is still off) and reports an overlap skip as a 409 rather than silently no-op'ing.
+profile, stored input, and repo worktree binding) instead of a lookalike; it passes no
+minute key, so a manual run cannot claim — and thereby swallow — the scheduler's slot
+for that minute. It works on a disabled schedule (`enabled` gates the tick, and trying a
+schedule out is exactly when it is still off) and reports an overlap skip as a 409 rather
+than silently no-op'ing.
 **Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`, `POST /api/schedules/{id}/run`.
 
 ## 10. Projects (workspaces)
