@@ -202,6 +202,27 @@ uses the starter project auto-provisioned under the data dir.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
+### Work-container areas (Phase-1 slice 1 - data layer only)
+
+**Why:** A project is a *work container*, not "a repo": it holds zero-or-more **code
+areas** (subfolders that are git repos; `.` = repo at root) plus one **ops area** (the
+non-code output space - the conventional `artifacts/ reports/ exports/ wiki/` subdirs
+belong to it). Later slices consume this metadata: worktree-per-repo-job machinery cuts
+its safe copy from a job's target code area, and the slicer binds each job to exactly
+one area (T1's explicit job→target decision).
+**How:** `project_areas` table (row per area; `source` = `auto`/`manual`/`excluded`).
+Identification is **hybrid** (T1): `project_areas.py` auto-detects `.git` subfolders
+(bounded depth, skips node_modules/.venv/dist-style dirs, never descends into a
+detected repo) at project create/link and on demand; the owner can manually add,
+correct, or remove areas. Manual rows are never clobbered by re-detection, and removal
+leaves an `excluded` tombstone so re-detection cannot resurrect the area. Existing
+projects were wrapped in place by migration 18: root itself a repo → sole code area
+`.`; no repo → zero code areas; no file moves. Purely additive metadata - nothing in
+execution, cwd selection, or artifact scanning reads it yet. Project payloads include
+`code_areas` + `ops_area`.
+**Endpoints:** `GET/POST /api/projects/{slug}/areas`,
+`DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
+
 ## 11. Files & uploads (APIs)
 
 **Why:** Read/write project files safely from every surface that needs them.

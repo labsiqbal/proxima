@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .project_areas import ensure_ops_area, sync_code_areas
+
 logger = logging.getLogger("proxima.provisioning")
 
 
@@ -60,6 +62,7 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
     if existing:
         # Only ever reached when the row is verified as this user's own private project.
         scaffold_project_dir(cfg, slug)
+        ensure_ops_area(conn, existing["id"])
         return existing
     path = str(scaffold_project_dir(cfg, slug))
     cur = conn.execute(
@@ -67,6 +70,9 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
         (slug, f"{user['username']} (personal)", path, user["id"]),
     )
     project_id = cur.lastrowid
+    # Container areas (T1): ops area + code-area auto-detect at creation.
+    ensure_ops_area(conn, project_id)
+    sync_code_areas(conn, project_id, path)
     _audit(conn, user["id"], "workspace.provision.private", slug)
     return dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
 

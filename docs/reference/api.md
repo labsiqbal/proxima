@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-132 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+136 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -15,7 +15,7 @@
 - [`routes/files.py`](#routes-files-py) — 28 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 11 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
-- [`routes/projects.py`](#routes-projects-py) — 7 endpoints
+- [`routes/projects.py`](#routes-projects-py) — 11 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
@@ -163,6 +163,10 @@
 | DELETE | `/api/projects/{slug}` | `delete_project` |  |
 | GET | `/api/projects/{slug}` | `get_project` |  |
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
+| GET | `/api/projects/{slug}/areas` | `list_project_areas` | The project's container areas: code areas (git-repo subfolders, |
+| POST | `/api/projects/{slug}/areas` | `add_project_area` | Manually register (or correct) a code area - T1's hybrid override. |
+| POST | `/api/projects/{slug}/areas/detect` | `detect_project_areas` | Re-run code-area auto-detection on demand. Only auto rows follow the |
+| DELETE | `/api/projects/{slug}/areas/{area_id}` | `remove_project_area` | Remove a code area. The row becomes an 'excluded' tombstone (not a |
 
 
 ## routes/reviews.py
@@ -234,4 +238,4 @@
 
 
 ---
-_Generated 2026-07-20 21:15 UTC._
+_Generated 2026-07-21 18:51 UTC._

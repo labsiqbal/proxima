@@ -219,3 +219,59 @@ def test_sessions_pointer_fks_enforced_after_migration(tmp_path):
     sid = conn.execute("SELECT id FROM sessions").fetchone()["id"]
     conn.execute("DELETE FROM workflows WHERE id=?", (wid,))
     assert conn.execute("SELECT workflow_id FROM sessions WHERE id=?", (sid,)).fetchone()["workflow_id"] is None
+
+
+def test_v18_wraps_existing_projects_as_containers(tmp_path: Path):
+    """Migration note (spec, binding): each existing flat project wraps in place —
+    a root that is itself a repo registers as the sole code area '.', a repo-less
+    project gets zero code areas, and every project gets its single ops area.
+    No files are moved; a path missing on this machine is fine."""
+    repo_root = tmp_path / "repoproj"
+    (repo_root / ".git").mkdir(parents=True)
+    flat_root = tmp_path / "flatproj"
+    (flat_root / "artifacts").mkdir(parents=True)
+
+    conn = connect(tmp_path / "m.db")
+    conn.executescript("""
+      CREATE TABLE messages(id INTEGER PRIMARY KEY);
+      CREATE TABLE profiles(id INTEGER PRIMARY KEY);
+      CREATE TABLE runs(id INTEGER PRIMARY KEY);
+      CREATE TABLE sessions(id INTEGER PRIMARY KEY);
+      CREATE TABLE projects(id INTEGER PRIMARY KEY, name TEXT, visibility TEXT, path TEXT);
+    """)
+    conn.execute("INSERT INTO projects(name, visibility, path) VALUES ('r', 'private', ?)", (str(repo_root),))
+    conn.execute("INSERT INTO projects(name, visibility, path) VALUES ('f', 'private', ?)", (str(flat_root),))
+    conn.execute("INSERT INTO projects(name, visibility, path) VALUES ('gone', 'private', ?)", (str(tmp_path / "missing"),))
+
+    applied = run_migrations(conn, str(tmp_path / "m.db"))
+    assert 18 in applied
+
+    def areas(pid: int) -> set[tuple[str, str, str]]:
+        return {(r["kind"], r["rel_path"], r["source"]) for r in conn.execute(
+            "SELECT kind, rel_path, source FROM project_areas WHERE project_id = ?", (pid,)).fetchall()}
+
+    assert areas(1) == {("ops", ".", "auto"), ("code", ".", "auto")}
+    assert areas(2) == {("ops", ".", "auto")}          # zero code areas is valid
+    assert areas(3) == {("ops", ".", "auto")}          # missing path: nothing breaks
+
+
+def test_v18_full_chain_enforces_single_ops_area(tmp_path: Path):
+    import sqlite3 as _sqlite3
+    conn = connect(tmp_path / "m.db")
+    from proxima_api.db import init_db
+    init_db(conn, [])
+    run_migrations(conn, str(tmp_path / "m.db"))
+    conn.execute("INSERT INTO users(username, os_user) VALUES ('u','u')")
+    uid = conn.execute("SELECT id FROM users").fetchone()["id"]
+    pid = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES ('p','P','/tmp/nope',?)", (uid,)
+    ).lastrowid
+    conn.execute("INSERT INTO project_areas(project_id, kind, rel_path) VALUES (?, 'ops', '.')", (pid,))
+    try:
+        conn.execute("INSERT INTO project_areas(project_id, kind, rel_path) VALUES (?, 'ops', 'other')", (pid,))
+        assert False, "second ops area must violate the partial unique index"
+    except _sqlite3.IntegrityError:
+        pass
+    # Areas die with their project (ON DELETE CASCADE).
+    conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+    assert conn.execute("SELECT COUNT(*) FROM project_areas WHERE project_id = ?", (pid,)).fetchone()[0] == 0

@@ -23,6 +23,7 @@ The foundation everything leans on. Least allowed to change casually.
 | Auth & Session Tokens | active | `routes/auth.py`, `route_deps.py` (`current_user`), `main.py` (`/api/preview-auth`) | `api/client.ts`, `App.tsx` | `users`, `auth_sessions` | gates every route, Preview Proxy |
 | Health / Config / Feature Flags | active | `main.py` (`/api/health`, `/api/config`), `features.py` | `features.ts`, `api/config.ts` | — | Design Studio / graph gates |
 | Projects & FS Linking | active | `routes/projects.py`, `fsapi.py` | `screens/ProjectsScreen.tsx` | `projects` | files, tasks, wiki, apps, workflows |
+| Work-container areas (data layer) | active | `project_areas.py`, `routes/projects.py` (areas endpoints), migration 18 | (no UI yet; payload carries `code_areas`/`ops_area`) | `project_areas` | future worktree machinery + job→target binding (Phase-1 slices 2-3) |
 | Profiles / Runners / Commands | active | `routes/profiles.py`, `runners.py`, `runner_specs.py`, `commands.py`, `capabilities.py` | `screens/ProfilesScreen.tsx`, `RunnersScreen.tsx` | `profiles` | runs pick profile→runner→home |
 | Sessions & Messages | active | `routes/chat.py` (list/create/patch/delete) | `api/sessions.ts`, `ChatScreen.tsx` | `sessions`, `messages`, `agent_sessions` | runs, ACP, collab, reviews, goal |
 | Run Lifecycle (engine) | active | `worker.py` (RunWorker), `acp.py`, `run_prompting/outputs/summaries/advancers/drafts/state.py` | `hooks/useRunStream.ts` | `runs`, `events`, `messages` | EventHub, collab, reviews, goal, workflow |

@@ -167,6 +167,11 @@ maps a chat to its per-home ACP session.
 A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
 and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-node state
 in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_GRAPH`.
+A project is additionally a **work container** (Phase-1, T1): `project_areas` rows
+record its git-repo subfolders (*code areas*, auto-detected from `.git` with manual
+override - `.` means repo-at-root) and its single *ops area* (non-code output space).
+This is metadata only today; execution, cwd selection, and artifact scanning don't
+read it yet - the upcoming worktree machinery and job→target binding will.
 Full column-level detail: [database.md](database.md).
 
 ## Key flows

@@ -18,6 +18,7 @@ import json as _json
 from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
 from .profile_seed import seed_agent_home
+from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
 from .settings import hermes_home_for, validate_slug
@@ -247,7 +248,10 @@ def build_route_deps(
             raise http_exception(status_code=500, detail=detail) from exc
 
     def project_payload(row: dict[str, Any]) -> dict[str, Any]:
-        return {"slug": row["slug"], "name": row["name"], "path": row["path"], "owner": row.get("owner"), "role": row.get("role"), "visibility": row.get("visibility", "private")}
+        payload = {"slug": row["slug"], "name": row["name"], "path": row["path"], "owner": row.get("owner"), "role": row.get("role"), "visibility": row.get("visibility", "private")}
+        # Container areas (T1): every project row the routes select carries p.id.
+        payload.update(areas_payload(db(), row["id"]))
+        return payload
 
     def profile_payload(row: dict[str, Any]) -> dict[str, Any]:
         return {
