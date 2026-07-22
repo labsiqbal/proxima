@@ -362,7 +362,12 @@ def discard_job_worktree(conn: sqlite3.Connection, job_id: int) -> None:
 
 
 def worktree_payload(wt: sqlite3.Row) -> dict[str, Any]:
-    """The worktree state the job payload carries for the review UI."""
+    """The worktree state the job payload carries for the review UI. The
+    push_* fields are the T9 push-after-merge outcome (NULL push_status until
+    a push is attempted); push_web_url is the GitHub enrichment, parsed from
+    the recorded remote URL so list payloads never shell out."""
+    from .repo_remote import github_web_url
+
     return {
         "area_id": wt["area_id"],
         "branch": wt["branch"],
@@ -372,4 +377,8 @@ def worktree_payload(wt: sqlite3.Row) -> dict[str, Any]:
         "merge_commit": wt["merge_commit"],
         "error": wt["error"],
         "worktree_path": wt["worktree_path"],
+        "push_status": wt["push_status"],
+        "push_error": wt["push_error"],
+        "push_remote": wt["push_remote"],
+        "push_web_url": github_web_url(wt["push_remote_url"]) if wt["push_remote_url"] else None,
     }

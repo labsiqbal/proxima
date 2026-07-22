@@ -3,12 +3,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangesReview } from './ChangesReview'
-import { getJobDiff, rejectJob } from '../../api/jobs'
+import { getJobDiff, rejectJob, retryJobPush } from '../../api/jobs'
 import type { JobWorktree } from '../../types'
 
 vi.mock('../../api/jobs', () => ({
   getJobDiff: vi.fn(),
   rejectJob: vi.fn(),
+  retryJobPush: vi.fn(),
 }))
 
 const worktree: JobWorktree = {
@@ -127,6 +128,51 @@ describe('ChangesReview', () => {
     />)
     expect(screen.getByText(/Changes discarded/)).toHaveTextContent('not needed anymore')
     expect(getJobDiff).not.toHaveBeenCalled()
+  })
+
+  it('shows a quiet pushed line when the merge also went to the remote', async () => {
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="done"
+      worktree={{ ...worktree, status: 'merged', merge_commit: 'cafebabe123', push_status: 'pushed', push_remote: 'origin', push_web_url: 'https://github.com/owner/repo' }}
+      canDecide={false} onApprove={vi.fn()} onChanged={vi.fn()}
+    />)
+    expect(await screen.findByText(/Pushed to/)).toBeInTheDocument()
+    expect(screen.getByText('origin')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open repo/ })).toHaveAttribute('href', 'https://github.com/owner/repo')
+  })
+
+  it('a failed push surfaces as a blocker with the exact command, without un-merging', async () => {
+    vi.mocked(retryJobPush).mockResolvedValue({} as never)
+    const onChanged = vi.fn()
+    const user = userEvent.setup()
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="done"
+      worktree={{
+        ...worktree, status: 'merged', merge_commit: 'cafebabe123',
+        push_status: 'failed', push_error: '$ git push origin main\n ! [rejected] main -> main (fetch first)',
+      }}
+      canDecide={false} onApprove={vi.fn()} onChanged={onChanged}
+    />)
+    // The merge result still reads as landed; the blocker is about the push only.
+    expect(await screen.findByText(/Changes merged into/)).toBeInTheDocument()
+    const blocker = screen.getByRole('alert')
+    expect(blocker).toHaveTextContent(/pushing to the remote failed/)
+    expect(blocker).toHaveTextContent('$ git push origin main')
+    expect(blocker).toHaveTextContent(/Nothing was undone/)
+    await user.click(screen.getByRole('button', { name: /Retry push/ }))
+    await waitFor(() => expect(retryJobPush).toHaveBeenCalledWith('token', 7))
+    expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('a merged job with no push attempt shows neither push line nor blocker', async () => {
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="done"
+      worktree={{ ...worktree, status: 'merged', merge_commit: 'cafebabe123', push_status: null }}
+      canDecide={false} onApprove={vi.fn()} onChanged={vi.fn()}
+    />)
+    expect(await screen.findByText(/Changes merged into/)).toBeInTheDocument()
+    expect(screen.queryByText(/Pushed to/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('holds the verdict when the plan still has unapproved jobs', async () => {

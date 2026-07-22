@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 22 tables. Applied migration version: **24**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -111,6 +111,10 @@ SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exa
 | `status` | TEXT | NO | `'active'` |  |
 | `merge_commit` | TEXT | yes |  |  |
 | `error` | TEXT | yes |  |  |
+| `push_status` | TEXT | yes |  |  |
+| `push_error` | TEXT | yes |  |  |
+| `push_remote` | TEXT | yes |  |  |
+| `push_remote_url` | TEXT | yes |  |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -239,6 +243,7 @@ SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exa
 | `kind` | TEXT | NO | `'code'` |  |
 | `rel_path` | TEXT | NO |  |  |
 | `source` | TEXT | NO | `'auto'` |  |
+| `push_on_merge` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -415,4 +420,4 @@ SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exa
 
 
 ---
-_Generated 2026-07-22 08:04 UTC._
+_Generated 2026-07-22 08:45 UTC._

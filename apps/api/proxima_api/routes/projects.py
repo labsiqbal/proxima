@@ -13,11 +13,11 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import fsapi
+from .. import fsapi, repo_remote
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
-from ..schemas import ProjectAreaAddRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
+from ..schemas import ProjectAreaAddRequest, ProjectAreaUpdateRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
 
 
 def register(app, deps):
@@ -140,12 +140,24 @@ def register(app, deps):
 
     # ── Work-container areas (Phase-1 slice 1, T1): code areas + ops area ──
 
+    def _with_remotes(project: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        """Pair each code area with its detected git remote (T9, slice 11) so
+        the settings UI knows whether to offer the push-after-merge toggle -
+        no remote, no toggle. Only the dedicated areas endpoints pay for this
+        (it shells out to the host's git); project list payloads never do."""
+        root = Path(project["path"])
+        for area in payload["code_areas"]:
+            repo = root if area["rel_path"] == "." else root / area["rel_path"]
+            area["remote"] = repo_remote.detect_remote(repo)
+        return payload
+
     @app.get("/api/projects/{slug}/areas")
     def list_project_areas(slug: str, user: dict[str, Any] = Depends(current_user)):
         """The project's container areas: code areas (git-repo subfolders,
-        auto-detected or manual) and its single ops area."""
+        auto-detected or manual, each with its detected remote) and its
+        single ops area."""
         project = visible_project(slug, user)
-        return areas_payload(db(), project["id"])
+        return _with_remotes(project, areas_payload(db(), project["id"]))
 
     @app.post("/api/projects/{slug}/areas", status_code=201)
     def add_project_area(slug: str, payload: ProjectAreaAddRequest, user: dict[str, Any] = Depends(current_user)):
@@ -179,6 +191,40 @@ def register(app, deps):
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.add', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": rel})))
         return {"id": area_id, "rel_path": rel, "source": "manual"}
 
+    @app.patch("/api/projects/{slug}/areas/{area_id}")
+    def update_project_area(slug: str, area_id: int, payload: ProjectAreaUpdateRequest, user: dict[str, Any] = Depends(current_user)):
+        """Per-area settings - today that is the T9 push-after-merge toggle
+        (default off). Turning it ON requires a detected git remote: the
+        toggle is only ever offered where a push could go somewhere, and the
+        connector is BYO - Proxima pushes with the host's own git, so there
+        is no remote to configure in-app. Turning it OFF always works."""
+        project = visible_project(slug, user)
+        row = db().execute(
+            "SELECT id, kind, source, rel_path, push_on_merge FROM project_areas WHERE id = ? AND project_id = ?",
+            (area_id, project["id"]),
+        ).fetchone()
+        if not row or row["kind"] != "code" or row["source"] == "excluded":
+            raise HTTPException(status_code=404, detail="code area not found")
+        remote = None
+        if payload.push_on_merge:
+            root = Path(project["path"])
+            repo = root if row["rel_path"] == "." else root / row["rel_path"]
+            remote = repo_remote.detect_remote(repo)
+            if remote is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="this code area has no git remote - add one with your own git (git remote add ...) and re-open settings",
+                )
+        db().execute(
+            "UPDATE project_areas SET push_on_merge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if payload.push_on_merge else 0, area_id),
+        )
+        db().execute(
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.push_on_merge', 'project', ?, ?)",
+            (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge})),
+        )
+        return {"id": area_id, "rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "remote": remote}
+
     @app.delete("/api/projects/{slug}/areas/{area_id}")
     def remove_project_area(slug: str, area_id: int, user: dict[str, Any] = Depends(current_user)):
         """Remove a code area. The row becomes an 'excluded' tombstone (not a
@@ -203,4 +249,4 @@ def register(app, deps):
         project = visible_project(slug, user)
         ensure_ops_area(db(), project["id"])
         summary = sync_code_areas(db(), project["id"], project["path"])
-        return {**areas_payload(db(), project["id"]), "detect": summary}
+        return {**_with_remotes(project, areas_payload(db(), project["id"])), "detect": summary}

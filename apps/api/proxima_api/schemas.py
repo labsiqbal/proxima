@@ -164,6 +164,12 @@ class ProjectAreaAddRequest(BaseModel):
     rel_path: str = Field(min_length=1, max_length=500)  # '.' = container root
 
 
+class ProjectAreaUpdateRequest(BaseModel):
+    # T9 (slice 11): the per-code-area push-after-merge opt-in. Enabling
+    # requires a detected git remote (no remote -> the toggle is not offered).
+    push_on_merge: bool
+
+
 class CommandRequest(BaseModel):
     command: str = Field(min_length=1)
     project_slug: str | None = None

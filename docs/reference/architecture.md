@@ -204,6 +204,10 @@ override - `.` means repo-at-root) and its single *ops area* (non-code output sp
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
+A code area with a detected git remote may opt into push-after-merge via
+`project_areas.push_on_merge` (T9, slice 11, default off); `repo_remote.py` shells
+out to the host's own `git`/`gh` (BYO - no brokered auth, no stored tokens) and the
+push outcome lands on the `job_worktrees` row (`push_status/push_error/...`).
 Artifact scanning still ignores areas; the slicer that sets the binding at slice
 time is slice 3.
 Deliverables are durable records (Phase-1 slice 8, T4): `artifact_records` holds one
@@ -430,8 +434,14 @@ GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch,
     then per-file status + unified patch vs base_commit (slice-4 review surface)
     ▼
 POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
-    the branch the worktree was cut from (T1 local-first; no push - remote is T9)
-    ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn down
+    the branch the worktree was cut from (T1 local-first)
+    ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn
+    │  down - then, ONLY if the code area's push_on_merge toggle is on (T9,
+    │  slice 11, default off), `git push <remote> <base_branch>` via the
+    │  host's own git. A failed push never un-merges and never fails the
+    │  approve: push_status='failed' + the exact command output land on the
+    │  job_worktrees row and surface as a blocker card with a retry action
+    │  (POST /api/jobs/{id}/push, either engine).
     └─ refusal/conflict: 409, job PARKS in review with the surfaced error;
        worktree kept - resolve, approve again to retry. Never forced.
 POST /api/jobs/{id}/reject  {reason}  →  the other verdict door (slice 4, either

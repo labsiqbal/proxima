@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException
 from ..auth import iso_now
 from .. import artifact_registry
 from .. import features
+from .. import repo_remote
 from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
@@ -439,6 +440,23 @@ def register(app, deps):
             **diff,
         }
 
+    @app.post("/api/jobs/{job_id}/push")
+    def push_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
+        """Retry (or run) the T9 push-after-merge for a merged repo job -
+        either engine, since plans share the job row. Authorized when a prior
+        push attempt was recorded (the blocker card's retry action) or the
+        area's toggle is currently ON; a merged-locally job with the toggle
+        off stays local - the guardrail is push only on explicit opt-in."""
+        features.require(app.state.config, features.REPO_WORKTREES)
+        _job_or_404(job_id, user)
+        wt = worktrees.job_worktree_row(db(), job_id)
+        if not wt or wt["status"] != "merged":
+            raise HTTPException(status_code=409, detail="nothing to push - the job's changes are not merged locally")
+        if wt["push_status"] is None and not repo_remote.push_toggle_on(db(), wt["area_id"]):
+            raise HTTPException(status_code=409, detail="push after merge is off for this code area - turn it on in the project's container settings")
+        result = repo_remote.push_merged_branch(db(), wt)
+        return {"job_id": job_id, **result, "worktree": worktrees.worktree_payload(worktrees.job_worktree_row(db(), job_id))}
+
     @app.post("/api/jobs/{job_id}/approve")
     def approve_job(job_id: int, payload: JobApproveRequest | None = None, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
@@ -494,9 +512,18 @@ def register(app, deps):
                 wt = worktrees.job_worktree_row(db(), job_id)
                 if wt and wt["status"] in ("active", "conflict", "merging"):
                     try:
-                        worktrees.merge_job_worktree(db(), job, wt)
+                        merged = worktrees.merge_job_worktree(db(), job, wt)
                     except worktrees.WorktreeError as exc:
                         raise HTTPException(status_code=409, detail=f"merge blocked - job stays in review: {exc}") from exc
+                    # T9 (slice 11): push the merged main line AFTER the local
+                    # merge, only when the area's toggle is explicitly ON. A
+                    # failed push never un-merges and never fails the approve -
+                    # it lands on the worktree row as a job-level blocker with
+                    # the exact command output (retry: POST /jobs/{id}/push).
+                    try:
+                        repo_remote.push_after_merge(db(), merged)
+                    except Exception:
+                        logging.getLogger("proxima.work").exception("push after merge failed unexpectedly (job stays merged)")
             # Final review -> done (atomic claim).
             claimed = db().execute("UPDATE jobs SET status='done', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'", (job_id,))
             if claimed.rowcount == 0:

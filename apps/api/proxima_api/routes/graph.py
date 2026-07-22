@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import artifact_registry, features, scripts_library, state, worktrees
+from .. import artifact_registry, features, repo_remote, scripts_library, state, worktrees
 from ..graph import (
     GraphValidationError,
     descendant_node_ids,
@@ -854,12 +854,20 @@ def register(app, deps):
             wt = worktrees.job_worktree_row(db(), job_id)
             if wt and wt["status"] in ("active", "conflict", "merging"):
                 try:
-                    worktrees.merge_job_worktree(db(), job, wt)
+                    merged = worktrees.merge_job_worktree(db(), job, wt)
                 except worktrees.WorktreeError as exc:
                     raise HTTPException(
                         status_code=409,
                         detail=f"merge blocked - plan stays in review: {exc}",
                     ) from exc
+                # T9 (slice 11): push AFTER the local merge, only on explicit
+                # per-area opt-in. A failed push never un-merges and never
+                # fails the approve - it surfaces on the worktree row as a
+                # job-level blocker (retry: POST /api/jobs/{id}/push).
+                try:
+                    repo_remote.push_after_merge(db(), merged)
+                except Exception:
+                    logging.getLogger("proxima.graph").exception("push after merge failed unexpectedly (plan stays merged)")
         approved = state.guarded_transition(
             db(),
             "jobs",

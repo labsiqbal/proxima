@@ -1,6 +1,6 @@
 import React from 'react'
 import type { JobStatus, JobWorktree } from '../../types'
-import { getJobDiff, rejectJob, type JobDiff } from '../../api/jobs'
+import { getJobDiff, rejectJob, retryJobPush, type JobDiff } from '../../api/jobs'
 import { fileStatusLabel, parseUnifiedPatch } from './diff'
 
 // The repo-job review surface (slice 4, T1 local-first). One component, two
@@ -35,7 +35,7 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
   // The component stays mounted while a running job polls its way into
   // review — open the change the moment the review starts.
   React.useEffect(() => { if (jobStatus === 'review') setShowDiff(true) }, [jobStatus])
-  const [busy, setBusy] = React.useState<'approve' | 'reject' | null>(null)
+  const [busy, setBusy] = React.useState<'approve' | 'reject' | 'push' | null>(null)
   const [error, setError] = React.useState('')
   const [rejecting, setRejecting] = React.useState(false)
   const [reason, setReason] = React.useState('')
@@ -97,6 +97,20 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
     }
   }
 
+  async function retryPush() {
+    if (busy) return
+    setBusy('push')
+    setError('')
+    try {
+      await retryJobPush(token, jobId)
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+      onChanged() // either way the push outcome on the worktree changed
+    }
+  }
+
   const files = diff ? parseUnifiedPatch(diff.patch) : []
   const merged = worktree.status === 'merged'
 
@@ -113,6 +127,26 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
       ✓ Changes merged into <code>{worktree.base_branch}</code>
       {worktree.merge_commit && <> · <code>{short(worktree.merge_commit)}</code></>}
     </p>}
+    {/* Push-after-merge outcome (T9): only ever present when the code area's
+        own toggle was on. Success is one quiet line; failure is a job-level
+        blocker - merged locally stays true, the exact command output tells
+        the owner what their own git needs, and retry re-runs just the push. */}
+    {merged && worktree.push_status === 'pushed' && <p className="changes-note is-pushed">
+      ↑ Pushed to <code>{worktree.push_remote}</code>
+      {worktree.push_web_url && <> · <a href={worktree.push_web_url} target="_blank" rel="noreferrer">open repo</a></>}
+    </p>}
+    {merged && worktree.push_status === 'failed' && <div className="changes-push-failed" role="alert">
+      <p><strong>Merged into your project, but pushing to the remote failed.</strong></p>
+      {worktree.push_error && <pre className="changes-push-error">{worktree.push_error}</pre>}
+      <p>
+        Nothing was undone - the changes are safely in <code>{worktree.base_branch}</code>.
+        Fix the cause with your own git (sign in again, or bring in newer remote work), then retry.
+        {worktree.push_web_url && <> <a href={worktree.push_web_url} target="_blank" rel="noreferrer">Open the repo</a>.</>}
+      </p>
+      <button className="ghost-button" onClick={() => void retryPush()} disabled={!!busy}>
+        {busy === 'push' ? 'Pushing…' : '↑ Retry push'}
+      </button>
+    </div>}
     {discarded && <p className="changes-note is-discarded">
       ✕ Changes discarded{rejectedReason ? <> — {rejectedReason}</> : null}
     </p>}
