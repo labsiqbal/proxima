@@ -19,9 +19,13 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 
 **Why:** Proxima drives the AI agents you already own (Claude Code, Codex,
 Hermes, and Pi) over ACP — no baked-in model.
-**How:** `runner_specs.py` defines each runner's spawn argv + credential home. The
-worker (`worker.py`) starts one ACP subprocess per (runner, home, cwd) on demand;
-`runner_spec(run.runner_id)` makes it runner-agnostic. Default resolves via
+**How:** `runner_specs.py` defines each runner's spawn argv + credential home +
+wire `protocol`. The worker (`worker.py`) starts one agent subprocess per (runner,
+home, cwd) on demand; `runner_spec(run.runner_id)` makes it runner-agnostic.
+Most runners speak ACP; the **Codex** runner drives the owner's own
+`codex app-server` (`codex_appserver.py`, same call surface) so it tracks the
+current system Codex CLI instead of a stale bundled adapter core - newer models
+like `gpt-5.6-sol` work as soon as `codex update` has them. Default resolves via
 `default_runner()` (env → first *ready* runner → fallback).
 **Endpoints:** `GET /api/runners/detect` (installed/ready status).
 

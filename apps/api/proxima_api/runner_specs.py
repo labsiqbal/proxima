@@ -16,6 +16,11 @@ class RunnerSpec:
     has_adapter: bool = True
     detection_only: bool = False
     notes: str = ""
+    # Wire protocol the run layer speaks to this runner. "acp" (default) drives a
+    # persistent ACP JSON-RPC subprocess via acp.AcpProcess. "codex-app-server"
+    # drives the system Codex CLI's `codex app-server` via
+    # codex_appserver.CodexAppServerProcess (same call surface, different wire).
+    protocol: str = "acp"
     # Host dir the agent's login lives in (~ is expanded at use). Proxima copies the
     # listed files into each new profile home so the agent is authenticated out of
     # the box, and re-copies refresh_files before each run to follow token rotation.
@@ -51,12 +56,20 @@ RUNNER_SPECS: dict[str, RunnerSpec] = {
     ),
     "codex": RunnerSpec(
         id="codex",
-        spawn_argv=["npx", "-y", "@zed-industries/codex-acp"],
+        # Drive the owner's own Codex CLI (`codex app-server`, stdio JSON-RPC),
+        # NOT the Zed `@zed-industries/codex-acp` adapter. That adapter statically
+        # bundles its own Codex core, which lags releases and gets rejected by the
+        # ChatGPT backend for newer models ("requires a newer version of Codex")
+        # even when the system `codex` runs them fine. Driving the system CLI
+        # tracks the owner's up-to-date Codex, so the runner never falls behind a
+        # model release. See codex_appserver.CodexAppServerProcess.
+        spawn_argv=["codex", "app-server"],
+        protocol="codex-app-server",
         home_env="CODEX_HOME",
         binary="codex",
         display_name="Codex",
         auth_hint="Install the Codex CLI and run `codex login` (or set OPENAI_API_KEY).",
-        notes="OpenAI Codex CLI",
+        notes="OpenAI Codex CLI (native app-server)",
         source_dir="~/.codex",
         seed_files=("auth.json", "config.toml"),
         refresh_files=("auth.json",),

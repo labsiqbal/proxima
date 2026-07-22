@@ -34,8 +34,11 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 
 - **ACP runners** (`acp.py`, `runners.py`, `runner_specs.py`) — each supported CLI
   (Claude Code, Codex, Hermes, Pi) is described by a _runner spec_ (spawn
-  argv + credential home + readiness check). The app spawns one ACP subprocess per
-  `(runner, home, cwd)` on demand.
+  argv + credential home + readiness check + wire `protocol`). The app spawns one
+  agent subprocess per `(runner, home, cwd)` on demand. Most runners speak ACP;
+  **Codex** instead drives the owner's own `codex app-server`
+  (`codex_appserver.py`) so it always tracks the up-to-date system Codex CLI
+  rather than a bundled adapter core (see architecture.md → "Codex runner").
 - **Run worker** (`worker.py`) — a bounded-concurrency background worker that
   executes agent runs so one slow run never blocks other chats.
 - **Scheduler** (`scheduler.py`) — a 60-second loop that materializes due cron jobs.
