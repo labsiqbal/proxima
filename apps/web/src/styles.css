@@ -2946,7 +2946,12 @@ button:disabled {
 
 /* ── Tool dock: right icon rail + overlay panel (Terminal / Files / Preview) ──
    Tools open above the current screen instead of replacing it, so the plan or
-   chat being read keeps its place. The panel slides in from the right edge. */
+   chat being read keeps its place. The panel slides in from the right edge.
+   When open, `.app-shell.tool-open` reserves matching padding on `.main-pane`
+   so right-edge primary actions (Generate, Send, etc.) are not covered. */
+.app-shell.tool-open > .main-pane {
+	padding-right: min(var(--toolpanel-w), 74%);
+}
 .tool-rail {
 	display: flex;
 	flex-direction: column;

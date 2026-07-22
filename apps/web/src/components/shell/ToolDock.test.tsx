@@ -38,6 +38,23 @@ describe('ToolDock', () => {
     expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
   })
 
+  it('marks the shell tool-open while a panel is showing so main content can reflow', async () => {
+    const user = userEvent.setup()
+    const shell = document.createElement('div')
+    shell.className = 'app-shell'
+    document.body.appendChild(shell)
+    const root = document.createElement('div')
+    shell.appendChild(root)
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />, { container: root })
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    expect(shell.classList.contains('tool-open')).toBe(false)
+    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    expect(shell.classList.contains('tool-open')).toBe(true)
+    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    expect(shell.classList.contains('tool-open')).toBe(false)
+    shell.remove()
+  })
+
   it('closes on Escape', async () => {
     const user = userEvent.setup()
     render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
