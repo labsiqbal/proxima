@@ -102,7 +102,7 @@ app = create_app(
         "update_check": env_bool("PROXIMA_UPDATE_CHECK", bool(DEFAULT_CONFIG["update_check"])),
         "update_repo": os.environ.get("PROXIMA_UPDATE_REPO") or DEFAULT_CONFIG["update_repo"],
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
-        "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", False),
+        "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", True),
         "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
         # On by default since slice 4 (review UI); the env var is the escape hatch.
         "feature_repo_worktrees": env_bool("PROXIMA_FEATURE_REPO_WORKTREES", True),
