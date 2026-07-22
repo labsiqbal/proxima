@@ -219,6 +219,9 @@ Tasks plan row.
 edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
 run time and substituted into node text. An **authoring chat** beside the canvas emits
 `<workflow-graph>` blocks that are applied to the plan on screen, never the database.
+**Start chat** and a node's **Test in chat** share one open path onto the plan's
+session (concurrent clicks await the same load) so the panel cannot stick on
+Opening…; a missing session surfaces an error instead of a silent idle card.
 The **Sequential recipe editor is retired** — a linear recipe is a graph with no
 branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be

@@ -416,8 +416,23 @@ export function GraphScreen({
   React.useEffect(() => {
     if (!pendingTest || !chatOpen || !plan) return
     const index = plan.nodes.findIndex(node => node.id === pendingTest)
-    if (index >= 0) chatRef.current?.runThrough(index, plan.nodes[index].name || pendingTest)
-    setPendingTest(null)
+    if (index < 0) { setPendingTest(null); return }
+    let cancelled = false
+    let frames = 0
+    // The authoring chat mounts with chatOpen; retry a few frames until its
+    // imperative handle exists so Test in chat is not dropped on first paint.
+    const tryRun = () => {
+      if (cancelled) return
+      if (!chatRef.current) {
+        if (frames++ < 30) requestAnimationFrame(tryRun)
+        else setPendingTest(null)
+        return
+      }
+      chatRef.current.runThrough(index, plan.nodes[index].name || pendingTest)
+      setPendingTest(null)
+    }
+    tryRun()
+    return () => { cancelled = true }
   }, [pendingTest, chatOpen, plan])
 
   async function deletePlan(item: { id: number; title: string }) {
