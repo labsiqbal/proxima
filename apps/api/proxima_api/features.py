@@ -81,7 +81,7 @@ def queued_run_feature(run: Mapping[str, Any], session_mode: str) -> str | None:
     if session_mode == "design":
         return DESIGN_STUDIO
     kind = str(run.get("kind") or "")
-    if kind in {"wf_node", "workflow_graph_draft"}:
+    if kind in {"wf_node", "wf_script_node", "workflow_graph_draft"}:
         return WORKFLOW_GRAPH
     if kind == "media_image-studio":
         return DESIGN_STUDIO

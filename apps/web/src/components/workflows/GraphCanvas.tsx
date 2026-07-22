@@ -1,5 +1,6 @@
 import React from 'react'
 import type { GraphJob, GraphNodeState, Profile, WorkflowGraph } from '../../types'
+import { lastOutputLine } from '../tasks/planProjection'
 import { layoutGraph } from '../../screens/graphLayout'
 
 // The one dependency canvas (extracted from GraphScreen for slice 3): the
@@ -34,7 +35,7 @@ function edgePath(from: Point, to: Point): string {
   return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`
 }
 
-export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDeselect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddTrigger, hasTrigger }: {
+export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDeselect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddScript, onAddTrigger, hasTrigger }: {
   job: GraphJob
   plan: WorkflowGraph
   profiles: Profile[]
@@ -47,6 +48,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   onConnect: (from: string, to: string) => void
   onDisconnect: (from: string, to: string) => void
   onAddNode: () => void
+  onAddScript: () => void
   onAddTrigger: () => void
   hasTrigger: boolean
 }) {
@@ -223,6 +225,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
         whether or not a node happens to be selected. */}
     {editable && <div className="graph-canvas-tools">
       <button className="ghost-button" onClick={onAddNode}>+ Node</button>
+      <button className="ghost-button" onClick={onAddScript} title="A step that runs a saved script from scripts/ — no AI involved">+ Script</button>
       <button className="ghost-button" onClick={onAddTrigger} disabled={hasTrigger}>+ Trigger</button>
     </div>}
     <div className="graph-zoom-controls">
@@ -298,6 +301,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
           const state = stateFor(job, definition.id)
           const status = state?.status ?? 'pending'
           const trigger = definition.type === 'trigger'
+          const script = definition.type === 'script'
           const agent = definition.profile_id
             ? profiles.find(profile => profile.id === definition.profile_id)
             : undefined
@@ -308,12 +312,17 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
             : definition.target
               ? ` · ${definition.target === 'ops' ? 'ops' : definition.target === '.' ? 'repo' : `repo ${definition.target}`}`
               : ''
+          // A script card leads with what it runs — the command is its identity
+          // the way the instruction is an agent node's.
           const subtitle = trigger
             ? 'manual'
-            : `${definition.output_kind}${binding}${agent ? ` · ${agent.name}` : ''}`
+            : script
+              ? `⚡ scripts/${definition.command ?? ''}`
+              : `${definition.output_kind}${binding}${agent ? ` · ${agent.name}` : ''}`
+          const scriptResult = script ? lastOutputLine(state?.output) : null
           return <g
             key={definition.id}
-            className={`graph-node st-${status}${definition.id === selectedId ? ' selected' : ''}${trigger ? ' is-trigger' : ''}${editable ? ' draggable' : ''}`}
+            className={`graph-node st-${status}${definition.id === selectedId ? ' selected' : ''}${trigger ? ' is-trigger' : ''}${script ? ' is-script' : ''}${editable ? ' draggable' : ''}`}
             transform={`translate(${position.x} ${position.y})`}
             role="button"
             tabIndex={0}
@@ -331,6 +340,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
             <text className="graph-node-kind" x="22" y="55">{subtitle}</text>
             <text className="graph-node-status" x="22" y="76">
               {statusLabel(status)}{definition.review_required ? ' · review gate' : ''}
+              {scriptResult ? ` · ${scriptResult.length > 26 ? `${scriptResult.slice(0, 25)}…` : scriptResult}` : ''}
             </text>
             {editable && !trigger && <circle
               className="graph-handle graph-handle-in"

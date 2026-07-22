@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { orderedPlanJobs, planBranches, planProgress, targetBadge } from './planProjection'
+import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, targetBadge } from './planProjection'
 import type { GraphJob, GraphNodeDefinition, WorkflowGraph } from '../../types'
 
 const node = (id: string, extra: Partial<GraphNodeDefinition> = {}): GraphNodeDefinition => ({
@@ -110,5 +110,36 @@ describe('planProgress', () => {
       { a: 'done' },
     )
     expect(planProgress(plan)).toBe('1/2')
+  })
+})
+
+describe('script rows (T6)', () => {
+  it('includes script nodes as job rows with their output for the result line', () => {
+    const plan = job(
+      {
+        nodes: [node('collect'), node('count', { type: 'script', command: 'count.py', instruction: '' })],
+        edges: [{ from: 'collect', to: 'count' }],
+      },
+      { collect: 'done', count: 'done' },
+    )
+    plan.node_states[1].output = 'lines 1\nfinal: 42\n'
+
+    const rows = orderedPlanJobs(plan)
+    expect(rows.map(row => row.node.id)).toEqual(['collect', 'count'])
+    expect(rows[1].node.type).toBe('script')
+    expect(rows[1].output).toBe('lines 1\nfinal: 42\n')
+  })
+
+  it('scripts have no target badge — they run at the container root', () => {
+    expect(targetBadge(node('s', { type: 'script', command: 'x.sh' }))).toBeNull()
+  })
+})
+
+describe('lastOutputLine', () => {
+  it('returns the last non-empty line of text output only', () => {
+    expect(lastOutputLine('a\nb\n\n')).toBe('b')
+    expect(lastOutputLine('   ')).toBeNull()
+    expect(lastOutputLine({ not: 'text' })).toBeNull()
+    expect(lastOutputLine(null)).toBeNull()
   })
 })

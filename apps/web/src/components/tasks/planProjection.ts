@@ -9,6 +9,9 @@ export type PlanJobRow = {
   node: GraphNodeDefinition
   status: GraphNodeState['status']
   error: string | null
+  // The node's validated output, for the compact result surfaces (a script
+  // row shows its last output line, T6). Null while nothing has run.
+  output: unknown
 }
 
 /**
@@ -56,7 +59,17 @@ export function orderedPlanJobs(job: GraphJob): PlanJobRow[] {
       node,
       status: states.get(node.id)?.status ?? 'pending',
       error: (states.get(node.id)?.error as string | null) ?? null,
+      output: states.get(node.id)?.output ?? null,
     }))
+}
+
+/** The last non-empty line of a node's output — the at-a-glance result a script
+ *  step shows on its card and list row (T6). Text output only; JSON is a
+ *  structure, not a line. */
+export function lastOutputLine(output: unknown): string | null {
+  if (typeof output !== 'string') return null
+  const lines = output.split('\n').map(line => line.trim()).filter(Boolean)
+  return lines.length ? lines[lines.length - 1] : null
 }
 
 /**

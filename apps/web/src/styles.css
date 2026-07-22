@@ -5202,6 +5202,15 @@ div.result-media {
 	fill: var(--ui-surface-subtle);
 	stroke-dasharray: 5 4;
 }
+/* A script node (T6) is deterministic machinery: a dotted outline distinct from
+   the trigger's dash, and its command subtitle set in the mono face. It keeps the
+   ordinary surface fill — it is work, unlike the trigger's entry-point marker. */
+.graph-node.is-script rect {
+	stroke-dasharray: 1.5 3;
+}
+.graph-node.is-script .graph-node-kind {
+	font-family: var(--font-mono);
+}
 .graph-node rect {
 	fill: var(--ui-surface);
 	stroke: var(--ui-stroke-primary);
@@ -5888,6 +5897,34 @@ div.result-media {
 .plan-repo-mark {
 	font-weight: 700;
 }
+/* A script step (T6): deterministic machinery, not an agent. The chip says what
+   runs; the out-line shows the script's last printed line once it has run. */
+.plan-script {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	border-radius: var(--radius-full);
+	padding: 1px var(--space-2);
+	font-size: var(--text-2xs);
+	font-weight: 600;
+	font-family: var(--font-mono);
+	border: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface-subtle);
+	color: var(--ui-text-secondary);
+	white-space: nowrap;
+	max-width: 16rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.plan-script-out {
+	font-family: var(--font-mono);
+	font-size: var(--text-2xs);
+	color: var(--ui-text-tertiary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 14rem;
+}
 .plan-job-error {
 	color: var(--ui-danger-strong);
 	font-weight: 700;
@@ -6079,6 +6116,28 @@ div.result-media {
 	background: var(--ui-danger-bg);
 	color: var(--ui-danger-strong);
 	font-size: var(--text-xs);
+}
+
+/* The one-time script approval ask (T6): an expected pause, not a failure —
+   warning tint, never the danger palette. */
+.graph-script-approval {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid color-mix(in srgb, var(--ui-warning) 45%, var(--ui-stroke-secondary));
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--ui-warning) 10%, var(--ui-surface));
+	font-size: var(--text-xs);
+}
+.graph-script-approval p {
+	margin: 0;
+}
+.graph-script-approval code {
+	font-family: var(--font-mono);
+}
+.graph-script-approval .primary-button {
+	align-self: flex-start;
 }
 
 .job-step-output {

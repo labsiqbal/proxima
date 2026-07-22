@@ -48,6 +48,11 @@ export const rerunGraphNode = (token: string, jobId: number, nodeId: string) =>
 export const approveGraphNode = (token: string, jobId: number, nodeId: string) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/approve`, token, { method: 'POST' })
 
+// The one-time, hash-bound script approval (T6): trusts the script's CURRENT
+// content and reruns the blocked step. Unchanged scripts never ask again.
+export const approveGraphNodeScript = (token: string, jobId: number, nodeId: string) =>
+  api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/approve-script`, token, { method: 'POST' })
+
 export const approveGraphJob = (token: string, jobId: number) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/approve`, token, { method: 'POST' })
 

@@ -90,6 +90,22 @@ Current environment behavior:
 - `PROXIMA_RUNNER_INHERIT_ENV=1` and `PROXIMA_APP_INHERIT_ENV=1` are explicit
   compatibility escape hatches for trusted installations.
 
+## Script steps (deterministic plan nodes)
+
+Agent-written scripts in a project's `scripts/` folder are untrusted content like
+any other project file — a prompt-injected run can write one. The controls:
+
+- a script executes as a plan step only after the owner's one-time approval of its
+  exact bytes (sha256 recorded in `script_trust`); any content change re-blocks it;
+- execution uses an exec array (node args cannot shell-inject), the project
+  container as cwd, and a minimal env (`PATH`/`HOME`/locale — no server secrets);
+- the script path is jailed to `scripts/` at plan validation and at resolution
+  (no `..`/absolute/symlink escape).
+
+The approval is the boundary, not a sandbox: an approved script runs with the
+service user's OS privileges, so the owner should read a script before approving
+it. See `docs/security-boundaries.md`.
+
 ## Developer mode (future)
 
 A future explicit "developer mode" could allow source inspection with a reason +

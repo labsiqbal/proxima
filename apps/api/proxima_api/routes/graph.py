@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import features, state, worktrees
+from .. import features, scripts_library, state, worktrees
 from ..graph import (
     GraphValidationError,
     descendant_node_ids,
@@ -716,6 +717,118 @@ def register(app, deps):
                 raise exc
         if dispatch:
             app.state.worker.graph_executor.dispatch_ready(job_id)
+        return graph_job_payload(graph_job_or_404(job_id, user))
+
+    @app.post("/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script")
+    def approve_node_script(
+        job_id: int,
+        node_id: str,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """The one-time, hash-bound script approval (T6 #5, captain's decision).
+
+        A script step blocked on trust and the plan is paused in review; this
+        records the script's CURRENT content hash as approved — recomputed from
+        the file now, never taken from the request or the stored error, so what
+        the owner approves is exactly what will run — then reruns the node the
+        same way an ordinary rerun does. Unchanged scripts never come back
+        here; an edited script's hash mismatch does.
+        """
+        require_graph()
+        job = graph_job_or_404(job_id, user)
+        ensure_correctable(job)
+        graph = normalize_graph(job["graph"] or "")
+        node = _graph_node(graph, node_id)
+        if node.get("type") != "script":
+            raise HTTPException(status_code=422, detail="this job step does not run a script")
+        if not job["project_id"]:
+            raise HTTPException(status_code=409, detail="script steps need a project container")
+        project = db().execute(
+            "SELECT path FROM projects WHERE id = ?", (job["project_id"],)
+        ).fetchone()
+        if not project or not project["path"]:
+            raise HTTPException(status_code=409, detail="this plan's project path is unavailable")
+        try:
+            rel = scripts_library.normalize_script_rel_path(str(node["command"]))
+            script_path = scripts_library.resolve_script(Path(project["path"]), rel)
+            digest = scripts_library.content_hash(script_path)
+        except (scripts_library.ScriptResolutionError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        conn = db()
+        approval_run_id: int | None = None
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM node_states WHERE job_id = ? AND node_id = ?",
+                    (job_id, node_id),
+                ).fetchone()
+                if not row or row["status"] != "failed":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="this step is not blocked on a script approval",
+                    )
+                scripts_library.record_trust(
+                    conn, _as_int(job["project_id"]), rel, digest, _as_int(user["id"])
+                )
+                conn.execute(
+                    "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+                    "VALUES (?, 'script.trust.approve', 'script', ?, ?)",
+                    (
+                        user["id"],
+                        f"{job['project_id']}:{rel}",
+                        json.dumps({"content_hash": digest, "job_id": job_id, "node_id": node_id}),
+                    ),
+                )
+                approval_run_id = row["run_id"]
+                stale = state.guarded_node_transition(
+                    conn,
+                    _as_int(row["id"]),
+                    "stale",
+                    ("failed",),
+                    _as_int(row["version"]),
+                    run_id=None,
+                    error=None,
+                    clear_started=True,
+                    clear_finished=True,
+                )
+                if not stale:
+                    raise HTTPException(status_code=409, detail="node changed concurrently")
+                mark_descendants_stale(conn, graph, job_id, node_id)
+                resumed = state.guarded_transition(
+                    conn,
+                    "jobs",
+                    job_id,
+                    "running",
+                    ("review", "done"),
+                    set_extra="updated_at=CURRENT_TIMESTAMP, finished_at=NULL",
+                )
+                if not resumed:
+                    raise HTTPException(status_code=409, detail="job changed concurrently")
+                conn.execute("COMMIT")
+            except Exception as exc:
+                _rollback(conn)
+                raise exc
+        # The approval belongs in the job timeline (T6 #4): attach it to the
+        # attempt that was blocked, whose session is the step's own thread.
+        if approval_run_id:
+            run_row = db().execute(
+                "SELECT session_id FROM runs WHERE id = ?", (approval_run_id,)
+            ).fetchone()
+            if run_row:
+                app.state.worker.add_event(
+                    _as_int(approval_run_id),
+                    _as_int(run_row["session_id"]),
+                    job["project_id"],
+                    "script.trust.approved",
+                    {
+                        "job_id": job_id,
+                        "node_id": node_id,
+                        "script": f"scripts/{rel}",
+                        "content_hash": digest,
+                    },
+                )
+        app.state.worker.graph_executor.dispatch_ready(job_id)
         return graph_job_payload(graph_job_or_404(job_id, user))
 
     @app.post("/api/graph/jobs/{job_id}/approve")

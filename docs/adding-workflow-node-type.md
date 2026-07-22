@@ -6,7 +6,7 @@ This playbook preserves the invariants of the graph engine described in
 
 ## Before changing code
 
-There are two execution types today, both carried by the node's `type` field:
+There are three execution types today, all carried by the node's `type` field:
 
 - **`agent`** (the default, and what an absent `type` means): runner-agnostic work
   dispatched as a `wf_node` run.
@@ -14,10 +14,18 @@ There are two execution types today, both carried by the node's `type` field:
   runner and has no `runs` row. `trigger_kind` selects the variety; only `manual`
   exists. `schedule`/`webhook`/`event` belong here as further kinds — that is the whole
   reason the entry point is a node.
+- **`script`** (slice 6, T6 — ADR-0001's Phase-3 deterministic node in minimal form):
+  runs a library script from the container's `scripts/` folder as a subprocess. It is
+  the precedent for a deterministic type done right: dispatched as a `wf_script_node`
+  run through the ordinary runs queue (durability, budget, quota, reaping), executed
+  by `script_runner.py` behind the worker's kind branch, gated by the hash-bound
+  approval in `script_trust`, and advanced by the same `graph_advancers` validation
+  every node uses.
 
 `output_kind` is a node's data contract, not its execution type. Do not hide a shell
-step, HTTP action, or runner-specific subagent behind a new output kind. Deterministic
-execution types belong to Phase 3 and must still use the durable node state machine.
+step, HTTP action, or runner-specific subagent behind a new output kind. A new
+deterministic execution type must still use the durable node state machine — follow
+the script node's shape.
 
 Write down:
 

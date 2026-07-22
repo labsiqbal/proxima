@@ -193,7 +193,9 @@ export type WorkflowDraft = {
 
 export type GraphOutputKind = "text" | "json" | "artifact-ref";
 
-export type GraphNodeType = "agent" | "trigger";
+// "script" (slice 6, T6) is a deterministic step: it runs a saved script from the
+// project's scripts/ library — no LLM, no agent — under the same node state machine.
+export type GraphNodeType = "agent" | "trigger" | "script";
 // Only manual entry exists today; schedule/webhook/event become further kinds of
 // this same node rather than a separate execution path.
 export type GraphTriggerKind = "manual";
@@ -226,6 +228,11 @@ export type GraphNodeDefinition = {
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;
 	trigger_kind?: GraphTriggerKind;
+	// Script nodes only: the library script this step runs (a path inside the
+	// project's scripts/ folder) plus its CLI args. First run — or any run after
+	// the script's bytes changed — needs a one-time approval (hash-bound trust).
+	command?: string;
+	args?: string[];
 	// The agent this step runs as. Null/absent = the job's own agent.
 	profile_id?: number | null;
 	// Canvas position. Absent until the owner drags the node, which is what lets

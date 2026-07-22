@@ -2,6 +2,7 @@ import React from 'react'
 import {
   approveGraphJob,
   approveGraphNode,
+  approveGraphNodeScript,
   createGraphJob,
   deleteGraphJob,
   deleteGraphTemplate,
@@ -547,6 +548,24 @@ export function GraphScreen({
     }
   }
 
+  function addScriptNode() {
+    if (!plan) return
+    let index = plan.nodes.length + 1
+    while (plan.nodes.some(node => node.id === `script-${index}`)) index += 1
+    const node: GraphNodeDefinition = {
+      id: `script-${index}`,
+      type: 'script',
+      name: 'Run a script',
+      instruction: '',
+      command: '',
+      output_kind: 'text',
+      ...freeSlot(plan),
+    }
+    setPlan({ ...plan, nodes: [...plan.nodes, node] })
+    setSelectedId(node.id)
+    setDirty(true)
+  }
+
   function addTrigger() {
     if (!plan || plan.nodes.some(node => node.type === 'trigger')) return
     // Deliberately no x/y: a trigger has no dependencies, so the auto-layout puts
@@ -910,6 +929,7 @@ export function GraphScreen({
               onConnect={connect}
               onDisconnect={disconnect}
               onAddNode={addNode}
+              onAddScript={addScriptNode}
               onAddTrigger={addTrigger}
               hasTrigger={plan.nodes.some(node => node.type === 'trigger')}
             />
@@ -935,6 +955,27 @@ export function GraphScreen({
                   The trigger hands the workflow input to whatever it connects to. Schedules and
                   webhooks become further options here.
                 </p>
+              </> : definition.type === 'script' ? <>
+                <label>Script<input
+                  value={definition.command ?? ''}
+                  placeholder="A file in this project's scripts/ folder — e.g. fetch-data.sh"
+                  onChange={event => updateSelected({ command: event.target.value })}
+                /></label>
+                <label>Arguments <span className="muted">(one per line; {'{{input}}'} fills from the workflow input)</span><textarea
+                  rows={3}
+                  value={(definition.args ?? []).join('\n')}
+                  onChange={event => updateSelected({ args: event.target.value.split('\n') })}
+                /></label>
+                <p className="muted graph-field-note">
+                  This step runs the saved script — no AI involved, so it's fast, free, and
+                  repeatable. It gets the earlier steps' results as JSON on its input; what it
+                  prints becomes this step's output. The first time a script (or a changed
+                  script) runs, the plan pauses for your one-time approval.
+                </p>
+                <label>Output contract<select value={definition.output_kind} onChange={event => updateSelected({ output_kind: event.target.value as GraphOutputKind })}>
+                  {OUTPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+                </select></label>
+                <label className="graph-check"><input type="checkbox" checked={!!definition.review_required} onChange={event => updateSelected({ review_required: event.target.checked })} />Require human review</label>
               </> : <>
                 <label>Instruction<MentionTextarea rows={5} items={mentionItems} value={definition.instruction} onChange={value => updateSelected({ instruction: value })} ariaLabel="Node instruction" /></label>
                 <label>Expected output<MentionTextarea
@@ -1038,18 +1079,25 @@ export function GraphScreen({
                 {/* A dry run in the chat: the agent executes this node and its upstream
                     chain conversationally, so the instruction can be judged before
                     Approve & start. No job state is touched. */}
-                {definition.type !== 'trigger' && <button
-                  className="ghost-button"
-                  disabled={!definition.instruction.trim()}
-                  title={definition.instruction.trim() ? undefined : 'Write an instruction first'}
-                  onClick={() => { setChatOpen(true); setPendingTest(definition.id) }}
-                >Test in chat</button>}
+                {definition.type !== 'trigger' && (() => {
+                  const testable = definition.type === 'script'
+                    ? !!(definition.command ?? '').trim()
+                    : !!definition.instruction.trim()
+                  return <button
+                    className="ghost-button"
+                    disabled={!testable}
+                    title={testable ? undefined : definition.type === 'script' ? 'Name a script first' : 'Write an instruction first'}
+                    onClick={() => { setChatOpen(true); setPendingTest(definition.id) }}
+                  >Test in chat</button>
+                })()}
                 <button className="ghost-button danger" onClick={removeNode} disabled={plan.nodes.length <= 1}>Remove node</button>
               </div>
             </div> : <div className="graph-run-detail">
               <p>{definition.type === 'trigger'
                 ? 'Manual trigger — this workflow starts when you press start.'
-                : definition.instruction || 'No instruction.'}</p>
+                : definition.type === 'script'
+                  ? `⚡ Runs the saved script scripts/${definition.command}${definition.args?.length ? ` with: ${definition.args.join(' ')}` : ''} — no AI involved.`
+                  : definition.instruction || 'No instruction.'}</p>
               {definition.expected_output && <div className="graph-node-detail">
                 <p className="graph-eyebrow">Expected output</p><p>{definition.expected_output}</p>
               </div>}
@@ -1065,13 +1113,29 @@ export function GraphScreen({
                     : `Repo — ${definition.target === '.' ? 'the project root' : definition.target}`}
                 </dd></div>}
                 <div><dt>Output</dt><dd>{definition.output_kind}</dd></div>
-                {definition.type !== 'trigger' && <div><dt>Agent</dt><dd>
+                {definition.type === 'script' && <div><dt>Script</dt><dd>scripts/{definition.command}</dd></div>}
+                {definition.type !== 'trigger' && definition.type !== 'script' && <div><dt>Agent</dt><dd>
                   {profiles.find(profile => profile.id === definition.profile_id)?.name ?? 'Run default'}
                 </dd></div>}
                 <div><dt>Attempt</dt><dd>{selectedState?.run_id ?? '—'}</dd></div>
               </dl>
               {selectedState?.inputs != null && <details><summary>Resolved inputs</summary><pre>{JSON.stringify(selectedState.inputs, null, 2)}</pre></details>}
-              {selectedState?.error && <p className="error-text">{selectedState.error}</p>}
+              {/* A script blocked on trust is not a malfunction — it is the one-time
+                  approval surface (T6). The banner replaces the raw error, and the
+                  approve action records the hash and reruns the step. */}
+              {definition.type === 'script' && selectedState?.status === 'failed' && selectedState.error?.startsWith('script_approval_required') ? <div className="graph-script-approval">
+                <p>
+                  This step wants to run <code>scripts/{definition.command}</code>, and this
+                  version of the script hasn't been approved yet. Approve it once and it runs
+                  without asking — until the file's content changes again.
+                </p>
+                <button
+                  className="primary-button"
+                  disabled={!!busy}
+                  onClick={() => void act('approve-script', () => approveGraphNodeScript(token, job.id, definition.id), 'Script approved — the step is running again.')}
+                >{busy === 'approve-script' ? 'Approving…' : 'Approve script & run'}</button>
+              </div>
+              : selectedState?.error && <p className="error-text">{selectedState.error}</p>}
               {selectedState?.output != null ? <pre className="graph-output">{outputText(selectedState)}</pre> : <p className="muted">No validated output yet.</p>}
               {['review', 'done'].includes(job.status) && selectedState && ['done', 'review', 'failed'].includes(selectedState.status) && <>
                 <label>Correct output<textarea rows={8} value={outputEdit} onChange={event => setOutputEdit(event.target.value)} /></label>

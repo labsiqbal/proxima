@@ -408,3 +408,117 @@ def test_node_touches_repo_reads_stored_graphs_tolerantly():
     assert node_touches_repo("[1,2]", "fix") is False
     assert node_touches_repo(None, "fix") is False
     assert node_touches_repo('{"nodes": [{"id": "fix"}]}', "fix") is False
+
+
+# ── script nodes (T6 slice 6) ─────────────────────────────────────────────
+
+
+def test_script_node_normalizes_command_args_and_contract():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "count",
+                    "type": "script",
+                    "name": "Count URLs",
+                    # Both spellings canonicalize to one script → one trust record.
+                    "command": "scripts/seo/count.py",
+                    "args": ["{{site}}", "--fast", "", "  "],
+                    "output_kind": "json",
+                    "output_schema": {"type": "object"},
+                    "review_required": True,
+                }
+            ]
+        }
+    )
+
+    node = graph["nodes"][0]
+    assert node["type"] == "script"
+    assert node["command"] == "seo/count.py"
+    # Whole-empty args are dropped (a trailing blank editor line is not an arg).
+    assert node["args"] == ["{{site}}", "--fast"]
+    assert node["output_kind"] == "json"
+    assert node["output_schema"] == {"type": "object"}
+    assert node["review_required"] is True
+
+
+def test_script_node_drops_agent_only_fields_and_work_binding():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "step",
+                    "type": "script",
+                    "name": "Step",
+                    "command": "fetch.sh",
+                    "profile_id": 3,
+                    "skill_ids": ["web"],
+                    "expected_output": "n/a",
+                    "rules": "n/a",
+                    "trigger_kind": "manual",
+                    # Scripts run at the container root: no repo/ops binding.
+                    "target": "apps/web",
+                    "target_ambiguous": True,
+                    "target_question": "where?",
+                }
+            ]
+        }
+    )
+
+    node = graph["nodes"][0]
+    for dropped in (
+        "profile_id",
+        "skill_ids",
+        "expected_output",
+        "rules",
+        "trigger_kind",
+        "target",
+        "target_ambiguous",
+        "target_question",
+        "touches_repo",
+    ):
+        assert dropped not in node, dropped
+    assert node["args"] == [] if "args" in node else True
+    # And a script plan raises no target machinery at all.
+    assert plan_target_problems(graph, []) == []
+    assert unresolved_target_questions(graph) == []
+    assert repo_target_paths(graph) == []
+
+
+def test_script_node_command_is_required_and_jailed():
+    def script_graph(command: Any):
+        node: dict[str, Any] = {"id": "s", "type": "script", "name": "S"}
+        if command is not None:
+            node["command"] = command
+        return {"nodes": [node]}
+
+    _expect_graph_error("must name a script", lambda: normalize_graph(script_graph(None)))
+    _expect_graph_error("must name a script", lambda: normalize_graph(script_graph("  ")))
+    for escape in ("/etc/passwd", "../up.sh", "a/../../b.sh"):
+        _expect_graph_error("scripts/", lambda: normalize_graph(script_graph(escape)))
+    _expect_graph_error(
+        "args must be a list of strings",
+        lambda: normalize_graph(
+            {"nodes": [{"id": "s", "type": "script", "name": "S", "command": "x.sh", "args": [1]}]}
+        ),
+    )
+
+
+def test_agent_node_sheds_script_fields():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "write",
+                    "name": "Write",
+                    "instruction": "Write it",
+                    "command": "x.sh",
+                    "args": ["a"],
+                }
+            ]
+        }
+    )
+    node = graph["nodes"][0]
+    assert node["type"] == "agent"
+    assert "command" not in node
+    assert "args" not in node
