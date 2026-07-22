@@ -12,8 +12,25 @@ export function stateFor(job: GraphJob, nodeId: string): GraphNodeState | undefi
   return job.node_states.find(state => state.node_id === nodeId)
 }
 
+/** Human label for a job/node status chip. Proper-cased so CSS need not
+ *  capitalize every word (which mangled multi-word plan labels like
+ *  "Ready to approve" into "Ready To Approve"). */
 export function statusLabel(status: GraphJob['status'] | GraphNodeState['status']): string {
-  return status.replaceAll('_', ' ')
+  switch (status) {
+    case 'pending': return 'Pending'
+    case 'ready': return 'Ready'
+    case 'queued': return 'Queued'
+    case 'running': return 'Running'
+    case 'review': return 'Review'
+    case 'done': return 'Done'
+    case 'failed': return 'Failed'
+    case 'cancelled': return 'Cancelled'
+    case 'stale': return 'Stale'
+    default: {
+      const raw = String(status).replaceAll('_', ' ')
+      return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : raw
+    }
+  }
 }
 
 const ZOOM_MIN = 0.35

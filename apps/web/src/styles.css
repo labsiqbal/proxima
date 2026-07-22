@@ -5354,7 +5354,9 @@ div.result-media {
 	background: var(--ui-surface-subtle);
 	font-size: var(--text-xs);
 	font-weight: 700;
-	text-transform: capitalize;
+	/* Labels are already proper-cased (planStatusLabel / statusLabel). Do not
+	   capitalize here - multi-word phrases like "Ready to approve" must keep
+	   their sentence case. */
 }
 .graph-status.st-running,
 .graph-status.st-ready {
@@ -5882,6 +5884,18 @@ div.result-media {
 	background: var(--ui-success-bg);
 	color: var(--ui-success-strong);
 	font-size: var(--text-sm);
+}
+/* Plan-canvas durable merge/push lines (same copy family as ChangesReview). */
+.graph-merge-note {
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	margin: 0;
+}
+.graph-merge-note.changes-push-failed {
+	border-radius: 0;
+	border-left: 0;
+	border-right: 0;
+	border-top: 0;
 }
 .graph-inspector-head {
 	justify-content: space-between;

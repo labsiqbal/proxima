@@ -314,7 +314,10 @@ retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/r
 (either engine) marks the job `failed` with `jobs.rejected_reason` recorded and tears
 the worktree down unmerged - the project never sees the discarded change. After the
 merge the row shows what landed (base branch + merge commit) and keeps the change
-readable; slice 12's satpam consumes these same review states.
+readable; the plan canvas header Approve door shows a success notice and keeps a
+durable "merged into <branch> · <sha>" line (plus push outcome when applicable) so a
+reopened Done plan still says where the work landed. Slice 12's satpam consumes these
+same review states.
 
 ### Repo-remote connector: BYO push-after-merge (Phase-1 slice 11, T9 - LIVE)
 

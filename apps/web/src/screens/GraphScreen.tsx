@@ -843,7 +843,14 @@ export function GraphScreen({
             {busy === 'start' ? 'Starting…' : 'Approve plan & start'}
           </button>
         </>}
-        {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act('approve-job', () => approveGraphJob(token, job.id))} disabled={!!busy}>
+        {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act(
+          'approve-job',
+          () => approveGraphJob(token, job.id),
+          // Same door as ChangesReview: final approve is the local merge for repo plans.
+          job.worktree
+            ? `Changes merged into ${job.worktree.base_branch}.`
+            : 'Final result approved.',
+        )} disabled={!!busy}>
           {/* A repo plan's final approve is also the local merge (slice 4) — say so. */}
           {busy === 'approve-job'
             ? (job.worktree ? 'Merging…' : 'Approving…')
@@ -854,6 +861,25 @@ export function GraphScreen({
 
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
+    {/* Durable merge/push outcome so a reopened Done plan still shows where the
+        changes landed - the header Approve button disappears after the merge. */}
+    {job?.worktree?.status === 'merged' && <p className="changes-note is-merged graph-merge-note">
+      ✓ Changes merged into <code>{job.worktree.base_branch}</code>
+      {job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}
+    </p>}
+    {job?.worktree?.status === 'merged' && job.worktree.push_status === 'pushed' && <p className="changes-note is-pushed graph-merge-note">
+      ↑ Pushed to <code>{job.worktree.push_remote}</code>
+      {job.worktree.push_web_url && <> · <a href={job.worktree.push_web_url} target="_blank" rel="noreferrer">open repo</a></>}
+    </p>}
+    {job?.worktree?.status === 'merged' && job.worktree.push_status === 'failed' && <div className="changes-push-failed graph-merge-note" role="alert">
+      <p><strong>Merged into your project, but pushing to the remote failed.</strong></p>
+      {job.worktree.push_error && <pre className="changes-push-error">{job.worktree.push_error}</pre>}
+      <p>
+        Nothing was undone - the changes are safely in <code>{job.worktree.base_branch}</code>.
+        Fix the cause with your own git, then retry from the task Changes panel.
+        {job.worktree.push_web_url && <> <a href={job.worktree.push_web_url} target="_blank" rel="noreferrer">Open the repo</a>.</>}
+      </p>
+    </div>}
     {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={() => void loadJob(job.id)} />}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
