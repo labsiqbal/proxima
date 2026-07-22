@@ -220,3 +220,28 @@ def test_build_run_preamble_injects_design_guidelines_only_with_design_studio(tm
     # Guidelines are design-scoped: a non-design run must not carry them.
     without_ds = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", include_design_studio=False, design_guidelines=g)
     assert "#FF6A00" not in (without_ds or "")
+
+
+def test_preamble_injects_the_script_library_catalog(tmp_path: Path):
+    # The T6 reuse-awareness surface: alongside the wiki catalog, a project
+    # session's preamble inlines the scripts/ catalog + the prefer-reuse rule.
+    root = tmp_path / "wiki"
+    root.mkdir()
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "fetch.sh").write_text("# Description: fetch the sitemap\n", encoding="utf-8")
+
+    p = wiki_memory.build_run_preamble("P", "p", root)
+    assert "## Script library (scripts/)" in p
+    assert "scripts/fetch.sh — fetch the sitemap" in p
+    assert "REUSING" in p
+
+
+def test_preamble_teaches_the_script_convention_when_library_is_empty(tmp_path: Path):
+    root = tmp_path / "wiki"
+    root.mkdir()
+    p = wiki_memory.build_run_preamble("P", "p", root)
+    assert "## Script library (scripts/)" in p
+    assert "none yet" in p
+    # No project -> no scripts block at all.
+    assert "Script library" not in (wiki_memory.build_run_preamble(None, None, None) or "")

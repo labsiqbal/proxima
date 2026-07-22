@@ -62,6 +62,23 @@ credential leakage but does not prevent the process reading files available to i
 Tool permission requests ask the owner by default. Auto-approve remains available as
 an explicit trusted-owner setting and is recorded in run events.
 
+## Script steps (hash-bound trust, honest statement)
+
+A plan's `script` node executes a file from the project's `scripts/` folder as the
+service OS user, with the project container as cwd and a minimal environment
+(`PATH`/`HOME`/locale — never the server's config/secrets env). Execution uses an
+exec array, never a shell string, so node args cannot shell-inject; the script path
+is jailed to `scripts/` at plan validation and again at resolution (no `..`,
+absolute paths, or symlink escapes).
+
+The control is an **approval gate, not a sandbox**: a script's first run — or any
+run after its content changed — blocks until the owner approves the exact bytes
+(sha256 recorded in `script_trust`; approvals land in the audit log and the step's
+timeline). An unchanged approved script then runs without per-run prompts, and it
+can do anything the service user can. Because agents write these scripts, the
+approval moment is the place where a prompt-injected script body would have to get
+past the owner; approving without reading the script waives that control.
+
 ## Filesystem Rules
 
 Project file APIs must be rooted in the project path from the database. Client

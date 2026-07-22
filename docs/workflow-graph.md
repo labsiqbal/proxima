@@ -25,6 +25,9 @@ opens the graph Editor directly.
 - Each node may name **its own agent**; nodes without one use the job's agent.
 - Independent branches execute **in parallel**, bounded by a concurrency budget.
 - An optional **trigger node** is the graph's entry point. Only `manual` exists today.
+- A **script node** is a deterministic step (T6): it runs a saved script from the
+  project's `scripts/` library as a subprocess — no LLM, no agent — under the same
+  node state machine and dispatch budget, gated by a one-time hash-bound approval.
 - Upstream results are passed as explicit typed inputs, never implicit chat history.
 - Node output is validated as `text`, JSON Schema-backed `json`, or a contained
   `artifact-ref` before downstream work can start.
@@ -109,8 +112,10 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 
 | Field | Meaning |
 | --- | --- |
-| `type` | `agent` (default) or `trigger`. Absent means `agent`, so graphs predating node types keep working. |
+| `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
 | `trigger_kind` | Trigger nodes only. `manual` is the only kind today. |
+| `command` | Script nodes only (required). The library script this step runs — a path relative to the container's `scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
+| `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
 | `rules` | Agent nodes only. Prose constraints on *how* to do it. Omitted from the prompt entirely when unset. |
 | `skill_ids` | Agent nodes only. Skill/tool hints listed in the prompt as suggestions — the node's agent profile still decides what is actually enabled. Deduped; absent when empty. |
@@ -160,6 +165,66 @@ the owner pressing start, so there is no work to do.
 
 The point of modelling the entry point as a node is that `schedule`, `webhook`, and
 `event` become further `trigger_kind` values here — not a second execution path.
+
+### Script nodes (deterministic steps, slice 6 / T6)
+
+A script node runs a saved script from the project container's **`scripts/` folder**
+— no LLM, no agent process. It is "a new kind here, not a new execution path": the
+same `node_states` row, the same `pending → ready → running → done/failed` walk, the
+same concurrency budget, the same output validation. What differs is execution: the
+dispatcher queues a **`runs.kind='wf_script_node'`** row (so the run shares the
+worker's durability, turn quota, heartbeats, and crash reaping), and the worker hands
+it to `script_runner.py` instead of a runner/ACP session.
+
+At normalization a script node keeps `command`/`args`, its output contract, and an
+optional `review_required` gate; agent-only fields (`profile_id`, `skill_ids`,
+`expected_output`, `rules`) and the T1 work binding (`target`/`touches_repo`) are
+forced off, the trigger's precedent. Scripts always execute with the **project
+container root as cwd** and take no part in repo worktrees.
+
+**I/O contract** (the simplest thing that works, no expression language):
+
+- **in**: CLI args (with `{{var}}` filled from the job input) plus one JSON object on
+  stdin — `{"job_input": {…}, "upstream": [{node_id, name, output_kind, output}, …]}`,
+  exactly the typed hand-off an agent node receives in its prompt;
+- **out**: stdout, validated against the node's `output_kind`/`output_schema` by the
+  ordinary graph advancer (a script feeding a `json` contract must print one JSON
+  value); exit code ≠ 0 fails the node with the code and a stderr tail, pausing the
+  plan in review like any node failure. Output above 1 MB fails loudly rather than
+  being truncated.
+
+**Execution boundary (honest):** the script runs as the server user with an exec
+*array* (never a shell string — args cannot inject through a shell), the project
+container as cwd, and a minimal environment (`PATH`/`HOME`/locale only, so the
+server's own config/secrets env never reaches it). An executable file runs directly;
+otherwise the extension picks the interpreter (`.sh`/`.bash` → bash, `.py` → the
+server's Python, `.js`/`.mjs` → node). There is **no sandbox**: an approved script
+can do anything the server user can. The trust model below is the control for that,
+and it is an approval gate, not a jail — see `docs/security-boundaries.md`.
+
+**Trust = content-hash binding (the captain's T6 decision).** Every execution hashes
+the exact bytes about to run and compares them to the approved sha256 in
+`script_trust` (one row per project + script path). First run — or any run after the
+bytes changed — does **not** execute: the run fails with a structured
+`script_approval_required:` error, the node pauses the plan in review, and the
+inspector shows the one-time **Approve script & run** action
+(`POST …/nodes/{node_id}/approve-script`). Approval re-reads the file and records the
+hash of what is on disk *now* (never a hash from the request or the stored error),
+writes an audit-log entry, and reruns the node through the ordinary stale/rerun path.
+Unchanged trusted scripts then run with no per-run approval — the deterministic +
+free payoff — and an edited script's hash mismatch forces re-approval. Both moments
+are visible in the step's timeline (`script.approval.required`,
+`script.trust.approved` events).
+
+**Reuse awareness (the make-or-break):** agents write and maintain the library as
+ordinary job output. Each script starts with a header comment block —
+`# Description:` / `# Inputs:` / `# Outputs:`, one line each; no separate manifest.
+`scripts_library.scan_catalog` parses those headers into a catalog (path + one-line
+description) that is injected into **every project run preamble** alongside the wiki
+catalog, with the instruction to prefer reusing/extending an existing script over
+writing a new one. The plan slicer gets the same catalog and may emit script jobs for
+steps needing no judgment — but only referencing scripts that exist; a step whose
+script would first have to be written is an agent job.
 
 ### Output contracts
 
@@ -244,6 +309,11 @@ The durable state is split between:
   checkpoint, and optimistic `version`;
 - `runs.kind='wf_node'`: one runner activity for one node attempt, carrying that
   node's own agent (`profile_id`/`runner_id`/`model`), not necessarily the job's;
+- `runs.kind='wf_script_node'`: one subprocess attempt for one script node. The row
+  keeps the job's profile/runner columns only so session rows stay well-formed —
+  execution never touches a runner, and the worker branches on the kind;
+- `script_trust`: the approved content hash per (project, script) behind the
+  script-node trust gate;
 - hidden `sessions.job_id`: a fresh ACP conversation for each attempt. A fresh session
   per node is also what lets branches run at once — `claim_run` serializes runs *per
   session*, so nodes sharing one session could never overlap.
@@ -460,7 +530,8 @@ are:
 - `GET /api/graph/jobs/{id}` — inspect graph and node state;
 - `PATCH /api/graph/jobs/{id}/graph` — queued-plan edit;
 - `POST /api/graph/jobs/{id}/start` — explicit execution approval;
-- node output, rerun, and approval routes under `/nodes/{node_id}`;
+- node output, rerun, and approval routes under `/nodes/{node_id}` (including the
+  one-time script approval, `POST .../nodes/{node_id}/approve-script`);
 - `POST /api/graph/jobs/{id}/approve` — final approval;
 - `POST /api/graph/jobs/{id}/save-template` — reusable template.
 
@@ -469,6 +540,7 @@ are:
 | Graph validation/readiness (incl. target tags) | `apps/api/proxima_api/graph.py` |
 | Dispatch and prompt isolation | `graph_executor.py`, `workflows.py` |
 | Typed advancement | `graph_advancers.py`, `worker.py` |
+| Script library + deterministic execution (T6) | `scripts_library.py`, `script_runner.py` |
 | Lifecycle/correction API | `routes/graph.py`, `state.py` |
 | Repo-plan worktrees (flag-gated) | `worktrees.py`, `routes/graph.py`, `worker.py` |
 | Architect promotion | `routes/chat.py`, `run_drafts.py`, `workflows.py` |

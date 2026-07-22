@@ -43,7 +43,8 @@ from .prompt_collaborations import (
 from . import graph as graph_mod
 from . import workflows as wf
 from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImports]
-from .graph_executor import GRAPH_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
+from .graph_executor import GRAPH_NODE_RUN_KIND, SCRIPT_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
+from .script_runner import ScriptRunner  # pyright: ignore[reportMissingImports]
 from .run_reaper import RunReaper
 from .run_summaries import RunSummaries
 from .run_advancers import RunAdvancers
@@ -79,6 +80,7 @@ class RunWorker:
         self.advancers = RunAdvancers(app)
         self.graph_executor = GraphExecutor(app)
         self.graph_advancers = GraphAdvancers(app, self.graph_executor)
+        self.script_runner = ScriptRunner(app, self)
         self.prompting = RunPrompting(app)
         self.outputs = RunOutputs(app)
         self.drafts = RunDrafts(app)
@@ -853,6 +855,12 @@ class RunWorker:
                     )
                     self.add_event(run_id, session_id, project_id, "run.failed", features.disabled_payload(gated_feature))
                 self._fail_job(session_id, error, run_id)
+                return
+            # Deterministic script step (T6): executed as a subprocess by the
+            # script runner, never through a runner/ACP session. Everything
+            # below this point is agent-session machinery it must not touch.
+            if str(run.get("kind") or "") == SCRIPT_NODE_RUN_KIND:
+                await self.script_runner.execute(run)
                 return
             hermes_home = run["hermes_home"] or ""
             spec = runner_spec(run["runner_id"])

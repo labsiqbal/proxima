@@ -302,6 +302,21 @@ CREATE TABLE IF NOT EXISTS node_states (
   UNIQUE(job_id, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status);
+-- One-time script approvals (Phase-1 slice 6, T6): a library script runs as a
+-- deterministic plan step only after the owner approved its exact bytes once.
+-- One row per (project, scripts/-relative path) holding the approved sha256;
+-- editing the script changes its hash, which is what forces re-approval.
+CREATE TABLE IF NOT EXISTS script_trust (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, rel_path)
+);
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

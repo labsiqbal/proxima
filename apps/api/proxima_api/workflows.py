@@ -239,10 +239,11 @@ GRAPH_ARCHITECT_SYSTEM = (
     "a DAG of jobs. Extract the repeatable process, not merely the last message. "
     "Respond with ONLY one JSON object and no prose: "
     '{"name": str, "description": str, "category": str, "graph": {'
-    '"nodes": [{"id": str, "name": str, "instruction": str, '
+    '"nodes": [{"id": str, "type": "agent|script", "name": str, "instruction": str, '
     '"expected_output": str, "output_kind": "text|json|artifact-ref", '
     '"output_schema": object|null, "review_required": bool, '
     '"target": str|null, "target_ambiguous": bool, "target_question": str|null, '
+    '"command": str|null, "args": [str], '
     '"depends_on": [node_id]}], "edges": [{"from": node_id, "to": node_id}]}}. '
     "Use stable short kebab-case node ids. Express every dependency; independent nodes "
     "may share the same dependencies. Keep each instruction self-contained because every "
@@ -262,7 +263,17 @@ GRAPH_ARCHITECT_SYSTEM = (
     "focused work). Split anything larger into sequential jobs along natural seams. "
     "A job that overruns its quota is auto-continued a limited number of times as a "
     "safety net - continuation is the safety net, not the plan; never size a job "
-    "assuming it will get extra turns."
+    "assuming it will get extra turns.\n"
+    'A job may be type "script" instead of "agent": a deterministic step that '
+    "runs a saved script from the project's scripts/ library with NO AI involved - "
+    "free and repeatable. Use it ONLY for steps needing no judgment (fetch, convert, "
+    "check, publish) AND only with a script that already exists in the library below: "
+    'set command to the script\'s path and args to its CLI arguments ("{{var}}" '
+    "placeholders fill from the workflow input). A script step receives upstream "
+    "outputs as JSON on stdin, its stdout is the step's output (declare output_kind "
+    "to match what it prints), and script steps take no target/expected_output. "
+    "Never invent a script that does not exist - a step that would first need its "
+    "script written is an agent job (which may save the script for future plans)."
 )
 
 # Appended to the graph architect prompt so targets name real areas instead of
@@ -284,10 +295,36 @@ def _code_areas_block(code_areas: list[str]) -> str:
     )
 
 
-def architect_system(*, graph: bool = False, code_areas: list[str] | None = None) -> str:
+def _scripts_block(scripts: list[dict[str, str]]) -> str:
+    """The slicer's view of the script library (T6 #3): what exists is what a
+    script step may reference — reuse awareness, per-project like code areas."""
+    if not scripts:
+        return (
+            "\nPROJECT SCRIPT LIBRARY: empty - this plan may not contain script "
+            "jobs; every job must be an agent job."
+        )
+    listed = "; ".join(
+        f'"{s["rel_path"]}"' + (f" ({s['description']})" if s.get("description") else "")
+        for s in scripts
+    )
+    return (
+        f"\nPROJECT SCRIPT LIBRARY (the only valid script-job commands): {listed}."
+    )
+
+
+def architect_system(
+    *,
+    graph: bool = False,
+    code_areas: list[str] | None = None,
+    scripts: list[dict[str, str]] | None = None,
+) -> str:
     if not graph:
         return ARCHITECT_SYSTEM
-    return GRAPH_ARCHITECT_SYSTEM + _code_areas_block(code_areas or [])
+    return (
+        GRAPH_ARCHITECT_SYSTEM
+        + _code_areas_block(code_areas or [])
+        + _scripts_block(scripts or [])
+    )
 
 
 def _cron_field_matches(field: str, value: int, lo: int, hi: int) -> bool:

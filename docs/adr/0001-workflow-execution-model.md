@@ -108,7 +108,8 @@ without a throwaway foundation:
   the old linear engine — it runs on the new node/state model, so it is not thrown away.)*
 - **Phase 2 — real parallel execution** (bounded, machine-limited).
 - **Phase 3 — complex joins, deterministic (non-agent) node types (the "n8n" part),
-  dynamic re-planning.**
+  dynamic re-planning.** *(Status: the deterministic node type shipped early, in minimal
+  form, as Phase-1 slice 6's `script` node — see [workflow-graph.md](../workflow-graph.md).)*
 
 The dynamic-planning experience is layered as: **architect agent proposes a graph → human
 reviews/edits the plan → execute as a reviewable node graph → optionally save the approved

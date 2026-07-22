@@ -6,7 +6,7 @@ import { GraphCanvas } from '../components/workflows/GraphCanvas'
 import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
 import { ChangesReview } from '../components/tasks/ChangesReview'
 import { worktreeStateLabel } from '../components/tasks/diff'
-import { orderedPlanJobs, planBranches, planProgress, targetBadge } from '../components/tasks/planProjection'
+import { lastOutputLine, orderedPlanJobs, planBranches, planProgress, targetBadge } from '../components/tasks/planProjection'
 import { usePolling } from '../hooks/usePolling'
 
 const PAGE = 25
@@ -84,6 +84,7 @@ function PlanJobs({ plan, profiles, onOpenPlan }: {
             onConnect={() => undefined}
             onDisconnect={() => undefined}
             onAddNode={() => undefined}
+            onAddScript={() => undefined}
             onAddTrigger={() => undefined}
             hasTrigger={plan.graph.nodes.some(node => node.type === 'trigger')}
           />
@@ -91,7 +92,11 @@ function PlanJobs({ plan, profiles, onOpenPlan }: {
       : <ol className="plan-job-list">
           {rows.map(row => <li className="plan-job-row" key={row.node.id}>
             <span className="plan-job-name">{row.node.name}</span>
+            {/* A script step is a different kind of thing than an agent job —
+                say what it runs, and once it ran, what it last printed (T6). */}
+            {row.node.type === 'script' && <span className="plan-script" title="A saved script runs this step — no AI involved">⚡ scripts/{row.node.command}</span>}
             <TargetChip node={row.node} />
+            {row.node.type === 'script' && lastOutputLine(row.output) && <span className="plan-script-out" title={lastOutputLine(row.output) ?? undefined}>{lastOutputLine(row.output)}</span>}
             {row.error && <span className="plan-job-error" title={row.error}>!</span>}
             <StatusPill status={row.status} />
           </li>)}

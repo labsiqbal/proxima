@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import scripts_library
+
 # Layer 1 — the summarize prompt the worker sends after a successful run.
 SUMMARIZE_PROMPT = (
     "In one sentence, summarize what you just did, for the project log. "
@@ -465,6 +467,15 @@ def build_run_preamble(
     else:
         lines += ["", "A wiki/ folder will hold this project's durable memory as it grows — "
                   "save concise notes at wiki/<topic>.md for anything future sessions should remember."]
+    # The script library catalog (T6): the same inline-the-catalog move the wiki
+    # block makes, for the same reason — an agent only reuses (or extends) a
+    # script it can SEE. This is the reuse-awareness half of deterministic steps.
+    if root is not None:
+        try:
+            catalog = scripts_library.scan_catalog(root.parent)
+        except Exception:
+            catalog = []
+        lines += ["", scripts_library.catalog_preamble_block(catalog)]
     # Bridge the (separate) Design Studio chat → the main chat: list the project's
     # existing designs so the agent is aware of visuals built/edited there, and knows
     # to read the current layout before restyling or building pages from them.

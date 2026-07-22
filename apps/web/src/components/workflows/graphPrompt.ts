@@ -30,7 +30,8 @@ export function buildGraphPrompt(snapshot: GraphSnapshot, instruction: string, c
   return [
     '⟦MODE: WORKFLOW GRAPH AUTHORING⟧ You are editing a Proxima workflow *graph*, not running it. A graph is nodes plus edges: each node is one instruction handed to an AI agent, and an edge means the target node depends on the source node\'s output. Nodes with no edge between them are independent and run AT THE SAME TIME, so use branches wherever work is genuinely parallel — that is the point of a graph over a list.',
     'A graph is JSON: {name, description, category, inputs[], graph:{nodes[], edges[]}}. inputs are typed placeholders any node can reference with {{id}}: {id, label, kind("text"|"number"|"url"|"file"), required(bool)}.',
-    'A node is {id(short slug, unique), type("agent"|"trigger"), name, instruction, expected_output?(what a good result is), rules?(hard constraints), skill_ids?(string[] — skill/tool hints for the runner), review_required?(bool — pause for human approval after this node), output_kind?("text"|"json"|"artifact-ref"), output_schema?(JSON Schema, only when output_kind is "json"), target?(where the job works), target_ambiguous?(bool), target_question?(string)}.',
+    'A node is {id(short slug, unique), type("agent"|"trigger"|"script"), name, instruction, expected_output?(what a good result is), rules?(hard constraints), skill_ids?(string[] — skill/tool hints for the runner), review_required?(bool — pause for human approval after this node), output_kind?("text"|"json"|"artifact-ref"), output_schema?(JSON Schema, only when output_kind is "json"), target?(where the job works), target_ambiguous?(bool), target_question?(string), command?(script nodes: path in scripts/), args?(script nodes: string[])}.',
+    'A node may be type:"script" — a deterministic step that runs a saved script from the project\'s scripts/ folder with no AI (free, repeatable). Use it only for steps needing no judgment, and only name a script the user says exists (never invent one). Its command is the script path, args its CLI arguments; it receives upstream outputs as JSON on stdin and its stdout is the step\'s output. Script nodes take no expected_output/rules/skills/target/agent.',
     codeAreas.length
       ? `A node's target is the ONE work area it binds to: a code area of this project (${codeAreas.map(area => `"${area}"`).join(', ')}; "." means the project root repo) when the job edits that repo, or "ops" for everything else. If it is genuinely unclear, do NOT guess: leave target null, set target_ambiguous true and put the owner's question in target_question. Keep every node's existing target unless the user asks to change it.`
       : 'This project has no registered code areas, so a node\'s target is "ops" (or omitted). Keep every node\'s existing target unless the user asks to change it.',
@@ -75,10 +76,12 @@ function parseNodes(raw: unknown): GraphNodeDefinition[] {
     // A node with no id cannot be an edge's endpoint, and a duplicate id would make
     // "which one?" unanswerable — the server rejects both, so drop them here.
     if (!id || seen.has(id)) continue
-    const type = node.type === 'trigger' ? 'trigger' : 'agent'
+    const type = node.type === 'trigger' ? 'trigger' : node.type === 'script' ? 'script' : 'agent'
     const instruction = String(node.instruction ?? '').trim()
     // An agent node with no instruction is not a step the runner can act on.
     if (type === 'agent' && !instruction) continue
+    // A script node with no command has nothing to run — same reasoning.
+    if (type === 'script' && !String(node.command ?? '').trim()) continue
     seen.add(id)
     const parsed: GraphNodeDefinition = {
       id,
@@ -93,6 +96,19 @@ function parseNodes(raw: unknown): GraphNodeDefinition[] {
       parsed.trigger_kind = 'manual'
       parsed.output_kind = 'json'
       parsed.instruction = ''
+    } else if (type === 'script') {
+      // Deterministic step: only what the server keeps — command, args, the
+      // output contract, and an optional review gate. Agent-only fields are
+      // dropped here for the same reason the server drops them.
+      parsed.command = String(node.command ?? '').trim()
+      if (Array.isArray(node.args)) {
+        const args = node.args.map(item => String(item))
+        if (args.length) parsed.args = args
+      }
+      if (node.review_required) parsed.review_required = true
+      if (parsed.output_kind === 'json' && node.output_schema && typeof node.output_schema === 'object') {
+        parsed.output_schema = node.output_schema as Record<string, unknown>
+      }
     } else {
       if (typeof node.expected_output === 'string' && node.expected_output.trim()) parsed.expected_output = node.expected_output.trim()
       if (typeof node.rules === 'string' && node.rules.trim()) parsed.rules = node.rules.trim()
@@ -246,7 +262,12 @@ export function buildNodeTestPrompt(
     ] : []),
     'Steps:',
     ...chain.map((node, index) => {
-      const parts = [`${index + 1}. ${node.name || node.id}${node.id === target?.id ? '  ← the node under test' : ''}: ${node.instruction}`]
+      // A script step's "instruction" is its command line — say so, so the
+      // rehearsal actually runs the library script rather than improvising.
+      const step = node.type === 'script'
+        ? `Run the project script scripts/${node.command ?? ''}${node.args?.length ? ` with args: ${node.args.join(' ')}` : ''} and use its stdout as this step's output.`
+        : node.instruction
+      const parts = [`${index + 1}. ${node.name || node.id}${node.id === target?.id ? '  ← the node under test' : ''}: ${step}`]
       if (node.expected_output) parts.push(`   Expected: ${node.expected_output}`)
       if (node.rules) parts.push(`   Rules: ${node.rules}`)
       return parts.join('\n')

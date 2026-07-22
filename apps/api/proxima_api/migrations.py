@@ -499,6 +499,29 @@ def _add_runs_continuation(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs ADD COLUMN continuation_count INTEGER NOT NULL DEFAULT 0")
 
 
+def _add_script_trust(conn: sqlite3.Connection) -> None:
+    """Hash-bound script approvals, Phase-1 slice 6 (T6): a deterministic
+    script step runs only after the owner approved its exact content once.
+    The approved sha256 per (project, script) lives here; a content change
+    means a hash mismatch and the next run blocks for re-approval. Mirrors
+    the CREATE TABLE in db.py so fresh installs and migrated ones agree."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS script_trust (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          rel_path TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, rel_path)
+        )
+        """
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -521,6 +544,7 @@ MIGRATIONS: list[Migration] = [
     (19, "add jobs.target_area_id + job_worktrees: worktree machinery for repo jobs (T1 slice 2)", _add_repo_job_worktrees),
     (20, "add jobs.rejected_reason: reject-at-review verdict for the review surface (slice 4)", _add_jobs_rejected_reason),
     (21, "add runs.continued_from_run_id + continuation_count: timeout auto-continuation chain (T5 slice 5)", _add_runs_continuation),
+    (22, "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)", _add_script_trust),
 ]
 
 

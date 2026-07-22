@@ -101,6 +101,52 @@ describe('parseGraphDraft', () => {
   })
 })
 
+describe('parseGraphDraft script nodes (T6)', () => {
+  it('keeps a script node with its command, args, contract and gate', () => {
+    const patch = parseGraphDraft(reply(JSON.stringify({
+      graph: {
+        nodes: [{
+          id: 'count',
+          type: 'script',
+          name: 'Count',
+          command: 'seo/count.py',
+          args: ['--fast', 7],
+          output_kind: 'json',
+          output_schema: { type: 'object' },
+          review_required: true,
+          // Agent-only fields the server would drop anyway:
+          expected_output: 'n/a',
+          target: 'apps/web',
+        }],
+        edges: [],
+      },
+    })))
+
+    const node = patch?.graph?.nodes[0]
+    expect(node?.type).toBe('script')
+    expect(node?.command).toBe('seo/count.py')
+    expect(node?.args).toEqual(['--fast', '7'])
+    expect(node?.output_kind).toBe('json')
+    expect(node?.output_schema).toEqual({ type: 'object' })
+    expect(node?.review_required).toBe(true)
+    expect(node?.expected_output).toBeUndefined()
+    expect(node?.target).toBeUndefined()
+  })
+
+  it('drops a script node with no command — nothing to run', () => {
+    const patch = parseGraphDraft(reply(JSON.stringify({
+      graph: {
+        nodes: [
+          { id: 'bad', type: 'script', name: 'Bad' },
+          { id: 'ok', name: 'Ok', instruction: 'work' },
+        ],
+        edges: [],
+      },
+    })))
+    expect(patch?.graph?.nodes.map(node => node.id)).toEqual(['ok'])
+  })
+})
+
 describe('stripGraphBlock', () => {
   it('keeps the summary and drops the JSON', () => {
     const text = stripGraphBlock(reply(JSON.stringify({ graph: { nodes: [], edges: [] } })))
@@ -170,5 +216,23 @@ describe('buildNodeTestPrompt', () => {
     const prompt = buildNodeTestPrompt(snapshot, 'research')
 
     expect(prompt).toContain('sensible sample values')
+  })
+
+  it('rehearses a script step as its command line, not an empty instruction', () => {
+    const prompt = buildNodeTestPrompt(
+      {
+        ...snapshot,
+        graph: {
+          nodes: [
+            { id: 'fetch', type: 'script', name: 'Fetch', instruction: '', command: 'fetch.sh', args: ['x'], output_kind: 'text' },
+            { id: 'write', type: 'agent', name: 'Write', instruction: 'write it', output_kind: 'text' },
+          ],
+          edges: [{ from: 'fetch', to: 'write' }],
+        },
+      },
+      'write',
+    )
+    expect(prompt).toContain('Run the project script scripts/fetch.sh with args: x')
+    expect(prompt).toContain('write it')
   })
 })

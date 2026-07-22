@@ -286,6 +286,41 @@ both as fallback defaults. The plan slicer is instructed to size every job to fi
 turn quota - continuation is the safety net, not the plan.
 **Endpoints:** `GET/PUT /api/settings/runs`.
 
+### Deterministic script steps (Phase-1 slice 6, T6 - LIVE)
+
+**Why:** repeated mechanical work (fetch, convert, check, publish) should not cost an
+agent turn every time. A plan step that needs no judgment can be a saved script - fast,
+free, and exactly reproducible (T6; ADR-0001's Phase-3 deterministic nodes pulled
+forward in minimal form).
+**How:** one new node kind, `script`, on the graph engine (not an n8n palette): the
+node names a script inside the project container's **`scripts/` folder** plus CLI args,
+and executes as a **subprocess** - exec array, never a shell string - with the
+container root as cwd and a minimal environment (no server env). I/O contract: args
+(`{{var}}` fills from the workflow input) + one JSON object on stdin
+(`{"job_input": …, "upstream": […]}` - the graph engine's existing typed hand-off);
+stdout is the node output, validated against the node's `output_kind`/`output_schema`
+like any agent node; exit code decides success/failure. Script runs queue through the
+ordinary runs table (`kind='wf_script_node'`), so they share the dispatch budget, turn
+quota, heartbeats, and crash reaping - but never touch a runner/ACP, and never
+auto-continue.
+**Trust = content-hash binding (captain's decision):** a script's first run - or any
+run after its bytes changed - blocks with a one-time approval ask (the plan pauses in
+review; the node inspector shows **Approve script & run**). Approving records the
+script's sha256 in `script_trust`; unchanged trusted scripts then run with **no
+per-run approval** - that is the whole deterministic + free payoff. Approvals and
+blocks are visible in the step's timeline (`script.approval.required`,
+`script.trust.approved`) and the audit log.
+**Reuse awareness:** agents write and maintain the scripts as ordinary job output,
+each starting with a header comment block (`# Description:` / `# Inputs:` /
+`# Outputs:`). Proxima auto-scans `scripts/` into a catalog (name + one-line
+description) injected into every project run preamble alongside the wiki catalog,
+with the instruction to prefer reusing/extending an existing script. The plan slicer
+is given the same catalog and may emit script jobs - but only for scripts that exist.
+**UI:** script nodes render distinctly (dotted outline, `⚡ scripts/<command>` in the
+mono face, last output line on the card and Tasks list row); the canvas has a
+**+ Script** tool and the inspector edits command/args/contract/gate.
+**Endpoints:** `POST /api/graph/jobs/{id}/nodes/{node_id}/approve-script`.
+
 ## 9. Schedules (cron)
 
 **Why:** Recurring agents — daily report, watch-and-summarize — while you sleep.

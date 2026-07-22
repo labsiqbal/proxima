@@ -32,6 +32,7 @@ from .. import auth_health as auth_health_mod
 from .. import design_scenes
 from .. import features
 from .. import kinds
+from .. import scripts_library
 from .. import state
 from .. import image_providers
 from .. import wiki_memory
@@ -486,6 +487,10 @@ def register(app, deps):
         # area, so it must be told which ones exist. No project ⇒ no code areas
         # ⇒ every job targets ops.
         code_areas: list[str] = []
+        # The script library catalog (T6): the slicer may emit deterministic
+        # script jobs, but only for scripts that actually exist — so it is told
+        # exactly what the library holds (empty ⇒ agent jobs only).
+        scripts_catalog: list[dict[str, str]] = []
         if graph_planning and session["project_id"]:
             code_areas = [
                 r["rel_path"] for r in db().execute(
@@ -494,8 +499,15 @@ def register(app, deps):
                     (session["project_id"],),
                 ).fetchall()
             ]
+            prow = db().execute(
+                "SELECT path FROM projects WHERE id = ?", (session["project_id"],)
+            ).fetchone()
+            if prow and prow["path"]:
+                scripts_catalog = scripts_library.scan_catalog(Path(prow["path"]))
         prompt = (
-            wf.architect_system(graph=graph_planning, code_areas=code_areas)
+            wf.architect_system(
+                graph=graph_planning, code_areas=code_areas, scripts=scripts_catalog
+            )
             + "\n\nCONVERSATION:\n" + convo
         )
         run_kind = "workflow_graph_draft" if graph_planning else "workflow_draft"

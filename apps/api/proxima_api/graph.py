@@ -17,13 +17,15 @@ from typing import Any, Literal, TypeAlias, cast
 from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[reportMissingModuleSource]
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
 
+from .scripts_library import ScriptResolutionError, normalize_script_rel_path
+
 OutputKind: TypeAlias = Literal["text", "json", "artifact-ref"]
-NodeType: TypeAlias = Literal["agent", "trigger"]
+NodeType: TypeAlias = Literal["agent", "trigger", "script"]
 Graph: TypeAlias = dict[str, Any]
 
 _OUTPUT_KINDS: frozenset[str] = frozenset({"text", "json", "artifact-ref"})
 _RUNNABLE_STATUSES: frozenset[str] = frozenset({"pending", "stale"})
-_NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger"})
+_NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger", "script"})
 # Only manual entry exists today. Schedule/webhook/event arrive as further kinds
 # on this node, which is the whole point of modelling the entry point as a node:
 # adding one is a new kind here, not a new execution path.
@@ -90,6 +92,39 @@ def _parse_trigger_kind(raw: Mapping[str, Any], node_id: str) -> str:
             f"node '{node_id}' trigger_kind must be one of: {allowed}"
         )
     return kind
+
+
+def _parse_script_command(raw: Mapping[str, Any], node_id: str) -> str:
+    """Parse a script node's ``command`` — the library script it runs (T6).
+
+    The value is a path relative to the container's ``scripts/`` folder,
+    canonicalized here so ``scripts/foo.sh`` and ``foo.sh`` are one script (and
+    therefore one trust record). Whether the file exists is an execution-time
+    question — this module does no I/O — but the shape must already be jailed
+    when the graph is frozen: a ``..`` in a frozen plan is a stored escape.
+    """
+    command = raw.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise GraphValidationError(
+            f"script node '{node_id}' must name a script in scripts/ as its command"
+        )
+    try:
+        return normalize_script_rel_path(command)
+    except ScriptResolutionError as exc:
+        raise GraphValidationError(f"node '{node_id}': {exc}") from exc
+
+
+def _parse_script_args(raw: Mapping[str, Any], node_id: str) -> list[str]:
+    """CLI args handed to the script, verbatim. ``{{var}}`` placeholders are
+    filled from the job input at execution time, mirroring instruction text.
+    Whole-blank entries are dropped (a trailing empty editor line is not an
+    argument), but inner whitespace is preserved — args are data, not prose."""
+    value = raw.get("args")
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise GraphValidationError(f"node '{node_id}' args must be a list of strings")
+    return [item for item in value if item.strip()]
 
 
 def _parse_prose(raw: Mapping[str, Any], node_id: str, field: str) -> str:
@@ -282,7 +317,37 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             node.pop("expected_output", None)
             node.pop("rules", None)
             node.pop("skill_ids", None)
+            node.pop("command", None)
+            node.pop("args", None)
             # A trigger does no work, so it binds to no area.
+            for field in ("target", "target_ambiguous", "target_question", "touches_repo"):
+                node.pop(field, None)
+        elif node_type == "script":
+            # A deterministic library-script step (T6): no LLM, no agent
+            # profile, no prose contract — its whole configuration is which
+            # script runs (command) with which args, plus the same enforced
+            # output contract and optional review gate every node has.
+            contract = parse_output_contract(raw_node)
+            node["output_kind"] = contract.kind
+            if contract.schema is not None:
+                node["output_schema"] = contract.schema
+            else:
+                node.pop("output_schema", None)
+            node["command"] = _parse_script_command(raw_node, node_id)
+            args = _parse_script_args(raw_node, node_id)
+            if args:
+                node["args"] = args
+            else:
+                node.pop("args", None)
+            # Agent-only fields are forced off, the trigger's precedent: no
+            # later stage should have to ask whether they mean anything here.
+            node.pop("trigger_kind", None)
+            node.pop("profile_id", None)
+            node.pop("expected_output", None)
+            node.pop("rules", None)
+            node.pop("skill_ids", None)
+            # Scripts always execute with the project container as cwd (T6 #6);
+            # they take no part in the repo/ops work binding or its worktrees.
             for field in ("target", "target_ambiguous", "target_question", "touches_repo"):
                 node.pop(field, None)
         else:
@@ -311,6 +376,8 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
                 node["skill_ids"] = skills
             else:
                 node.pop("skill_ids", None)
+            node.pop("command", None)
+            node.pop("args", None)
             _apply_target_tags(node, raw_node, node_id)
 
         for axis in ("x", "y"):

@@ -19,6 +19,10 @@ from .graph import dependency_map, normalize_graph, ready_node_ids
 from .workflows import substitute
 
 GRAPH_NODE_RUN_KIND = "wf_node"
+# A deterministic script step (T6). Queued through the same runs table so it
+# shares the worker's durability, budget, timeline, and crash reaping — but the
+# worker executes it as a subprocess, never through a runner/ACP.
+SCRIPT_NODE_RUN_KIND = "wf_script_node"
 DEFAULT_NODE_CONCURRENCY = 4
 
 
@@ -130,6 +134,17 @@ def build_node_prompt(
         "with a project-relative path and optional type/title/id; every path must already "
         "exist inside the job workspace."
     )
+
+
+def build_script_run_summary(node: Mapping[str, Any]) -> str:
+    """The stored ``prompt`` of a script run — a human-readable command line.
+
+    Nothing executes this text (the worker re-derives the argv from the frozen
+    node); it exists so the run's session and timeline say plainly what ran.
+    """
+    args = node.get("args") or []
+    suffix = " " + " ".join(str(arg) for arg in args) if args else ""
+    return f"Run script: scripts/{node.get('command')}{suffix}"
 
 
 class GraphExecutor:
@@ -354,6 +369,12 @@ class GraphExecutor:
                         continue
 
                     inputs = resolved_node_inputs(graph, node_id, job_input, states)
+                    # A script node executes as a subprocess, never a runner —
+                    # its run keeps the job's profile/runner columns only so the
+                    # session rows stay well-formed; the kind is what the worker
+                    # branches on, and it never reaches ACP.
+                    is_script = node.get("type") == "script"
+                    run_kind = SCRIPT_NODE_RUN_KIND if is_script else GRAPH_NODE_RUN_KIND
                     visibility = "project" if job["project_id"] else "private"
                     session_cur = db.execute(
                         """
@@ -373,7 +394,11 @@ class GraphExecutor:
                         ),
                     )
                     session_id = int(session_cur.lastrowid)
-                    prompt = build_node_prompt(node, inputs)
+                    prompt = (
+                        build_script_run_summary(node)
+                        if is_script
+                        else build_node_prompt(node, inputs)
+                    )
                     run_cur = db.execute(
                         """
                         INSERT INTO runs(
@@ -387,7 +412,7 @@ class GraphExecutor:
                             job["created_by"],
                             node_profile_id,
                             node_runner_id,
-                            GRAPH_NODE_RUN_KIND,
+                            run_kind,
                             prompt,
                             node_model,
                             node_home,
