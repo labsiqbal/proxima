@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-136 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+137 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -19,7 +19,7 @@
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 18 endpoints
+- [`routes/work.py`](#routes-work-py) — 19 endpoints
 - [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
 
 
@@ -211,8 +211,9 @@
 | GET | `/api/jobs` | `list_jobs` |  |
 | POST | `/api/jobs` | `create_job` |  |
 | DELETE | `/api/jobs/{job_id}` | `delete_job` |  |
-| GET | `/api/jobs/{job_id}` | `get_job` |  |
+| GET | `/api/jobs/{job_id}` | `get_job` | One job with its execution state (plus worktree state for repo jobs). |
 | POST | `/api/jobs/{job_id}/approve` | `approve_job` |  |
+| GET | `/api/jobs/{job_id}/diff` | `get_job_diff` | The repo job's before/after change (worktree branch vs its base): |
 | POST | `/api/jobs/{job_id}/link-run` | `link_job_run` | Attach a project-scoped media run to a queued ad-hoc task. |
 | POST | `/api/jobs/{job_id}/start` | `start_job` |  |
 | GET | `/api/schedules` | `list_schedules` |  |
@@ -238,4 +239,4 @@
 
 
 ---
-_Generated 2026-07-21 18:51 UTC._
+_Generated 2026-07-22 03:36 UTC._

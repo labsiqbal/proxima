@@ -185,8 +185,9 @@ with TestClient(serve.app) as client:
     assert config_response.json()["features"] == {
         "design_studio": False,
         "workflow_graph": True,
+        "repo_worktrees": False,
     }
-    print("config: design_studio=false, workflow_graph=true")
+    print("config: design_studio=false, workflow_graph=true, repo_worktrees=false")
 
     auth_response = client.post("/auth/auto", json={})
     auth_response.raise_for_status()
@@ -305,8 +306,8 @@ async function main() {
   console.log(`health: proxima ${health.version}, database ok`)
 
   const config = await request('/api/config')
-  assert.deepEqual(config.features, { design_studio: false, workflow_graph: true })
-  console.log('config: design_studio=false, workflow_graph=true')
+  assert.deepEqual(config.features, { design_studio: false, workflow_graph: true, repo_worktrees: false })
+  console.log('config: design_studio=false, workflow_graph=true, repo_worktrees=false')
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')

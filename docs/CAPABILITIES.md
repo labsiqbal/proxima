@@ -172,6 +172,35 @@ from the linear Tasks list. Live-polls while running; auto-archive after 30 days
 Old kanban tasks were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
 
+### Repo jobs: isolated worktrees + local merge (Phase-1 slice 2 - flag-gated, off by default)
+
+**Why:** A job that touches a repo must never edit the primary tree directly (T1). It
+runs in a safe copy, the owner reviews the before/after diff, and approving merges the
+work **locally** into the branch it was cut from - no remote, no GitHub required
+(T1 local-first; push-after-merge is T9). Off behind `feature_repo_worktrees`
+(`PROXIMA_FEATURE_REPO_WORKTREES`) until slice 4 ships the review UI; while off, job
+behavior is exactly as above.
+**How:** a job may carry `target_area_id` - the ONE container area it works against
+(T1: exactly one target; a code-area target = repo job). On start, `worktrees.py` cuts
+branch `proxima/job-<id>` from the target code area's repo into a worktree under
+`<workspace_root>/worktrees/job-<id>` - outside the container, so scans never see
+work-in-progress and the worktree's `.git` file can't register as a code area. The cut
+refuses loudly (409, job stays queued) on a dirty repo, detached HEAD, or no commits;
+crash leftovers are cleaned idempotently by job id. With the flag on, the run worker
+sets the run's cwd to the active worktree (a missing worktree fails the run loudly -
+never a silent fallback to the primary tree). Diff and merge operate on commits:
+outstanding edits are snapshotted onto the job branch first, so partial work also
+survives crashes (feeds T5 continuation, slice 5). Final approve = guarded `--no-ff`
+merge: refuses a dirty repo or switched-away base branch, aborts on conflicts and
+parks the job in `review` with the surfaced error (worktree kept; approve again after
+resolving) - never forced. Success records `merge_commit` on the job's worktree row
+(`job_worktrees`) and tears the worktree + branch down; deleting a job also tears its
+worktree down.
+**Endpoints:** `GET /api/jobs/{id}/diff` (per-file status + unified patch; also
+readable after the merge), `POST /api/jobs/{id}/approve` (merge point),
+`POST /api/jobs` (`target_area_id`). Job payloads carry a `worktree` object
+(branch, base, status `active/merging/merged/conflict/discarded`, merge_commit, error).
+
 ## 9. Schedules (cron)
 
 **Why:** Recurring agents — daily report, watch-and-summarize — while you sleep.
@@ -207,9 +236,9 @@ uses the starter project auto-provisioned under the data dir.
 **Why:** A project is a *work container*, not "a repo": it holds zero-or-more **code
 areas** (subfolders that are git repos; `.` = repo at root) plus one **ops area** (the
 non-code output space - the conventional `artifacts/ reports/ exports/ wiki/` subdirs
-belong to it). Later slices consume this metadata: worktree-per-repo-job machinery cuts
-its safe copy from a job's target code area, and the slicer binds each job to exactly
-one area (T1's explicit job→target decision).
+belong to it). Slice 2's worktree machinery (above, flag-gated) cuts its safe copy from
+a job's target code area; the slicer that binds each job to exactly one area at slice
+time is slice 3 (T1's explicit job→target decision).
 **How:** `project_areas` table (row per area; `source` = `auto`/`manual`/`excluded`).
 Identification is **hybrid** (T1): `project_areas.py` auto-detects `.git` subfolders
 (bounded depth, skips node_modules/.venv/dist-style dirs, never descends into a
@@ -217,9 +246,9 @@ detected repo) at project create/link and on demand; the owner can manually add,
 correct, or remove areas. Manual rows are never clobbered by re-detection, and removal
 leaves an `excluded` tombstone so re-detection cannot resurrect the area. Existing
 projects were wrapped in place by migration 18: root itself a repo → sole code area
-`.`; no repo → zero code areas; no file moves. Purely additive metadata - nothing in
-execution, cwd selection, or artifact scanning reads it yet. Project payloads include
-`code_areas` + `ops_area`.
+`.`; no repo → zero code areas; no file moves. Artifact scanning still ignores areas;
+execution reads them only through slice 2's flag-gated repo-job path (`jobs.target_area_id`
+→ worktree cwd). Project payloads include `code_areas` + `ops_area`.
 **Endpoints:** `GET/POST /api/projects/{slug}/areas`,
 `DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
 

@@ -416,6 +416,56 @@ def _add_project_areas(conn: sqlite3.Connection) -> None:
         sync_code_areas(conn, row["id"], row["path"])
 
 
+def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
+    """Worktree machinery for repo jobs, Phase-1 slice 2 (T1): bind a job to
+    its target container area and track its isolated worktree.
+
+    Two additive pieces, both inert until ``feature_repo_worktrees`` is on:
+
+    - ``jobs.target_area_id`` - the ONE area (T1: exactly one target) the job
+      works against, set before it runs. Pointing at a code area is what makes
+      it a repo job; ops-target and NULL-target jobs behave exactly as today.
+      ``ON DELETE SET NULL`` so removing an area never breaks job history.
+    - ``job_worktrees`` - one row per repo job recording where its branch was
+      cut from (repo_path/base_branch/base_commit), where the agent works
+      (worktree_path - outside the container, under
+      ``<workspace_root>/worktrees/``), and the merge lifecycle
+      (active/merging/merged/conflict/discarded). A table, not job columns,
+      because the lifecycle is its own state machine with its own guarded
+      transitions, and slices 4-5 (review UI, continuation) read it as a unit.
+      ``UNIQUE(job_id)`` pins one worktree per job; ``ON DELETE CASCADE``
+      keeps rows from outliving their job (disk cleanup happens in the job
+      delete path, keyed by job id, so crash leftovers are removable even
+      without the row).
+    """
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "target_area_id" not in cols:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL"
+            )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_worktrees (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+          area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+          repo_path TEXT NOT NULL,
+          worktree_path TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          base_branch TEXT NOT NULL,
+          base_commit TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          merge_commit TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_job_worktrees_status ON job_worktrees(status)")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -435,6 +485,7 @@ MIGRATIONS: list[Migration] = [
     (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
     (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
     (18, "add project_areas: wrap existing projects as work containers (T1)", _add_project_areas),
+    (19, "add jobs.target_area_id + job_worktrees: worktree machinery for repo jobs (T1 slice 2)", _add_repo_job_worktrees),
 ]
 
 

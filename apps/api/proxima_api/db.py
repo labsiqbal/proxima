@@ -213,6 +213,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- Frozen {nodes,edges} snapshot for graph jobs (NULL for linear).
   graph TEXT,
   schedule_id INTEGER,
+  -- Job -> target-area binding (Phase-1 slice 2, T1): the ONE container area
+  -- this job works against, set before it runs. A code-area target makes it a
+  -- repo job (isolated worktree + diff review + local merge); an ops-area
+  -- target (or NULL, today's jobs) runs exactly as before.
+  target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -220,6 +225,28 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT,
   archived_at TEXT
 );
+-- Isolated worktree per repo job (Phase-1 slice 2, T1): where the branch was
+-- cut from (repo_path/base_branch/base_commit), where the agent works
+-- (worktree_path, outside the container under <workspace_root>/worktrees/),
+-- and the merge lifecycle: active -> merging -> merged, with conflict (merge
+-- refused/conflicted; job parks in review) and discarded as off-ramps.
+-- repo_path is denormalized so crash-leftover cleanup survives area removal.
+CREATE TABLE IF NOT EXISTS job_worktrees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+  area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+  repo_path TEXT NOT NULL,
+  worktree_path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  base_commit TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  merge_commit TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_job_worktrees_status ON job_worktrees(status);
 -- Schedules = a first-class recurring trigger for a workflow (cron). The scheduler
 -- materializes only due jobs (not a backlog); spawned jobs carry schedule_id.
 CREATE TABLE IF NOT EXISTS schedules (

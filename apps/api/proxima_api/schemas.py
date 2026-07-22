@@ -58,6 +58,11 @@ class JobCreateRequest(BaseModel):
     profile_id: int | None = None
     input: dict[str, Any] | None = None
     title: str | None = None
+    # The ONE container area this job works against (T1 job→target binding,
+    # Phase-1 slice 2). A code-area target makes it a repo job (worktree +
+    # diff review + local merge, behind feature_repo_worktrees); None keeps
+    # today's behavior.
+    target_area_id: int | None = None
 
 
 class JobRunLinkRequest(BaseModel):

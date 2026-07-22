@@ -770,6 +770,20 @@ class RunWorker:
             is_build = bool(jrow and jrow["workflow_id"])  # a workflow iterate/test chat
             if is_job and not project_id:
                 cwd = str(Path(cwd) / "workflow-runs" / f"job-{jrow['job_id']}")
+            # Repo jobs (Phase-1 slice 2, flag-gated): a job with an active
+            # worktree runs THERE, never in the primary tree. Flag off ⇒ this
+            # block is skipped entirely and cwd selection is exactly as above.
+            # A worktree that vanished from disk fails the run loudly instead
+            # of silently falling back to (and editing) the primary tree.
+            if is_job and features.enabled(cfg, features.REPO_WORKTREES):
+                wt = db.execute(
+                    "SELECT worktree_path FROM job_worktrees WHERE job_id = ? AND status = 'active'",
+                    (jrow["job_id"],),
+                ).fetchone()
+                if wt:
+                    if not Path(wt["worktree_path"]).is_dir():
+                        raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
+                    cwd = wt["worktree_path"]
             Path(cwd).mkdir(parents=True, exist_ok=True)
 
             # Collaboration synthesis streams into the PARENT run's bubble too, so

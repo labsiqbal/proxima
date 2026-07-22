@@ -8,14 +8,17 @@ together. No behavior change.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from typing import Any
 
 from fastapi import Depends, HTTPException
 
 from ..auth import iso_now
+from .. import features
 from .. import scheduler
 from .. import workflows as wf
+from .. import worktrees
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRunLinkRequest, ScheduleCreateRequest,
     ScheduleUpdateRequest, WorkflowCreateRequest, WorkflowUpdateRequest,
@@ -190,6 +193,12 @@ def register(app, deps):
         if d.get("project_id") and not d.get("project_slug"):
             pr = db().execute("SELECT slug FROM projects WHERE id = ?", (d["project_id"],)).fetchone()
             d["project_slug"] = pr["slug"] if pr else None
+        # Repo jobs (slice 2): surface the worktree lifecycle for the review UI.
+        # Only when a row exists - flag-off installs have none, so their job
+        # payloads are unchanged.
+        wt = worktrees.job_worktree_row(db(), d["id"])
+        if wt:
+            d["worktree"] = worktrees.worktree_payload(wt)
         return d
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
@@ -221,6 +230,17 @@ def register(app, deps):
             title = payload.title or brief[:80]
             project_id = req_project_id
         steps_state = [wf.step_state_from(s, payload.input or {}) for s in steps]
+        # Job -> target binding (T1, slice 2): the target must be one of THIS
+        # project's live areas, pinned before the job runs. Code area = repo
+        # job; ops area (or None) = today's behavior.
+        target_area_id = None
+        if payload.target_area_id is not None:
+            area = db().execute(
+                "SELECT * FROM project_areas WHERE id = ?", (payload.target_area_id,)
+            ).fetchone()
+            if not area or area["source"] == "excluded" or project_id is None or area["project_id"] != project_id:
+                raise HTTPException(status_code=422, detail="target area not found in this job's project")
+            target_area_id = _as_int(area["id"])
         visibility = "project" if project_id else "private"
         scur = db().execute(
             "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
@@ -228,8 +248,8 @@ def register(app, deps):
         )
         session_id = _as_int(scur.lastrowid)
         jcur = db().execute(
-            "INSERT INTO jobs(project_id, workflow_id, session_id, title, input, steps_state, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (project_id, payload.workflow_id, session_id, title, json.dumps(payload.input or {}), json.dumps(steps_state), user["id"]),
+            "INSERT INTO jobs(project_id, workflow_id, session_id, title, input, steps_state, target_area_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, payload.workflow_id, session_id, title, json.dumps(payload.input or {}), json.dumps(steps_state), target_area_id, user["id"]),
         )
         job_id = _as_int(jcur.lastrowid)
         db().execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
@@ -247,6 +267,14 @@ def register(app, deps):
         profile = profile_for_user(session["profile_id"] if session else None, user)
         inputs = _decode_json(job["input"]) if job["input"] else {}
         prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
+        # Repo job (slice 2, flag-gated): cut the isolated worktree BEFORE the
+        # job claims running, so a refused cut (dirty repo, detached HEAD, no
+        # commits) surfaces loudly and leaves the job queued for a clean retry.
+        if features.enabled(app.state.config, features.REPO_WORKTREES):
+            try:
+                worktrees.ensure_job_worktree(db(), app.state.config, job)
+            except worktrees.WorktreeError as exc:
+                raise HTTPException(status_code=409, detail=f"cannot start repo job: {exc}") from exc
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
@@ -384,7 +412,30 @@ def register(app, deps):
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
+        """One job with its execution state (plus worktree state for repo jobs)."""
         return _job_payload(_job_or_404(job_id, user))
+
+    @app.get("/api/jobs/{job_id}/diff")
+    def get_job_diff(job_id: int, user: dict[str, Any] = Depends(current_user)):
+        """The repo job's before/after change (worktree branch vs its base):
+        per-file status + unified patch, the shape the slice-4 review UI
+        renders. After a merge, the same change read off the base branch."""
+        features.require(app.state.config, features.REPO_WORKTREES)
+        _job_or_404(job_id, user)
+        wt = worktrees.job_worktree_row(db(), job_id)
+        if not wt or wt["status"] == "discarded":
+            raise HTTPException(status_code=409, detail="job has no worktree - not a repo job, or it has not started yet")
+        try:
+            diff = worktrees.job_diff(wt)
+        except worktrees.WorktreeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "job_id": job_id,
+            "branch": wt["branch"],
+            "base_branch": wt["base_branch"],
+            "worktree_status": wt["status"],
+            **diff,
+        }
 
     @app.post("/api/jobs/{job_id}/approve")
     def approve_job(job_id: int, payload: JobApproveRequest | None = None, user: dict[str, Any] = Depends(current_user)):
@@ -432,6 +483,18 @@ def register(app, deps):
                     raise
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
+            # Repo job (slice 2, flag-gated): the final approve is the merge
+            # point (T1 local-first) - land the job branch on its base branch
+            # before the job closes. Refusals and conflicts surface as 409 and
+            # PARK the job in review (worktree kept for resolution); approve
+            # again after resolving to retry. Never forced, never silent.
+            if features.enabled(app.state.config, features.REPO_WORKTREES):
+                wt = worktrees.job_worktree_row(db(), job_id)
+                if wt and wt["status"] in ("active", "conflict", "merging"):
+                    try:
+                        worktrees.merge_job_worktree(db(), job, wt)
+                    except worktrees.WorktreeError as exc:
+                        raise HTTPException(status_code=409, detail=f"merge blocked - job stays in review: {exc}") from exc
             # Final review -> done (atomic claim).
             claimed = db().execute("UPDATE jobs SET status='done', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'", (job_id,))
             if claimed.rowcount == 0:
@@ -466,6 +529,14 @@ def register(app, deps):
                 app.state.worker.add_event(_as_int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
                 app.state.worker.cancel(_as_int(r["id"]))
             db().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        # Repo job worktree (slice 2): tear down the isolated worktree + branch
+        # (never the primary tree). Deliberately flag-independent so a flag
+        # flip can't orphan a worktree; a job without one is a no-op. Cleanup
+        # trouble is logged, not raised - it must not block the delete.
+        try:
+            worktrees.discard_job_worktree(db(), job_id)
+        except worktrees.WorktreeError:
+            logging.getLogger("proxima.worktrees").exception("job %s worktree cleanup failed (job deleted anyway)", job_id)
         db().execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         return {"ok": True, "id": job_id}
 

@@ -48,7 +48,7 @@ def test_public_config_defaults_to_graph_authoring(tmp_path):
     response = TestClient(app).get("/api/config")
 
     assert response.status_code == 200
-    assert response.json()["features"] == {"design_studio": False, "workflow_graph": True}
+    assert response.json()["features"] == {"design_studio": False, "workflow_graph": True, "repo_worktrees": False}
 
 
 def test_public_config_reports_explicit_boot_opt_in(tmp_path):
@@ -60,6 +60,7 @@ def test_public_config_reports_explicit_boot_opt_in(tmp_path):
     assert TestClient(app).get("/api/config").json()["features"] == {
         "design_studio": True,
         "workflow_graph": True,
+        "repo_worktrees": False,
     }
 
 
@@ -70,8 +71,8 @@ def test_workflow_graph_environment_flag_reaches_asgi_config(monkeypatch):
 
 
 def test_programmatic_zero_values_do_not_enable_features():
-    config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0"})
-    assert features.public_flags(config) == {"design_studio": False, "workflow_graph": False}
+    config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0", "feature_repo_worktrees": "0"})
+    assert features.public_flags(config) == {"design_studio": False, "workflow_graph": False, "repo_worktrees": False}
 
 
 def test_disabled_commands_are_omitted_and_rejected(tmp_path):

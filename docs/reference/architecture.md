@@ -94,7 +94,7 @@ code never mixes with per-install state:
 ```text
 PROXIMA_FEATURE_DESIGN_STUDIO ─────────┐
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> frontend capability map
-                                       └─> route/run guards before side effects
+PROXIMA_FEATURE_REPO_WORKTREES ────────┘─> route/run guards before side effects
 ```
 
 Design Studio is an active feature behind a server-owned flag: `scripts/dev`
@@ -137,6 +137,12 @@ its typed output replaced or be rerun; either action marks every transitive desc
 `stale` and resumes deterministic execution. A gate is approved node-by-node, and a
 job reaches `done` only after all nodes are `done` and final approval is explicit.
 
+`PROXIMA_FEATURE_REPO_WORKTREES` gates the repo-job worktree machinery (Phase-1
+slice 2, T1) and defaults to **off** until slice 4 ships the diff-review UI. While
+off, `worktrees.py` has no callers on the execution path, the `/api/jobs/{id}/diff`
+endpoint returns the standard 503 `feature_disabled` payload, and job start/approve/
+cwd selection behave exactly as without the feature. See flow 6b.
+
 ## Media provider setup
 
 Chat and coding-agent runs stay on ACP (`RunWorker` → `AcpManager` → runner CLI).
@@ -170,8 +176,11 @@ in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_G
 A project is additionally a **work container** (Phase-1, T1): `project_areas` rows
 record its git-repo subfolders (*code areas*, auto-detected from `.git` with manual
 override - `.` means repo-at-root) and its single *ops area* (non-code output space).
-This is metadata only today; execution, cwd selection, and artifact scanning don't
-read it yet - the upcoming worktree machinery and job→target binding will.
+A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
+makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
+(slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
+Artifact scanning still ignores areas; the slicer that sets the binding at slice
+time is slice 3.
 Full column-level detail: [database.md](database.md).
 
 ## Key flows
@@ -332,6 +341,38 @@ execution remain strictly linear.
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
+
+### 6b. Repo job: worktree → diff review → local merge (slice 2, flag-gated)
+
+Gated behind `PROXIMA_FEATURE_REPO_WORKTREES` (off until slice 4 ships the review
+UI; off = flow 6 exactly). A job whose `target_area_id` names a code area is a
+**repo job** and never edits the primary tree:
+
+```text
+POST /api/jobs/{id}/start
+    │  worktrees.py cuts branch proxima/job-<id> from the code area's repo
+    │  into <workspace_root>/worktrees/job-<id>   (outside the container;
+    │  refuses loudly on dirty repo / detached HEAD / no commits → 409, job
+    │  stays queued; crash leftovers cleaned idempotently by job id)
+    ▼
+RunWorker: the run's cwd = the worktree (missing worktree fails the run
+    loudly - never a silent fallback to the primary tree)
+    ▼
+GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch,
+    then per-file status + unified patch vs base_commit (slice-4 review surface)
+    ▼
+POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
+    the branch the worktree was cut from (T1 local-first; no push - remote is T9)
+    ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn down
+    └─ refusal/conflict: 409, job PARKS in review with the surfaced error;
+       worktree kept - resolve, approve again to retry. Never forced.
+```
+
+Lifecycle state is one `job_worktrees` row per job
+(`active → merging → merged`, with `conflict` and `discarded` as off-ramps);
+deleting a job tears its worktree down. Snapshot-then-merge means partial agent
+work is durable in the worktree across crashes - the substrate slice 5's
+continuation turns (T5) resume in.
 
 ### 7. Schedule (cron)
 
