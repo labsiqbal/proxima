@@ -85,23 +85,31 @@ an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
 **Endpoints:** `POST /api/chat/send`, `/api/sessions/{id}/runs`, `/messages`,
 `/events/stream`, `WS /api/ws/sessions/{id}`, `/runs/{id}/cancel`, `/runs/{id}/permission`.
 
-### Project-file references (`@`)
+### Project-file and artifact references (`@`)
 
-Every project-scoped prompt surface shares the same file picker: Code chat, the Ops
+Every project-scoped prompt surface shares the same mention picker: Code chat, the Ops
 Task Composer, workflow authoring chat and graph fields, Design Home, Design chat, and
-Graph Home. Typing `@` filters a path-only project index and inserts the selected
-reference at the caret; arrow keys plus Enter/Tab work as well as the mouse. Ordinary
-files become project-relative paths, which project-scoped runners can open from their
-working directory. Images become `![name](path)` references, so `/image` providers and
-design-agent vision receive the selected pixels instead of only a filename. The popup
-viewport shows four ranked matches at once; additional matches remain available by
-scrolling, while typing more of the path narrows the full bounded index.
+Graph Home. Typing `@` filters a merged index of project files **and produced
+artifacts** (designs, images, pages, docs, apps, videos, and other deliverables under
+the conventional artifact roots) and inserts the selected reference at the caret;
+arrow keys plus Enter/Tab work as well as the mouse. Ordinary files and non-image
+artifacts become project-relative paths, which project-scoped runners can open from
+their working directory. Images become `![name](path)` references, so `/image`
+providers and design-agent vision receive the selected pixels instead of only a
+filename. Produced artifacts carry a short kind badge (Design, Image, Doc, …) so they
+are visually distinct from plain source files; artifacts are ranked ahead of the file
+tree when the query is empty. The popup viewport shows four ranked matches at once;
+additional matches remain available by scrolling, while typing more of the path or
+title narrows the full bounded index.
 
 The picker never expands text-file contents into the prompt. Its authenticated
 `GET /api/projects/{slug}/reference-files` index is bounded and project-jailed, skips
 symlinks, dependency/build/cache and hidden directories, and omits common secret/key
-files. Vision loading re-validates paths against the session project and accepts only
-bounded image files (10 files, 8 MB each, 32 MB total).
+files. Produced artifacts come from the existing
+`GET /api/projects/{slug}/artifacts` scan (year-long window, scanner-capped) and are
+merged client-side by `useProjectMentionItems` so every Composer / `MentionTextarea`
+surface stays on one pipeline. Vision loading re-validates paths against the session
+project and accepts only bounded image files (10 files, 8 MB each, 32 MB total).
 
 ### Per-prompt Brainstorm / Debate modes
 
@@ -517,13 +525,14 @@ execution reads them only through slice 2's flag-gated repo-job path (`jobs.targ
 chunk-streamed file upload with collision-safe naming and a configurable 100 MB default
 limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
-powers `@` autocomplete without returning file contents.
+powers `@` autocomplete without returning file contents; produced artifacts from the
+project artifact scan are merged into the same picker on the client.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
-file references — with the in-browser **Terminal** as the raw escape hatch.
+file/artifact references — with the in-browser **Terminal** as the raw escape hatch.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
-`/reference-files`, `/api/preview/{slug}/{path}`.
+`/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`.
 
 ## 12. Run & Preview app
 

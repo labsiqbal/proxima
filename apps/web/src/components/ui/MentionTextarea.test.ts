@@ -55,6 +55,24 @@ describe('filterMentions', () => {
     expect(filterMentions(items, '')).toHaveLength(3)
   })
 
+  it('shows a kind badge for typed artifacts in the popover', async () => {
+    const Harness = () => {
+      const [value, setValue] = React.useState('')
+      return React.createElement(MentionTextarea, {
+        value,
+        onChange: setValue,
+        items,
+        ariaLabel: 'Prompt',
+      })
+    }
+    const user = userEvent.setup()
+    render(React.createElement(Harness))
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), '@Homepage')
+    expect(await screen.findByText('Homepage design')).toBeInTheDocument()
+    expect(screen.getByText('Design')).toBeInTheDocument()
+    expect(screen.getByRole('listbox', { name: 'Project references' })).toBeInTheDocument()
+  })
+
   it('ranks a matching filename ahead of a generic parent-directory match', () => {
     const candidates = [
       { path: 'app/archive/readme.md' },
@@ -102,7 +120,7 @@ describe('MentionTextarea', () => {
     const textarea = screen.getByRole('textbox', { name: 'Prompt' })
 
     await user.type(textarea, '@')
-    const list = await screen.findByRole('listbox', { name: 'Project files' })
+    const list = await screen.findByRole('listbox', { name: 'Project references' })
     const options = screen.getAllByRole('option')
     expect(options).toHaveLength(6)
     expect(textarea).toHaveAttribute('aria-controls', list.id)

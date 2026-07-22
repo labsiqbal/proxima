@@ -5,6 +5,7 @@ import {
 	filterMentions,
 	matchMention,
 	mentionInsertion,
+	MentionOptionContent,
 	type MentionItem,
 } from "../ui/MentionTextarea";
 import { uploadFile } from "../../api/files";
@@ -129,6 +130,7 @@ export function Composer({
 	const [submitting, setSubmitting] = React.useState(false);
 	const [uploadError, setUploadError] = React.useState("");
 	const taRef = React.useRef<HTMLTextAreaElement>(null);
+	const pendingMentionCaret = React.useRef<{ caret: number; forText: string } | null>(null);
 	const mentionListRef = React.useRef<HTMLDivElement>(null);
 	const mentionListId = React.useId();
 	const fileRef = React.useRef<HTMLInputElement>(null);
@@ -185,13 +187,22 @@ export function Composer({
 			mention.at,
 			mentionInsertion(item),
 		);
+		// Restore the caret after the controlled re-render commits — and only while
+		// the value is still exactly the inserted text (same race guard as MentionTextarea).
+		pendingMentionCaret.current = { caret: applied.caret, forText: applied.text };
 		setDraft(applied.text);
 		setMention(null);
-		requestAnimationFrame(() => {
-			element.focus();
-			element.setSelectionRange(applied.caret, applied.caret);
-		});
 	};
+
+	React.useLayoutEffect(() => {
+		const pending = pendingMentionCaret.current;
+		const element = taRef.current;
+		if (!pending || !element) return;
+		pendingMentionCaret.current = null;
+		if (element.value !== pending.forText) return;
+		element.focus();
+		element.setSelectionRange(pending.caret, pending.caret);
+	});
 
 	React.useEffect(() => {
 		mountedRef.current = true;
@@ -343,7 +354,7 @@ export function Composer({
 					ref={mentionListRef}
 					className="slash-popover mention-results"
 					role="listbox"
-					aria-label="Project files"
+					aria-label="Project references"
 				>
 					{mentionMatches.map((item, index) => (
 						<button
@@ -360,8 +371,7 @@ export function Composer({
 								pickMention(item);
 							}}
 						>
-							<strong>{item.title || item.path.split("/").pop()}</strong>
-							<span>{item.path}</span>
+							<MentionOptionContent item={item} />
 						</button>
 					))}
 				</div>

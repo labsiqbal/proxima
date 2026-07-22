@@ -1,10 +1,41 @@
 import React from 'react'
 
-// A file the owner can @-mention. Deliberately narrower than api/files' Artifact —
-// mentions need a path to insert and something readable to show, nothing more.
+// A file or produced artifact the owner can @-mention. Deliberately narrower than
+// api/files' Artifact — mentions need a path to insert and something readable to
+// show (optional title + kind), nothing more.
 export type MentionItem = { path: string; title?: string; type?: string }
 
 const IMAGE_PATH = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i
+
+/** Short kind labels for typed produced artifacts in the mention picker. */
+const MENTION_KIND_LABELS: Record<string, string> = {
+  design: 'Design',
+  video: 'Video',
+  'video-file': 'Video',
+  app: 'App',
+  page: 'Page',
+  doc: 'Doc',
+  file: 'File',
+  image: 'Image',
+}
+
+export function mentionKindLabel(type?: string): string | null {
+  if (!type) return null
+  return MENTION_KIND_LABELS[type] || type
+}
+
+/** Shared title + optional kind badge + path line used by every mention popover. */
+export function MentionOptionContent({ item }: { item: MentionItem }) {
+  const kind = mentionKindLabel(item.type)
+  const title = item.title || item.path.split('/').pop() || item.path
+  return <>
+    <strong>
+      <span className="mention-option-title">{title}</span>
+      {kind ? <em className="mention-kind">{kind}</em> : null}
+    </strong>
+    <span>{item.path}</span>
+  </>
+}
 
 /** Turn an explicitly selected image into the same Markdown reference used by file
  * attachments. Media routes can then consume its pixels; ordinary files stay as a
@@ -139,7 +170,7 @@ export function MentionTextarea({ value, onChange, items, rows = 3, placeholder,
       }}
       onBlur={() => window.setTimeout(() => setOpen(null), 120)}
     />
-    {open && matches.length > 0 && <div id={listId} ref={listRef} className="mention-popover" role="listbox" aria-label="Project files">
+    {open && matches.length > 0 && <div id={listId} ref={listRef} className="mention-popover" role="listbox" aria-label="Project references">
       {matches.map((item, index) => <button
         type="button"
         key={item.path}
@@ -153,8 +184,7 @@ export function MentionTextarea({ value, onChange, items, rows = 3, placeholder,
         // has already dismissed itself.
         onMouseDown={event => { event.preventDefault(); pick(item) }}
       >
-        <strong>{item.title || item.path.split('/').pop()}</strong>
-        <span>{item.path}</span>
+        <MentionOptionContent item={item} />
       </button>)}
     </div>}
   </div>
