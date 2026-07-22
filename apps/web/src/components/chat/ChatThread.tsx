@@ -945,7 +945,8 @@ export function ChatThread({
 						>
 							<strong>
 								{labelFor(message)}
-								{ts && <span className="chat-time">{timeLabel(ts)}</span>}
+								{/* Leading space keeps screen readers from reading "owner04:16 AM". */}
+								{ts && <span className="chat-time"> {timeLabel(ts)}</span>}
 							</strong>
 							{message.role === "assistant" &&
 							message.content.includes("<question-form") ? (

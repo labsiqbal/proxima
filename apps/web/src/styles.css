@@ -652,13 +652,20 @@ button:disabled {
 	padding: var(--mention-list-padding);
 	border-width: var(--mention-list-border-width);
 }
+/* Mentions are title+path, not short slash-command names. Stack the two lines
+   full-width so long artifact titles stay readable instead of living in the
+   86px first column inherited from .slash-popover button. */
 .slash-popover.mention-results button {
+	grid-template-columns: minmax(0, 1fr);
+	align-content: center;
+	gap: 2px;
 	height: var(--mention-option-height);
 }
 .slash-popover.mention-results strong {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-2);
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -668,6 +675,10 @@ button:disabled {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.slash-popover.mention-results button > span {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
 }
 .slash-popover.mention-results .mention-kind,
 .mention-popover .mention-kind {

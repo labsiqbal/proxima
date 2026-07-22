@@ -31,7 +31,8 @@ export function MentionOptionContent({ item }: { item: MentionItem }) {
   return <>
     <strong>
       <span className="mention-option-title">{title}</span>
-      {kind ? <em className="mention-kind">{kind}</em> : null}
+      {/* Leading space keeps the accessible name from reading as "TitleDesign". */}
+      {kind ? <em className="mention-kind"> {kind}</em> : null}
     </strong>
     <span>{item.path}</span>
   </>
