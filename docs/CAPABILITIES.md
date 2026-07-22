@@ -269,6 +269,18 @@ that node touches the repo** (ops jobs run at the project root), and the plan's 
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
 
+**Known gap - tool approvals during plan-node runs (verified live 2026-07-22):** a
+plan node's agent run uses the same permission machinery as chat, but its run thread
+is a hidden job session, and no surface in the plan/Tasks UI renders the approval
+card. An unanswered permission request times out after 300s and **cancels** (the
+deliberate default: "no answer" never becomes "yes"; `PROXIMA_ACP_TIMEOUT_ACTION`
+overrides), so with the default ask-each-time permission setting a plan job that
+needs, say, a file-edit approval blocks honestly with the agent's blocker report and
+can be rerun from the node inspector. Practical paths today: flip Settings → Agent
+permissions to auto-approve (control then shifts to the diff review, which fits the
+isolated-worktree model), or answer via `POST /api/runs/{id}/permission`. An in-UI
+card surface for plan-node approvals is an open Phase-1 follow-up.
+
 **Review surface (slice 4):** the captain-facing half, following T4's ratified detail
 language - the diff opens in an **expanding row** (a plan row's expanded body on the
 Tasks screen) and on the **full-width task page** (`TaskWorkspace`); never a right
