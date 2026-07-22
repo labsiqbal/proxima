@@ -11369,6 +11369,30 @@ div.result-media {
 	font-size: var(--text-xs);
 	max-width: 320px;
 }
+/* Design records reuse MiniPreview (same first-artboard thumb as Design gallery). */
+.archive-preview-box.design {
+	display: grid;
+	place-items: center;
+	padding: var(--space-3);
+	background: var(--ui-bg-secondary, var(--ui-bg));
+}
+.archive-preview-box.design .archive-design-thumb {
+	width: min(100%, 560px);
+	container-type: inline-size;
+}
+.archive-preview-box.compact.design .archive-design-thumb {
+	width: min(100%, 320px);
+}
+.archive-preview-box.design .ds-mini {
+	width: 100%;
+	max-height: 420px;
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	box-shadow: 0 1px 3px color-mix(in srgb, var(--ui-ink) 12%, transparent);
+}
+.archive-preview-box.compact.design .ds-mini {
+	max-height: 200px;
+}
 /* Full record page (variant A) */
 .archive-record-page {
 	flex: 1;

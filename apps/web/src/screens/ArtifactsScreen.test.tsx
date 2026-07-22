@@ -14,9 +14,15 @@ vi.mock('../api/archive', () => ({
 vi.mock('../api/files', () => ({
   previewUrl: vi.fn(() => 'http://preview/x'),
   fetchRawBlob: vi.fn(() => Promise.resolve('blob:x')),
+  fileUrl: vi.fn((slug: string, path: string) => `http://file/${slug}/${path}`),
 }))
+const fsRead = vi.fn(() => Promise.resolve({ content: '# hi' }))
 vi.mock('../api/fsAdapter', () => ({
-  projectFs: vi.fn(() => ({ read: vi.fn(() => Promise.resolve({ content: '# hi' })) })),
+  projectFs: vi.fn(() => ({ read: (...args: unknown[]) => fsRead(...args) })),
+}))
+vi.mock('../components/design/MiniPreview', () => ({
+  MiniPreview: ({ art }: { art?: { width: number; height: number } }) =>
+    art ? <div data-testid="design-mini-preview">{art.width}×{art.height}</div> : null,
 }))
 vi.mock('../components/files/AppRunner', () => ({ AppRunner: () => null }))
 vi.mock('../components/artifacts/ArtifactViewer', () => ({ ArtifactViewer: () => <div data-testid="viewer" /> }))
@@ -75,6 +81,8 @@ beforeEach(() => {
   vi.mocked(listArchive).mockReset()
   vi.mocked(setArchiveStatus).mockReset()
   vi.mocked(getArchiveRecord).mockReset()
+  fsRead.mockReset()
+  fsRead.mockResolvedValue({ content: '# hi' })
 })
 
 describe('ArtifactsScreen (Archive registry)', () => {
@@ -164,5 +172,31 @@ describe('ArtifactsScreen (Archive registry)', () => {
       pendingArtifact={{ type: 'doc', title: 'report.md', path: 'reports/report.md', project_slug: 'wingoh' }} />)
     await waitFor(() => expect(onOpenRecord).toHaveBeenCalledWith('wingoh', 'report-md-v1'))
     expect(onConsumed).toHaveBeenCalled()
+  })
+
+  it('previews a design record from scene.json instead of the open-only placeholder', async () => {
+    fsRead.mockResolvedValue({
+      content: JSON.stringify({
+        id: 'deck',
+        type: 'deck',
+        title: 'Sales Deck',
+        artboards: [{ id: 'a1', width: 1920, height: 1080, background: '#0b1220', layers: [] }],
+      }),
+    })
+    vi.mocked(listArchive).mockResolvedValue(listResponse([
+      rec({
+        id: 9,
+        slug: 'sales-deck-v1',
+        name: 'Sales Deck',
+        type: 'design',
+        path: 'artifacts/design/sales-deck',
+        size: null,
+      }),
+    ]))
+    render(<ArtifactsScreen {...base} />)
+    await userEvent.click(await screen.findByText('Sales Deck'))
+    expect(fsRead).toHaveBeenCalledWith('artifacts/design/sales-deck/scene.json')
+    expect(await screen.findByTestId('design-mini-preview')).toHaveTextContent('1920×1080')
+    expect(screen.queryByText(/use Open to view it/)).not.toBeInTheDocument()
   })
 })

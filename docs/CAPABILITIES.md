@@ -652,6 +652,9 @@ project/type/status/date filters, text search, and facet counts; each record has
 permanent per-project address (`/api/archive/{project}/{slug}` — the UI's
 `#archive/<project>/<slug>` permalink) with same-path version history plus
 project-level newer/older record navigation (by produce date, not version).
+Inline and full-record previews cover docs (markdown), pages (HTML iframe),
+images/video, and **designs** (first artboard via the same `MiniPreview` thumb as
+Design gallery, loaded from `scene.json`). Apps and other types still point at Open.
 Chat result cards and the iterate Result view keep using the live scan
 (`GET /api/projects/{slug}/artifacts`, unchanged).
 
