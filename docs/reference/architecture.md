@@ -240,18 +240,20 @@ Full column-level detail: [database.md](database.md).
 
 ### 1. Chat turn (the core loop)
 
-Before submission, every project-scoped composer can resolve `@query` through
-`GET /api/projects/{slug}/reference-files`. The endpoint returns relative paths only;
-it does not read or inline file content. Traversal is capped, skips symlinks and
-dependency/build/cache/hidden trees, and suppresses common secret/key filenames.
-The shared frontend loader rejects stale project responses and refreshes after file
-changes. A selected ordinary file is sent as its relative path. A selected image is
+Before submission, every project-scoped composer can resolve `@query` through a merged
+index of `GET /api/projects/{slug}/reference-files` (path-only file tree) and
+`GET /api/projects/{slug}/artifacts` (typed produced deliverables carrying title +
+kind). Neither endpoint reads or inlines file content. Reference-file traversal is
+capped, skips symlinks and dependency/build/cache/hidden trees, and suppresses common
+secret/key filenames. The shared frontend loader (`useProjectMentionItems`) merges the
+two (artifacts ranked first, winning path collisions), rejects stale project responses,
+and refreshes after file changes. A selected ordinary file is sent as its relative path. A selected image is
 sent as Markdown image-reference syntax: ordinary ACP agents can still open the path,
 while `/image` and design flows resolve it again inside the session project jail and
 attach bounded image bytes as visual input.
 
 ```text
-UI  @file picker (path only) ─────────► relative path / explicit image reference
+UI  @ picker (files + artifacts) ─────► relative path / explicit image reference
     POST /api/chat/send ─────────────► create session (if new) + user message
     │                                  enqueue a run (status: queued)
     ▼
