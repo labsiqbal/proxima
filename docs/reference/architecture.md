@@ -206,6 +206,15 @@ makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktre
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
 Artifact scanning still ignores areas; the slicer that sets the binding at slice
 time is slice 3.
+Deliverables are durable records (Phase-1 slice 8, T4): `artifact_records` holds one
+row per deliverable **version** - identity (project, type, path), lineage
+(session → job/node → run), the single approval status (`draft/review/approved/
+superseded`) both approval doors write, an automatic version chain
+(new producer at the same identity ⇒ v(n+1), prior versions superseded), and a
+permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
+registry (`artifact_registry.py`) remembers - records survive file moves/deletion
+via `file_missing`. Fed at the one seam every run's outputs pass through
+(`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Full column-level detail: [database.md](database.md).
 
 ## Key flows
@@ -358,7 +367,8 @@ job = frozen snapshot of steps + per-step state (steps_state JSON)
     │  steps run sequentially in ONE ACP session (context carries across steps)
     │  review-gate steps pause → Approve / edit-&-continue
     ▼
-job done  →  artifacts surface in the Result view / Artifacts gallery
+job done  →  artifacts surface in the Result view + land as durable Archive records
+             (registry feed; approving the job auto-approves its records - T4)
 ```
 
 The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attempt in
@@ -548,7 +558,7 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 `App.tsx` remains the single view owner. It owns the Recipes Editor/Scheduled modes and embeds the graph surface under the single Recipes destination (view id `workflows`). The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly; the existing chat `selectProject` behavior still selects the latest project chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Tasks, Recipes, Projects, Artifacts, gated Design) and the default landing view is `chat`. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Tasks, Recipes, Projects, Archive, gated Design) and the default landing view is `chat`. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 Generic frontend refresh loops use one non-overlapping polling hook. It pauses while
 the document is hidden and refreshes once when the tab becomes visible, avoiding

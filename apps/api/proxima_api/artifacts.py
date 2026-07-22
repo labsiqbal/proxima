@@ -17,10 +17,12 @@ _ARTIFACT_EXCLUDE = {"node_modules", ".git", ".next", "dist", "build", "out", "_
 _ARTIFACT_SKIP_NAMES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".impeccable.md", "CONTRIBUTING.md", "LICENSE.md"}
 
 
-def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]]:
+def scan_project_artifacts(root: "Path", start_ts: float, *, cap: int = 40) -> list[dict[str, Any]]:
     """Typed list of artifacts under `root` modified at/after `start_ts`, so the UI can
     preview each: design / app (runnable package.json) / page (.html) / doc (.md) / file.
-    Prunes heavy dirs and absorbs files inside a produced app dir. Pure + best-effort."""
+    Prunes heavy dirs and absorbs files inside a produced app dir. Pure + best-effort.
+    `cap` bounds the result (default 40 for live scan surfaces; the registry seed
+    passes a higher cap because durable records are paginated, not capped)."""
     if not root.is_dir():
         return []
 
@@ -97,7 +99,7 @@ def scan_project_artifacts(root: "Path", start_ts: float) -> list[dict[str, Any]
         seen.add(k)
         a.pop("_m", None)
         out.append(a)
-    return out[:40]
+    return out[:cap]
 
 
 def artifacts_for_output_links(artifacts: list[dict[str, Any]], project_slug: str | None = None) -> list[dict[str, Any]]:

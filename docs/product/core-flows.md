@@ -308,6 +308,10 @@ Design result card should open Design Studio directly, not Artifacts.
 
 ## Artifacts Flow
 
+> **Status (Phase-1 slice 8, T4):** shipped as the **Archive** - a durable registry
+> (records with lineage, one synced approval status, version chains, permalinks)
+> rather than a scan-only gallery. See `docs/CAPABILITIES.md` §14.
+
 Artifacts is the current project's universal output gallery.
 
 Filters:

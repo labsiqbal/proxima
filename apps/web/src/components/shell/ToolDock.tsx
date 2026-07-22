@@ -43,6 +43,19 @@ export function ToolDock({ token, project, onOpenSettings }: {
     return () => window.removeEventListener('keydown', dismiss)
   }, [open])
 
+  // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
+  // so far-away screens ask for it with an event instead of prop-drilling
+  // through the whole shell. detail.path highlights the file in the tree.
+  const [revealPath, setRevealPath] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const onReveal = (event: Event) => {
+      const path = (event as CustomEvent).detail?.path
+      if (typeof path === 'string') { setRevealPath(path); setOpen('files') }
+    }
+    window.addEventListener('proxima:reveal-file', onReveal)
+    return () => window.removeEventListener('proxima:reveal-file', onReveal)
+  }, [])
+
   const slug = project?.slug
   const fs = React.useMemo(() => (slug ? projectFs(token, slug) : null), [token, slug])
 
@@ -81,7 +94,7 @@ export function ToolDock({ token, project, onOpenSettings }: {
           </React.Suspense>)}
         {pane('files',
           fs && project
-            ? <WorkspaceTree fs={fs} title={project.name} className="tool-files" />
+            ? <WorkspaceTree fs={fs} title={project.name} className="tool-files" activePath={revealPath} />
             : <PaneFallback label="Pick a project to browse its files." />)}
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug

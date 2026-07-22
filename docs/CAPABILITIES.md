@@ -381,7 +381,7 @@ limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents.
 These APIs power the **Files tool** on the right rail (the project tree + inline
-editor as an overlay panel, any context), the **Artifacts** gallery's *Source* editor
+editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
 file references — with the in-browser **Terminal** as the raw escape hatch.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
@@ -441,7 +441,7 @@ canvas applies live. The studio offers select/move/resize with a full inspector
 selection-aware chat, undo/redo + version history, multi-image reference inputs, an
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
 URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
-`artifacts/design/<id>/scene.json` and appear in the Artifacts visual gallery.
+`artifacts/design/<id>/scene.json` and appear as design records in the Archive.
 See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
 
 The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: `scripts/dev` enables
@@ -454,20 +454,54 @@ file writes, subprocesses, or collaboration dispatch.
 Video Studio, editable video projects, and the `/video` generation surface were removed;
 ordinary video files remain readable and playable as generic artifacts.
 
-## 14. Wiki + memory (knowledge)
+## 14. Archive: durable deliverable registry (Phase-1 slice 8, T4 - LIVE)
+
+**Why:** deliverables used to exist only as a capped (~40 item) mtime scan - no
+memory, no approval state, no trace of which job produced a file. The Archive is now
+a **registry, not a scanner**: the scanner discovers files, the registry remembers
+them as durable records that survive file moves and deletion (a missing file flips
+`file_missing` on the record; the record stays).
+
+**How:** every finished run (agent or script) feeds its scanned output links into
+`artifact_records` (module `artifact_registry.py`): one row per deliverable
+**version** with name, type (scanner types + `script-output` for generic files a
+script step produced), project + path, size, produced date, lineage
+(session → job/node → run), approval status, and a version chain. Identity is
+(project, type, path): a new producer at the same identity creates v(n+1) and
+automatically marks prior versions superseded; re-scans by the same run (or later
+steps of the same still-draft job) refresh in place, so feeding is idempotent.
+Migration 23 seeds the registry from the current scanner output so existing
+projects' artifacts appear as draft records on upgrade.
+
+**Approval is ONE status with two doors (synced):** `draft / review / approved /
+superseded`. Approving a job in its Tasks review auto-approves the records that job
+produced; the Archive page edits the SAME field for the late/batch/supersede cases.
+Never two separate approval states.
+
+**Registry queries replace the item cap:** paginated newest-first list with
+project/type/status/date filters, text search, and facet counts; each record has a
+permanent per-project address (`/api/archive/{project}/{slug}` — the UI's
+`#archive/<project>/<slug>` permalink) with version history and prev/next.
+Chat result cards and the iterate Result view keep using the live scan
+(`GET /api/projects/{slug}/artifacts`, unchanged).
+
+**Endpoints:** `GET /api/archive`, `GET /api/archive/{slug}/{record_slug}`,
+`POST /api/archive/records/{record_id}/status`.
+
+## 15. Wiki + memory (knowledge)
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
 aggregation. Fed by Chat→Wiki (§5).
 **Endpoints:** `/api/projects/{slug}/wiki/all`, `/api/wiki/all`, `/tree`, `/file`, `/fs/*`.
 
-## 15. Terminal
+## 16. Terminal
 
 **Why:** A real shell in the cockpit, scoped to the project.
 **How:** `terminal.py` over `WS /api/ws/terminal`. Opened from the **Terminal** tool
 on the right rail; once opened it stays mounted so shells survive closing the panel.
 
-## 16. Command palette (quick commands)
+## 17. Command palette (quick commands)
 
 **Why:** A catalog of quick slash-style commands runnable from chat.
 **How:** `commands.py` — `command_catalog()` lists them; `execute_command()` runs one.
@@ -479,7 +513,7 @@ on the right rail; once opened it stays mounted so shells survive closing the pa
 > guard. The real access boundary is network reachability (single-user). See
 > [security-boundaries.md](security-boundaries.md).
 
-## 17. New task launcher + search
+## 18. New task launcher + search
 
 **Why:** Delegate a one-off task, and see what needs you. The app itself lands on
 **Chat** — the launcher opens from the Tasks screen's `+ New task`.
@@ -493,12 +527,12 @@ though the current Home renders only the review-attention data. Global **Search*
 (magnifier in the top bar) covers chats, messages, projects, and designs.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
 
-## 18. Audit log
+## 19. Audit log
 
 **Why:** An activity trail of meaningful actions.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
 
-## 19. Reliability (cross-cutting)
+## 20. Reliability (cross-cutting)
 
 Heartbeat/reaper for hung runs, per-session serialization, graceful shutdown, output
 salvage, orphaned-run cleanup, a per-turn quota (`run_timeout_seconds` — an in-app
@@ -508,7 +542,7 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 20. Updates (version check + self-update)
+## 21. Updates (version check + self-update)
 
 **Why:** Every install should be one click away from the latest release without
 the owner babysitting `git pull`.
@@ -541,11 +575,11 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Artifacts, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Archive, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session; the chat remains lazily created on first send.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher — a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Recipes** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
-+ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.

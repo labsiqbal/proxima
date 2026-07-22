@@ -125,6 +125,26 @@ export function App() {
   const clearTaskHash = React.useCallback(() => {
     if (window.location.hash.startsWith('#task/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
   }, [])
+  // Archive record permalinks (T4): #archive/<project>/<slug> is a record's
+  // permanent address - bookmarkable, shareable, survives reloads.
+  const [archiveRecord, setArchiveRecord] = React.useState<{ project: string; slug: string } | null>(null)
+  const clearArchiveHash = React.useCallback(() => {
+    if (window.location.hash.startsWith('#archive/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+  }, [])
+  const openArchiveRecord = React.useCallback((project: string, slug: string) => {
+    setArchiveRecord({ project, slug })
+    const hash = `#archive/${encodeURIComponent(project)}/${encodeURIComponent(slug)}`
+    if (window.location.hash.startsWith('#archive/')) {
+      // Record-to-record moves (prev/next, versions) replace instead of piling
+      // up history entries; one Back always returns to where Archive was opened.
+      window.history.replaceState({ ...window.history.state, proximaView: 'artifacts' }, '', hash)
+    } else {
+      window.history.replaceState({ ...window.history.state, proximaView: view }, '', window.location.href)
+      window.history.pushState({ ...window.history.state, proximaView: 'artifacts' }, '', hash)
+    }
+    setView('artifacts')
+  }, [view])
+  const closeArchiveRecord = React.useCallback(() => { clearArchiveHash(); setArchiveRecord(null); setView('artifacts') }, [clearArchiveHash])
   const openTask = React.useCallback((jobId: number) => {
     clearPendingNavigation()
     setActiveTaskId(jobId)
@@ -150,6 +170,8 @@ export function App() {
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   const goView = (v: View) => {
     clearTaskHash()
+    clearArchiveHash()
+    setArchiveRecord(null)
     clearPendingNavigation()
     if (v === 'workflows') setWorkflowMode('graph')
     // Chat in the nav means the conversation front door — never a recipe's
@@ -176,16 +198,23 @@ export function App() {
   const [error, setError] = React.useState('')
   React.useEffect(() => {
     if (booting || !user) return
-    const syncTaskRoute = (event?: Event) => {
+    const syncHashRoute = (event?: Event) => {
       const match = window.location.hash.match(/^#task\/(\d+)$/)
       if (match) { setActiveTaskId(Number(match[1])); setView('task'); return }
+      const archiveMatch = window.location.hash.match(/^#archive\/([^/]+)\/([^/]+)$/)
+      if (archiveMatch) {
+        setArchiveRecord({ project: decodeURIComponent(archiveMatch[1]), slug: decodeURIComponent(archiveMatch[2]) })
+        setView('artifacts')
+        return
+      }
       const priorView = event instanceof PopStateEvent && typeof event.state?.proximaView === 'string' ? event.state.proximaView as View : null
+      setArchiveRecord(null)
       setView(current => current === 'task' ? priorView || 'activity' : current)
     }
-    syncTaskRoute()
-    window.addEventListener('hashchange', syncTaskRoute)
-    window.addEventListener('popstate', syncTaskRoute)
-    return () => { window.removeEventListener('hashchange', syncTaskRoute); window.removeEventListener('popstate', syncTaskRoute) }
+    syncHashRoute()
+    window.addEventListener('hashchange', syncHashRoute)
+    window.addEventListener('popstate', syncHashRoute)
+    return () => { window.removeEventListener('hashchange', syncHashRoute); window.removeEventListener('popstate', syncHashRoute) }
   }, [booting, user?.id])
   const sessionEnabled = React.useCallback((session: ChatSession) => isFeatureSessionEnabled(session, features), [features])
   const refreshSeq = React.useRef(0)
@@ -396,6 +425,21 @@ export function App() {
     }
   }
 
+  // Archive lineage: jump from a record straight to the chat that produced it.
+  function openSessionById(sessionId: number) {
+    const session = sessions.find(s => s.id === sessionId)
+    if (!session) return
+    clearTaskHash()
+    clearArchiveHash()
+    setArchiveRecord(null)
+    clearPendingNavigation()
+    setActiveSession(session)
+    const sp = projects.find(p => p.slug === session.project_slug)
+    if (sp) setActiveProject(sp)
+    markSeen(session.id, session.updated_at)
+    setView('chat')
+  }
+
   function backToOriginChat() {
     const origin = returnToChat
     setReturnToChat(null)
@@ -488,7 +532,7 @@ export function App() {
       })()}
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
+      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} onGraphBack={() => setGraphBackNonce(n => n + 1)} /></React.Suspense>}
       {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph')} onNewTask={() => goView('home')} /></React.Suspense>}
       {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setDesignCameFrom('task'); setView('design') } : undefined} onOpenFile={(slug, path) => { clearTaskHash(); setReturnToTask(activeTaskId); setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}

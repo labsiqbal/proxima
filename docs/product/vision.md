@@ -152,7 +152,7 @@ Instruction priority:
 
 More specific instructions override broader ones.
 
-### Artifacts Are The Output Library *(registry beyond the filesystem scanner is planned)*
+### Artifacts Are The Output Library *(shipped as the Archive registry - Phase-1 slice 8, T4)*
 
 Artifacts is the universal gallery for outputs in the active project.
 

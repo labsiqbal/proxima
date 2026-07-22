@@ -3,12 +3,13 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-141 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+144 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
+- [`routes/archive.py`](#routes-archive-py) — 3 endpoints
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
@@ -30,6 +31,15 @@
 | GET | `/api/audit` | `list_audit` |  |
 | GET | `/api/debug/logs` | `debug_logs` |  |
 | POST | `/api/debug/reap-orphaned-jobs` | `reap_orphaned_jobs` |  |
+
+
+## routes/archive.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/archive` | `list_archive` |  |
+| POST | `/api/archive/records/{record_id}/status` | `set_archive_status` | The Archive door of the ONE approval status (late/batch/supersede |
+| GET | `/api/archive/{slug}/{record_slug}` | `get_archive_record` | One full record by its permanent address: metadata, lineage, |
 
 
 ## routes/auth.py
@@ -243,4 +253,4 @@
 
 
 ---
-_Generated 2026-07-22 06:05 UTC._
+_Generated 2026-07-22 07:45 UTC._

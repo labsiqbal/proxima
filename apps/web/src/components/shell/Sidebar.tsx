@@ -6,7 +6,7 @@ import { ProximaMark } from '../brand/ProximaMark'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
 // (Tasks), keep what worked (Recipes), then the places work lives (Projects,
-// Artifacts). Terminal/Files/Preview are tools on the right rail, not
+// Archive). Terminal/Files/Preview are tools on the right rail, not
 // destinations, and Agents/Settings stay in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
@@ -14,7 +14,7 @@ const primary: Destination[] = [
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Recipes', icon: IconWorkflows },
   { id: 'projects', label: 'Projects', icon: IconProjects },
-  { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
+  { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
 const enabled = (item: Destination, features: AppFeatures) =>
