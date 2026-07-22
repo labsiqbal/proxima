@@ -219,13 +219,14 @@ ARCHITECT_SYSTEM = (
 )
 
 GRAPH_ARCHITECT_SYSTEM = (
-    "You are a workflow architect. Convert the conversation into a reusable, "
-    "reviewable DAG plan. Extract the repeatable process, not merely the last message. "
+    "You are a work planner. Slice the conversation's goal into a runnable plan: "
+    "a DAG of jobs. Extract the repeatable process, not merely the last message. "
     "Respond with ONLY one JSON object and no prose: "
     '{"name": str, "description": str, "category": str, "graph": {'
     '"nodes": [{"id": str, "name": str, "instruction": str, '
     '"expected_output": str, "output_kind": "text|json|artifact-ref", '
     '"output_schema": object|null, "review_required": bool, '
+    '"target": str|null, "target_ambiguous": bool, "target_question": str|null, '
     '"depends_on": [node_id]}], "edges": [{"from": node_id, "to": node_id}]}}. '
     "Use stable short kebab-case node ids. Express every dependency; independent nodes "
     "may share the same dependencies. Keep each instruction self-contained because every "
@@ -233,12 +234,41 @@ GRAPH_ARCHITECT_SYSTEM = (
     "Use output_kind=json only when downstream nodes need structured data, with a valid "
     "JSON Schema when useful. Use artifact-ref only for concrete files/directories created "
     "inside the project. Set review_required only at meaningful human gates. The graph must "
-    "be acyclic. category is one of content, seo, build, audit, research, other."
+    "be acyclic. category is one of content, seo, build, audit, research, other.\n"
+    "Every job binds to exactly ONE work area, chosen NOW, not at runtime: set target to "
+    "one of the project's code areas (listed below) when the job edits that repo's files, "
+    "or to \"ops\" for everything else (research, writing, review, reports, designs). "
+    "If it is genuinely unclear which area a job should work in, do NOT guess: set "
+    "target to null, target_ambiguous to true, and put the question for the owner in "
+    "target_question — the plan will surface it before running. All repo jobs of one "
+    "plan must target the SAME code area; work spanning two repos belongs in two plans.\n"
+    "Size every job to finish comfortably within one agent turn (about 15 minutes of "
+    "focused work). Split anything larger into sequential jobs along natural seams."
+)
+
+# Appended to the graph architect prompt so targets name real areas instead of
+# invented paths. Kept out of GRAPH_ARCHITECT_SYSTEM because it is per-project.
+_NO_CODE_AREAS_NOTE = (
+    "\nPROJECT WORK AREAS: this project has no registered code areas, so every "
+    "job's target must be \"ops\"."
 )
 
 
-def architect_system(*, graph: bool = False) -> str:
-    return GRAPH_ARCHITECT_SYSTEM if graph else ARCHITECT_SYSTEM
+def _code_areas_block(code_areas: list[str]) -> str:
+    if not code_areas:
+        return _NO_CODE_AREAS_NOTE
+    listed = ", ".join(f'"{a}"' for a in code_areas)
+    return (
+        f"\nPROJECT WORK AREAS: code areas: {listed} "
+        '("." means the project root is itself the repo), plus "ops" for '
+        "non-repo work. A job's target must be exactly one of these values."
+    )
+
+
+def architect_system(*, graph: bool = False, code_areas: list[str] | None = None) -> str:
+    if not graph:
+        return ARCHITECT_SYSTEM
+    return GRAPH_ARCHITECT_SYSTEM + _code_areas_block(code_areas or [])
 
 
 def _cron_field_matches(field: str, value: int, lo: int, hi: int) -> bool:

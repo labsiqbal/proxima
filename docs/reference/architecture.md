@@ -117,7 +117,14 @@ cycles and invalid references, computes deterministic topological/ready sets, va
 node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
 trigger, no incoming edges), and validates each node's `text` / `json` / `artifact-ref`
 output contract (including JSON Schema definitions); it performs no DB, runner, or HTTP
-work. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a node's
+`target` names ONE container area (a code area's rel_path or `ops`), `touches_repo` is
+always derived from it (an authored value is never trusted), and an ambiguous binding
+is a first-class `target_ambiguous`/`target_question` state. `routes/graph.py` checks
+targets against the project's registered areas at plan create/edit (422 on an unknown
+area) and refuses to start a plan with an unresolved target question (409 carrying the
+question) — the target is pinned at slice time precisely so it cannot be discovered at
+runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
@@ -293,12 +300,17 @@ Cancel with `/goal/cancel`.
 + **Wiki:** `POST /.../wiki-note/draft` spawns a run that emits a `wiki.draft` event
   (preview) → `POST /.../wiki-note/commit` writes the markdown into the project's
   `wiki/` and rebuilds the index.
-+ **Workflow:** `POST /.../promote-workflow` has an architect agent decompose the
-  conversation. The default linear path emits ordered steps. When
-  `PROXIMA_FEATURE_WORKFLOW_GRAPH=1`, it instead emits a normalized typed DAG draft;
-  the frontend materializes that as a queued graph job so the owner can inspect/edit
-  the frozen plan before explicit start. `POST /api/graph/jobs/{id}/save-template`
-  persists a reviewed plan as a reusable graph-backed `workflow` row.
++ **Workflow:** `POST /.../promote-workflow` has an architect agent slice the
+  conversation. The legacy linear path emits ordered steps. When
+  `PROXIMA_FEATURE_WORKFLOW_GRAPH=1`, it instead emits a normalized typed DAG draft —
+  a **runnable plan**, not a template: the frontend materializes it as a queued graph
+  job the owner can inspect/edit and start directly (run-first, T2). The architect
+  prompt carries the project's registered code areas, and every sliced job arrives
+  tagged with its `target` (one code area or `ops`) and derived `touches_repo`; when
+  the slicer cannot decide it marks the job ambiguous with a question instead of
+  guessing, and the plan refuses to start until the owner picks a target. Saving as a
+  reusable Recipe (`POST /api/graph/jobs/{id}/save-template`) is an optional, separate
+  act — available before or after the run, from the canvas or from a Tasks plan row.
 
 ### 6. Workflow → Job → execution
 
@@ -333,11 +345,20 @@ reports a real bounding box because the canvas is infinite and positions may be
 negative. Node positions are part of the graph and are persisted by the same explicit
 **Save plan** action as every other plan edit, never written behind the owner's back.
 Drag-to-connect is pointer-only, so the inspector's dependency checkboxes remain the
-keyboard path to the same edges. The screen lists graph jobs separately from classic
-Activity, allows node/dependency/layout edits only while queued, and exposes the
-correction and approval protocol once execution begins. Saved graph templates are
-listed and reused only through the gated graph surface; classic workflow lists and
-execution remain strictly linear.
+keyboard path to the same edges. The screen allows node/dependency/layout edits only
+while queued, and exposes the correction and approval protocol once execution begins.
+Saved graph templates are listed and reused only through the gated graph surface;
+classic workflow lists and execution remain strictly linear.
+
+The **Tasks screen** (`ActivityScreen.tsx`) is the index of plans + their jobs (T2):
+graph plans appear alongside classic linear tasks, and a plan row expands into its
+ordered job list — each job showing its name, target badge, touches-repo marker, and
+live status (`planProjection.ts` computes the deterministic order and joins
+`node_states`). List view and graph view are two projections of the same plan:
+branch-less plans read as a plain list, and branching plans offer the read-only
+dependency canvas as a toggle (the same `GraphCanvas` component the editor uses —
+extracted, not duplicated). Plan rows also carry **Open plan** (to the canvas, where
+review actions live) and **Save as Recipe** (the same save-template mechanics).
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
@@ -373,6 +394,18 @@ Lifecycle state is one `job_worktrees` row per job
 deleting a job tears its worktree down. Snapshot-then-merge means partial agent
 work is durable in the worktree across crashes - the substrate slice 5's
 continuation turns (T5) resume in.
+
+**Graph plans reuse this same machinery per job-in-plan (slice 3).** When the flag is
+on and a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`
+resolves their one code-area target to `jobs.target_area_id` and cuts the plan's
+worktree before claiming `running` — same loud-refusal ordering as the linear start. A
+plan's repo jobs must share ONE code area (Phase-1: one worktree row per job); a
+multi-area plan refuses to start with a split-the-plan message. The worker's cwd seam
+is node-aware: a `wf_node` run executes in the worktree only when ITS node touches the
+repo, while ops siblings run at the project root, where their artifact outputs belong.
+The final `POST /api/graph/jobs/{id}/approve` is the merge point, with the identical
+guarded-merge/park-in-review contract as the linear approve. Flag off: none of this
+runs and target tags are inert metadata.
 
 ### 7. Schedule (cron)
 

@@ -14,7 +14,12 @@ opens the graph Editor directly.
 
 ## What it provides
 
-- An architect turns a chat into a typed directed acyclic graph (DAG).
+- An architect **slices** a chat into a typed directed acyclic graph (DAG) of jobs —
+  a **plan** that is directly runnable (run-first, T2): no template has to be saved
+  first, and saving one (a reusable Recipe) is an optional act before or after the run.
+- Every sliced job carries its **work binding** (T1): a `target` naming one project
+  code area or `ops`, with `touches_repo` derived from it. An ambiguous binding is a
+  surfaced question that blocks start, never a runtime guess.
 - The owner reviews, lays out, and edits the frozen plan before explicitly starting it.
 - Every node attempt runs in a fresh hidden ACP session against the selected runner.
 - Each node may name **its own agent**; nodes without one use the job's agent.
@@ -110,6 +115,9 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | `rules` | Agent nodes only. Prose constraints on *how* to do it. Omitted from the prompt entirely when unset. |
 | `skill_ids` | Agent nodes only. Skill/tool hints listed in the prompt as suggestions — the node's agent profile still decides what is actually enabled. Deduped; absent when empty. |
 | `profile_id` | Agent nodes only. The agent this node runs as; absent/null = the job's agent. |
+| `target` | Agent nodes only. The ONE container area this job works against: a registered code area's rel_path (`.`, `apps/web`, …) or `ops`. Absent on pre-slice-3 plans, which keep their old behavior (no repo binding). |
+| `touches_repo` | Agent nodes only. **Always derived** from `target` at normalization — an authored value is never trusted, because a lie here would let a repo job dodge its worktree. |
+| `target_ambiguous`, `target_question` | Agent nodes only. The slicer could not decide where the job works; the question surfaces in the plan and start is refused (409) until the owner picks a target. Choosing a target IS the resolution: a node with a target cannot be ambiguous. |
 | `x`, `y` | Canvas position. Absent until the node is dragged, which is what lets un-placed nodes stay auto-laid-out. |
 
 `expected_output` and `rules` are the per-step detail a linear recipe carried, and they
@@ -164,6 +172,38 @@ The point of modelling the entry point as a node is that `schedule`, `webhook`, 
 Artifact references cannot escape the job workspace. A prompt or runner answer cannot
 grant permission to read source, config, secrets, or unrelated paths.
 
+### Per-job work binding (targets)
+
+The architect prompt is told the project's registered code areas (T1's read surface)
+and must bind every job to exactly one target — a code area when the job edits that
+repo, `ops` for everything else — **at slice time, not at runtime**: the safe-copy
+worktree must be cut from a known repo before any agent starts. When the target is
+genuinely unclear, the slicer marks the job ambiguous with a question for the owner
+instead of guessing.
+
+Enforcement lives at two gates:
+
+- **Plan create/edit** (`POST /api/graph/jobs`, `PATCH .../graph`): a target that
+  names no registered code area (and is not `ops`) is a 422 naming the job, the bad
+  target, and the areas that do exist. A plan with repo jobs but no project is a 422
+  too — there are no code areas to bind to.
+- **Plan start** (`POST .../start`): an unresolved target question is a 409 carrying
+  the question(s); the owner answers it by picking a target in the node inspector's
+  **Works in** field (the answer clears the question — one act, no separate flag).
+
+With `PROXIMA_FEATURE_REPO_WORKTREES` **on**, start also reserves the repo jobs' path:
+the plan's single code-area target is pinned to `jobs.target_area_id` and the slice-2
+worktree is cut *before* the plan claims `running` (a refused cut — dirty repo,
+detached HEAD, no commits — is a 409 and the plan stays queued). Phase-1 keeps **one
+worktree per plan**, so all repo jobs of a plan must target the *same* code area; a
+multi-area plan refuses to start with a split-the-plan message. During execution the
+worker's cwd seam is **node-aware**: a node runs in the worktree only when *it*
+touches the repo — its ops siblings run at the project root, where their artifact
+outputs belong. The final plan approve is the merge point, with the same guarded
+`--no-ff` local merge and park-in-review-on-conflict contract as a linear repo job.
+Flag **off**: targets are inert metadata, no worktree is cut, and execution is exactly
+as before slice 3.
+
 ## Lifecycle
 
 ```text
@@ -206,9 +246,10 @@ attempt cannot overwrite a corrected or rerun node.
 
 1. Enable the flag and restart Proxima.
 2. Open a chat and choose **To graph**. The architect result opens as a queued plan.
-3. Inspect each node. While queued, edit its name, instruction, **agent**, output
-   contract, review gate, or dependencies; add/remove nodes; add a trigger; drag
-   nodes and connections; then choose **Save plan**.
+3. Inspect each node. While queued, edit its name, instruction, **Works in** target
+   (the T1 binding; an open target question shows here and is answered by picking),
+   **agent**, output contract, review gate, or dependencies; add/remove nodes; add a
+   trigger; drag nodes and connections; then choose **Save plan**.
 4. Optionally choose **Save template**.
 5. Choose **Approve plan & start**. This is the mandatory human execution gate.
 6. Inspect live node state and validated outputs on the canvas.
@@ -341,9 +382,24 @@ threads in the sidebar); a template delete removes the workflows row and its sch
 (a schedule for a deleted workflow could never run). Produced artifacts stay — they are
 deliverables, not run records.
 
-A job's **review opens where it can be acted on**: the Home attention strip and a
-schedule's "Run now" pass the job's `engine` up, and a graph job routes to this canvas
-instead of the linear TaskWorkspace, which has no way to approve a graph gate.
+A job's **review opens where it can be acted on**: the Home attention strip, the Tasks
+screen's plan rows, and a schedule's "Run now" pass the job's `engine` up, and a graph
+job routes to this canvas instead of the linear TaskWorkspace, which has no way to
+approve a graph gate.
+
+### Tasks: plans + their jobs
+
+The Tasks screen is the index of plans (T2): every graph plan appears alongside the
+classic linear tasks, and a plan row **expands into its ordered job list** — name,
+target badge (`repo`, a sub-path, `ops`, or a red `where?` for an unanswered target
+question), touches-repo marker, and live status. List view and graph view are **two
+projections of one plan**: branch-less plans read as a plain list; branching plans
+offer the read-only canvas as a toggle, rendered by the same `GraphCanvas` component
+the editor uses. Each plan row carries **Open plan** (the canvas, where editing and
+review actions live) and **Save as Recipe** (the same save-template modal and
+endpoint). A repo plan additionally shows its worktree state chip (`active`,
+`merged`, `conflict`). With the graph feature off, the Tasks screen shows classic
+tasks only, exactly as before.
 
 Selecting a plan opens it showing the whole graph with nothing selected. The live poll
 keeps an existing selection but drops one whose node has disappeared.
@@ -398,12 +454,14 @@ are:
 
 | Layer | Files |
 | --- | --- |
-| Graph validation/readiness | `apps/api/proxima_api/graph.py` |
+| Graph validation/readiness (incl. target tags) | `apps/api/proxima_api/graph.py` |
 | Dispatch and prompt isolation | `graph_executor.py`, `workflows.py` |
 | Typed advancement | `graph_advancers.py`, `worker.py` |
 | Lifecycle/correction API | `routes/graph.py`, `state.py` |
+| Repo-plan worktrees (flag-gated) | `worktrees.py`, `routes/graph.py`, `worker.py` |
 | Architect promotion | `routes/chat.py`, `run_drafts.py`, `workflows.py` |
-| Canvas | `apps/web/src/screens/GraphScreen.tsx`, `graphLayout.ts` |
+| Canvas | `apps/web/src/screens/GraphScreen.tsx`, `components/workflows/GraphCanvas.tsx`, `screens/graphLayout.ts` |
+| Tasks plan index | `apps/web/src/screens/ActivityScreen.tsx`, `components/tasks/planProjection.ts` |
 | Typed client | `apps/web/src/api/graph.ts`, `types.ts` |
 
 ## Scheduling a graph

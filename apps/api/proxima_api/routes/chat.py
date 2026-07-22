@@ -482,7 +482,22 @@ def register(app, deps):
             payload.engine == "auto"
             and features.enabled(feature_cfg, features.WORKFLOW_GRAPH)
         )
-        prompt = wf.architect_system(graph=graph_planning) + "\n\nCONVERSATION:\n" + convo
+        # Per-job targets (T1/T2): the slicer binds each job to a real container
+        # area, so it must be told which ones exist. No project ⇒ no code areas
+        # ⇒ every job targets ops.
+        code_areas: list[str] = []
+        if graph_planning and session["project_id"]:
+            code_areas = [
+                r["rel_path"] for r in db().execute(
+                    "SELECT rel_path FROM project_areas WHERE project_id = ? "
+                    "AND kind = 'code' AND source != 'excluded' ORDER BY rel_path",
+                    (session["project_id"],),
+                ).fetchall()
+            ]
+        prompt = (
+            wf.architect_system(graph=graph_planning, code_areas=code_areas)
+            + "\n\nCONVERSATION:\n" + convo
+        )
         run_kind = "workflow_graph_draft" if graph_planning else "workflow_draft"
         cur = db().execute(
             """

@@ -5798,6 +5798,127 @@ div.result-media {
 	margin-left: 7px;
 	vertical-align: middle;
 }
+/* Plans on the Tasks screen (slice 3, T2): a plan row expands into its ordered
+   job list; branching plans also offer the read-only canvas projection. */
+.job-pill.plan {
+	margin-left: var(--space-2);
+	vertical-align: middle;
+	color: var(--ui-accent);
+	border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary));
+	background: var(--ui-row-active-background);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.plan-row {
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+}
+.plan-row .plan-row-head {
+	border-bottom: 0;
+}
+/* The glyph is ▸, so collapsed sits at 0° (right) and open rotates to ▾ —
+   same correction .graph-col-head applies over the ▾-based .chevron default. */
+.plan-row .chevron {
+	margin-right: var(--space-2);
+	transform: rotate(0deg);
+}
+.plan-row .chevron.open {
+	transform: rotate(90deg);
+}
+.plan-detail {
+	padding: var(--space-2) var(--space-5) var(--space-4) var(--space-8);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	background: var(--ui-surface-subtle);
+}
+.plan-projection {
+	align-self: flex-start;
+}
+.plan-job-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface);
+}
+.plan-job-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-3);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+	font-size: var(--text-sm);
+}
+.plan-job-row:last-child {
+	border-bottom: 0;
+}
+.plan-job-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+}
+/* The T1 work-binding chip: where a job runs. Repo bindings carry the branch
+   mark; an open "where?" question is the loudest of the three. */
+.plan-target {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	border-radius: var(--radius-full);
+	padding: 1px var(--space-2);
+	font-size: var(--text-2xs);
+	font-weight: 600;
+	border: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface);
+	color: var(--ui-text-secondary);
+	white-space: nowrap;
+}
+.plan-target.is-repo {
+	color: var(--ui-accent);
+	border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary));
+	background: var(--ui-row-active-background);
+}
+.plan-target.is-open {
+	color: var(--ui-danger-strong);
+	border-color: var(--ui-danger-border);
+	background: var(--ui-danger-bg);
+}
+.plan-repo-mark {
+	font-weight: 700;
+}
+.plan-job-error {
+	color: var(--ui-danger-strong);
+	font-weight: 700;
+}
+.plan-canvas {
+	display: flex;
+	height: 320px;
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface);
+	overflow: hidden;
+}
+/* The editor's canvas floor would overflow this fixed-height read-only box;
+   inside it the svg simply fills the box and the fit-to-view does the rest. */
+.plan-canvas .graph-canvas {
+	min-height: 0;
+}
+.plan-actions {
+	display: flex;
+	gap: var(--space-2);
+}
+/* The unresolved where-does-this-run question in the node inspector. */
+.graph-target-question {
+	margin: 0;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--ui-danger-border);
+	border-radius: var(--radius-sm);
+	background: var(--ui-danger-bg);
+	color: var(--ui-danger-strong);
+	font-size: var(--text-xs);
+}
 
 .job-step-output {
 	background: var(--ui-surface-subtle);

@@ -17,7 +17,10 @@ import {
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
 import { runnerCapabilities } from '../api/profiles'
+import { listProjectAreas } from '../api/projects'
 import { IconTrash } from '../components/shell/icons'
+import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
+import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
@@ -43,17 +46,9 @@ import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
 
-function stateFor(job: GraphJob, nodeId: string): GraphNodeState | undefined {
-  return job.node_states.find(state => state.node_id === nodeId)
-}
-
 function outputText(state?: GraphNodeState): string {
   if (state?.output == null) return ''
   return typeof state.output === 'string' ? state.output : JSON.stringify(state.output, null, 2)
-}
-
-function statusLabel(status: GraphJob['status'] | GraphNodeState['status']): string {
-  return status.replaceAll('_', ' ')
 }
 
 /** Plan statuses phrased as what the owner can do next — "kok gak bisa diedit?" should
@@ -109,25 +104,6 @@ function useDragWidth(key: string, fallback: number, min: number, max: number): 
   return [width, start]
 }
 
-const ZOOM_MIN = 0.35
-const ZOOM_MAX = 2.5
-const HANDLE_RADIUS = 6
-
-type CanvasView = { x: number; y: number; k: number }
-type Point = { x: number; y: number }
-
-/** Pointer gesture in progress. The canvas can only be doing one at a time. */
-type Gesture =
-  | { kind: 'pan'; from: Point; origin: Point }
-  | { kind: 'node'; nodeId: string; grab: Point }
-  | { kind: 'link'; from: string }
-  | null
-
-function edgePath(from: Point, to: Point): string {
-  const bend = Math.max(36, (to.x - from.x) / 2)
-  return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`
-}
-
 /** True when `from` can already be reached from `to`, i.e. the edge would cycle. */
 function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
   const seen = new Set<string>()
@@ -142,316 +118,6 @@ function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
   return false
 }
 
-function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDeselect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddTrigger, hasTrigger }: {
-  job: GraphJob
-  plan: WorkflowGraph
-  profiles: Profile[]
-  selectedId: string | null
-  onSelect: (nodeId: string) => void
-  /** Fired when the background is clicked — closing the inspector by clicking away. */
-  onDeselect: () => void
-  editable: boolean
-  onMoveNode: (nodeId: string, x: number, y: number) => void
-  onConnect: (from: string, to: string) => void
-  onDisconnect: (from: string, to: string) => void
-  onAddNode: () => void
-  onAddTrigger: () => void
-  hasTrigger: boolean
-}) {
-  const layout = React.useMemo(() => layoutGraph(plan), [plan])
-  const positions = React.useMemo(
-    () => new Map(layout.nodes.map(node => [node.id, node])),
-    [layout.nodes],
-  )
-  const svgRef = React.useRef<SVGSVGElement | null>(null)
-  const [view, setView] = React.useState<CanvasView>({ x: 0, y: 0, k: 1 })
-  const [gesture, setGesture] = React.useState<Gesture>(null)
-  const [linkAt, setLinkAt] = React.useState<Point | null>(null)
-  const [selectedEdge, setSelectedEdge] = React.useState<string | null>(null)
-
-  // A gesture reads the newest layout/view/callbacks without re-subscribing its
-  // window listeners on every pointermove.
-  const live = React.useRef({ view, layout, positions, plan, onMoveNode, onConnect })
-  live.current = { view, layout, positions, plan, onMoveNode, onConnect }
-
-  const toGraphPoint = React.useCallback((event: { clientX: number; clientY: number }): Point => {
-    const rect = svgRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    const { view: current } = live.current
-    return {
-      x: (event.clientX - rect.left - current.x) / current.k,
-      y: (event.clientY - rect.top - current.y) / current.k,
-    }
-  }, [])
-
-  const zoomTo = React.useCallback((nextK: number, focus?: Point) => {
-    setView(current => {
-      const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextK))
-      const rect = svgRef.current?.getBoundingClientRect()
-      const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
-      // Keep whatever sits under `at` pinned there while the scale changes.
-      return {
-        k,
-        x: at.x - (at.x - current.x) * (k / current.k),
-        y: at.y - (at.y - current.y) * (k / current.k),
-      }
-    })
-  }, [])
-
-  // React attaches wheel listeners passively at the root, so a non-passive native
-  // listener is the only way to zoom without the page scrolling underneath.
-  React.useEffect(() => {
-    const element = svgRef.current
-    if (!element) return
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault()
-      const rect = element.getBoundingClientRect()
-      const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top }
-      setView(current => {
-        const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current.k * Math.exp(-event.deltaY * 0.0015)))
-        return {
-          k,
-          x: focus.x - (focus.x - current.x) * (k / current.k),
-          y: focus.y - (focus.y - current.y) * (k / current.k),
-        }
-      })
-    }
-    element.addEventListener('wheel', onWheel, { passive: false })
-    return () => element.removeEventListener('wheel', onWheel)
-  }, [])
-
-  const fit = React.useCallback(() => {
-    const rect = svgRef.current?.getBoundingClientRect()
-    const { layout: box } = live.current
-    if (!rect || !box.width || !box.height) return
-    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(rect.width / box.width, rect.height / box.height)))
-    // Offset by the content origin, which is negative once a node has been
-    // dragged left of or above where the auto-layout started.
-    setView({
-      k,
-      x: (rect.width - box.width * k) / 2 - box.x * k,
-      y: (rect.height - box.height * k) / 2 - box.y * k,
-    })
-  }, [])
-
-  // Frame the graph once it is known, so a plan never opens scrolled off-screen.
-  const framed = React.useRef(false)
-  React.useEffect(() => {
-    if (framed.current || !layout.nodes.length) return
-    framed.current = true
-    fit()
-  }, [fit, layout.nodes.length])
-
-  // Listening on the window rather than capturing the pointer means a gesture
-  // still completes when the pointer is released outside the canvas.
-  React.useEffect(() => {
-    if (!gesture) return
-    const onMove = (event: PointerEvent) => {
-      if (gesture.kind === 'pan') {
-        setView(current => ({
-          ...current,
-          x: gesture.origin.x + (event.clientX - gesture.from.x),
-          y: gesture.origin.y + (event.clientY - gesture.from.y),
-        }))
-        return
-      }
-      const point = toGraphPoint(event)
-      if (gesture.kind === 'node') {
-        live.current.onMoveNode(
-          gesture.nodeId,
-          Math.round(point.x - gesture.grab.x),
-          Math.round(point.y - gesture.grab.y),
-        )
-        return
-      }
-      setLinkAt(point)
-    }
-    const onUp = (event: PointerEvent) => {
-      if (gesture.kind === 'link') {
-        const point = toGraphPoint(event)
-        const { layout: currentLayout, plan: currentPlan, onConnect: connect } = live.current
-        let target: string | null = null
-        for (let index = currentLayout.nodes.length - 1; index >= 0; index -= 1) {
-          const node = currentLayout.nodes[index]
-          if (point.x >= node.x && point.x <= node.x + node.width
-            && point.y >= node.y && point.y <= node.y + node.height) {
-            target = node.id
-            break
-          }
-        }
-        const targetNode = currentPlan.nodes.find(node => node.id === target)
-        // A trigger is an entry point, so it can never be the far end of an edge.
-        if (target && targetNode && target !== gesture.from && targetNode.type !== 'trigger') {
-          connect(gesture.from, target)
-        }
-      }
-      setGesture(null)
-      setLinkAt(null)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-    return () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-  }, [gesture, toGraphPoint])
-
-  function beginPan(event: React.PointerEvent<SVGSVGElement>) {
-    if (event.button !== 0) return
-    setSelectedEdge(null)
-    onDeselect()
-    setGesture({ kind: 'pan', from: { x: event.clientX, y: event.clientY }, origin: { x: view.x, y: view.y } })
-  }
-
-  function beginNodeDrag(event: React.PointerEvent, nodeId: string) {
-    if (event.button !== 0) return
-    event.stopPropagation()
-    onSelect(nodeId)
-    if (!editable) return
-    const position = positions.get(nodeId)
-    if (!position) return
-    const point = toGraphPoint(event)
-    setGesture({ kind: 'node', nodeId, grab: { x: point.x - position.x, y: point.y - position.y } })
-  }
-
-  function beginLink(event: React.PointerEvent, nodeId: string) {
-    if (event.button !== 0 || !editable) return
-    event.stopPropagation()
-    setLinkAt(toGraphPoint(event))
-    setGesture({ kind: 'link', from: nodeId })
-  }
-
-  const linking = gesture?.kind === 'link' ? gesture : null
-  const linkSource = linking ? positions.get(linking.from) : undefined
-
-  return <div className="graph-canvas-scroll">
-    {/* Adding a node is a canvas act, so it lives on the canvas — reachable
-        whether or not a node happens to be selected. */}
-    {editable && <div className="graph-canvas-tools">
-      <button className="ghost-button" onClick={onAddNode}>+ Node</button>
-      <button className="ghost-button" onClick={onAddTrigger} disabled={hasTrigger}>+ Trigger</button>
-    </div>}
-    <div className="graph-zoom-controls">
-      <button className="row-action" onClick={() => zoomTo(view.k * 1.25)} aria-label="Zoom in">+</button>
-      <button className="row-action" onClick={() => zoomTo(view.k / 1.25)} aria-label="Zoom out">−</button>
-      <button className="row-action" onClick={fit} aria-label="Fit graph to view">⤢</button>
-    </div>
-    <svg
-      ref={svgRef}
-      className={`graph-canvas${gesture ? ` grabbing-${gesture.kind}` : ''}`}
-      onPointerDown={beginPan}
-      aria-label={`${job.title} workflow graph`}
-    >
-      <defs>
-        <marker id="graph-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-          <path className="graph-arrow-head" d="M0,0 L0,6 L9,3 z" />
-        </marker>
-      </defs>
-      <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-        {plan.edges.map(edge => {
-          const source = positions.get(edge.from)
-          const target = positions.get(edge.to)
-          if (!source || !target) return null
-          const key = `${edge.from}:${edge.to}`
-          const from = { x: source.x + source.width, y: source.y + source.height / 2 }
-          const to = { x: target.x, y: target.y + target.height / 2 }
-          const selected = selectedEdge === key
-          return <g key={key} className={`graph-edge-group${selected ? ' selected' : ''}`}>
-            <path className="graph-edge" d={edgePath(from, to)} markerEnd="url(#graph-arrow)" />
-            {/* A 2px curve is far too thin to click; this invisible one is the hit area. */}
-            <path
-              className="graph-edge-hit"
-              d={edgePath(from, to)}
-              onPointerDown={event => {
-                if (!editable) return
-                event.stopPropagation()
-                setSelectedEdge(current => current === key ? null : key)
-              }}
-            />
-            {selected && editable && <g
-              className="graph-edge-delete"
-              role="button"
-              tabIndex={0}
-              aria-label={`Remove connection from ${edge.from} to ${edge.to}`}
-              onPointerDown={event => {
-                event.stopPropagation()
-                setSelectedEdge(null)
-                onDisconnect(edge.from, edge.to)
-              }}
-              onKeyDown={event => {
-                if (event.key !== 'Enter' && event.key !== ' ') return
-                setSelectedEdge(null)
-                onDisconnect(edge.from, edge.to)
-              }}
-            >
-              <circle cx={(from.x + to.x) / 2} cy={(from.y + to.y) / 2} r="9" />
-              <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 + 4}>×</text>
-            </g>}
-          </g>
-        })}
-
-        {linking && linkSource && linkAt && <path
-          className="graph-edge graph-edge-pending"
-          d={edgePath(
-            { x: linkSource.x + linkSource.width, y: linkSource.y + linkSource.height / 2 },
-            linkAt,
-          )}
-        />}
-
-        {layout.nodes.map(position => {
-          const definition = plan.nodes.find(node => node.id === position.id)
-          if (!definition) return null
-          const state = stateFor(job, definition.id)
-          const status = state?.status ?? 'pending'
-          const trigger = definition.type === 'trigger'
-          const agent = definition.profile_id
-            ? profiles.find(profile => profile.id === definition.profile_id)
-            : undefined
-          const subtitle = trigger
-            ? 'manual'
-            : `${definition.output_kind}${agent ? ` · ${agent.name}` : ''}`
-          return <g
-            key={definition.id}
-            className={`graph-node st-${status}${definition.id === selectedId ? ' selected' : ''}${trigger ? ' is-trigger' : ''}${editable ? ' draggable' : ''}`}
-            transform={`translate(${position.x} ${position.y})`}
-            role="button"
-            tabIndex={0}
-            aria-label={`${definition.name}, ${statusLabel(status)}`}
-            onPointerDown={event => beginNodeDrag(event, definition.id)}
-            onKeyDown={event => {
-              if (event.key === 'Enter' || event.key === ' ') onSelect(definition.id)
-            }}
-          >
-            <rect width={position.width} height={position.height} rx="12" />
-            <circle className="graph-node-dot" cx="22" cy="24" r="6" />
-            <text className="graph-node-name" x="38" y="29">
-              {definition.name.length > 24 ? `${definition.name.slice(0, 23)}…` : definition.name}
-            </text>
-            <text className="graph-node-kind" x="22" y="55">{subtitle}</text>
-            <text className="graph-node-status" x="22" y="76">
-              {statusLabel(status)}{definition.review_required ? ' · review gate' : ''}
-            </text>
-            {editable && !trigger && <circle
-              className="graph-handle graph-handle-in"
-              cx="0"
-              cy={position.height / 2}
-              r={HANDLE_RADIUS}
-            />}
-            {editable && <circle
-              className="graph-handle graph-handle-out"
-              cx={position.width}
-              cy={position.height / 2}
-              r={HANDLE_RADIUS}
-              onPointerDown={event => beginLink(event, definition.id)}
-            />}
-          </g>
-        })}
-      </g>
-    </svg>
-  </div>
-}
 
 export function GraphScreen({
   token,
@@ -510,6 +176,10 @@ export function GraphScreen({
   const [pendingTest, setPendingTest] = React.useState<string | null>(null)
   const [skillsByRunner, setSkillsByRunner] = React.useState<Record<string, DetectedSkill[]>>({})
   const skillFetches = React.useRef(new Set<string>())
+  // The plan project's code areas (T1) — the vocabulary of the "Works in" field
+  // and the authoring chat's target instruction. Keyed per slug so switching
+  // projects never shows another project's repos.
+  const [areasBySlug, setAreasBySlug] = React.useState<Record<string, string[]>>({})
   const loadSkills = React.useCallback((runnerId: string | undefined) => {
     if (!runnerId || skillFetches.current.has(runnerId)) return
     skillFetches.current.add(runnerId)
@@ -738,6 +408,15 @@ export function GraphScreen({
   }
 
   const mentionSlug = job?.project_slug ?? activeProject?.slug ?? undefined
+  React.useEffect(() => {
+    if (!mentionSlug || areasBySlug[mentionSlug]) return
+    let live = true
+    listProjectAreas(token, mentionSlug)
+      .then(areas => { if (live && mounted.current) setAreasBySlug(current => ({ ...current, [mentionSlug]: areas.code_areas.map(area => area.rel_path) })) })
+      .catch(() => { /* areas are an enhancement — the selector still offers Ops */ })
+    return () => { live = false }
+  }, [token, mentionSlug, areasBySlug])
+  const codeAreas = (mentionSlug ? areasBySlug[mentionSlug] : undefined) ?? []
   const mentionItems = useProjectMentionItems(token, mentionSlug)
 
   React.useEffect(() => {
@@ -1185,7 +864,7 @@ export function GraphScreen({
             category: '',
             inputs: [],
             graph: plan,
-          }, text)}
+          }, text, codeAreas)}
           applyReply={raw => {
             const patch = parseGraphDraft(raw)
             if (!patch?.graph) return false
@@ -1271,6 +950,36 @@ export function GraphScreen({
                   onChange={value => updateSelected({ rules: value })}
                   ariaLabel="Node rules"
                 /></label>
+                {definition.target_ambiguous && <p className="graph-target-question" role="alert">
+                  This job needs an answer before the plan can start: {definition.target_question || 'which area should it work in?'}
+                </p>}
+                <label>Works in<select
+                  value={definition.target_ambiguous ? '' : (definition.target ?? '')}
+                  onChange={event => {
+                    const value = event.target.value
+                    // Picking a target IS the answer to an ambiguous job (T1) —
+                    // the question clears with the choice, never silently.
+                    // touches_repo mirrors the server's derivation for live
+                    // display only; the server recomputes it and never trusts it.
+                    updateSelected({
+                      target: value || null,
+                      target_ambiguous: false,
+                      target_question: null,
+                      touches_repo: !!value && value !== 'ops',
+                    })
+                  }}
+                >
+                  {definition.target_ambiguous
+                    ? <option value="">Choose where this job works…</option>
+                    : <option value="">Anywhere — the project folder</option>}
+                  <option value="ops">Ops — notes, reports, files</option>
+                  {codeAreas.map(area => <option key={area} value={area}>
+                    {area === '.' ? 'Repo — the project root' : `Repo — ${area}`}
+                  </option>)}
+                </select></label>
+                {definition.touches_repo && <p className="muted graph-field-note">
+                  A repo job: it gets its own isolated copy of the code, and you review the change before it lands.
+                </p>}
                 <label>Agent<select
                   value={definition.profile_id ?? ''}
                   onChange={event => updateSelected({
@@ -1345,6 +1054,13 @@ export function GraphScreen({
                 <p className="graph-eyebrow">Rules</p><p>{definition.rules}</p>
               </div>}
               <dl>
+                {definition.type !== 'trigger' && <div><dt>Works in</dt><dd>
+                  {definition.target_ambiguous
+                    ? 'Unanswered — where should it work?'
+                    : definition.target == null ? 'The project folder'
+                    : definition.target === 'ops' ? 'Ops'
+                    : `Repo — ${definition.target === '.' ? 'the project root' : definition.target}`}
+                </dd></div>}
                 <div><dt>Output</dt><dd>{definition.output_kind}</dd></div>
                 {definition.type !== 'trigger' && <div><dt>Agent</dt><dd>
                   {profiles.find(profile => profile.id === definition.profile_id)?.name ?? 'Run default'}
@@ -1381,73 +1097,4 @@ export function GraphScreen({
       onRun={async input => { await createFromTemplate(runningTemplate, input) }}
     />}
   </section>
-}
-
-const INPUT_KINDS: WorkflowInput['kind'][] = ['text', 'url', 'number', 'file']
-const slugifyId = (value: string) =>
-  value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-
-// Saving a plan as a template is the moment its reusable contract is defined, so it is
-// also where {{inputs}} are declared: a template is what a fresh run and a schedule are
-// both built from, and each needs to know what to ask for.
-function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
-  title: string
-  /** What the authoring chat proposed — a starting point, still fully editable here. */
-  initial?: { description?: string; category?: string; inputs?: WorkflowInput[] }
-  busy: boolean
-  onCancel: () => void
-  onSave: (meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) => void
-}) {
-  const [name, setName] = React.useState(title)
-  const [description, setDescription] = React.useState(initial?.description ?? '')
-  const [category, setCategory] = React.useState(initial?.category ?? '')
-  const [inputs, setInputs] = React.useState<WorkflowInput[]>(initial?.inputs ?? [])
-
-  const patch = (index: number, next: Partial<WorkflowInput>) =>
-    setInputs(current => current.map((item, i) => i === index ? { ...item, ...next } : item))
-  const close = () => { if (!busy) onCancel() }
-
-  return <div className="modal-scrim" onClick={close}><div className="modal-card graph-template-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true">
-    <h3>Save as reusable workflow</h3>
-    <label>Name<input autoFocus value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
-    <label>Category <span className="muted">(optional)</span><input value={category} disabled={busy} placeholder="e.g. content" onChange={event => setCategory(event.target.value)} /></label>
-    <label>Description <span className="muted">(optional)</span><textarea rows={2} value={description} disabled={busy} placeholder="What this workflow does" onChange={event => setDescription(event.target.value)} /></label>
-
-    <p className="eyebrow">Inputs <span className="muted">(optional)</span></p>
-    <p className="muted graph-field-note">
-      What each run should be asked for. Refer to one from any node with <code>{'{{id}}'}</code>.
-    </p>
-    <div className="wf-inputs">
-      {inputs.length > 0 && <div className="wf-input-row wf-input-head">
-        <span>Label</span><span>ID</span><span>Kind</span><span>Required</span><span />
-      </div>}
-      {inputs.map((item, index) => <div className="wf-input-row" key={index}>
-        <input className="wf-input-cell" value={item.label} disabled={busy} placeholder="e.g. Topic"
-          onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} />
-        <input className="wf-input-cell" value={item.id} disabled={busy} placeholder="topic"
-          onChange={event => patch(index, { id: slugifyId(event.target.value) })} />
-        <select className="wf-input-cell" value={item.kind} disabled={busy}
-          onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
-          {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
-        </select>
-        <label className="wf-input-req"><input type="checkbox" checked={item.required} disabled={busy}
-          onChange={event => patch(index, { required: event.target.checked })} /> required</label>
-        <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={busy}
-          onClick={() => setInputs(current => current.filter((_, i) => i !== index))}>×</button>
-      </div>)}
-      <button className="ghost-button wf-add-step" disabled={busy}
-        onClick={() => setInputs(current => [...current, { id: '', label: '', kind: 'text', required: false }])}>+ Add input</button>
-    </div>
-
-    <div className="modal-actions">
-      <button className="ghost-button" onClick={close} disabled={busy}>Cancel</button>
-      <button className="primary-button" disabled={busy || !name.trim()} onClick={() => onSave({
-        name: name.trim(),
-        description: description.trim(),
-        category: category.trim() || 'other',
-        // A half-typed row is noise, not a declaration.
-        inputs: inputs.filter(item => item.id.trim() && item.label.trim()),
-      })}>{busy ? 'Saving…' : 'Save template'}</button>
-    </div>
-  </div></div>
 }
