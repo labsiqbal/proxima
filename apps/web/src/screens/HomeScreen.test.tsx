@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeScreen } from "./HomeScreen";
 import { getDashboard } from "../api/dashboard";
-import { listReferenceFiles } from "../api/files";
+import { listArtifacts, listReferenceFiles } from "../api/files";
 
 vi.mock("../api/dashboard", () => ({ getDashboard: vi.fn() }));
 vi.mock("../api/commands", () => ({
@@ -12,6 +12,7 @@ vi.mock("../api/commands", () => ({
 }));
 vi.mock("../api/files", () => ({
 	listReferenceFiles: vi.fn(),
+	listArtifacts: vi.fn(),
 	uploadFile: vi.fn(),
 }));
 
@@ -73,6 +74,7 @@ describe("HomeScreen Ops task composer", () => {
 			files: [{ path: "docs/release-brief.md" }],
 			truncated: false,
 		});
+		vi.mocked(listArtifacts).mockResolvedValue({ artifacts: [] });
 	});
 
 	it("submits a guarded project-scoped task", async () => {
