@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 21 tables. Applied migration version: **22**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -27,6 +27,33 @@ SQLite (WAL mode). 21 tables. Applied migration version: **22**. This is the exa
 | `key` | TEXT | yes |  | PK |
 | `value` | TEXT | NO |  |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
+### artifact_records
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `project_id` | INTEGER | NO |  | → `projects.id` (ON DELETE CASCADE) |
+| `slug` | TEXT | NO |  |  |
+| `name` | TEXT | NO |  |  |
+| `type` | TEXT | NO |  |  |
+| `path` | TEXT | NO |  |  |
+| `size` | INTEGER | yes |  |  |
+| `status` | TEXT | NO | `'draft'` |  |
+| `approved_at` | TEXT | yes |  |  |
+| `version` | INTEGER | NO | `1` |  |
+| `superseded_by` | INTEGER | yes |  | → `artifact_records.id` (ON DELETE SET NULL) |
+| `session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
+| `job_id` | INTEGER | yes |  | → `jobs.id` (ON DELETE SET NULL) |
+| `node_id` | TEXT | yes |  |  |
+| `run_id` | INTEGER | yes |  | → `runs.id` (ON DELETE SET NULL) |
+| `file_missing` | INTEGER | NO | `0` |  |
+| `produced_at` | TEXT | NO |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_artifact_records_job` — (job_id); `idx_artifact_records_identity` — (project_id, type, path); `idx_artifact_records_project` — (project_id, produced_at)
 
 
 ### audit_log
@@ -388,4 +415,4 @@ SQLite (WAL mode). 21 tables. Applied migration version: **22**. This is the exa
 
 
 ---
-_Generated 2026-07-22 06:05 UTC._
+_Generated 2026-07-22 07:21 UTC._

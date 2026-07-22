@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from ..auth import iso_now
+from .. import artifact_registry
 from .. import features
 from .. import scheduler
 from .. import workflows as wf
@@ -501,6 +502,13 @@ def register(app, deps):
             if claimed.rowcount == 0:
                 return _job_payload(_job_or_404(job_id, user))
             db().execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
+            # One status, two doors (T4): approving the job auto-approves the
+            # deliverable records it produced. Best-effort - the verdict stands
+            # even if the registry write fails.
+            try:
+                artifact_registry.approve_records_for_job(db(), job_id)
+            except Exception:
+                logging.getLogger("proxima.work").exception("registry approve sync failed (non-fatal)")
         return _job_payload(_job_or_404(job_id, user))
 
     @app.post("/api/jobs/{job_id}/reject")

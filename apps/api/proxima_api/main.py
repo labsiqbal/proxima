@@ -40,6 +40,7 @@ from .worker import RunWorker
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
     admin as routes_admin,
+    archive as routes_archive,
     auth as routes_auth,
     chat as routes_chat,
     design as routes_design,
@@ -205,6 +206,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_profiles.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)
+    routes_archive.register(app, _route_deps)
     routes_design.register(app, _route_deps)
     routes_wiki.register(app, _route_deps)
     routes_admin.register(app, _route_deps)

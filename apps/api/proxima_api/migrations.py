@@ -522,6 +522,78 @@ def _add_script_trust(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_artifact_registry(conn: sqlite3.Connection) -> None:
+    """Durable deliverable registry, Phase-1 slice 8 (T4): create
+    `artifact_records` and seed it from the current scanner output.
+
+    Registry, not scanner (captain-ratified decision 1): the mtime scan
+    discovers files but forgets them; this table is the durable record - one
+    row per deliverable version with lineage (session -> job/node -> run),
+    the single approval status both doors write, and the version chain.
+    Mirrors the CREATE TABLE in db.py so fresh installs and migrated ones
+    agree.
+
+    Seed behavior: every existing project's scanner output (uncapped-ish,
+    cap=1000) becomes v1 draft records with produced_at from file mtime, so
+    upgrading owners see their existing artifacts as records immediately. A
+    project path missing on this machine seeds nothing and loses nothing -
+    records appear when runs produce new output.
+    """
+    from .artifact_registry import seed_project
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS artifact_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          slug TEXT NOT NULL,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL,
+          path TEXT NOT NULL,
+          size INTEGER,
+          status TEXT NOT NULL DEFAULT 'draft',
+          approved_at TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          superseded_by INTEGER REFERENCES artifact_records(id) ON DELETE SET NULL,
+          session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+          job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+          node_id TEXT,
+          run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+          file_missing INTEGER NOT NULL DEFAULT 0,
+          produced_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, slug)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_artifact_records_project ON artifact_records(project_id, produced_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, type, path)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id)")
+    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    if not {"id", "path"}.issubset(cols):
+        return  # minimal test fixture, nothing to seed
+    for prow in conn.execute("SELECT id, path FROM projects").fetchall():
+        if not prow["path"]:
+            continue
+        try:
+            seed_project(conn, int(prow["id"]), Path(prow["path"]))
+        except Exception:
+            # Best-effort per project: an unreadable path must not block the
+            # upgrade; the registry fills in as new runs produce output.
+            import logging
+
+            logging.getLogger("proxima.migrations").exception(
+                "artifact registry seed failed for project %s (non-fatal)", prow["id"]
+            )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -545,6 +617,7 @@ MIGRATIONS: list[Migration] = [
     (20, "add jobs.rejected_reason: reject-at-review verdict for the review surface (slice 4)", _add_jobs_rejected_reason),
     (21, "add runs.continued_from_run_id + continuation_count: timeout auto-continuation chain (T5 slice 5)", _add_runs_continuation),
     (22, "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)", _add_script_trust),
+    (23, "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)", _add_artifact_registry),
 ]
 
 

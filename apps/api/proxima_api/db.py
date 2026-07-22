@@ -317,6 +317,37 @@ CREATE TABLE IF NOT EXISTS script_trust (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(project_id, rel_path)
 );
+-- Durable deliverable registry (Phase-1 slice 8, T4). One row per deliverable
+-- VERSION: the scanner discovers files, this table remembers them - records
+-- survive file moves/deletion (file_missing flips, the row stays). Identity is
+-- (project, type, path); a new producer at the same identity creates v(n+1)
+-- and marks prior versions superseded. status is the ONE approval field with
+-- two doors: the job-review approve and the Archive page write the same value.
+CREATE TABLE IF NOT EXISTS artifact_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  size INTEGER,
+  status TEXT NOT NULL DEFAULT 'draft',
+  approved_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  superseded_by INTEGER REFERENCES artifact_records(id) ON DELETE SET NULL,
+  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+  node_id TEXT,
+  run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+  file_missing INTEGER NOT NULL DEFAULT 0,
+  produced_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_records_project ON artifact_records(project_id, produced_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, type, path);
+CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id);
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

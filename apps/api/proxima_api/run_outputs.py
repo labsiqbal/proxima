@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import artifact_registry
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
@@ -65,5 +66,11 @@ class RunOutputs:
                     update_produced_artifacts(db, session_id, _merge)
                 except Exception:
                     logging.getLogger("proxima.worker").exception("session artifact track failed (non-fatal)")
+                # Durable registry (T4): the same scan feeds the deliverable
+                # records - the scanner discovers, the registry remembers.
+                try:
+                    artifact_registry.record_run_outputs(db, run_id, session_id, project_id, output_links)
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("artifact registry feed failed (non-fatal)")
             trow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return trow

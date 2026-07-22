@@ -270,6 +270,10 @@ class ChatSendRequest(BaseModel):
     model: str | None = None
 
 
+class ArchiveStatusRequest(BaseModel):
+    status: str = Field(min_length=1)  # draft | review | approved | superseded
+
+
 class FileWriteRequest(BaseModel):
     content: str
 

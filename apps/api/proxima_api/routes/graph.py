@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import features, scripts_library, state, worktrees
+from .. import artifact_registry, features, scripts_library, state, worktrees
 from ..graph import (
     GraphValidationError,
     descendant_node_ids,
@@ -869,4 +870,11 @@ def register(app, deps):
         )
         if not approved:
             raise HTTPException(status_code=409, detail="graph job changed concurrently")
+        # One status, two doors (T4): approving the plan auto-approves the
+        # deliverable records its nodes produced. Best-effort - the verdict
+        # stands even if the registry write fails.
+        try:
+            artifact_registry.approve_records_for_job(db(), job_id)
+        except Exception:
+            logging.getLogger("proxima.graph").exception("registry approve sync failed (non-fatal)")
         return graph_job_payload(graph_job_or_404(job_id, user))
