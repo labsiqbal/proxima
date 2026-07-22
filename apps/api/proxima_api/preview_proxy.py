@@ -29,6 +29,7 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import ipaddress
 import logging
 import secrets
 import socket
@@ -49,6 +50,44 @@ _HOP = {"authorization", "cf-access-jwt-assertion", "connection", "cookie",
 _RESPONSE_HOP = _HOP | {"set-cookie", "www-authenticate"}
 PREVIEW_COOKIE = "proxima_preview"
 PREVIEW_TOKEN_TTL_SECONDS = 60 * 60
+
+# Tailscale gives every node an IPv4 address from the CGNAT range.
+TAILNET_IPV4_NET = ipaddress.ip_network("100.64.0.0/10")
+_TAILNET_PROBE = ("100.100.100.100", 53)  # Tailscale MagicDNS anycast address
+
+
+def tailnet_address() -> str | None:
+    """This host's Tailscale IPv4 address, or None when not on a tailnet.
+
+    Connecting a UDP socket sends no packet; the kernel just resolves which
+    source address it would route to the tailnet from - the tailscale
+    interface address whenever tailscale is up.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(_TAILNET_PROBE)
+            addr = probe.getsockname()[0]
+    except OSError:
+        return None
+    try:
+        return addr if ipaddress.ip_address(addr) in TAILNET_IPV4_NET else None
+    except ValueError:
+        return None
+
+
+def resolve_preview_bind_host(configured: str | None) -> str:
+    """Resolve the relay bind interface, keeping the default off the plain LAN.
+
+    "auto" (the shipped default) binds the Tailscale interface when the host
+    has one, else loopback. The fallback is loopback, never 0.0.0.0: a home-LAN
+    install must not open all-interface listeners unless the operator says so
+    (PROXIMA_PREVIEW_BIND=0.0.0.0 remains an explicit override). Every other
+    value - an IP, "off" - is the operator's explicit choice and passes through.
+    """
+    value = (configured or "").strip()
+    if value.lower() != "auto":
+        return value
+    return tailnet_address() or "127.0.0.1"
 
 
 def mint_preview_token(secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS) -> str:
@@ -266,10 +305,13 @@ class PreviewRelayManager:
 
     def __init__(self, bind_host: str | None, port_for: Callable[[str], int | None],
                  validate_token=None) -> None:
-        # bind_host must be remote-reachable for remote preview to work; "off"
+        # bind_host must be remote-reachable for remote preview to work. "auto"
+        # resolves to the tailnet interface or loopback - never 0.0.0.0; "off"
         # (or empty) disables relays entirely for strict loopback-only installs.
-        self.bind_host = (bind_host or "").strip()
+        self.bind_host = resolve_preview_bind_host(bind_host)
         self.enabled = self.bind_host.lower() not in ("", "off", "none", "disabled")
+        if self.enabled:
+            _LOG.info("preview relays bind %s", self.bind_host)
         self.port_for = port_for
         self.validate_token = validate_token
         self._relays: dict[str, dict[str, Any]] = {}

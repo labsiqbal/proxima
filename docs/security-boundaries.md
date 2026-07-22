@@ -114,12 +114,28 @@ preview switches between `localhost` and `127.0.0.1`, remote preview uses a shor
 preview-only capability, reverse proxies strip Cookie/Authorization and upstream
 `Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
 
-Remote preview without an apps domain opens one **relay listener per running app**
-(`PROXIMA_PREVIEW_BIND`, default `0.0.0.0` so LAN/Tailscale clients can reach it; the
-listener answers 403 without the preview capability and closes with the app). This is a
-deliberate network surface: what it exposes is the previewed dev server, never the
-Proxima API or owner session. Strict loopback-only installs should set
-`PROXIMA_PREVIEW_BIND=127.0.0.1` or `off`.
+Remote preview without an apps domain opens one **relay listener per running app**.
+The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
+interface when the host is on a tailnet, otherwise loopback - never `0.0.0.0`. Tailnet
+devices can reach previews out of the box; untrusted plain-LAN devices cannot. The
+listener answers 403 without the preview capability and closes with the app; what it
+exposes when authorized is the previewed dev server, never the Proxima API or owner
+session. Operators may set an explicit interface instead - including `0.0.0.0`, which
+deliberately exposes the relay ports to every device on the LAN - or `127.0.0.1`/`off`
+for strict loopback-only installs. If no tailnet address is found, `auto` falls back to
+loopback, never to `0.0.0.0`.
+
+**The relay only protects its own port.** The dev server it fronts is a separate
+listener whose bind address is dictated by the launch command. A preview command that
+binds a non-loopback address (`0.0.0.0`, a LAN IP, ...) is directly LAN/tailnet-reachable
+with **no authentication** - the relay does not and cannot protect it. For a static file
+server or a debug-mode web app that means the whole project tree (including `.env`) is
+readable by any device on the network, and a framework debug console can escalate to
+code execution. Proxima therefore suggests loopback-bound commands
+(`--bind 127.0.0.1` / `runserver 127.0.0.1:$PORT`), sets `HOST=127.0.0.1` for dev
+servers that honor it, and the app runner shows a warning whenever a running preview's
+port is found listening beyond loopback. Loopback-bound dev servers still preview fine
+remotely: the relay always connects to `127.0.0.1:<port>`.
 
 There is no command classifier presented as a security boundary. The owner confirmation,
 environment filtering, project cwd, preview credential isolation, and optional OS-level

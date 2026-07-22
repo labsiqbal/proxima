@@ -66,7 +66,7 @@ export const fileUrl = (slug: string, path: string) =>
 
 // Run & preview a project app (managed dev server). preview_port is the app's
 // credential-stripping relay listener — the preview origin for remote clients.
-export type AppStatus = { running: boolean; ready?: boolean; port?: number; preview_port?: number; command?: string; log?: string[]; exited?: boolean }
+export type AppStatus = { running: boolean; ready?: boolean; port?: number; preview_port?: number; command?: string; log?: string[]; exited?: boolean; broad_bind?: boolean }
 export const appStart = (token: string, slug: string, command: string, port: number, dir = '') =>
   api<{ ok: boolean }>(`/api/projects/${slug}/app/start`, token, { method: 'POST', body: JSON.stringify({ command, port, dir }) })
 export const appStop = (token: string, slug: string) =>

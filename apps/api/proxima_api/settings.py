@@ -59,11 +59,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Proxima's shipped capability bundle (T8): bundled skills + the recommended-
     # tools advisory list. None -> <repo root>/bundled-skills (normalize_config).
     "bundled_skills_dir": None,
-    # Interface the per-app preview relay listens on. Remote preview without an
-    # apps domain needs a remote-reachable bind (relays are gated by the
-    # proxima_preview capability cookie, so a reachable port is a 403 wall, not
-    # an open app). "off" disables relays for strict loopback-only installs.
-    "preview_bind_host": "0.0.0.0",
+    # Interface the per-app preview relay listens on. "auto" (default) binds the
+    # Tailscale interface when the host is on a tailnet, else loopback - never
+    # 0.0.0.0: tailnet devices can reach previews, untrusted plain-LAN devices
+    # cannot (relays are gated by the proxima_preview capability cookie either
+    # way, so a reachable port is a 403 wall, not an open app). Operators can
+    # still set an explicit interface (including 0.0.0.0) via
+    # PROXIMA_PREVIEW_BIND, or "off" for strict loopback-only installs.
+    "preview_bind_host": "auto",
 }
 
 

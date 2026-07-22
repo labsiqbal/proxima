@@ -23,6 +23,39 @@ def _port_open(port: int) -> bool:
     except OSError:
         return False
 
+
+def _hex_addr_is_loopback(hex_addr: str) -> bool:
+    """/proc/net/tcp{,6} local address (hex, per-word little-endian) → loopback?"""
+    if len(hex_addr) == 8:  # IPv4: 127.0.0.0/8 → first octet is the last byte
+        return hex_addr.endswith("7F")
+    if len(hex_addr) == 32:  # IPv6: ::1, or IPv4-mapped ::ffff:127.x.x.x
+        return (hex_addr == "00000000000000000000000001000000"
+                or (hex_addr.startswith("0000000000000000FFFF0000") and hex_addr.endswith("7F")))
+    return False
+
+
+def port_bound_non_loopback(port: int) -> bool | None:
+    """True if any socket LISTENs on `port` at a non-loopback address (including
+    the 0.0.0.0/:: wildcards), False if every listener is loopback-only, None
+    when it cannot be determined (no /proc/net on this platform)."""
+    hex_port = f"{int(port):04X}"
+    checked = False
+    broad = False
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path, encoding="ascii") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        checked = True
+        for row in rows:
+            cols = row.split()
+            # cols[1] = local "ADDR:PORT" in hex, cols[3] = state (0A = LISTEN)
+            if len(cols) > 3 and cols[3] == "0A" and cols[1].endswith(":" + hex_port):
+                if not _hex_addr_is_loopback(cols[1].split(":")[0].upper()):
+                    broad = True
+    return broad if checked else None
+
 from .runners import subprocess_env
 
 IS_WINDOWS = os.name == "nt"
@@ -44,6 +77,12 @@ class AppManager:
             inherit_env="PROXIMA_APP_INHERIT_ENV",
         )
         env["PORT"] = str(port)
+        # Default the dev server onto loopback: frameworks that honor $HOST
+        # (webpack-dev-server/CRA and friends) then bind 127.0.0.1, keeping the
+        # unauthenticated dev port off the LAN/tailnet - the gated preview relay
+        # reaches it via 127.0.0.1 regardless. An allowlisted HOST or an explicit
+        # --host flag in the command still wins.
+        env.setdefault("HOST", "127.0.0.1")
         # Run the command string through the platform shell, in its own process
         # group so we can clean-kill the whole tree later.
         if IS_WINDOWS:
@@ -122,7 +161,13 @@ class AppManager:
         # and hides the real startup failure from the user.
         eff_port = app.get("detected_port") or app["port"]
         ready = _port_open(eff_port)
-        return {"running": True, "ready": ready, "port": eff_port, "command": app["command"], "log": app["log"][-40:]}
+        out = {"running": True, "ready": ready, "port": eff_port, "command": app["command"], "log": app["log"][-40:]}
+        # A dev server listening beyond loopback is directly reachable by other
+        # LAN/tailnet devices with no auth - the gated relay does not protect a
+        # broadly-bound origin. Surface it so the UI can warn the owner.
+        if ready and port_bound_non_loopback(eff_port):
+            out["broad_bind"] = True
+        return out
 
     def port(self, slug: str) -> int | None:
         app = self._apps.get(slug)

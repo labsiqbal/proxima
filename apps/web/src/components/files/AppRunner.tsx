@@ -174,6 +174,12 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <button className="icon-button" onClick={close} disabled={busy} aria-label="Close">✕</button>
     </div>
 
+    {status.running && status.broad_bind && <div className="app-bind-warning" role="alert">
+      ⚠ This dev server is listening on all network interfaces - other devices on your network can reach it
+      directly, with no authentication. Bind it to <code>127.0.0.1</code> (e.g. <code>--host 127.0.0.1</code>);
+      remote preview still works through Proxima's gated relay.
+    </div>}
+
     {!status.running && <div className="app-runner-setup">
       {apps.length > 0 && <div className="app-detected">
         <span className="app-detected-label">Detected apps — pick one:</span>

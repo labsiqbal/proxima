@@ -540,7 +540,12 @@ origin), so the transport depends on the vantage. Locally the iframe uses the ot
 loopback hostname, avoiding host-cookie reuse across ports. Remotely,
 `PreviewRelayManager` starts a per-app listener on the Proxima host
 (`preview_port` in app status; interface via `preview_bind_host` /
-`PROXIMA_PREVIEW_BIND`, `off` disables) — the app's own origin by port. When
+`PROXIMA_PREVIEW_BIND`, default `auto` = the Tailscale interface if the host has one,
+else loopback - never `0.0.0.0` unless set explicitly; `off` disables) - the app's own
+origin by port. The relay guards only its own port: the dev server itself is defaulted
+onto loopback (suggested commands bind `127.0.0.1`, `HOST=127.0.0.1` in the child env)
+and app status flags `broad_bind` when its port is found listening beyond loopback,
+because that listener is LAN/tailnet-reachable with no auth. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
 `preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to

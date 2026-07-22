@@ -505,14 +505,18 @@ absolute asset paths and HMR opens a WebSocket to the page origin), so each vant
 one: local direct preview uses the other loopback hostname so the Proxima cookie is not
 sent across ports; remote preview uses the app's **preview relay port** on the Proxima
 host (reported as `preview_port` in app status; bind interface via
-`PROXIMA_PREVIEW_BIND`, `off` disables) or, with an apps domain configured, the
+`PROXIMA_PREVIEW_BIND`, default `auto` = the tailnet interface or loopback, never
+`0.0.0.0`; `off` disables) or, with an apps domain configured, the
 `preview-<slug>.<apps_domain>` subdomain. Relay and subdomain proxy share one engine:
 HTTP + WebSocket forwarding, Host rewritten to the local dev port (Vite-style
 allowed-host checks pass), gated by a short-lived preview-only cookie — never the owner
 API token — and they strip cookies/auth before forwarding and strip upstream
 `Set-Cookie`. Same-origin fallback and generated HTML use an opaque iframe sandbox.
 This is credential-leak mitigation, not OS/container isolation; the command still runs
-as the Proxima service user.
+as the Proxima service user. The relay only guards its own port: detected-app
+suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
+and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
+found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio
