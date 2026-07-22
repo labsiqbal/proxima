@@ -827,6 +827,24 @@ button:disabled {
 	display: block;
 	font-size: var(--text-xs);
 }
+.container-settings-lead {
+	margin: 0 0 var(--space-3);
+	font-size: var(--text-sm);
+}
+.container-empty {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+}
+.container-empty p {
+	margin: 0;
+}
+.container-empty-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
 .panel {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-lg);
