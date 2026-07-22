@@ -1,5 +1,5 @@
 import React from 'react'
-import { appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
+import { appExitSummary, appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
 import { IconMonitor, IconTablet, IconMobile } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
 import { usePolling } from '../../hooks/usePolling'
@@ -177,11 +177,13 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   const openUrl = subdomainUrl || relayUrl || directUrl || appViewUrl(slug)
   const isolatedOrigin = Boolean(subdomainUrl || relayUrl || directUrl)
   const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
+  const exitInfo = status.exited && !status.running ? appExitSummary(status) : null
 
   return <div className="app-runner-dock">
     <div className="app-runner-head">
       <strong>Run &amp; Preview</strong>
       {status.running && <span className={`app-ready-badge ${status.ready ? 'ready' : 'starting'}`}>{status.ready ? '● Ready' : '◌ Starting…'}</span>}
+      {exitInfo && <span className={`app-ready-badge ${exitInfo.tone === 'fail' ? 'failed' : 'finished'}`}>{exitInfo.tone === 'fail' ? '● Failed' : '● Finished'}</span>}
       {status.running && status.ready && <div className="vp-seg">{VIEWPORTS.map(v => <button key={v.key} className={vw === v.key ? 'active' : ''} onClick={() => setVw(v.key)} title={v.label} aria-label={v.label}><v.Icon size={16} /></button>)}</div>}
       <span className="spacer" />
       {status.running && status.ready && <><a className="ghost-button sm app-act" href={openUrl} target="_blank" rel="noreferrer" title="Open in new tab"><span className="act-ico">↗</span><span className="btn-txt">Open</span></a><button className="ghost-button sm app-act" onClick={() => setReloadKey(k => k + 1)} title="Reload"><span className="act-ico">⟳</span><span className="btn-txt">Reload</span></button><button className="ghost-button sm danger app-act" onClick={() => void stop()} disabled={busy} title="Stop"><span className="act-ico">■</span><span className="btn-txt">Stop</span></button></>}
@@ -214,7 +216,11 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       </div>
       <p className="app-runner-cwd muted">Working dir: <code>{slug}/{dir || ''}</code> · command runs here</p>
       {error && <p className="error-text">{error}</p>}
-      {status.exited && <pre className="app-log">{(status.log || []).join('\n')}</pre>}
+      {exitInfo && <div className={`app-exit-note ${exitInfo.tone}`} role="status">
+        <strong>{exitInfo.title}</strong>
+        <p>{exitInfo.hint}</p>
+      </div>}
+      {status.exited && (status.log || []).length > 0 && <pre className="app-log">{(status.log || []).join('\n')}</pre>}
     </div>}
 
     {status.running && status.ready && <div className="app-preview-area">

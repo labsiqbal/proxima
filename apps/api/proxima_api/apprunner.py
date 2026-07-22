@@ -159,7 +159,15 @@ class AppManager:
             return self._last_exit.get(slug) or {"running": False}
         if app["proc"].returncode is not None:  # exited on its own
             self._apps.pop(slug, None)
-            result = {"running": False, "command": app["command"], "log": app["log"][-40:], "exited": True}
+            # exit_code + exited stay sticky across 2s polls so the UI can say
+            # "Finished" vs "Failed" instead of a bare log dump after a short run.
+            result = {
+                "running": False,
+                "command": app["command"],
+                "log": app["log"][-40:],
+                "exited": True,
+                "exit_code": int(app["proc"].returncode),
+            }
             self._last_exit[slug] = result
             return result
         # "ready" = the effective port actually accepts connections. Do not mark a

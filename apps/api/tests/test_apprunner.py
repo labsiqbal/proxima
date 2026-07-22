@@ -77,10 +77,12 @@ def test_app_runner_keeps_exit_log_across_status_polls(tmp_path):
             assert status is not None
             assert status["running"] is False
             assert status["exited"] is True
+            assert status["exit_code"] == 7
             assert any("boom-fail" in line for line in status.get("log") or [])
             # Second poll must still carry the same exit payload.
             again = manager.status("demo")
             assert again.get("exited") is True
+            assert again.get("exit_code") == 7
             assert again.get("log") == status.get("log")
             assert again.get("command") == "bash -lc 'echo boom-fail; exit 7'"
         finally:

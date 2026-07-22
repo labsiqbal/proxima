@@ -559,6 +559,9 @@ as the Proxima service user. The relay only guards its own port: detected-app
 suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
 and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
+When a command self-exits (short script, crash, or non-server entry point), status keeps
+a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
+vs Failed with the log and a next-step hint instead of a silent bare dump.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio
