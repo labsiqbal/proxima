@@ -832,7 +832,10 @@ export function GraphScreen({
           </button>
         </>}
         {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act('approve-job', () => approveGraphJob(token, job.id))} disabled={!!busy}>
-          {busy === 'approve-job' ? 'Approving…' : 'Approve final result'}
+          {/* A repo plan's final approve is also the local merge (slice 4) — say so. */}
+          {busy === 'approve-job'
+            ? (job.worktree ? 'Merging…' : 'Approving…')
+            : (job.worktree ? 'Approve & merge changes' : 'Approve final result')}
         </button>}
       </div>
     </header>

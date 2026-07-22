@@ -75,6 +75,20 @@ class JobApproveRequest(BaseModel):
     edited_output: str | None = None
 
 
+class JobRejectRequest(BaseModel):
+    # The one-line why (slice 4, T1): rejection is a review verdict, so it must
+    # leave a record - the reason lands on the job row and shows in its history.
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("a reject reason is required")
+        return stripped
+
+
 class GraphJobCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     graph: dict[str, Any]

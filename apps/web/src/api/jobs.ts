@@ -15,9 +15,35 @@ export const deleteJob = (token: string, id: number) => api<{ ok: boolean }>(`/a
 
 // Approve a job at a review gate. A MID-workflow gate resumes (status:'running');
 // the FINAL review finalizes (status:'done'). edited_output, when given, replaces
-// the just-reviewed step's output_summary before resuming.
+// the just-reviewed step's output_summary before resuming. For a repo job the
+// final approve is also the merge point: the reviewed changes land on the code
+// area's own line, and a clash surfaces as an error while the job stays in review.
 export const approveJob = (token: string, id: number, body?: { edited_output?: string }) =>
   api<Job>(`/api/jobs/${id}/approve`, token, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+
+// Reject a job waiting for review (either engine — plans share the job row). The
+// one-line reason is required; the job fails with it recorded, and a repo job's
+// isolated copy is discarded without touching the project.
+export const rejectJob = (token: string, id: number, reason: string) =>
+  api<Job>(`/api/jobs/${id}/reject`, token, { method: 'POST', body: JSON.stringify({ reason }) })
+
+// A repo job's reviewable change: per-file statuses plus one unified patch.
+// Readable while the job works, at review, and after the merge (read off the
+// code area's own history).
+export type JobDiff = {
+  job_id: number
+  branch: string
+  base_branch: string
+  worktree_status: import('../types').JobWorktree['status']
+  base_commit: string
+  head_commit: string
+  files: { path: string; old_path: string | null; status: string }[]
+  patch: string
+  patch_truncated: boolean
+  summary: string
+}
+
+export const getJobDiff = (token: string, id: number) => api<JobDiff>(`/api/jobs/${id}/diff`, token)
 
 export const listJobs = (token: string, params: { status?: JobStatus; workflow_id?: number; project_id?: number; project_slug?: string | null; include_archived?: boolean; limit?: number; offset?: number } = {}) => {
   const q = new URLSearchParams()

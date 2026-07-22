@@ -308,6 +308,9 @@ export type GraphJob = {
 	graph: WorkflowGraph;
 	node_states: GraphNodeState[];
 	worktree?: JobWorktree;
+	// The owner's one-line why from the reject-at-review action (slice 4);
+	// set only when status became 'failed' through a rejection.
+	rejected_reason?: string | null;
 	created_at?: string;
 	updated_at?: string;
 };
@@ -360,6 +363,8 @@ export type Job = {
 	input: any;
 	steps_state: JobStep[];
 	worktree?: JobWorktree;
+	// The owner's one-line why from the reject-at-review action (slice 4).
+	rejected_reason?: string | null;
 	schedule_id: number | null;
 	created_by: number | null;
 	created_at: string;

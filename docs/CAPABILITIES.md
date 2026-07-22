@@ -196,14 +196,14 @@ carry **Open plan** (the canvas, where review acts live) and **Save as Recipe**
 With the graph feature off, the screen shows classic tasks only, exactly as before.
 **Endpoints:** `GET /api/graph/jobs` (+ the linear list above), `POST /api/graph/jobs/{id}/save-template`.
 
-### Repo jobs: isolated worktrees + local merge (Phase-1 slice 2 - flag-gated, off by default)
+### Repo jobs: isolated worktrees + review + local merge (Phase-1 slices 2+4 - LIVE, on by default)
 
 **Why:** A job that touches a repo must never edit the primary tree directly (T1). It
 runs in a safe copy, the owner reviews the before/after diff, and approving merges the
 work **locally** into the branch it was cut from - no remote, no GitHub required
-(T1 local-first; push-after-merge is T9). Off behind `feature_repo_worktrees`
-(`PROXIMA_FEATURE_REPO_WORKTREES`) until slice 4 ships the review UI; while off, job
-behavior is exactly as above.
+(T1 local-first; push-after-merge is T9). **On by default since slice 4 shipped the
+review UI**; `feature_repo_worktrees` (`PROXIMA_FEATURE_REPO_WORKTREES`) remains the
+owner's escape hatch - while off, job behavior is exactly as above.
 **How:** a job may carry `target_area_id` - the ONE container area it works against
 (T1: exactly one target; a code-area target = repo job). On start, `worktrees.py` cuts
 branch `proxima/job-<id>` from the target code area's repo into a worktree under
@@ -222,8 +222,10 @@ resolving) - never forced. Success records `merge_commit` on the job's worktree 
 worktree down.
 **Endpoints:** `GET /api/jobs/{id}/diff` (per-file status + unified patch; also
 readable after the merge), `POST /api/jobs/{id}/approve` (merge point),
-`POST /api/jobs` (`target_area_id`). Job payloads carry a `worktree` object
-(branch, base, status `active/merging/merged/conflict/discarded`, merge_commit, error).
+`POST /api/jobs/{id}/reject` (see below), `POST /api/jobs` (`target_area_id`). Job
+payloads carry a `worktree` object (branch, base, status
+`active/merging/merged/conflict/discarded`, merge_commit, error) and, after a
+rejection, `rejected_reason`.
 
 **Graph plans (slice 3):** the same machinery wired per job-in-plan. With the flag on,
 starting a plan with repo jobs pins their single code-area target to the job row and
@@ -232,6 +234,21 @@ Phase-1 is one worktree per plan); the worker runs each node in the worktree **o
 that node touches the repo** (ops jobs run at the project root), and the plan's final
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
+
+**Review surface (slice 4):** the captain-facing half, following T4's ratified detail
+language - the diff opens in an **expanding row** (a plan row's expanded body on the
+Tasks screen) and on the **full-width task page** (`TaskWorkspace`); never a right
+panel, never a modal. One shared component (`components/tasks/ChangesReview.tsx`)
+fetches `GET /api/jobs/{id}/diff` and renders the per-file list (statuses in plain
+words) plus the unified change; UI copy is de-jargonized ("isolated copy", "changes" -
+git nouns stay in dev docs). Two verdict doors: **Approve & merge changes** invokes the
+engine's approve (the slice-2 guarded merge; a conflict surfaces as a plain
+needs-attention banner with the server's reason and the job parks in review for a
+retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/reject`
+(either engine) marks the job `failed` with `jobs.rejected_reason` recorded and tears
+the worktree down unmerged - the project never sees the discarded change. After the
+merge the row shows what landed (base branch + merge commit) and keeps the change
+readable; slice 12's satpam consumes these same review states.
 
 ## 9. Schedules (cron)
 

@@ -40,9 +40,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # recovery control, but default it on so Workflows is usable after install.
     "feature_workflow_graph": True,
     # Repo jobs in isolated git worktrees with diff review + local merge (Phase-1
-    # slice 2, T1). Off until the review UI ships (slice 4); off = the machinery
-    # is inert and job execution is unchanged.
-    "feature_repo_worktrees": False,
+    # slices 2+4, T1). On by default since the review UI shipped (slice 4); the
+    # switch stays as an owner escape hatch - off = the machinery is inert and
+    # job execution matches the pre-worktree behavior.
+    "feature_repo_worktrees": True,
     # How many nodes of one graph job may be in flight at once. This is a dispatch
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
