@@ -1,8 +1,9 @@
 # Proxima
 
-Your self-hosted **cockpit for the AI agents you already own** — delegate tasks,
-chat, run reviewable plans on a schedule, and design, all in one private
-control plane on **your own machine**. Bring your own agent CLI: **Claude Code,
+Your self-hosted **cockpit for delegating real work to the AI agents you
+already own**: think it through in chat, let AI slice it into reviewable jobs,
+run them safely, and keep the good runs as repeatable recipes - code, content,
+and ops, all on **your own machine**. Bring your own agent CLI: **Claude Code,
 Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
 
 ![New task — delegate an outcome](docs/screenshots/ops-home.png)
@@ -14,17 +15,21 @@ install as a PWA on your phone). FastAPI backend + React PWA. It's a **control
 plane**: it drives agents over the Agent Client Protocol (ACP), so you plug in
 whichever agent CLI you already use and log into — Proxima ships **no model and
 no credentials**. The work it orchestrates is domain-neutral: content, ops,
-research, and code all flow through the same tasks, workflows, reviews, and
-artifacts.
+research, and code all flow through the same chats, plans, reviews, and
+archive records.
 
 One workspace, organized around the flow **Chat → Tasks → Recipes**:
 
-- **Chat** is the front door — think it through with the agent, then *Slice into
-  plan*. **Tasks** holds the resulting plans and one-off jobs with their review
-  gates. **Recipes** keeps the plans worth repeating, on demand or on a schedule.
-- **Projects** and **Artifacts** hold the work itself, and the technical tools —
-  a real in-browser terminal, a file tree, and live app preview — sit on a right
-  rail, one click away in any context.
+- **Chat** is the front door - think it through with the agent, then *Slice into
+  plan*: the AI turns the conversation into a runnable plan of reviewable jobs.
+- **Tasks** holds the resulting plans and one-off jobs with their review gates.
+  A job that touches a repo runs in an isolated copy of the code and comes back
+  as a diff you review and merge locally - nothing leaves your machine.
+- **Recipes** keeps the plans worth repeating, on demand or on a schedule.
+- **Projects** holds the work itself, **Archive** keeps every deliverable as a
+  durable record, and the technical tools - a real in-browser terminal, a file
+  tree, and live app preview - sit on a right rail, one click away in any
+  context.
 
 ## Features
 
@@ -36,6 +41,10 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
   pauses for your review before it counts as done.
 
   ![Task review gate](docs/screenshots/task-review.png)
+- **Repo jobs: diff review + local merge** - a job aimed at a code area runs in
+  an isolated git worktree; you review its changes in place and approve to
+  merge, or reject with a reason. The merge is local - Proxima never pushes
+  anywhere on its own.
 - **Full-power chat** — streaming responses, tool-activity cards, slash
   commands, session continuity. Agent approval/permission prompts render as
   clickable cards; point the Claude Code runner at your live config and the
@@ -45,10 +54,18 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 - **Plans & Recipes** — describe a process and an agent draws the plan as a DAG
   on an n8n-style canvas; nodes carry typed output contracts (`text` / `json` /
   `artifact-ref`), per-node agents, and review gates. Correct one node's output
-  and every dependent node reruns deterministically. Slice a good chat into a
-  plan with one click, save it as a Recipe, run it on cron.
+  and every dependent node reruns deterministically. Plans are **run-first**:
+  slice a good chat into a plan with one click and run it - saving it as a
+  Recipe (and putting it on cron) is an optional step after it proves out.
 
   ![Plan run on the canvas](docs/screenshots/workflow-graph-run.png)
+- **Script steps** - a plan node can be a deterministic script instead of an
+  agent turn. Scripts live in the project's `scripts/` folder and each script's
+  content hash is approved once, so repeated non-AI work costs nothing and
+  can't change under you silently.
+- **Long work survives** - agent turns get a configurable time budget, and a
+  turn that times out mid-task auto-continues with its real context (up to 5
+  genuine resumes) before stopping honestly and pausing the plan for you.
 - **Multi-agent collaboration** — per-prompt **Brainstorm** (parallel idea
   lanes + synthesis) and **Debate** (alternating rounds + judge), plus a
   **Validate** sidecar where a different runner pressure-tests a finished
@@ -61,11 +78,13 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 
   ![Design Studio](docs/screenshots/design-studio-inspector.png)
 - **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,
-  Higgsfield, or any OpenAI-compatible endpoint; results land in Artifacts and
-  can open in Design Studio.
-- **Artifacts** — every project's outputs in one gallery (designs, images,
-  documents, apps, data) with type-aware viewers and **Run & Preview** for dev
-  servers behind a credential-stripping proxy.
+  Higgsfield, or any OpenAI-compatible endpoint; results land in the Archive
+  and can open in Design Studio.
+- **Archive** - every agent deliverable becomes a durable record with lineage
+  (chat → task → file), one approval status synced with task review, a version
+  chain, and a permanent link; records survive file moves and deletion.
+  Type-aware viewers, plus **Run & Preview** for dev servers behind a
+  credential-stripping proxy.
 - **In-browser terminal** — a real PTY shell scoped to the project. Work in the
   shell from anywhere, no SSH.
 - **Link existing folders** — register any folder on disk as a project;
@@ -137,14 +156,10 @@ With `PROXIMA_CLAUDE_LIVE_HOME=1`, the Claude Code runner points at your live
 
 ## Security / trust model
 
-Proxima is a **single-user cockpit**. Keep the primary access gate at the network
-layer (loopback, Tailnet, Cloudflare Access, or equivalent). On first run the owner
-also sets a password; its session is defense-in-depth, not a multi-user permission
-system. Agents run with the **same privileges as the server process** — they can
-read/write files and run tools on the host.
-
-Do **not** expose Proxima to untrusted users without a real external access gate
-and OS/container isolation. See [docs/security-boundaries.md](docs/security-boundaries.md).
+Proxima runs agents with your user's full privileges - you are the trust
+boundary. Keep it behind your own network gate (loopback or Tailnet) and never
+expose it to untrusted users. See
+[docs/security-boundaries.md](docs/security-boundaries.md).
 
 ## Tailscale / phone access
 

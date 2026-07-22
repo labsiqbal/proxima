@@ -1,23 +1,30 @@
 # Proxima Product Vision
 
-Updated: 2026-06-27
+Updated: 2026-07-22
 
 Proxima is an opinionated agent harness and workspace OS. It gives AI agents full execution capacity inside a project, while keeping humans in control through visible actions, structured outputs, editable surfaces, memory, and project-scoped ownership.
 
 > **How to read this doc:** this is product *direction*, not a description of current
-> behavior — several flows below are **not in the code yet**. Implemented today:
-> chat, projects, Ops tasks, workflow graphs, schedules, wiki, artifacts, image
-> generation, and **Design Studio** (active, feature-flagged). Planned only — marked
-> *(planned)* on their sections: **Main Project**, **Integrations** (global
-> connections + project bindings), **Workflow versioning**, **artifact
-> registry/Publish**, and per-agent `AGENT.md` memory files. Video Studio was
-> removed and is not planned.
+> behavior - some flows below are **not in the code yet**. Implemented today
+> (through Phase-1 slice 9): the single-workspace flow (Chat → Tasks → Recipes,
+> plus Projects and the Archive), run-first plans on the graph engine, repo jobs
+> with worktree isolation + local diff review and merge, deterministic script
+> nodes, turn-timeout auto-continuation, the durable Archive registry, the
+> bundled capability pack, chat, schedules, wiki, image generation, and
+> **Design Studio** (active, feature-flagged). Planned only - marked *(planned)*
+> on their sections: **Main Project**, **Integrations** (global connections +
+> project bindings), **Workflow versioning**, **artifact/app Publish**, and
+> per-agent `AGENT.md` memory files. Video Studio was removed and is not planned.
+> Where a section below has drifted from what shipped, an inline note marks the
+> shipped reality.
 
 The product is not just a chat wrapper. Chat is the gateway. The real product is the workspace that turns conversations into editable work products: designs, files, wiki notes, workflows, apps, reports, and artifacts.
 
 ## Positioning
 
-Proxima is an AI agent cockpit where agents execute across projects, and humans steer, inspect, edit, organize, reuse, and publish the results.
+Proxima is your self-hosted cockpit for delegating real work to the AI agents you already own: think it through in chat, let AI slice it into reviewable jobs, run them safely, and keep the good runs as repeatable recipes - code, content, and ops, all on your own machine.
+
+Agents execute across projects; humans steer, inspect, edit, organize, reuse, and publish the results.
 
 Technical category:
 
@@ -71,7 +78,7 @@ Cross-project access is intentionally narrow:
 
 This keeps context clean and prevents project state from blending accidentally.
 
-### Home Is Global
+### Home Is Global *(aspirational — the shipped shell lands on Chat; there is no Home destination today)*
 
 Home is the exception to active-project scoping. Home is a global resume dashboard across projects.
 
@@ -209,11 +216,9 @@ Agent/harness may also create Activity for longer, multi-step, reviewable, or mu
 
 Normal chat does not need Activity.
 
-### Tasks Are Not A Primary Surface
+### Tasks Are The Execution Index *(superseded the earlier "Tasks are not a primary surface" stance — Phase-1 T2/T3 made Tasks primary)*
 
-Top-level Tasks are likely redundant. Ad-hoc work starts from Chat or `/goal`. Reusable work belongs in Workflows. Execution status belongs in Activity.
-
-If task data remains internally, it should behave as a one-step job, not as a separate top-level product concept.
+Tasks is the durable execution/review index: plans (DAGs of jobs) and one-off jobs together, each with its review gates, and repo jobs reviewing their changes in place. Ad-hoc work still starts from Chat; a one-off task is just a one-job plan. Reusable work graduates to Recipes.
 
 ### Integrations Are Global Connections With Project Bindings *(planned — not yet in code)*
 
@@ -254,7 +259,7 @@ Chat
 Tasks
 Recipes
 Projects
-Artifacts
+Archive
 Design (feature-gated)
 ```
 

@@ -8,7 +8,8 @@ audits — kept for context, not maintained).
 > **One-line what-it-is:** a self-hosted, single-user **control plane for AI
 > agents** — a FastAPI backend + React PWA that drives Claude Code / Codex / Hermes /
 > Pi over ACP. It ships no model and no credentials of its own; the work it
-> orchestrates (tasks, workflows, designs, artifacts) is domain-neutral.
+> orchestrates (chat → plans of reviewable jobs → recipes, plus designs and
+> archive records) is domain-neutral — code, content, and ops alike.
 
 **New here?** Start with the **[visual tour](tour.md)** — screenshots of every surface.
 
@@ -26,7 +27,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |
-| [ui-shell.md](ui-shell.md) | Shell IA, Ops/Code lifecycle, navigation, gates, accessibility, and extension points | by hand |
+| [ui-shell.md](ui-shell.md) | Shell IA: the single-workspace flow navigation, tool rail, gates, accessibility, and extension points | by hand |
 | [workflow-graph.md](workflow-graph.md) | How the default workflow graph engine plans, executes, reviews, and corrects DAGs | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |

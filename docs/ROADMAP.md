@@ -2,8 +2,8 @@
 
 ## DNA (the filter)
 
-Proxima is a **self-hosted control plane for the AI coding agents you already
-own** — not an IDE, not a closed agent product. Every feature is judged against
+Proxima is a **self-hosted control plane for the AI agents you already own** —
+not an IDE, not a closed agent product. Every feature is judged against
 five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 1. **Bring-your-own-agent** — drives *your* local runners (Claude Code, Codex,
@@ -32,6 +32,14 @@ cards · projects + **link existing folders** · agent profiles as personas
 (per-profile instructions) · files + live preview · wiki + graph · dark/light +
 design tokens · daily integrity-checked DB backup.
 
+**Phase 1 (slices 1-9):** single workspace around the flow (Chat → Tasks →
+Recipes, tools on a right rail) · project work containers (code areas + ops
+area) · run-first plans with per-job targets · repo jobs in isolated worktrees
+with in-app diff review + local merge · turn-timeout auto-continuation ·
+deterministic script nodes with hash-bound trust · durable Archive registry
+(lineage, synced approval, permalinks) · bundled capability pack (masterplan
+skill + work-discipline preamble).
+
 ---
 
 ## Now — make daily use sharp (low/med effort, high DNA fit)
@@ -55,8 +63,9 @@ design tokens · daily integrity-checked DB backup.
 
 ## Next — the orchestration layer (the real differentiator)
 
-- **Agent pipelines / handoff** — chain personas (research → build → review),
-  output of one feeds the next; defined visually. *(Orchestration)*
+- **Agent pipelines / handoff** — shipped in Phase 1 as plans: a DAG of jobs
+  with per-node agents, outputs feeding dependents, drawn on the canvas. What
+  remains here: richer persona-to-persona handoff conventions. *(Orchestration)*
 - **Approval queue** — one place for every pending permission/question across all
   running agents. *(Orchestration + Cockpit)*
 - **Local model runner** — Ollama / vLLM via 9router as a first-class runner, for

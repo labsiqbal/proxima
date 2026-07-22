@@ -17,7 +17,7 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 
 ## 1. Agents & runners (bring-your-own-agent)
 
-**Why:** Proxima drives the AI coding agents you already own (Claude Code, Codex,
+**Why:** Proxima drives the AI agents you already own (Claude Code, Codex,
 Hermes, and Pi) over ACP — no baked-in model.
 **How:** `runner_specs.py` defines each runner's spawn argv + credential home. The
 worker (`worker.py`) starts one ACP subprocess per (runner, home, cwd) on demand;

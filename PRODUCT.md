@@ -10,7 +10,7 @@ A **solo operator** — a founder, indie builder, or one person on a small team 
 
 ## Product Purpose
 
-Proxima is a **self-hosted, single-user control plane / cockpit** for one operator directing human + AI-agent work: one private place to **chat** with agents, run repeatable **workflows** (recipes of steps, runnable now or on a cron schedule), watch each step execute and **review/approve** results, browse the project's **files & wiki**, and produce real artifacts. It is runner-agnostic (drives Claude Code / Codex / Hermes / Pi over ACP) and BYO-AI (no per-seat SaaS). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Headed toward **open source** (each user self-hosts their own single-owner cockpit).
+Proxima is a **self-hosted, single-user control plane / cockpit** for delegating real work to the AI agents the owner already owns: think it through in **Chat**, let AI slice it into reviewable jobs, watch the plan run in **Tasks** (with review gates, and local diff review + merge for jobs that touch a repo), and keep the good runs as repeatable **Recipes** - runnable on demand or on a cron schedule - with every deliverable landing in the **Archive** as a durable record. Code, content, and ops flow through the same loop. It is runner-agnostic (drives Claude Code / Codex / Hermes / Pi over ACP) and BYO-AI (no per-seat SaaS, no baked-in model or credentials). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Open source (AGPL); each user self-hosts their own single-owner cockpit.
 
 Image generation and Design Studio are part of the active product (Design Studio
 sits behind a server-owned feature flag — on by default in dev, opt-in on
@@ -18,7 +18,7 @@ installed instances). Video Studio was removed.
 
 ## Brand Personality
 
-**Powerful through real work, not theater.** Proxima uses one calm, compact product register with separate Ops and Code workspaces. Ops leads with project-scoped orchestration; Code focuses on direct sessions and Terminal. Workflows, Activity, Artifacts, and project knowledge stay focused and uncluttered. Character comes from precise hierarchy, truthful live state, and responsive interaction—not synthetic mission-control visuals.
+**Powerful through real work, not theater.** Proxima uses one calm, compact product register in a single workspace: flow-ordered navigation (Chat, Tasks, Recipes, Projects, Archive) with the technical tools (Terminal, Files, Preview) on a right rail. Chat is the front door; Tasks, Recipes, the Archive, and project knowledge stay focused and uncluttered. Character comes from precise hierarchy, truthful live state, and responsive interaction - not synthetic mission-control visuals.
 
 Voice: plain and direct, with operator energy (uppercase mono labels, status lines), never hypey marketing.
 
@@ -32,7 +32,7 @@ Bold is welcome; *cheap* and *generic* are not. Do NOT look like:
 - **Stiff corporate/enterprise** — navy-and-gold, cold formal admin panels, "legacy IBM dashboard" chrome.
 - **Cheap-SaaS clichés** — the hero-metric template, identical icon-heading-text card grids, eyebrow kickers on every section, gradient text. Expressive ≠ these tired patterns.
 - **Thoughtless clutter** — density only where the task needs it; supporting information must not crowd out the task.
-- **Too plain / sterile** — hierarchy and interaction should still make Ops feel deliberate, while the task remains the focus.
+- **Too plain / sterile** — hierarchy and interaction should still make the workspace feel deliberate, while the task remains the focus.
 
 ## Design Principles
 
@@ -50,6 +50,6 @@ Bold is welcome; *cheap* and *generic* are not. Do NOT look like:
 - **Low-end hardware is a first-class constraint** (typical host: i5-7200U class). Transform/opacity-only motion, no heavy effects by default.
 - Light + dark themes (plus accent themes) must both pass contrast.
 
-### A calmer task-first Ops home
+### A calmer task-first workspace
 
-The default Home register is Ops: a focused task brief and project picker backed by a real ad-hoc job, followed by compact views of attention, running/recent work, schedules, outputs, and projects. This keeps Proxima powerful, alive, owned, and runner-agnostic without presenting a decorative command center or synthetic activity. Code remains the persistent conversational workspace and never loses its current session merely because the owner visits Ops.
+Chat is the default landing view and the front door for new work. The New task launcher (behind Tasks) is a focused brief and project picker backed by a real ad-hoc job - no destination dashboard grid, no decorative command center, no synthetic activity. Attention-needing work surfaces on the Tasks index where it can be acted on. This keeps Proxima powerful, alive, owned, and runner-agnostic, and Chat never loses its current session merely because the owner visits another screen.

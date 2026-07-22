@@ -1,13 +1,17 @@
 # Proxima Core Flows
 
-> **How to read this doc:** these are the *intended* flows guiding implementation —
+> **How to read this doc:** these are the *intended* flows guiding implementation -
 > not all of them exist yet. Sections marked *(planned)* (**Main Project**,
 > **Workflow versioning**, **Integrations**, **artifact/app Publish**, per-agent
-> `AGENT.md` memory) are design targets with **no code behind them today**. Design
-> Studio is an active, feature-flagged surface; image generation is active; Video
-> Studio was removed.
+> `AGENT.md` memory) are design targets with **no code behind them today**; other
+> inline notes mark where the shipped product diverged. Design Studio is an
+> active, feature-flagged surface; image generation is active; Video Studio was
+> removed. The shipped single-workspace flow (Chat → Tasks → Recipes, run-first
+> plans, repo-job diff review + local merge, script nodes, the Archive) is
+> documented in [../ui-shell.md](../ui-shell.md) and
+> [../CAPABILITIES.md](../CAPABILITIES.md).
 
-Updated: 2026-06-27
+Updated: 2026-07-22
 
 This document turns the product vision into concrete user flows and ownership rules. It should guide implementation decisions before adding or changing product surfaces.
 
@@ -72,7 +76,7 @@ connect folder
 
 The agent has full read capacity in the active project. The summarizer should be intelligent about noise and generated/vendor/binary files, but this is an indexing-quality decision, not a permission restriction.
 
-## Returning User Flow
+## Returning User Flow *(aspirational — the shipped shell lands on Chat; attention-needing work surfaces on Tasks)*
 
 Returning users enter Home.
 
@@ -459,17 +463,14 @@ Normal chat does not create Activity.
 
 Home can show cross-project Activity summaries, but Activity screen itself is active-project scoped.
 
-## Tasks Flow
+## Tasks Flow *(superseded — Phase-1 T2/T3 made Tasks the primary execution index)*
 
-Top-level Tasks are not a core navigation surface.
+Tasks lists plans (DAGs of jobs) and one-off tasks together, with review gates
+and repo-job diff review + local merge in place. A one-off task is a one-job
+plan under the hood.
 
-If task-like work remains internally, model it as:
-
-```text
-one-step Activity job
-```
-
-Ad-hoc work starts from Chat or `/goal`. Repeatable work starts from Recipes.
+Ad-hoc work starts from Chat (or the New task launcher behind Tasks). Repeatable
+work starts from Recipes.
 
 ## Integration Flow *(planned — not yet in code)*
 

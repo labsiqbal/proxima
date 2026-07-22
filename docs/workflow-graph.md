@@ -423,16 +423,16 @@ conflict with the profile owning the real capability grant.)
 
 The canvas is the workspace; the chrome yields to it.
 
-- **Header bar**: the *same* bar Sequential uses — one shared `.tasks-head, .graph-header`
-  rule, so the two modes cannot drift apart again. Left to right: plan-list toggle, the
-  project picker (the shared `Dropdown`, exactly as Sequential has it), plan title, job
+- **Header bar**: one shared `.tasks-head, .graph-header` rule (inherited from the
+  retired Sequential mode, kept so list-shell surfaces cannot drift apart). Left to
+  right: plan-list toggle, the project picker (the shared `Dropdown`), plan title, job
   status, node count, unsaved marker; then the **plan-level** actions — Save template, Save
   plan, Approve plan & start. Plan actions live here rather than in the node form because
   they act on the plan, which is also what allows the inspector to close. The mode tab
   already names the screen, so the bar does not repeat it in a title block.
 - **Plan list** (plans, templates): collapsible from the header. It is navigation between
   plans, not something needed while authoring one. The project picker is deliberately *not*
-  here — it is the same control Sequential puts in the bar, so it belongs in the same place.
+  here — it belongs in the header bar with the other plan-level controls.
 - **Canvas tools** (`+ Node`, `+ Trigger`): on the canvas, since adding a node is a canvas
   act and must not depend on a node being selected. Zoom sits opposite them.
 - **Node inspector**: rendered **only while a node is selected**, with **×** to dismiss. It
@@ -487,7 +487,7 @@ Selecting a plan opens it showing the whole graph with nothing selected. The liv
 keeps an existing selection but drops one whose node has disappeared.
 
 The screen paints no background of its own — `.main-pane`'s gradient is the app's
-backdrop, and every other destination lets it through (Sequential's card grid, and even
+backdrop, and every other destination lets it through (the Recipes card grid, and even
 Tasks' own `.job-list`). The graph screen used to paint an opaque shell *and* opaque
 panels over it, which is why the gradient stopped dead under the mode tabs here and
 nowhere else. The rail and inspector are delineated by their border, not by a fill.
