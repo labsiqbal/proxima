@@ -204,7 +204,7 @@ export function AppShell(props: {
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
       <ToolDock token={props.token} project={props.activeProject} onOpenSettings={() => props.onSelectView('settings')} />
-      {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
+      {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
     </div>
   )
 }

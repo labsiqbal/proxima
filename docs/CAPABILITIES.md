@@ -707,7 +707,10 @@ jobs are waiting in review (jump to the first, or open Tasks). It polls
 cached background checks (`auth_health.py`, 60s TTL, never on the request path)
 of the selected image provider plus every runner referenced by a profile —
 though the current Home renders only the review-attention data. Global **Search**
-(magnifier in the top bar) covers chats, messages, projects, and designs.
+(magnifier in the top bar / Ctrl+K) covers chats, messages, projects, and designs.
+Chat hits include `mode` + project so a Design Studio session (excluded from the
+main chat list) opens in Studio on click instead of silently closing the modal;
+ordinary chats still open in Chat and switch project when needed.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
 
 ## 19. Audit log

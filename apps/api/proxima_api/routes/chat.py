@@ -170,13 +170,22 @@ def register(app, deps):
             "SELECT p.slug, p.name FROM projects p "
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
             (uid, like, like)).fetchall()]
+        # Include mode + project so the client can open design sessions in Studio
+        # (they are excluded from GET /api/sessions) and switch project on click.
         chats = [dict(r) for r in db().execute(
-            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND job_id IS NULL "
-            "AND workflow_id IS NULL AND title LIKE ? ESCAPE '\\' "
-            "ORDER BY updated_at DESC LIMIT 10", (uid, like)).fetchall()]
+            "SELECT s.id, s.title, IFNULL(s.mode, 'chat') AS mode, "
+            "p.slug AS project_slug, p.name AS project_name "
+            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
+            "WHERE s.owner_user_id = ? AND s.job_id IS NULL "
+            "AND s.workflow_id IS NULL AND s.title LIKE ? ESCAPE '\\' "
+            "ORDER BY s.updated_at DESC LIMIT 10", (uid, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
-            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title "
-            "FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.owner_user_id = ? "
+            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, "
+            "s.title AS session_title, IFNULL(s.mode, 'chat') AS mode, "
+            "p.slug AS project_slug, p.name AS project_name "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
+            "WHERE s.owner_user_id = ? "
             "AND s.job_id IS NULL AND s.workflow_id IS NULL "
             "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
         return {"projects": projects, "chats": chats, "messages": msgs}
