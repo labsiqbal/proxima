@@ -90,8 +90,8 @@ The active project is global app context for these surfaces:
 
 - Chat
 - Design
-- Workflows
-- Activity
+- Recipes
+- Tasks
 - Artifacts
 - Files
 - Wiki
@@ -152,9 +152,9 @@ Chat is a gateway. It can create or route to structured surfaces:
 - Design,
 - Wiki,
 - Files,
-- Workflows,
+- Recipes,
 - Artifacts,
-- Activity.
+- Tasks.
 
 ### Tool Cards
 
@@ -465,7 +465,7 @@ If task-like work remains internally, model it as:
 one-step Activity job
 ```
 
-Ad-hoc work starts from Chat or `/goal`. Repeatable work starts from Workflows.
+Ad-hoc work starts from Chat or `/goal`. Repeatable work starts from Recipes.
 
 ## Integration Flow *(planned — not yet in code)*
 

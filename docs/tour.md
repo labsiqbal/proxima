@@ -1,8 +1,10 @@
 # Visual tour
 
-Every major surface of Proxima, captured from a real instance (v1.0.0, default
-*Sunset* theme, demo project `atelier-notes`). Feature descriptions live in
-[CAPABILITIES.md](CAPABILITIES.md); this page is the "what does it look like" layer.
+Every major surface of Proxima, captured from a real instance (default *Sunset*
+theme). Feature descriptions live in [CAPABILITIES.md](CAPABILITIES.md); this page
+is the "what does it look like" layer. The shell captures show the current
+single-workspace layout; some older surface captures predate it and may still show
+the previous Ops/Code chrome around an otherwise-unchanged surface.
 
 ## First run
 
@@ -12,25 +14,50 @@ Set the owner password, then optionally link a real folder as your first project
 
 ![Pick your working folder](screenshots/onboarding-link-folder.png)
 
-## Ops workspace
+## Chat — the front door
 
-**Home** is a task launcher: describe an outcome, pick project + agent +
-execution policy (Guarded / Autonomous), and go. Tasks needing your attention
-surface right below.
+Chat with streaming, tool-activity cards, and interactive approval cards
+(auto-approve is an explicit Settings opt-in). Brainstorm until the scope is
+clear, then **Slice into plan** turns the conversation into runnable jobs.
 
-![Ops home](screenshots/ops-home.png)
+![Approval card](screenshots/chat-approval.png)
+
+![A completed exchange](screenshots/chat-code.png)
+
+**Brainstorm** fans a prompt out to parallel agent lanes and synthesizes;
+**Debate** alternates rounds before a judge pass:
+
+![Brainstorm](screenshots/brainstorm.png)
+
+**Validate** asks a *different* agent to pressure-test a finished answer — with
+a structured verdict, gaps/risks, and a revised version you can apply:
+
+![Validate sidecar](screenshots/validate-sidecar.png)
+
+`/image` generates images through your configured provider; results are saved
+as project artifacts and can open in Design Studio:
+
+![Image generation](screenshots/image-generation.png)
+
+## Tasks
+
+Tasks lists plans and one-off jobs together. **+ New task** opens the launcher:
+describe an outcome, pick project + agent + execution policy
+(Guarded / Autonomous), and go. Tasks needing your attention surface right below.
+
+![New task launcher](screenshots/ops-home.png)
 
 A **Guarded** task pauses at a review gate — the output is editable before you
 approve it as done. Artifacts produced by the task are linked as chips.
 
 ![Task review gate](screenshots/task-review.png)
 
-## Workflows (graphs)
+## Recipes
 
-The Workflows home: describe a process and the agent draws the graph, or start
-from a blank canvas. Drafts, reusable templates, and run history live here.
+The Recipes home: describe a process and the agent draws the plan, or start
+from a blank canvas. Drafts, saved Recipes, and run history live here.
 
-![Workflows home](screenshots/workflows-home.png)
+![Recipes home](screenshots/workflows-home.png)
 
 The authoring chat edits the plan on the canvas (never the database) — save the
 plan explicitly, then approve it to start:
@@ -50,36 +77,16 @@ transitive descendants are marked stale and rerun) or rerun the node itself:
 
 ![Finished run](screenshots/workflow-graph-run.png)
 
-**Schedules** run saved templates on five-field cron, with overlap policy and a
+**Schedules** run saved Recipes on five-field cron, with overlap policy and a
 "Run now" that uses the real scheduler spawn path:
 
 ![Schedules](screenshots/schedules.png)
 
-## Code workspace
+## Tool rail — Terminal, Files, Preview
 
-Chat with streaming, tool-activity cards, and interactive approval cards
-(auto-approve is an explicit Settings opt-in):
-
-![Approval card](screenshots/chat-approval.png)
-
-![A completed exchange](screenshots/chat-code.png)
-
-**Brainstorm** fans a prompt out to parallel agent lanes and synthesizes;
-**Debate** alternates rounds before a judge pass:
-
-![Brainstorm](screenshots/brainstorm.png)
-
-**Validate** asks a *different* runner to pressure-test a finished answer — with
-a structured verdict, gaps/risks, and a revised version you can apply:
-
-![Validate sidecar](screenshots/validate-sidecar.png)
-
-`/image` generates images through your configured provider; results are saved
-as project artifacts and can open in Design Studio:
-
-![Image generation](screenshots/image-generation.png)
-
-A real PTY terminal, scoped to the project:
+Terminal, Files, and Preview open from the right icon rail as overlay panels, in
+any context, scoped to the active project. A real PTY terminal (shells survive
+closing the panel):
 
 ![Terminal](screenshots/terminal.png)
 

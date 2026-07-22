@@ -47,7 +47,7 @@ function TargetChip({ node }: { node: ReturnType<typeof orderedPlanJobs>[number]
     ? node.target_question || 'This job still needs a work area.'
     : node.touches_repo
       ? `Works in the repo (${node.target}) — runs in an isolated copy you review before it lands`
-      : 'Ops work — notes, reports, files in the project'
+      : 'Works outside the repo — notes, reports, files in the project'
   return <span className={`plan-target is-${kind}`} title={title}>
     {node.touches_repo && <span className="plan-repo-mark" aria-hidden="true">⎇</span>}
     {badge}
@@ -104,14 +104,16 @@ function PlanJobs({ plan, profiles, onOpenPlan }: {
   </div>
 }
 
-export function ActivityScreen({ token, activeProject, features, profiles, onOpenTask, onOpenPlan }: {
+export function ActivityScreen({ token, activeProject, features, profiles, onOpenTask, onOpenPlan, onNewTask }: {
   token: string
   activeProject: Project | null
   features: AppFeatures
   profiles: Profile[]
   onOpenTask: (jobId: number) => void
-  /** Opens a plan where it can be acted on — the Workflows canvas. */
+  /** Opens a plan where it can be acted on — the Recipes canvas. */
   onOpenPlan: (jobId: number) => void
+  /** Opens the New task launcher — this screen is its home in the nav. */
+  onNewTask?: () => void
 }) {
   const [mode, setMode] = React.useState<'list' | 'board' | 'review'>('list')
   const [statusFilter, setStatusFilter] = React.useState<JobStatus | 'all'>('all')
@@ -173,7 +175,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
       const template = await saveGraphTemplate(token, savingPlan.id, meta)
       if (!mountedRef.current) return
       setSavingPlan(null)
-      setNotice(`Saved “${template.name}” as a Recipe — run or schedule it from Workflows.`)
+      setNotice(`Saved “${template.name}” as a Recipe — run or schedule it from Recipes.`)
     } catch (cause) {
       if (mountedRef.current) setError(String(cause))
     } finally {
@@ -198,7 +200,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
 
   return <section className="tasks-view">
     <div className="tasks-head">
-      <div><p className="eyebrow">Ops</p><h1>Tasks</h1></div>
+      <div><h1>Tasks</h1></div>
       <div className="seg sm">
         <button className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}>List</button>
         <button className={mode === 'board' ? 'active' : ''} onClick={() => setMode('board')}>Board</button>
@@ -208,6 +210,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
         <div className="seg sm job-filter">{STATUS_FILTERS.map(status => <button key={status} className={statusFilter === status ? 'active' : ''} onClick={() => setStatusFilter(status)}>{status}</button>)}</div>
         <label className="job-archived-toggle"><input type="checkbox" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /> Archived</label>
       </>}
+      {onNewTask && <button className="primary-button" onClick={onNewTask}>+ New task</button>}
     </div>
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
@@ -232,7 +235,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
         })}</div>
       : <div className="job-list">
           {rows.length === 0
-            ? <div className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{mode === 'review' ? 'Nothing waiting for review.' : 'No tasks yet. Sliced plans and one-off tasks land here.'}</p></div></div>
+            ? <div className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{mode === 'review' ? 'Nothing waiting for review.' : 'No tasks yet. Slice a plan from Chat or press New task — both land here.'}</p></div></div>
             : <>
               <div className="job-row job-row-head">
                 <span className="jr-title">Task</span><span className="jr-wf">Type</span><span className="jr-status">Status</span><span className="jr-prog">Jobs</span><span className="jr-time">Created</span>

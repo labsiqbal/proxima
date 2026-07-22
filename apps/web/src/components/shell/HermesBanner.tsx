@@ -27,5 +27,5 @@ export function HermesBanner({ token, runnerId }: { token: string; runnerId?: st
   if (!readiness || !runnerId) return null
   const active = readiness[runnerId]
   if (!active || active.ready) return null
-  return <div className="hermes-banner" role="status">⚠ {active.displayName} runner not ready{active.authHint ? ` — ${active.authHint}` : ''}</div>
+  return <div className="hermes-banner" role="status">⚠ {active.displayName} isn't ready{active.authHint ? ` — ${active.authHint}` : ''}</div>
 }

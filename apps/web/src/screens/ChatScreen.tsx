@@ -48,15 +48,13 @@ function localCommandReply(
 ): string {
 	switch (name) {
 		case "/help":
-			return "Commands: /new (new session), /status, /session, /project <name> (switch to another project's chat), /runner. Prefix // to send a literal slash message to the agent.";
+			return "Commands: /new (new chat), /status, /session, /project <name> (switch to another project's chat). Prefix // to send a literal slash message to the agent.";
 		case "/status":
-			return `Project: ${props.activeProject?.name || "none"} · Profile: ${props.activeProfile?.name || "none"} · Runner: ${props.activeProfile?.runner_id || "none"}`;
+			return `Project: ${props.activeProject?.name || "none"} · Agent: ${props.activeProfile?.name || "none"}`;
 		case "/session":
 			return `Session: ${props.activeSession?.title || "new chat"}`;
 		case "/project":
 			return `Project: ${props.activeProject?.name || "none"} (${props.activeProject?.slug || "-"}). Type "/project <name>" to switch to another project's chat.`;
-		case "/runner":
-			return `Active runner: ${props.activeProfile?.runner_id || "none"}.`;
 		default:
 			return "Unknown command.";
 	}
@@ -266,7 +264,7 @@ export function ChatScreen(props: {
 			});
 			window.dispatchEvent(new CustomEvent("proxima:files-changed"));
 			if (event.type === "run.completed")
-				notify("Hermes finished", "New reply in chat.");
+				notify("Agent finished", "New reply in chat.");
 		}
 	};
 	React.useEffect(() => {
@@ -355,8 +353,7 @@ export function ChatScreen(props: {
 					name === "/help" ||
 					name === "/status" ||
 					name === "/session" ||
-					name === "/project" ||
-					name === "/runner"
+					name === "/project"
 				) {
 					setMessages((current) => [
 						...current,
@@ -695,17 +692,19 @@ export function ChatScreen(props: {
 					</button>
 				</>
 			)}
-			{/* Workflow-iteration sessions never reach Code: the API keeps them out of the
-			    session list and the recipe editor owns its own test bench. So there is no
-			    "Save to workflow" arm here — only the promote path out of an ordinary chat. */}
+			{/* Recipe-iteration sessions never reach this surface: the API keeps them
+			    out of the session list and the recipe editor owns its own test bench.
+			    So there is no "Save to recipe" arm here — only the promote path out of
+			    an ordinary chat: talk until the scope is clear, then slice it into a
+			    plan (the key moment of the flow). */}
 			{activeSession && (props.onWorkflowDraft || props.onGraphDraft) && (
 				<ConvertToWorkflowButton
 					token={props.token}
 					sessionId={activeSession.id}
 					profileId={props.activeProfile?.id ?? null}
 					engine={props.features.workflowGraph ? "graph" : "linear"}
-					label={props.features.workflowGraph ? "To graph" : "To workflow"}
-					busyLabel={props.features.workflowGraph ? "Building graph…" : "Building workflow…"}
+					label="Slice into plan"
+					busyLabel="Slicing into plan…"
 					onDraft={draft => {
 						if ("graph" in draft) props.onGraphDraft?.(draft);
 						else props.onWorkflowDraft?.(draft);
@@ -720,8 +719,8 @@ export function ChatScreen(props: {
 	return (
 		<section className="chat-stage code-view">
 			<header className="code-header">
-				<div><p className="eyebrow">Code</p><strong>{activeSession?.title || "New session"}</strong></div>
-				<div className="code-context"><span>{props.activeProject ? cleanName(props.activeProject.name) : "No project"}</span><span>{props.activeProfile?.name || "No profile"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New session" title="Start a new Code session"><IconNewChat size={15} /><span>New session</span></button></div>
+				<div><p className="eyebrow">Chat</p><strong>{activeSession?.title || "New chat"}</strong></div>
+				<div className="code-context"><span>{props.activeProject ? cleanName(props.activeProject.name) : "No project"}</span><span>{props.activeProfile?.name || "No agent"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New chat" title="Start a new chat"><IconNewChat size={15} /><span>New chat</span></button></div>
 			</header>
 			{goalBanner}
 			<ChatThread

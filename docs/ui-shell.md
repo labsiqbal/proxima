@@ -4,56 +4,39 @@ This is the durable contract for Proxima's application shell. It describes produ
 
 ## Information architecture
 
-The desktop shell has a persisted, collapsible left navigation rail and a destination work surface. There is no generic right panel. **Ops and Code are separate workspace contexts inside the same application window**, and the left sidebar adapts to the selected workspace.
+There is **one workspace**. The old Ops/Code split is gone — no workspace switcher exists anywhere. The desktop shell has three regions:
 
-Each workspace remembers its last destination. Switching workspaces restores that destination rather than resetting the current job, chat, project, terminal, filters, or scroll state. Global destinations such as Projects, Agents, and Settings do not redefine the selected workspace.
+- a persisted, collapsible **left navigation** ordered by the flow,
+- the **destination work surface** in the center,
+- a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-## Ops workspace
+The left navigation is flow-ordered: **Chat** (the front door — talk it through), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Artifacts** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
 
-Ops is for orchestration and deliverables. Its sidebar contains:
+## Chat — the front door
 
-- New task
-- Tasks
-- Projects
-- Workflows
-- Artifacts
-- feature-gated Design
+Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The sidebar always shows **New chat** plus the project-scoped recent chats (and design sessions when the Design feature is on). A new chat starts blank; the database session is created lazily on the first message. `/new` remains available.
 
-Workflow Graphs are **not** a second sidebar destination: the graph canvas is the
-default Editor inside Workflows. Video Studio has been removed.
+A recipe's iteration thread is not an ordinary chat: the nav attributes it to Recipes, and picking Chat while one is open switches to a plain conversation instead.
 
-Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work. Ops Home and workflow runs open the same task workspace rather than a generic Activity subview. A repo job (one that worked in an isolated copy of a code area) reviews its **Changes** in place — inside a plan row's expanding body, or on the full-width task page — with approve-and-merge and reject-with-reason as the two verdict doors; per T4 there is no right panel and no popup, and the copy stays jargon-free.
+## Tasks
 
-Ops Home is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. The Agent selector belongs to that group, not beside the start action. Code-only Normal/Brainstorm/Debate controls are absent. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
+Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work — plans and one-off tasks together. Plan rows expand into their ordered job list; branching plans also offer the List↔Graph projection toggle. A repo job (one that worked in an isolated copy of a code area) reviews its **Changes** in place — inside a plan row's expanding body, or on the full-width task page — with approve-and-merge and reject-with-reason as the two verdict doors; per T4 there is no right panel and no popup, and the copy stays jargon-free.
 
-## Code workspace
+The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
-Code is for direct ACP sessions. Its sidebar contains:
+## Recipes
 
-- New session
-- Projects
-- Terminal
-- project-scoped recent sessions
+Recipes is the template library for repeatable work. The screen owns two modes:
 
-Terminal belongs only to Code and remains mounted after its first visit so PTY processes survive navigation and workspace switches. Code restores its previous chat or Terminal view when selected. New session starts blank, `/new` remains available, and the database session is created lazily on first message.
-
-## Workflows and schedules
-
-The **top bar** owns the brand mark and the Ops/Code workspace switcher (brand at the
-far left), so collapsing the sidebar never takes away who you are or where you can go.
-The mobile drawer keeps its own copy — the top bar hides below the tablet breakpoint.
-
-Workflows appears once in Ops navigation. Its screen owns two modes:
-
-- **Editor** is the workflow graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
-  with the recovery switch off the mode explains how to re-enable it.
+- **Editor** is the plan/graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
+  with the recovery switch off the mode explains that the editor is off (the env var
+  itself stays out of the UI copy — it is documented here and in installation docs).
   It has an **authoring chat** on the left under the standing rule — typing drives the
   plan on screen, never the database — which hands back a `<workflow-graph>` (nodes +
   edges), so the agent can propose branches rather than a straight line. The chat is
   pinned to the graph job's own session, so reopening a plan resumes its conversation.
   The editor is **canvas-first**: node-level actions stay with the node; the plan list
-  collapses; and the node inspector exists only while a node is selected, so an unused
-  panel never holds canvas width.
+  collapses; and the node inspector exists only while a node is selected.
 - **Scheduled** manages real schedule rows for saved graph templates. A schedule renders
   its input form from the template's declared `{{inputs}}`, and a due tick spawns the
   same `engine='graph'` job a manual run produces.
@@ -61,20 +44,33 @@ Workflows appears once in Ops navigation. Its screen owns two modes:
 The **Sequential recipe editor is retired**: a linear recipe is a graph with no branches,
 and the canvas authors those too. The linear *engine* remains for pre-existing jobs and
 sessions (`IterateStage` is still reachable from an old session carrying `workflow_id`),
-but no new linear workflow can be authored. The retirement was deliberate and owner-driven;
-node parity landed first (per-node `expected_output`/`rules`, `{{var}}` substitution,
-declared template inputs), then the scheduler bridge, so nothing only Sequential could do
-was lost.
+but no new linear workflow can be authored.
 
-Schedule inputs mirror each workflow's declared definitions, validate required values, and serialize values by declared input ID. Workflows without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
+Schedule inputs mirror each recipe's declared definitions, validate required values, and serialize values by declared input ID. Recipes without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
 
-Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same workflow, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, so running at 09:00 cannot swallow a real 09:00 tick, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
+Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
+
+## Right tool rail — Terminal, Files, Preview
+
+Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, in any context, scoped to the active project:
+
+- **Terminal** — the multi-tab PTY terminal. Once opened it stays mounted (hidden when
+  the panel closes) so shells survive closing the panel and navigating anywhere.
+- **Files** — the shared workspace tree over the project root, with the inline
+  CodeMirror editor. Also kept mounted after first open so unsaved edits survive a
+  closed panel.
+- **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
+  its server is a managed backend process that survives on its own, and unmounting
+  stops the status polling. Artifacts and the recipe test bench keep their own
+  Preview entry points for app-type artifacts.
+
+The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
 ## Global account surfaces
 
-Agents and Settings live in the profile/account menu rather than either workspace sidebar. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search.
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint.
 
-Projects remain shared application entities. The current implementation still uses one active project across Ops and Code; independent per-workspace project contexts are a separate product decision. Artifacts and Designs remain owned by their Project, not by an Ops or Code mode.
+Projects remain shared application entities: one active project across the app. Artifacts and Designs remain owned by their Project.
 
 ## Projects
 
@@ -94,20 +90,24 @@ created is deleted from disk. Chats and tasks go in both cases.
 
 ## Artifacts and Design
 
-Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available. Workflow Graph is the default Workflows editor, with its server flag retained only as a recovery switch.
+Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available.
+
+## De-jargon rule for primary surfaces
+
+Primary screens (Chat, Tasks, Recipes, Projects, Artifacts, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, or raw stack traces. The plain words are **agent** and **tools**. Technical detail — runner ids, managed homes, MCP servers, feature flags — belongs to Settings, the Agents screen, and the docs. New copy on primary surfaces must hold this line.
 
 ## Feature gates
 
-Routes, sidebar destinations, session eligibility, search, and deep links must all honor the server feature configuration. A hidden destination must not become reachable through stale state. Gating must not reorder the remaining workspace navigation.
+Routes, sidebar destinations, session eligibility, search, and deep links must all honor the server feature configuration. A hidden destination must not become reachable through stale state. Gating must not reorder the remaining navigation.
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer and the Task Composer context controls stack without changing task semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays, focus indicators use shared tokens, and reduced-motion preferences apply globally.
+The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer context controls stack without changing task semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel), focus indicators use shared tokens, and reduced-motion preferences apply globally.
 
 ## Extension points
 
-Add destinations through the existing `View`, feature policy, App routing, workspace classification, Sidebar, and SearchModal boundaries together. Every new destination must declare whether it belongs to Ops, Code, or the global account layer. Destination-specific inspectors remain owned by their destination rather than the application shell.
+Add destinations through the existing `View`, feature policy, App routing, Sidebar, and SearchModal boundaries together. Every new destination must declare whether it belongs to the flow navigation or the global account layer; new tools belong on the rail, not in the nav. Destination-specific inspectors remain owned by their destination rather than the application shell.
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover workspace restoration, adaptive sidebar membership, feature-off ordering, asynchronous task success/failure, Terminal persistence, declared schedule inputs, cron grammar, and keyboard resizing. Browser QA should check authenticated desktop and narrow layouts, focus order, themes, zoom, and reduced motion; if authentication prevents inspection, record that rather than using credentials.
+For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. Browser QA should check authenticated desktop and narrow layouts, focus order, themes, zoom, and reduced motion; if authentication prevents inspection, record that rather than using credentials.

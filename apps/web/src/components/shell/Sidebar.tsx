@@ -1,28 +1,27 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconNewChat, IconHome, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconActivity, IconTerminal, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconPlus, IconLogout } from './icons'
+import { IconNewChat, IconChat, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
-type WorkspaceMode = 'ops' | 'code'
+// One workspace, nav ordered by the flow: talk it through (Chat), watch it run
+// (Tasks), keep what worked (Recipes), then the places work lives (Projects,
+// Artifacts). Terminal/Files/Preview are tools on the right rail, not
+// destinations, and Agents/Settings stay in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
-const opsPrimary: Destination[] = [
-  { id: 'activity', label: 'Tasks', icon: IconActivity },
+const primary: Destination[] = [
+  { id: 'chat', label: 'Chat', icon: IconChat },
+  { id: 'activity', label: 'Tasks', icon: IconTasks },
+  { id: 'workflows', label: 'Recipes', icon: IconWorkflows },
   { id: 'projects', label: 'Projects', icon: IconProjects },
-  { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
-]
-const codePrimary: Destination[] = [
-  { id: 'projects', label: 'Projects', icon: IconProjects },
-  { id: 'terminal', label: 'Terminal', icon: IconTerminal },
 ]
 const enabled = (item: Destination, features: AppFeatures) =>
   (item.id !== 'design' || features.designStudio) && (item.id !== 'graph' || features.workflowGraph)
 
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View
-  workspaceMode: WorkspaceMode; onSelectWorkspace: (mode: WorkspaceMode) => void
   features: AppFeatures; onClose: () => void; onNewChat: () => void; onLogout: () => void
   onRenameSession: (id: number, title: string) => void; onDeleteSession: (id: number) => void
   onSelectProject: (project: Project) => void; onSelectSession: (session: ChatSession) => void
@@ -32,33 +31,35 @@ export function Sidebar(props: {
 }) {
   const [acctOpen, setAcctOpen] = useState(false)
   const go = (view: View) => { props.onSelectView(view); props.onClose() }
+  const isActive = (item: Destination) => {
+    // A workflow-iteration chat belongs to Recipes, not Chat; the New task
+    // launcher ('home') and an open task both belong to the Tasks flow.
+    const inRecipeChat = props.currentView === 'chat' && !!props.activeSession?.workflow_id
+    switch (item.id) {
+      case 'chat': return props.currentView === 'chat' && !inRecipeChat
+      case 'activity': return props.currentView === 'activity' || props.currentView === 'task' || props.currentView === 'home'
+      case 'workflows': return props.currentView === 'workflows' || props.currentView === 'graph' || inRecipeChat
+      default: return props.currentView === item.id
+    }
+  }
   const destination = (item: Destination) => {
     const Icon = item.icon
-    const active = props.currentView === item.id || (item.id === 'activity' && props.currentView === 'task') || (item.id === 'workflows' && props.currentView === 'chat' && !!props.activeSession?.workflow_id)
+    const active = isActive(item)
     return <button className={`nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} key={item.id} onClick={() => go(item.id)}><span className="nav-icon"><Icon /></span><strong>{item.label}</strong></button>
   }
 
   return <div className="sidebar-inner">
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
-    <div className="workspace-switch" role="group" aria-label="Workspace">
-      <button className={props.workspaceMode === 'ops' ? 'active' : ''} aria-pressed={props.workspaceMode === 'ops'} onClick={() => { props.onSelectWorkspace('ops'); props.onClose() }}><IconHome size={14} /><span>Ops</span></button>
-      <button className={props.workspaceMode === 'code' ? 'active' : ''} aria-pressed={props.workspaceMode === 'code'} onClick={() => { props.onSelectWorkspace('code'); props.onClose() }}><IconTerminal size={14} /><span>Code</span></button>
-    </div>
 
-    {props.workspaceMode === 'ops' ? <nav className="shell-navigation" aria-label="Ops navigation">
+    <nav className="shell-navigation" aria-label="Navigation">
       <section className="nav-group primary-nav">
-        <button className={`nav-item ${props.currentView === 'home' ? 'active' : ''}`} aria-current={props.currentView === 'home' ? 'page' : undefined} onClick={() => go('home')}><span className="nav-icon"><IconPlus /></span><strong>New task</strong></button>
-        {opsPrimary.filter(item => enabled(item, props.features)).map(destination)}
+        {/* An action, not a destination — never carries the active state (the
+            Chat item below shows where you are). */}
+        <button className="nav-item" onClick={() => { props.onNewChat(); props.onClose() }}><span className="nav-icon"><IconNewChat /></span><strong>New chat</strong></button>
+        {primary.filter(item => enabled(item, props.features)).map(destination)}
       </section>
-    </nav> : <>
-      <nav className="shell-navigation" aria-label="Code navigation">
-        <section className="nav-group primary-nav">
-          <button className={`nav-item ${props.currentView === 'chat' && !props.activeSession ? 'active' : ''}`} onClick={() => { props.onNewChat(); props.onClose() }}><span className="nav-icon"><IconNewChat /></span><strong>New session</strong></button>
-          {codePrimary.map(destination)}
-        </section>
-      </nav>
-      <SessionGroups {...props} />
-    </>}
+    </nav>
+    <SessionGroups {...props} />
 
     {props.updateVersion && props.onUpdateClick && <button type="button" className="sidebar-update-pill" onClick={() => { props.onUpdateClick?.(); props.onClose() }}><span className="update-dot" aria-hidden="true" />Update available · v{props.updateVersion}</button>}
     <div className="sidebar-user">
@@ -92,7 +93,7 @@ function SessionGroups(props: GroupProps) {
     <span className="row-actions">{!design && <button className="row-action" aria-label="Rename session" onClick={() => void promptDialog({ title: 'Rename chat', label: 'Name', defaultValue: session.title, confirmLabel: 'Rename' }).then(value => { if (value) props.onRenameSession(session.id, value) })}><IconPencil size={15} /></button>}<button className="row-action danger" aria-label={`Delete ${design ? 'design chat' : 'session'}`} onClick={() => void confirmDialog({ title: `Delete ${design ? 'design chat' : 'chat'}?`, message: design ? 'The design file stays.' : `“${session.title}” and its messages will be removed.`, confirmLabel: 'Delete', danger: true }).then(ok => { if (ok) props.onDeleteSession(session.id) })}><IconTrash size={15} /></button></span>
   </div>)
   return <div className="recent-groups">
-    {chats.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleChats} aria-expanded={openChats}><span><span className={`chevron ${openChats ? 'open' : ''}`}><IconChevronRight size={13} /></span>Recent sessions</span><span>{chats.length}</span></button>{openChats && rows(chats, false)}</section>}
+    {chats.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleChats} aria-expanded={openChats}><span><span className={`chevron ${openChats ? 'open' : ''}`}><IconChevronRight size={13} /></span>Recent chats</span><span>{chats.length}</span></button>{openChats && rows(chats, false)}</section>}
     {props.features.designStudio && designs.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleDesigns} aria-expanded={openDesigns}><span><span className={`chevron ${openDesigns ? 'open' : ''}`}><IconChevronRight size={13} /></span>Design sessions</span><span>{designs.length}</span></button>{openDesigns && rows(designs, true)}</section>}
   </div>
 }

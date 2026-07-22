@@ -195,7 +195,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
 
   if (session == null) {
     return <aside className="wf-chat wf-chat-idle">
-      <p className="eyebrow">Workflow chat</p>
+      <p className="eyebrow">Plan chat</p>
       <p className="muted">{idleHint}</p>
       {error && <div className="error-bar" role="alert">{error}</div>}
       <button className="primary-button" onClick={() => void ensureSession()} disabled={opening}>
@@ -206,7 +206,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
 
   return <aside className="wf-chat">
     <div className="wf-chat-head">
-      <p className="eyebrow">Workflow chat</p>
+      <p className="eyebrow">Plan chat</p>
       {busyRun != null && <span className="muted wf-chat-running">Running…</span>}
     </div>
     {applied && <div className="wf-chat-note" role="status">{applied}</div>}
@@ -231,7 +231,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
       slug={projectSlug || undefined}
       features={features}
       placeholder={placeholder}
-      textareaLabel="Author the workflow"
+      textareaLabel="Author the plan"
       promptModes={false}
       submitIconOnly
       submitLabel="Send"

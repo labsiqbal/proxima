@@ -170,7 +170,7 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     const exact = step.instruction.match(/^\s*Reply with exactly:\s*(.+?)\s*$/i)?.[1]?.trim()
     const textOnly = exact && /do not (create|modify|write|edit) files?/i.test(step.rules || '')
     setTab('result')
-    onRunRecipe?.(`Dry-test only workflow step ${i + 1}: ${step.name || `Step ${i + 1}`}.
+    onRunRecipe?.(`Dry-test only recipe step ${i + 1}: ${step.name || `Step ${i + 1}`}.
 Do this step now, using prior chat outputs only if relevant.
 Instruction: ${step.instruction || '-'}
 Expected output: ${step.expected_output || '-'}

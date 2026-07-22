@@ -273,3 +273,18 @@ export const IconActivity = ({ size }: IconProps) => (
 		<path d="M3 12h3.5l2-6 4 13 2.5-7H21" />
 	</Svg>
 );
+
+export const IconChat = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<path d="M20 14.5a2.5 2.5 0 0 1-2.5 2.5H9l-5 4V6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8z" />
+	</Svg>
+);
+
+export const IconTasks = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<path d="M3.5 6.3 5 7.8l2.5-2.6" />
+		<path d="M3.5 12.8 5 14.3l2.5-2.6" />
+		<path d="M3.5 19.3 5 20.8l2.5-2.6" />
+		<path d="M11 6.5h9.5M11 13h9.5M11 19.5h9.5" />
+	</Svg>
+);

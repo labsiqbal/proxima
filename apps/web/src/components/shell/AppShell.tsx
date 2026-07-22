@@ -3,7 +3,8 @@ import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../
 import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
-import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout, IconHome, IconTerminal } from './icons'
+import { ToolDock } from './ToolDock'
+import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
@@ -22,8 +23,6 @@ export function AppShell(props: {
   activeProject: Project | null
   activeSession: ChatSession | null
   currentView: View
-  workspaceMode: 'ops' | 'code'
-  onSelectWorkspace: (mode: 'ops' | 'code') => void
   features: AppFeatures
   onNewChat: () => void
   onRenameSession: (id: number, title: string) => void
@@ -95,14 +94,10 @@ export function AppShell(props: {
   return (
     <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''}`} style={shellStyle}>
       <header className="top-bar">
-        {/* Brand and workspace switcher live up here, not in the sidebar, so collapsing
-            the sidebar never takes away who you are (the mark) or where you can go
-            (Ops/Code). The drawer keeps its own copy for mobile, where this bar hides. */}
+        {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
+            takes away who you are (the mark). The drawer keeps its own copy for
+            mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
-        <div className="workspace-switch top-bar-switch" role="group" aria-label="Workspace">
-          <button className={props.workspaceMode === 'ops' ? 'active' : ''} aria-pressed={props.workspaceMode === 'ops'} onClick={() => props.onSelectWorkspace('ops')}><IconHome size={14} /><span>Ops</span></button>
-          <button className={props.workspaceMode === 'code' ? 'active' : ''} aria-pressed={props.workspaceMode === 'code'} onClick={() => props.onSelectWorkspace('code')}><IconTerminal size={14} /><span>Code</span></button>
-        </div>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         <button className="tool-btn" onClick={() => setSearchOpen(true)} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         <span className="top-bar-spacer" />
@@ -129,6 +124,7 @@ export function AppShell(props: {
       <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
+      <ToolDock token={props.token} project={props.activeProject} onOpenSettings={() => props.onSelectView('settings')} />
       {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
     </div>
   )

@@ -152,7 +152,7 @@ remains an owner recovery switch; the legacy ordered-step path is retained only 
 existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
-## 7. Workflows (graphs) + schedules
+## 7. Recipes (plans worth repeating) + schedules
 
 **Why:** Codify a repeatable multi-step process the agent can execute — with branches,
 per-node agents and review gates, not just a straight line. A saved template (Recipe)
@@ -380,16 +380,17 @@ chunk-streamed file upload with collision-safe naming and a configurable 100 MB 
 limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents.
-There is **no standalone "Files" screen** in the current shell: these APIs power the
-**Artifacts** gallery's *Source* editor view, the **Wiki** tree under Settings →
-Knowledge & Wiki, chat attachments, and `@` file references — with the in-browser
-**Terminal** as the raw escape hatch.
+These APIs power the **Files tool** on the right rail (the project tree + inline
+editor as an overlay panel, any context), the **Artifacts** gallery's *Source* editor
+view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
+file references — with the in-browser **Terminal** as the raw escape hatch.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/reference-files`, `/api/preview/{slug}/{path}`.
 
 ## 12. Run & Preview app
 
-**Why:** Launch a project's dev server and preview it in-app.
+**Why:** Launch a project's dev server and preview it in-app — from the **Preview**
+tool on the right rail, from an app-type artifact, or from the recipe test bench.
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
 environment; an authenticated reverse proxy serves it. Local direct preview uses the
 other loopback hostname so the Proxima cookie is not sent across ports. Remote preview
@@ -463,7 +464,8 @@ aggregation. Fed by Chat→Wiki (§5).
 ## 15. Terminal
 
 **Why:** A real shell in the cockpit, scoped to the project.
-**How:** `terminal.py` over `WS /api/ws/terminal`.
+**How:** `terminal.py` over `WS /api/ws/terminal`. Opened from the **Terminal** tool
+on the right rail; once opened it stays mounted so shells survive closing the panel.
 
 ## 16. Command palette (quick commands)
 
@@ -477,10 +479,11 @@ aggregation. Fed by Chat→Wiki (§5).
 > guard. The real access boundary is network reachability (single-user). See
 > [security-boundaries.md](security-boundaries.md).
 
-## 17. Home + search
+## 17. New task launcher + search
 
-**Why:** Land where the work starts: delegate a task, and see what needs you.
-**How:** Ops Home is deliberately minimal — a greeting, the **Task Composer**
+**Why:** Delegate a one-off task, and see what needs you. The app itself lands on
+**Chat** — the launcher opens from the Tasks screen's `+ New task`.
+**How:** The launcher is deliberately minimal — a greeting, the **Task Composer**
 (project + agent + Guarded/Autonomous policy), and an **attention strip** when
 jobs are waiting in review (jump to the first, or open Tasks). It polls
 `GET /api/dashboard` every 5s; the dashboard payload also carries `authHealth` —
@@ -536,12 +539,13 @@ visibility (private/shared), team name. Collaboration model is instead: **everyo
 self-hosts their own instance + shares folders/repos.** The runtime model is one
 owner with one password/session gate; legacy invite/member tables have been dropped.
 
-## Compact shell, Ops tasks, and Code
+## Single-workspace shell ("Deck", T3)
 
-+ **Ops** uses a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. Home does not duplicate Tasks, Scheduled, Artifacts, or Projects as dashboard cards. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible Code conversation.
-+ **Code** opens the current chat and adds only a real-context header (session, project, profile). Only the Code header’s **New session** action clears the active session; the chat remains lazily created on first send.
-+ The sidebar adapts by workspace. Ops contains New task, Tasks, Projects, Workflows, Artifacts, and gated Design. Code contains New session, Projects, Terminal, and project-scoped recents. Tasks is the permanent execution/review index; Ops Home and workflow runs open the same task workspace. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
-+ The single **Workflows** destination contains the graph Editor and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
-+ Terminal is lazy-mounted on first visit and then hidden rather than unmounted, preserving PTYs. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Artifacts, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session; the chat remains lazily created on first send.
++ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher — a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
++ The single **Recipes** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
++ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.

@@ -4,7 +4,7 @@ import { ScheduleManager } from '../components/workflows/ScheduleManager'
 import { BackButton } from '../components/ui/BackButton'
 import type { GraphTemplate } from '../types'
 
-// Workflows owns two modes: the graph editor, and the schedules that run its saved
+// Recipes owns two modes: the graph editor, and the schedules that run its saved
 // templates. The Sequential recipe editor that used to live here is retired — a linear
 // recipe is just a graph with no branches, and the canvas authors those too. The linear
 // ENGINE remains for pre-existing jobs and sessions; what is gone is its authoring UI.
@@ -41,8 +41,8 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   }, [mode, token])
 
   const modeNav = <div className="workflow-mode-row">
-    {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label="Workflows" onClick={onGraphBack} />}
-    <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow view">
+    {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label="Recipes" onClick={onGraphBack} />}
+    <div className="workflow-mode-nav seg" role="tablist" aria-label="Recipe view">
     <button className={mode === 'graph' ? 'active' : ''} role="tab" aria-selected={mode === 'graph'} onClick={() => onModeChange?.('graph')}>Editor</button>
     <button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button>
     </div>
@@ -59,8 +59,8 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   return <section className="workflow-advanced-view">
     {modeNav}
     {graphContent ?? <div className="placeholder-view"><div className="assistant-bubble compact">
-      <h1>Workflows</h1>
-      <p className="muted">The workflow graph engine is disabled. Enable <code>PROXIMA_FEATURE_WORKFLOW_GRAPH</code> and restart to author workflows.</p>
+      <h1>Recipes</h1>
+      <p className="muted">The recipe editor is switched off on this server. The setup docs cover turning it back on.</p>
     </div></div>}
   </section>
 }

@@ -5,7 +5,7 @@ import type { WorkflowInput } from '../../types'
 // Shared by the linear recipes and the graph canvas: a graph node's {{var}} is filled
 // from the job input exactly the way a linear step's is, so the same form asks the
 // same question. Kept out of either screen so it outlives them.
-export function RunModal({ title, inputs, confirmLabel = 'Run workflow', onCancel, onRun }: {
+export function RunModal({ title, inputs, confirmLabel = 'Run recipe', onCancel, onRun }: {
   title: string
   inputs: WorkflowInput[] | null | undefined
   confirmLabel?: string

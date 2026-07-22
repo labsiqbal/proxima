@@ -29,15 +29,10 @@ const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').the
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
 const TaskWorkspace = React.lazy(() => import('./screens/TaskWorkspace').then(m => ({ default: m.TaskWorkspace })))
 const GraphScreen = React.lazy(() => import('./screens/GraphScreen').then(m => ({ default: m.GraphScreen })))
-const TerminalTabs = React.lazy(() => import('./components/terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
 const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(m => ({ default: m.ProfilesScreen })))
 const RunnersScreen = React.lazy(() => import('./screens/RunnersScreen').then(m => ({ default: m.RunnersScreen })))
 const SettingsScreen = React.lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })))
 const WorkspaceOnboarding = React.lazy(() => import('./screens/WorkspaceOnboarding').then(m => ({ default: m.WorkspaceOnboarding })))
-
-type WorkspaceMode = 'ops' | 'code'
-const CODE_VIEWS = new Set<View>(['chat', 'terminal'])
-const OPS_VIEWS = new Set<View>(['home', 'artifacts', 'workflows', 'activity', 'task', 'graph', 'design'])
 
 type OpsTaskKind = 'agent' | 'image' | 'design'
 const opsTaskKind = (brief: string): OpsTaskKind => /^\/(image|gambar)\b/i.test(brief) ? 'image' : /^\/(design|image-studio|design-studio)\b/i.test(brief) ? 'design' : 'agent'
@@ -90,10 +85,8 @@ export function App() {
   // First-run only: after the password is set, offer to point Proxima at a real
   // code folder before landing in the app.
   const [onboarding, setOnboarding] = React.useState(false)
-  const [view, setView] = React.useState<View>('home')
-  const [workspaceMode, setWorkspaceMode] = React.useState<WorkspaceMode>('ops')
-  const [lastOpsView, setLastOpsView] = React.useState<View>('home')
-  const [lastCodeView, setLastCodeView] = React.useState<View>('chat')
+  // One workspace: Chat is the front door, so it is also the landing view.
+  const [view, setView] = React.useState<View>('chat')
   const [workflowMode, setWorkflowMode] = React.useState<'graph' | 'scheduled'>('graph')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
@@ -106,10 +99,6 @@ export function App() {
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
-  // Latch: mount the terminal lazily on first visit, then keep it mounted (hidden
-  // when away) so live shells survive view changes. Avoids an eager PTY on load.
-  const terminalMounted = React.useRef(false)
-  if (view === 'terminal') terminalMounted.current = true
   // Bumped by the iterate stage's "Run recipe" button → ChatScreen sends the dry-run.
   const [runRecipeNonce, setRunRecipeNonce] = React.useState(0)
   const [runRecipePrompt, setRunRecipePrompt] = React.useState<string | undefined>(undefined)
@@ -159,18 +148,16 @@ export function App() {
     openTask(jobId)
   }, [clearTaskHash, clearPendingNavigation, openTask])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
-  const goView = (v: View) => { clearTaskHash(); clearPendingNavigation(); if (v === 'workflows') setWorkflowMode('graph'); setView(viewEnabled(v) ? v : 'home') }
-  const selectWorkspace = (mode: WorkspaceMode) => {
+  const goView = (v: View) => {
     clearTaskHash()
     clearPendingNavigation()
-    setWorkspaceMode(mode)
-    const target = mode === 'ops' ? lastOpsView : lastCodeView
-    if (mode === 'code' && target === 'chat' && activeSession?.workflow_id) {
+    if (v === 'workflows') setWorkflowMode('graph')
+    // Chat in the nav means the conversation front door — never a recipe's
+    // iteration thread, which belongs to Recipes.
+    if (v === 'chat' && activeSession?.workflow_id) {
       setActiveSession(sessions.find(session => !session.workflow_id && !session.job_id && session.mode !== 'design') || null)
     }
-    const resolved = target === 'task' && activeTaskId == null ? 'activity' : target
-    if (mode === 'ops' && resolved === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`)
-    setView(viewEnabled(resolved) ? resolved : mode === 'ops' ? 'home' : 'chat')
+    setView(viewEnabled(v) ? v : 'chat')
   }
   // Unread/activity dots: a session is "unread" when its updated_at is newer
   // than the last time you opened it. Persisted so it survives reloads.
@@ -187,11 +174,6 @@ export function App() {
   const [activeProject, setActiveProject] = React.useState<Project | null>(null)
   const [activeSession, setActiveSession] = React.useState<ChatSession | null>(null)
   const [error, setError] = React.useState('')
-  React.useEffect(() => {
-    if (view === 'chat' && activeSession?.workflow_id) { setWorkspaceMode('ops'); setLastOpsView('workflows'); return }
-    if (CODE_VIEWS.has(view)) { setWorkspaceMode('code'); setLastCodeView(view); return }
-    if (OPS_VIEWS.has(view)) { setWorkspaceMode('ops'); setLastOpsView(view) }
-  }, [view, activeSession?.workflow_id])
   React.useEffect(() => {
     if (booting || !user) return
     const syncTaskRoute = (event?: Event) => {
@@ -352,7 +334,7 @@ export function App() {
   }, [])
 
   React.useEffect(() => {
-    if (!viewEnabled(view)) setView('home')
+    if (!viewEnabled(view)) setView('chat')
   }, [view, viewEnabled])
 
   // A new chat is just a blank composer — no DB session yet. The session is created
@@ -450,8 +432,9 @@ export function App() {
       } catch { /* best-effort — leaves the removable starter in place on failure */ }
     }
     await refreshAll(token)
-    // Make the linked folder the active project; if they skipped, the starter stays active.
-    if (linked) { setActiveProject(linked); setView('home') }
+    // Make the linked folder the active project; if they skipped, the starter stays
+    // active. Either way the app lands on Chat — the front door.
+    if (linked) { setActiveProject(linked); setView('chat') }
   }
   const handleLogout = async () => {
     try { await logout(token) } catch { /* best-effort; cookie is cleared server-side */ }
@@ -469,8 +452,6 @@ export function App() {
       activeProject={activeProject}
       activeSession={activeSession}
       currentView={view}
-      workspaceMode={workspaceMode}
-      onSelectWorkspace={selectWorkspace}
       onLogout={() => void handleLogout()}
       features={features}
       onNewChat={() => void startNewSession()}
@@ -509,15 +490,12 @@ export function App() {
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} onGraphBack={() => setGraphBackNonce(n => n + 1)} /></React.Suspense>}
-      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph')} /></React.Suspense>}
+      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph')} onNewTask={() => goView('home')} /></React.Suspense>}
       {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setDesignCameFrom('task'); setView('design') } : undefined} onOpenFile={(slug, path) => { clearTaskHash(); setReturnToTask(activeTaskId); setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} /></React.Suspense>}
-      {/* Always mounted (hidden when inactive) so the PTY shells survive navigating
-          to another view and back — unmounting would kill every running session. */}
-      {terminalMounted.current && <section className="chat-stage" style={{ display: view === 'terminal' ? 'flex' : 'none' }}><React.Suspense fallback={<ViewFallback label="Loading terminal..." />}><TerminalTabs token={token} projectSlug={activeProject?.slug} /></React.Suspense></section>}
-      {features.designStudio && view === 'design' && <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
+      {features.designStudio && view === 'design' &&<React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading runners..." />}><RunnersScreen runners={runners} token={token} onRefresh={refreshAll} /></React.Suspense>}
+      {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} token={token} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
