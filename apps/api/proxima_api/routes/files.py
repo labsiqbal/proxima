@@ -143,6 +143,30 @@ def register(app, deps):
         app_settings.set_setting(db(), "auto_approve_permissions", "1" if on else "0")
         return {"auto_approve": on}
 
+    @app.get("/api/settings/runs")
+    def get_run_settings(user: dict[str, Any] = Depends(current_user)):
+        """Turn quota (T5): the per-turn run timeout as a first-class in-app
+        setting, plus the (config-only) automatic continuation limit."""
+        cfg = app.state.config
+        return {
+            "run_timeout_seconds": app_settings.get_run_timeout_seconds(db(), cfg),
+            "default_run_timeout_seconds": int(cfg.get("run_timeout_seconds") or 900),
+            "min_seconds": app_settings.RUN_TIMEOUT_MIN_SECONDS,
+            "max_seconds": app_settings.RUN_TIMEOUT_MAX_SECONDS,
+            "continuation_limit": app_settings.get_continuation_limit(cfg),
+        }
+
+    @app.put("/api/settings/runs")
+    def set_run_settings(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
+        try:
+            value = app_settings.set_run_timeout_seconds(db(), int(payload.get("run_timeout_seconds")))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "invalid run_timeout_seconds") from exc
+        return {
+            "run_timeout_seconds": value,
+            "continuation_limit": app_settings.get_continuation_limit(app.state.config),
+        }
+
     @app.get("/api/settings/collaboration")
     def get_collaboration_settings(user: dict[str, Any] = Depends(current_user)):
         return app_settings.get_collaboration_settings(db())

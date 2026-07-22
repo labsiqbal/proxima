@@ -15,6 +15,8 @@ import {
   type ImageGenSettings,
   getPermissionSettings,
   savePermissionSettings,
+  getRunSettings,
+  saveRunSettings,
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
@@ -48,6 +50,37 @@ function CollaborationSettingsPanel({ token }: { token: string }) {
       <div className="seg sm">{([2, 3] as const).map(n => <button key={n} type="button" className={brainstormAgents === n ? 'active' : ''} disabled={busy} onClick={() => { setBrainstormAgents(n); void save(n, debateRounds) }}>{n}</button>)}</div>
       <span className="srow-label">Debate rounds</span>
       <div className="seg sm">{([2, 3, 4] as const).map(n => <button key={n} type="button" className={debateRounds === n ? 'active' : ''} disabled={busy} onClick={() => { setDebateRounds(n); void save(brainstormAgents, n) }}>{n}</button>)}</div>
+    </div>
+    {error && <p className="error-text">{error}</p>}
+  </div>
+}
+
+const TURN_QUOTA_MINUTES = [10, 15, 20, 30] as const
+
+function TurnQuotaPanel({ token }: { token: string }) {
+  const [seconds, setSeconds] = React.useState(900)
+  const [continuationLimit, setContinuationLimit] = React.useState(5)
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => {
+    let alive = true
+    getRunSettings(token).then(r => {
+      if (alive) { setSeconds(r.run_timeout_seconds); setContinuationLimit(r.continuation_limit) }
+    }).catch(() => undefined)
+    return () => { alive = false }
+  }, [token])
+  const save = async (nextSeconds: number) => {
+    setBusy(true); setError('')
+    try {
+      const r = await saveRunSettings(token, nextSeconds)
+      setSeconds(r.run_timeout_seconds); setContinuationLimit(r.continuation_limit)
+    } catch (err) { setError(String(err)) } finally { setBusy(false) }
+  }
+  return <div className="panel"><div className="panel-head"><h3>Turn quota</h3><span>{Math.round(seconds / 60)} min per turn</span></div>
+    <p className="muted">How long one agent turn may run before it is cut off. A job turn that hits the quota automatically continues from where it stopped (same session and files), up to {continuationLimit} times - then the job stops for your review.</p>
+    <div className="settings-rows">
+      <span className="srow-label">Per-turn limit</span>
+      <div className="seg sm">{TURN_QUOTA_MINUTES.map(m => <button key={m} type="button" className={seconds === m * 60 ? 'active' : ''} disabled={busy} onClick={() => { setSeconds(m * 60); void save(m * 60) }}>{m}m</button>)}</div>
     </div>
     {error && <p className="error-text">{error}</p>}
   </div>
@@ -444,7 +477,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
     </div></div>
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <button className={`toggle-pill ${notif ? 'on' : ''}`} onClick={() => void toggleNotif()} disabled={notifBusy}><span className="toggle-knob" />{notifBusy ? 'Requesting…' : notif ? 'On' : 'Off'}</button> : <p className="muted">Not supported in this browser.</p>}</div>
-  const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><PermissionsPanel token={token} /></>
+  const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><PermissionsPanel token={token} /></>
 
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>

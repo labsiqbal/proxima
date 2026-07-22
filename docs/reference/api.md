@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-138 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+140 endpoints across 13 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -12,7 +12,7 @@
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 24 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
-- [`routes/files.py`](#routes-files-py) — 28 endpoints
+- [`routes/files.py`](#routes-files-py) — 30 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 11 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 8 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 11 endpoints
@@ -119,6 +119,8 @@
 | POST | `/api/settings/image-gen/test` | `test_image_gen` | Test a provider. Codex/xAI → OAuth status; openai-compatible → endpoint probe. |
 | GET | `/api/settings/permissions` | `get_permission_settings` | Auto-approve toggle: when on, agent permission prompts are approved |
 | PUT | `/api/settings/permissions` | `set_permission_settings` |  |
+| GET | `/api/settings/runs` | `get_run_settings` | Turn quota (T5): the per-turn run timeout as a first-class in-app |
+| PUT | `/api/settings/runs` | `set_run_settings` |  |
 
 
 ## routes/graph.py
@@ -240,4 +242,4 @@
 
 
 ---
-_Generated 2026-07-22 05:09 UTC._
+_Generated 2026-07-22 05:34 UTC._

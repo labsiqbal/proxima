@@ -83,6 +83,22 @@ def build_step_prompt(step: dict[str, Any], idx: int, total: int, inputs: dict[s
     )
 
 
+def build_continuation_prompt(continuation: int, limit: int) -> str:
+    """The prompt for a timeout auto-continuation turn (T5): a genuine resume in
+    the SAME agent session (full context) and, for repo jobs, the SAME worktree
+    (file edits persist) - never a re-brief or restart-from-scratch."""
+    return (
+        "⟦MODE: CONTINUATION⟧ Your previous turn on this job hit the per-turn time "
+        f"limit and was cut off mid-work (automatic continuation {continuation} of {limit}). "
+        "Your working directory and this conversation are unchanged: everything you already "
+        "did is still there. Inspect the current state of your work - the files you already "
+        "changed, the output you already produced, your original instruction earlier in this "
+        "conversation - and CONTINUE from where it stopped. Do not start over and do not redo "
+        "finished work. Complete the remaining part of the original instruction and produce "
+        "the expected output it asked for."
+    )
+
+
 _DESIGN_CAPABILITY_PREAMBLE = """# Proxima capabilities (available to you in this Proxima project)
 
 Your working directory IS the project root. Decide from THIS step's instruction which of the
@@ -242,8 +258,11 @@ GRAPH_ARCHITECT_SYSTEM = (
     "target to null, target_ambiguous to true, and put the question for the owner in "
     "target_question — the plan will surface it before running. All repo jobs of one "
     "plan must target the SAME code area; work spanning two repos belongs in two plans.\n"
-    "Size every job to finish comfortably within one agent turn (about 15 minutes of "
-    "focused work). Split anything larger into sequential jobs along natural seams."
+    "Size every job to complete within ONE agent turn quota (default 15 minutes of "
+    "focused work). Split anything larger into sequential jobs along natural seams. "
+    "A job that overruns its quota is auto-continued a limited number of times as a "
+    "safety net - continuation is the safety net, not the plan; never size a job "
+    "assuming it will get extra turns."
 )
 
 # Appended to the graph architect prompt so targets name real areas instead of

@@ -22,7 +22,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hermes_bin": None,
     "run_worker_poll_interval_ms": 250,
     "run_worker_concurrency": 2,
+    # Per-turn quota fallback. The owner-facing value is the `run_timeout_seconds`
+    # app setting (Settings UI, stored in the DB); this config key is only the
+    # default when that setting is unset. See app_settings.get_run_timeout_seconds.
     "run_timeout_seconds": 900,
+    # How many automatic timeout continuations one job turn chain may consume
+    # before the honest stop (T5): job fails / plan pauses with a plain reason.
+    "run_continuation_limit": 5,
     "max_upload_bytes": 100 * 1024 * 1024,
     "auth_token_ttl_hours": 24 * 14,
     "seed_users": [],

@@ -227,10 +227,28 @@ run.completed → assistant message saved (linked via messages.run_id)
 ```
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
-reaper fail hung runs, and a run timeout (configurable `run_timeout_seconds`, default
-900s) cancels stragglers. Completion updates are guarded by the current run state, so
+reaper fail hung runs, and a per-turn quota cancels stragglers. The quota
+(`run_timeout_seconds`, default 900s) is a first-class **in-app setting** stored in
+`app_settings` (Settings → Agents → Turn quota), read per run so it applies on both
+entrypoints (`scripts/serve.py` and `uvicorn proxima_api.main:app`) without a
+restart; config/env (`PROXIMA_RUN_TIMEOUT_SECONDS`, mirrored on both entrypoints) is
+the fallback default. Completion updates are guarded by the current run state, so
 cancel wins over late media, review, collaboration, draft, or graph finalizers. Failures
 during pre-ACP setup are finalized immediately rather than waiting for the reaper.
+
+**Timeout auto-continuation (Phase-1 slice 5, T5):** when a *job* run (linear step or
+plan node) hits the quota, the worker salvages the streamed text, marks the run failed,
+and enqueues a **continuation run in the same session** — the persistent ACP session
+keeps the agent's context, and a repo job's cwd re-binds to the same worktree so file
+edits persist. The prompt is a genuine resume ("inspect the current state of your work,
+continue from where it stopped"). A graph node stays `running` and is re-attached to
+the continuation via a guarded `running→running` run-id swap in `node_states`. The
+chain (`runs.continued_from_run_id` / `runs.continuation_count`) is capped by
+`run_continuation_limit` (config, default 5); at the cap the job fails loudly with a
+plain-language reason and a plan pauses for review — never a silent stall. Chat,
+goal, collaboration, and review runs keep the plain fail-on-timeout path. Slice 12's
+satpam reads continuation counts as a confused-agent signal; restart-clean (worktree
+discard) stays a supervisor/owner decision, never automatic.
 
 ### 2. Per-prompt Brainstorm / Debate
 

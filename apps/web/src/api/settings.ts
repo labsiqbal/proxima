@@ -48,6 +48,19 @@ export const getPermissionSettings = (token: string) =>
 export const savePermissionSettings = (token: string, auto_approve: boolean) =>
   api<{ auto_approve: boolean }>(`/api/settings/permissions`, token, { method: 'PUT', body: JSON.stringify({ auto_approve }) })
 
+export type RunSettings = {
+  run_timeout_seconds: number
+  default_run_timeout_seconds: number
+  min_seconds: number
+  max_seconds: number
+  continuation_limit: number
+}
+
+export const getRunSettings = (token: string) =>
+  api<RunSettings>('/api/settings/runs', token)
+export const saveRunSettings = (token: string, run_timeout_seconds: number) =>
+  api<{ run_timeout_seconds: number; continuation_limit: number }>('/api/settings/runs', token, { method: 'PUT', body: JSON.stringify({ run_timeout_seconds }) })
+
 export type CollaborationSettings = {
   brainstorm_agents: 2 | 3
   debate_rounds: 2 | 3 | 4
