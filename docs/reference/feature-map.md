@@ -47,7 +47,7 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 
 | Feature | Status | Backend | Frontend | Relates to |
 | --- | --- | --- | --- | --- |
-| Composer / input + `@` project-file references | active | `routes/files.py` (`reference-files`), `fsapi.py`; `routes/chat.py` media vision | `components/chat/Composer.tsx`, `MentionTextarea.tsx`, `useProjectMentionItems.ts` | core chat/runs, projects/files |
+| Composer / input + `@` project-file & artifact references | active | `routes/files.py` (`reference-files`, `artifacts`), `fsapi.py`; `routes/chat.py` media vision | `components/chat/Composer.tsx`, `MentionTextarea.tsx`, `useProjectMentionItems.ts` | core chat/runs, projects/files |
 | File attach / upload | active | `routes/files.py` (upload) | `Composer.tsx`, `api/files.ts` | files, artifacts |
 | Slash commands | active | `commands.py`, `/api/commands/catalog` | `Composer.tsx`, `ChatScreen.tsx` (`localCommandReply`) | sessions, projects, runners |
 | Chat modes (Normal/Brainstorm/Debate) | active | `routes/chat.py` + `chat_collaboration.py` | `Composer.tsx` (`MODES`) | collaborations |

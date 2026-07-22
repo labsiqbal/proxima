@@ -7,6 +7,7 @@ import { Composer } from "./Composer";
 const mocks = vi.hoisted(() => ({
 	getCommandCatalog: vi.fn(),
 	listReferenceFiles: vi.fn(),
+	listArtifacts: vi.fn(),
 	uploadFile: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock("../../api/commands", () => ({
 
 vi.mock("../../api/files", () => ({
 	listReferenceFiles: mocks.listReferenceFiles,
+	listArtifacts: mocks.listArtifacts,
 	uploadFile: mocks.uploadFile,
 }));
 
@@ -56,6 +58,7 @@ describe("Composer project-file references", () => {
 		vi.clearAllMocks();
 		mocks.getCommandCatalog.mockResolvedValue({ groups: [] });
 		mocks.listReferenceFiles.mockResolvedValue(referenceFiles);
+		mocks.listArtifacts.mockResolvedValue({ artifacts: [] });
 	});
 
 	afterEach(() => {
@@ -116,7 +119,7 @@ describe("Composer project-file references", () => {
 		await user.type(textarea, "@");
 
 		const list = await screen.findByRole("listbox", {
-			name: "Project files",
+			name: "Project references",
 		});
 		expect(list).toHaveClass("mention-results");
 		const options = screen.getAllByRole("option");
@@ -174,6 +177,34 @@ describe("Composer project-file references", () => {
 		expect(await screen.findByText("src/app.tsx")).toBeInTheDocument();
 		await user.keyboard("{Tab}");
 		expect(textarea.value).toMatch(/^Compare src\/app\.tsx\s+after this$/);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("surfaces produced artifacts with a kind badge and inserts their path", async () => {
+		mocks.listArtifacts.mockResolvedValue({
+			artifacts: [
+				{
+					path: "artifacts/design/launch",
+					title: "Launch post",
+					type: "design",
+				},
+			],
+		});
+		const user = userEvent.setup();
+		const { onSubmit } = renderComposer();
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+
+		await waitFor(() => expect(mocks.listArtifacts).toHaveBeenCalled());
+		await user.type(textarea, "Open @Launch");
+		expect(await screen.findByText("Launch post")).toBeInTheDocument();
+		expect(screen.getByText("Design")).toBeInTheDocument();
+		expect(screen.getByText("artifacts/design/launch")).toBeInTheDocument();
+
+		const list = screen.getByRole("listbox", { name: "Project references" });
+		expect(list).toBeInTheDocument();
+
+		await user.keyboard("{Enter}");
+		expect(textarea).toHaveValue("Open artifacts/design/launch ");
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 });
