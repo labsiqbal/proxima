@@ -36,6 +36,14 @@ describe("stripRunnerPreamble", () => {
 		);
 	});
 
+	it("drops the dump when the answer starts with bold, not a ## heading", () => {
+		const raw =
+			"pi v0.80.10 --- ## Skills - /home/user/.pi/agent/skills/tdd/SKILL.md - /home/user/.agents/skills/qa/SKILL.md --- **Core idea:** Name two flavors that sound like a mismatched couple.";
+		expect(stripRunnerPreamble(raw)).toBe(
+			"**Core idea:** Name two flavors that sound like a mismatched couple.",
+		);
+	});
+
 	it("leaves ordinary answers untouched", () => {
 		const body = "## Position\n\nPlain text wins for tiny lists.";
 		expect(stripRunnerPreamble(body)).toBe(body);

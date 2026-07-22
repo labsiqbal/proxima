@@ -6,14 +6,25 @@ from typing import Any
 
 # Some runners (notably Pi) print a version banner + full skills catalog before
 # the real answer. That noise poisons collab card previews and synthesis prompts.
-_PI_BANNER = re.compile(
-    r"(?is)^\s*pi\s+v[\d.]+\b.*?(?=##\s+(?!skills\b))"
+# Real answers may start with ## Heading OR **bold** / plain prose (no second ##),
+# so the dump must end on skill path bullets and --- separators, not only on ##.
+_PI_PREAMBLE = re.compile(
+    r"(?is)^\s*pi\s+v[\d.]+\b"
+    r"(?:"
+    r"\s*---"
+    r"|\s*##\s+skills\b(?:[ \t]*-[ \t]+/\S+|\s)+"
+    r")*"
+    r"\s*(?:---\s*)?"
 )
 _SKILLS_HEADING = re.compile(
-    r"(?is)^\s*##\s+skills\b.*?(?=##\s+(?!skills\b)|\Z)"
+    r"(?is)^\s*##\s+skills\b(?:[ \t]*-[ \t]+/\S+|\s)*"
+    r"(?:---\s*)?"
 )
 _UPDATE_NOTICE = re.compile(
-    r"(?im)^\s*New version available:.*(?:\n|$)"
+    r"(?is)^\s*New version available:\s*\S+"
+    r"(?:\s*\([^)]*\))?"
+    r"(?:\.\s*Run:\s*`[^`]+`)?"
+    r"\s*"
 )
 
 
@@ -23,9 +34,9 @@ def strip_runner_preamble(text: str | None) -> str:
         return ""
     cleaned = text.strip()
     for _ in range(3):
-        nxt = _PI_BANNER.sub("", cleaned, count=1)
+        nxt = _PI_PREAMBLE.sub("", cleaned, count=1)
         nxt = _SKILLS_HEADING.sub("", nxt, count=1)
-        nxt = _UPDATE_NOTICE.sub("", nxt)
+        nxt = _UPDATE_NOTICE.sub("", nxt, count=1)
         nxt = nxt.lstrip(" \t\r\n-")
         if nxt == cleaned:
             break

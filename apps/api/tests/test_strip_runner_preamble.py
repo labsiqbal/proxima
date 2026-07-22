@@ -18,6 +18,18 @@ def test_strip_runner_preamble_drops_pi_skills_banner():
     )
 
 
+def test_strip_runner_preamble_when_answer_starts_with_bold_not_heading():
+    """Live Pi brainstorm answers often use **Core idea:** with no ## after Skills."""
+    raw = (
+        "pi v0.80.10 --- ## Skills - /home/user/.pi/agent/skills/tdd/SKILL.md "
+        "- /home/user/.agents/skills/qa/SKILL.md --- "
+        "**Core idea:** Name two flavors that sound like a mismatched couple."
+    )
+    assert strip_runner_preamble(raw) == (
+        "**Core idea:** Name two flavors that sound like a mismatched couple."
+    )
+
+
 def test_strip_runner_preamble_leaves_clean_answers():
     body = "## Position\n\nPlain text wins for tiny lists."
     assert strip_runner_preamble(body) == body

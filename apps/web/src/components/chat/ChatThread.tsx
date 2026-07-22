@@ -603,16 +603,21 @@ export function collabCardAriaLabel(
  * Drop leading runner banners/skills dumps (Pi often prefixes the real answer
  * with `pi v… --- ## Skills - /path …`). Keeps collab previews scannable and
  * matches server-side strip_runner_preamble for already-stored polluted rows.
+ * Real answers may start with a ## heading OR bold/plain prose (no second ##),
+ * so the dump ends on skill path bullets and --- separators, not only on ##.
  */
 export function stripRunnerPreamble(text: string): string {
 	if (!text) return "";
 	let cleaned = text.trim();
-	const piBanner = /^\s*pi\s+v[\d.]+\b[\s\S]*?(?=##\s+(?!skills\b))/i;
-	const skillsHeading = /^\s*##\s+skills\b[\s\S]*?(?=##\s+(?!skills\b)|$)/i;
-	const updateNotice = /^\s*New version available:.*(?:\n|$)/gim;
+	const piPreamble =
+		/^\s*pi\s+v[\d.]+\b(?:\s*---|\s*##\s+skills\b(?:[ \t]*-[ \t]+\/\S+|\s)+)*\s*(?:---\s*)?/i;
+	const skillsHeading =
+		/^\s*##\s+skills\b(?:[ \t]*-[ \t]+\/\S+|\s)*(?:---\s*)?/i;
+	const updateNotice =
+		/^\s*New version available:\s*\S+(?:\s*\([^)]*\))?(?:\.\s*Run:\s*`[^`]+`)?\s*/i;
 	for (let i = 0; i < 3; i += 1) {
 		const next = cleaned
-			.replace(piBanner, "")
+			.replace(piPreamble, "")
 			.replace(skillsHeading, "")
 			.replace(updateNotice, "")
 			.replace(/^[ \t\r\n-]+/, "");

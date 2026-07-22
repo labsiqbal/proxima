@@ -138,7 +138,8 @@ stacks cards vertically; Debate alternates them left/right per speaker so
 rounds read as a conversation. Leading runner banners and skills catalogs (e.g.
 Pi's `pi v… ## Skills` dump) are stripped from card bodies, previews, stored
 child outputs, and synthesis prompts so owners see the argument, not the path
-list. The synthesis is NOT a card — it streams into the parent bubble like a
+list — including when the real answer starts with bold/plain prose rather than
+a `##` heading. The synthesis is NOT a card — it streams into the parent bubble like a
 normal reply and lands as the final assistant message (synthesis only; per-agent
 detail lives in the cards). Child runs still do not save ordinary assistant
 messages; the card history replays from events.
