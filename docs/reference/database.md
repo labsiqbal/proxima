@@ -53,7 +53,7 @@ SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_artifact_records_job` — (job_id); `idx_artifact_records_identity` — (project_id, type, path); `idx_artifact_records_project` — (project_id, produced_at)
+**Indexes:** `idx_artifact_records_job` — (job_id); `idx_artifact_records_identity` — (project_id, path); `idx_artifact_records_project` — (project_id, produced_at)
 
 
 ### audit_log
@@ -415,4 +415,4 @@ SQLite (WAL mode). 22 tables. Applied migration version: **23**. This is the exa
 
 
 ---
-_Generated 2026-07-22 07:21 UTC._
+_Generated 2026-07-22 07:45 UTC._

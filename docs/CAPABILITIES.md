@@ -381,7 +381,7 @@ limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents.
 These APIs power the **Files tool** on the right rail (the project tree + inline
-editor as an overlay panel, any context), the **Artifacts** gallery's *Source* editor
+editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
 file references — with the in-browser **Terminal** as the raw escape hatch.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
@@ -441,7 +441,7 @@ canvas applies live. The studio offers select/move/resize with a full inspector
 selection-aware chat, undo/redo + version history, multi-image reference inputs, an
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
 URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
-`artifacts/design/<id>/scene.json` and appear in the Artifacts visual gallery.
+`artifacts/design/<id>/scene.json` and appear as design records in the Archive.
 See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
 
 The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: `scripts/dev` enables
@@ -575,11 +575,11 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Artifacts, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Archive, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session; the chat remains lazily created on first send.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher — a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Recipes** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
-+ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. Artifacts remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.

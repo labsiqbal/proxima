@@ -346,7 +346,7 @@ CREATE TABLE IF NOT EXISTS artifact_records (
   UNIQUE(project_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_records_project ON artifact_records(project_id, produced_at DESC);
-CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, type, path);
+CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, path);
 CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id);
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,

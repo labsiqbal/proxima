@@ -112,12 +112,22 @@ is selection-aware. Export as PNG/JPG/PDF/HTML.
 
 ![Layer inspector](screenshots/design-studio-inspector.png)
 
-## Artifacts
+## Archive
 
-The project's output gallery — visual artifacts up top, files/apps/documents
-below, filterable by type, with type-aware viewers:
+The durable deliverable registry (T4): every agent output becomes a record with
+lineage (chat → task → file), one approval status (draft / in review / approved /
+superseded), and a version chain. Filter by project, type, status, and date;
+records survive file moves and deletion.
 
-![Artifacts gallery](screenshots/artifacts-gallery.png)
+![Archive registry](screenshots/archive-registry.png)
+
+A row expands in place for a quick scan; "Open full record" goes to the record's
+permanent address (`#archive/<project>/<slug>`) with a large preview, version
+history, and the lineage chain as links:
+
+![Archive record page](screenshots/archive-record.png)
+
+Type-aware viewers open the underlying file:
 
 ![Markdown viewer](screenshots/artifact-viewer.png)
 

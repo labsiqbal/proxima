@@ -58,13 +58,13 @@ def _stat(root: Path | None, rel_path: str) -> tuple[int | None, float | None]:
         return None, None
 
 
-def _latest_for_identity(
-    conn: sqlite3.Connection, project_id: int, typ: str, path: str
-) -> sqlite3.Row | None:
+def _latest_for_identity(conn: sqlite3.Connection, project_id: int, path: str) -> sqlite3.Row | None:
+    """Identity is (project, path): the logical deliverable is the path, even if
+    a later producer re-labels its type (e.g. a script re-exporting a file)."""
     return conn.execute(
-        "SELECT * FROM artifact_records WHERE project_id = ? AND type = ? AND path = ? "
+        "SELECT * FROM artifact_records WHERE project_id = ? AND path = ? "
         "ORDER BY version DESC, id DESC LIMIT 1",
-        (project_id, typ, path),
+        (project_id, path),
     ).fetchone()
 
 
@@ -83,9 +83,9 @@ def record_artifacts(
 ) -> list[int]:
     """Upsert scanned artifacts as durable records; returns the touched row ids.
 
-    Identity is (project, type, path). A re-scan by the SAME run - or a later
+    Identity is (project, path). A re-scan by the SAME run - or a later
     step of the same still-draft job - refreshes the existing record (feeding
-    is idempotent). A new producer at the same identity creates v(n+1) and
+    is idempotent). A new producer at the same path creates v(n+1) and
     marks every prior version superseded (the automatic version chain).
     """
     now = iso_now()
@@ -100,7 +100,7 @@ def record_artifacts(
             typ = "script-output"
         name = str(item.get("title") or Path(path).name)
         size, _ = _stat(project_root, path)
-        latest = _latest_for_identity(conn, project_id, typ, path)
+        latest = _latest_for_identity(conn, project_id, path)
         refresh = latest is not None and (
             (run_id is not None and latest["run_id"] == run_id)
             # Later steps of the same job rewriting the same file are one
@@ -109,9 +109,9 @@ def record_artifacts(
         )
         if refresh and latest is not None:
             conn.execute(
-                "UPDATE artifact_records SET name = ?, size = ?, produced_at = ?, run_id = ?, "
+                "UPDATE artifact_records SET name = ?, type = ?, size = ?, produced_at = ?, run_id = ?, "
                 "file_missing = 0, updated_at = ? WHERE id = ?",
-                (name, size, produced, run_id if run_id is not None else latest["run_id"], now, latest["id"]),
+                (name, typ, size, produced, run_id if run_id is not None else latest["run_id"], now, latest["id"]),
             )
             touched.append(int(latest["id"]))
             continue
@@ -127,8 +127,8 @@ def record_artifacts(
         if latest is not None:
             conn.execute(
                 "UPDATE artifact_records SET status = 'superseded', superseded_by = ?, updated_at = ? "
-                "WHERE project_id = ? AND type = ? AND path = ? AND id != ? AND status != 'superseded'",
-                (new_id, now, project_id, typ, path, new_id),
+                "WHERE project_id = ? AND path = ? AND id != ? AND status != 'superseded'",
+                (new_id, now, project_id, path, new_id),
             )
         touched.append(new_id)
     return touched
@@ -237,7 +237,7 @@ def seed_project(conn: sqlite3.Connection, project_id: int, root: Path, *, cap: 
         path = str(item.get("path") or "")
         if not typ or not path:
             continue
-        if _latest_for_identity(conn, project_id, typ, path) is not None:
+        if _latest_for_identity(conn, project_id, path) is not None:
             continue
         name = str(item.get("title") or Path(path).name)
         size, mtime = _stat(root, path)

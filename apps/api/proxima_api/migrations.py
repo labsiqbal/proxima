@@ -571,7 +571,7 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_artifact_records_project ON artifact_records(project_id, produced_at DESC)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, type, path)"
+        "CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, path)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id)")
     if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():

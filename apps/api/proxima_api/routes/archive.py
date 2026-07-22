@@ -145,9 +145,9 @@ def register(app, deps):
             dict(v)
             for v in conn.execute(
                 "SELECT id, slug, version, status, produced_at, approved_at, superseded_by "
-                "FROM artifact_records WHERE project_id = ? AND type = ? AND path = ? "
+                "FROM artifact_records WHERE project_id = ? AND path = ? "
                 "ORDER BY version DESC, id DESC",
-                (p["id"], record["type"], record["path"]),
+                (p["id"], record["path"]),
             ).fetchall()
         ]
         nav = {}

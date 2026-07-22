@@ -1,371 +1,293 @@
 import React from 'react'
 import type { OutputLink, Project } from '../types'
-import { projectFs } from '../api/fsAdapter'
-import { detectApps, fetchRawBlob, listArtifacts, previewUrl, type Artifact } from '../api/files'
-import { MessageContent } from '../components/chat/MessageContent'
+import type { Artifact } from '../api/files'
+import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../api/archive'
 import { Dropdown } from '../components/ui/Dropdown'
-import { AppRunner } from '../components/files/AppRunner'
 import { BackButton } from '../components/ui/BackButton'
-import { MiniPreview } from '../components/design/MiniPreview'
 import { ArtifactViewer } from '../components/artifacts/ArtifactViewer'
-import type { Artboard } from '../components/design/scene'
+import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
+import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from '../components/artifacts/archive'
 
-const FileEditor = React.lazy(() => import('../components/files/FileEditor').then(m => ({ default: m.FileEditor })))
+// The Archive (Phase-1 slice 8, T4): a durable registry of deliverables, not a
+// folder scan. Detail is the captain's combo: a row expands in place for the
+// quick scan, and "Open full record" navigates to the record's permanent
+// address (ArchiveRecordPage). No right panel, no popup.
 
 const clean = (n: string) => n.replace(/\s*\(private\)\s*$/i, '')
-const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
-const VIDEO = /\.(mp4|webm|mov)$/i
-const RENDERED_MP4 = /\.mp4$/i
-const HTML = /\.html?$/i
-const MD = /\.(md|markdown)$/i
-const resolveArtifactSrc = (slug: string, src: string) =>
-  /^gen:/i.test(src) ? '' : (/^(https?:|data:|blob:)/.test(src) ? src : previewUrl(slug, src))
+const PAGE_SIZE = 50
 
-type Filter = 'all' | 'design' | 'video' | 'image' | 'document' | 'app' | 'data' | 'other'
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'design', label: 'Design' },
-  { key: 'video', label: 'Video' },
-  { key: 'image', label: 'Image' },
-  { key: 'document', label: 'Document' },
-  { key: 'app', label: 'App' },
-  { key: 'data', label: 'Data' },
-  { key: 'other', label: 'Other' },
+// Facet order for the type chips; unknown types append after these.
+const TYPE_ORDER = ['doc', 'image', 'file', 'page', 'design', 'script-output', 'video-file', 'app']
+const STATUSES: ArchiveStatus[] = ['draft', 'review', 'approved', 'superseded']
+const DATE_CHOICES = [
+  { days: 0, label: 'Any time' },
+  { days: 7, label: 'Last 7 days' },
+  { days: 30, label: 'Last 30 days' },
+  { days: 90, label: 'Last 90 days' },
 ]
-const VISUAL_PAGE_SIZE = 18
 
-const asArtifact = (a: Artifact | OutputLink): Artifact => ({
-  type: a.type as Artifact['type'],
-  title: a.title || a.path,
-  path: a.path,
-  id: a.id,
-  dir: a.dir,
-  command: a.command,
-  project_slug: a.project_slug,
+const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'>): Artifact => ({
+  type: (r.type === 'script-output' ? 'file' : r.type) as Artifact['type'],
+  title: r.name,
+  path: r.path,
+  project_slug: r.project_slug,
 })
 
-const category = (a: Artifact): Filter => {
-  if (a.type === 'design') return 'design'
-  if ((a.type === 'video-file' || RENDERED_MP4.test(a.path)) && RENDERED_MP4.test(a.path)) return 'video'
-  if (a.type === 'app') return 'app'
-  if (a.type === 'image' || IMG.test(a.path)) return 'image'
-  if (a.type === 'doc' || a.type === 'page' || /\.(md|markdown|pdf|docx?|txt|rtf|html?)$/i.test(a.path)) return 'document'
-  if (/\.(csv|json|xlsx?|db|sqlite)$/i.test(a.path)) return 'data'
-  return 'other'
-}
-const isVisualArtifact = (a: Artifact) => ['design', 'image', 'video'].includes(category(a))
-// Consumption types that open in the lightbox viewer (design → studio, app → runner
-// keep their own surfaces).
-const viewerEligible = (a: Artifact) => ['image', 'video', 'document', 'data'].includes(category(a))
-
-const icon = (a: Artifact) =>
-  category(a) === 'design' ? '◆'
-  : category(a) === 'video' ? '◉'
-  : category(a) === 'app' ? '▶'
-  : category(a) === 'image' ? '▧'
-  : category(a) === 'document' ? '□'
-  : category(a) === 'data' ? '▦'
-  : '◇'
-
-type DesignThumb = { art?: Artboard }
-
-function ArtifactCard({ artifact, active, slug, designThumb, onOpen }: { artifact: Artifact; active: boolean; slug: string; designThumb?: DesignThumb; onOpen: () => void }) {
-  const cat = category(artifact)
-  const visual = cat === 'design' || cat === 'image' || cat === 'video'
-  const title = artifact.title || artifact.path
-  return <button className={`art-card ${visual ? 'visual' : ''} ${active ? 'active' : ''}`} onClick={onOpen}>
-    {visual ? <span className="art-thumb">
-      {cat === 'design' && designThumb?.art
-        ? <MiniPreview art={designThumb.art} resolveSrc={s => resolveArtifactSrc(slug, s)} />
-        : cat === 'image'
-          ? <img src={previewUrl(slug, artifact.path)} alt={title} loading="lazy" />
-          : cat === 'video'
-            ? <span className="art-video-thumb"><video src={`${previewUrl(slug, artifact.path)}#t=0.1`} muted playsInline preload="metadata" /><i aria-hidden="true">▶</i></span>
-          : <span className="art-ic">{icon(artifact)}</span>}
-    </span> : <span className="art-ic">{icon(artifact)}</span>}
-    <span className="art-meta"><strong>{title}</strong><small>{artifact.path}{artifact.command ? ` · ${artifact.command}` : ''}</small></span>
-    {!visual && <span className="art-go">{artifact.type === 'app' ? 'Preview' : artifact.type === 'design' ? 'Open' : 'View'}</span>}
-  </button>
-}
-
-function ArtifactList({ artifacts, selected, onOpen }: { artifacts: Artifact[]; selected: Artifact | null; onOpen: (a: Artifact) => void }) {
-  return <div className="artifact-list">
-    {artifacts.map(a => <button key={`${a.type}:${a.path}:${a.command || ''}`} className={`art-card ${selected?.path === a.path ? 'active' : ''}`} onClick={() => onOpen(a)}>
-      <span className="art-ic">{icon(a)}</span>
-      <span className="art-meta"><strong>{a.title || a.path}</strong><small>{a.path}{a.command ? ` · ${a.command}` : ''}</small></span>
-      <span className="art-go">{a.type === 'app' ? 'Preview' : a.type === 'design' ? 'Open' : 'View'}</span>
-    </button>)}
-  </div>
-}
-
-function FileView({ token, slug, path, fs, onClose }: { token: string; slug: string; path: string; fs: ReturnType<typeof projectFs>; onClose: () => void }) {
-  const name = path.split('/').pop() || path
-  const previewable = HTML.test(path) || MD.test(path) || VIDEO.test(path)
-  const [mode, setMode] = React.useState<'preview' | 'source'>(previewable ? 'preview' : 'source')
-  const [img, setImg] = React.useState<string | null>(null)
-  const [md, setMd] = React.useState<string | null>(null)
-  const loadSeq = React.useRef(0)
-  const blobUrlRef = React.useRef<string | null>(null)
-
-  React.useEffect(() => { setMode(HTML.test(path) || MD.test(path) || VIDEO.test(path) ? 'preview' : 'source') }, [path])
-
-  React.useEffect(() => {
-    const seq = ++loadSeq.current
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current)
-      blobUrlRef.current = null
-    }
-    setImg(null)
-    setMd(null)
-    if (IMG.test(path) || VIDEO.test(path)) {
-      fetchRawBlob(token, slug, path).then(u => {
-        if (seq !== loadSeq.current) {
-          URL.revokeObjectURL(u)
-          return
-        }
-        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
-        blobUrlRef.current = u
-        setImg(u)
-      }).catch(() => {})
-    } else if (MD.test(path) && mode === 'preview') {
-      fs.read(path)
-        .then(b => {
-          if (seq === loadSeq.current) setMd(b.content)
-        })
-        .catch(() => {
-          if (seq === loadSeq.current) setMd('')
-        })
-    }
-    return () => {
-      if (seq === loadSeq.current) loadSeq.current += 1
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current)
-        blobUrlRef.current = null
-      }
-    }
-  }, [token, slug, path, mode, fs])
-
-  if (IMG.test(path)) return <div className="file-editor"><div className="file-editor-head"><strong>{name}</strong><button className="ghost-button" onClick={onClose}>Close</button></div><div className="file-preview img">{img && <img src={img} alt={name} />}</div></div>
-  if (VIDEO.test(path)) return <div className="file-editor"><div className="file-editor-head"><strong>{name}</strong><button className="ghost-button" onClick={onClose}>Close</button></div><div className="file-preview video">{img && <video className="art-video" src={img} controls playsInline />}</div></div>
-  if (mode === 'source') return <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{name}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor...</p></div>}><FileEditor fs={fs} path={path} onClose={previewable ? () => setMode('preview') : onClose} /></React.Suspense>
-  return <div className="file-editor">
-    <div className="file-editor-head">
-      <strong title={path}>{name}</strong>
-      <div className="seg sm"><button className="active">Preview</button><button onClick={() => setMode('source')}>Source</button></div>
-      <button className="ghost-button" onClick={onClose}>Close</button>
-    </div>
-    {HTML.test(path)
-      ? <iframe className="file-preview-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts" />
-      : <div className="file-preview md-doc"><div className="md">{md != null ? <MessageContent content={md} /> : <p className="muted">Loading…</p>}</div></div>}
-  </div>
-}
-
-export function ArtifactsScreen({ token, projects, activeProject, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign }: {
+export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign }: {
   token: string
   projects: Project[]
   activeProject: Project | null
+  archiveRecord?: { project: string; slug: string } | null
   pendingFile?: { slug: string; path: string } | null
   pendingArtifact?: OutputLink | null
   onPendingConsumed?: () => void
   onPendingArtifactConsumed?: () => void
   onActiveProject?: (p: Project) => void
+  onOpenRecord?: (project: string, slug: string) => void
+  onCloseRecord?: () => void
+  onOpenTask?: (jobId: number, engine?: string) => void
+  onOpenSession?: (sessionId: number) => void
   onBack?: () => void
   backLabel?: string
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
 }) {
-  const [slug, setSlug] = React.useState(activeProject?.slug || projects[0]?.slug || '')
-  const [filter, setFilter] = React.useState<Filter>('all')
-  const [visualPage, setVisualPage] = React.useState(0)
-  const [artifacts, setArtifacts] = React.useState<Artifact[]>([])
-  const [designThumbs, setDesignThumbs] = React.useState<Record<string, DesignThumb>>({})
-  const [selected, setSelected] = React.useState<Artifact | null>(null)
-  const [path, setPath] = React.useState<string | null>(null)
-  const [runner, setRunner] = React.useState<Artifact | null>(null)
-  // The lightbox: a list to walk with ←/→ and the current position. Clicks in the
-  // list pass the full visible set; an artifact opened from chat passes just itself.
-  const [viewer, setViewer] = React.useState<{ items: Artifact[]; index: number } | null>(null)
-  const [listHidden, setListHidden] = React.useState(false)
+  const [project, setProject] = React.useState('')
+  const [type, setType] = React.useState('')
+  const [status, setStatus] = React.useState<ArchiveStatus | ''>('')
+  const [q, setQ] = React.useState('')
+  const [days, setDays] = React.useState(0)
+  const [records, setRecords] = React.useState<ArchiveRecord[]>([])
+  const [total, setTotal] = React.useState(0)
+  const [counts, setCounts] = React.useState<ArchiveCounts>({ by_type: {}, by_status: {} })
+  const [expandedId, setExpandedId] = React.useState<number | null>(null)
+  const [viewer, setViewer] = React.useState<{ items: Artifact[]; slug: string } | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState('')
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
-  const project = projects.find(p => p.slug === slug) || null
-  const fs = React.useMemo(() => project ? projectFs(token, project.slug) : null, [token, project?.slug])
 
   React.useEffect(() => {
     mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      loadSeq.current += 1
-    }
+    return () => { mountedRef.current = false; loadSeq.current += 1 }
   }, [])
 
-  const pickProject = React.useCallback((nextSlug: string) => {
-    if (!mountedRef.current) return
-    setSlug(nextSlug)
-    const next = projects.find(p => p.slug === nextSlug)
-    if (next) onActiveProject?.(next)
-  }, [projects, onActiveProject])
-
-  React.useEffect(() => {
-    if (activeProject?.slug && activeProject.slug !== slug) setSlug(activeProject.slug)
-  }, [activeProject?.slug, slug])
-
-  const load = React.useCallback(async () => {
-    if (!slug) return
+  const fetchPage = React.useCallback(async (offset: number, append: boolean) => {
     const seq = ++loadSeq.current
     setLoading(true)
     setLoadError('')
     try {
-      const [artsResult, appsResult] = await Promise.allSettled([
-        listArtifacts(token, slug, 525600),
-        detectApps(token, slug),
-      ])
-      if (artsResult.status === 'rejected' && appsResult.status === 'rejected') throw artsResult.reason
-      const arts = artsResult.status === 'fulfilled' ? artsResult.value : { artifacts: [] }
-      const apps = appsResult.status === 'fulfilled' ? appsResult.value : { apps: [] }
+      const res = await listArchive(token, { project, type, status, q, days, limit: PAGE_SIZE, offset })
       if (!mountedRef.current || seq !== loadSeq.current) return
-      if (artsResult.status === 'rejected' || appsResult.status === 'rejected') {
-        setLoadError('Some project outputs could not be refreshed; available results are shown.')
-      }
-      const appArtifacts: Artifact[] = apps.apps.map(a => ({ type: 'app', title: a.dir && a.dir !== '.' ? a.dir : clean(project?.name || 'App'), path: a.dir || '.', dir: a.dir, command: a.command }))
-      const merged = new Map<string, Artifact>()
-      for (const a of [...arts.artifacts, ...appArtifacts]) merged.set(`${a.type}:${a.path}:${a.command || ''}`, a)
-      const nextArtifacts = [...merged.values()]
-      setArtifacts(nextArtifacts)
-      const thumbs: Record<string, DesignThumb> = {}
-      await Promise.all(nextArtifacts.filter(a => a.type === 'design').map(async a => {
-        try {
-          const scenePath = `${a.path.replace(/\/$/, '')}/scene.json`
-          const f = await projectFs(token, slug).read(scenePath)
-          const s = JSON.parse(f.content)
-          const art = s.artboards?.[0]
-          if (art) thumbs[a.path] = { art }
-        } catch { /* thumbnail optional */ }
-      }))
-      if (mountedRef.current && seq === loadSeq.current) setDesignThumbs(thumbs)
+      const items = res.items
+      setRecords(prev => append ? [...prev, ...items] : items)
+      setTotal(res.total)
+      setCounts(res.counts)
     } catch (cause) {
       if (mountedRef.current && seq === loadSeq.current) setLoadError(String(cause))
     } finally {
       if (mountedRef.current && seq === loadSeq.current) setLoading(false)
     }
-  }, [token, slug, project?.name])
+  }, [token, project, type, status, q, days])
 
-  React.useEffect(() => { void load() }, [load])
+  React.useEffect(() => { setExpandedId(null); void fetchPage(0, false) }, [fetchPage])
+
+  const refresh = React.useCallback(() => { void fetchPage(0, false) }, [fetchPage])
+
+  const pickProject = React.useCallback((slug: string) => {
+    setProject(slug)
+    const next = projects.find(p => p.slug === slug)
+    if (next) onActiveProject?.(next)
+  }, [projects, onActiveProject])
+
+  // Chat result cards and task file links keep working: a pending artifact
+  // resolves to its registry record (permanent address) when one exists, and
+  // falls back to the universal viewer for anything not (yet) registered.
   React.useEffect(() => {
-    setSelected(null); setPath(null); setRunner(null); setViewer(null)
-  }, [slug])
-  React.useEffect(() => { setVisualPage(0) }, [filter, slug])
-  React.useEffect(() => {
-    if (!mountedRef.current || !pendingFile) return
-    if (pendingFile.slug !== slug) {
-      pickProject(pendingFile.slug)
-      return
-    }
-    setPath(pendingFile.path); setSelected(null); setRunner(null); onPendingConsumed?.()
-  }, [pendingFile, slug, pickProject, onPendingConsumed])
-  React.useEffect(() => {
-    if (!mountedRef.current || !pendingArtifact) return
-    if (pendingArtifact.project_slug && pendingArtifact.project_slug !== slug) {
-      pickProject(pendingArtifact.project_slug)
-      return
-    }
-    const a = asArtifact(pendingArtifact)
-    if (a.type === 'app') { setRunner(a); setViewer(null) }
-    else if (viewerEligible(a)) { setSelected(a); setRunner(null); setPath(null); setViewer({ items: [a], index: 0 }) }
-    else { setSelected(a); setPath(a.type === 'design' ? `${a.path}/scene.json` : a.type === 'video' ? `${a.path}/index.html` : a.path); setRunner(null); setViewer(null) }
+    if (!pendingArtifact) return
+    const link = pendingArtifact
     onPendingArtifactConsumed?.()
-  }, [pendingArtifact, slug, pickProject, onPendingArtifactConsumed])
+    const slug = link.project_slug || activeProject?.slug
+    if (!slug || !link.path) return
+    void listArchive(token, { project: slug, path: link.path, limit: 1 }).then(res => {
+      if (!mountedRef.current) return
+      const hit = res.items[0]
+      if (hit) onOpenRecord?.(hit.project_slug, hit.slug)
+      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug })
+    }).catch(() => {
+      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug })
+    })
+  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed])
 
-  if (projects.length === 0) return <section className="placeholder-view"><div className="assistant-bubble compact"><h1>Artifacts</h1><p>No projects yet.</p></div></section>
+  React.useEffect(() => {
+    if (!pendingFile) return
+    onPendingConsumed?.()
+    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path }], slug: pendingFile.slug })
+  }, [pendingFile, onPendingConsumed])
 
-  const filtered = artifacts.filter(a => filter === 'all' || category(a) === filter)
-  // The lightbox walks the currently-visible consumption artifacts (image/video/doc/data).
-  const viewerItems = filtered.filter(viewerEligible)
-  const visualItems = (filter === 'all' ? artifacts : filtered).filter(isVisualArtifact)
-  const listItems = filter === 'all' ? artifacts.filter(a => !isVisualArtifact(a)) : filtered.filter(a => !isVisualArtifact(a))
-  const showVisual = filter === 'all' || filter === 'design' || filter === 'image' || filter === 'video'
-  const showList = filter === 'all' || !(filter === 'design' || filter === 'image' || filter === 'video')
-  const visualPages = Math.max(1, Math.ceil(visualItems.length / VISUAL_PAGE_SIZE))
-  const safeVisualPage = Math.min(visualPage, visualPages - 1)
-  const pagedVisuals = visualItems.slice(safeVisualPage * VISUAL_PAGE_SIZE, safeVisualPage * VISUAL_PAGE_SIZE + VISUAL_PAGE_SIZE)
-  const counts = FILTERS.reduce<Record<string, number>>((acc, f) => {
-    acc[f.key] = f.key === 'all' ? artifacts.length : artifacts.filter(a => category(a) === f.key).length
-    return acc
-  }, {})
-  const openArtifact = (a: Artifact) => {
-    if (!mountedRef.current) return
-    setSelected(a)
-    setPath(null)
-    setRunner(null)
-    setViewer(null)
-    if (a.type === 'design' && designStudioEnabled) {
-      onOpenDesign?.(a.id || a.path.split('/').filter(Boolean).slice(-1)[0])
-    } else if (viewerEligible(a)) {
-      // Image / video / document / data → open the lightbox at this item, walking the
-      // currently-visible consumption artifacts.
-      const idx = viewerItems.findIndex(x => x.type === a.type && x.path === a.path)
-      setViewer({ items: viewerItems, index: idx >= 0 ? idx : 0 })
-    } else if (a.type === 'design') {
-      setPath(`${a.path.replace(/\/$/, '')}/scene.json`)
-    } else if (a.type === 'video') {
-      setPath(`${a.path}/index.html`)
-    } else if (a.type === 'app') {
-      setRunner(a)
-    } else {
-      setPath(a.path)
+  const approve = async (record: ArchiveRecord) => {
+    try {
+      const updated = await setArchiveStatus(token, record.id, 'approved')
+      if (!mountedRef.current) return
+      setRecords(prev => prev.map(r => r.id === record.id ? { ...r, ...updated } : r))
+      setCounts(prev => ({
+        ...prev,
+        by_status: {
+          ...prev.by_status,
+          [record.status]: Math.max(0, (prev.by_status[record.status] || 1) - 1),
+          approved: (prev.by_status.approved || 0) + 1,
+        },
+      }))
+    } catch (cause) {
+      if (mountedRef.current) setLoadError(String(cause))
     }
   }
 
-  return <section className="artifacts-view">
-    {loadError && <div className="error-bar">Could not refresh artifacts: {loadError}</div>}
-    <div className="artifacts-head">
-      {onBack && <BackButton label={backLabel} onClick={onBack} />}
-      <div>
-        <h2>Artifacts</h2>
-        <p className="muted">Outputs and app previews for the active project.</p>
-      </div>
-      <Dropdown value={slug} onChange={pickProject} minWidth={200} options={projects.map(p => ({ value: p.slug, label: clean(p.name) }))} />
-      {(path || runner) && <button className="ghost-button" onClick={() => setListHidden(h => !h)} title={listHidden ? 'Show the artifact list' : 'Hide the list for a bigger preview'}>{listHidden ? 'Show list' : 'Hide list'}</button>}
-      <button className="ghost-button" onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
-    </div>
-    <div className="artifact-filters">
-      {FILTERS.map(f => <button key={f.key} className={filter === f.key ? 'active' : ''} onClick={() => setFilter(f.key)}>{f.label}<span>{counts[f.key] || 0}</span></button>)}
-    </div>
-    <div className={`artifacts-body ${path || runner ? 'has-preview' : ''} ${(path || runner) && listHidden ? 'list-hidden' : ''}`}>
-      <div className="artifacts-main">
-        {showVisual && <section className={`artifact-section ${filter !== 'all' ? 'full' : ''}`}>
-          <div className="artifact-section-head">
-            <div><h3>{filter === 'video' ? 'Rendered videos' : filter === 'image' ? 'Images' : filter === 'design' ? 'Designs' : 'Visual gallery'}</h3><p className="muted">{visualItems.length} {filter === 'video' ? 'MP4 render' : 'visual artifact'}{visualItems.length === 1 ? '' : 's'}</p></div>
-            {visualItems.length > VISUAL_PAGE_SIZE && <div className="artifact-pager">
-              <button className="ghost-button sm" disabled={safeVisualPage === 0} onClick={() => setVisualPage(p => Math.max(0, p - 1))}>Previous</button>
-              <span>{safeVisualPage + 1} / {visualPages}</span>
-              <button className="ghost-button sm" disabled={safeVisualPage >= visualPages - 1} onClick={() => setVisualPage(p => Math.min(visualPages - 1, p + 1))}>Next</button>
-            </div>}
+  const openViewer = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'>) =>
+    setViewer({ items: [recordAsArtifact(r)], slug: r.project_slug })
+
+  // Design opens in its studio, an app runs on its full record page, everything
+  // else opens in the universal viewer.
+  const openRecord = (r: ArchiveRecord) => {
+    if (r.type === 'design' && designStudioEnabled && onOpenDesign) {
+      onOpenDesign(r.path.split('/').filter(Boolean).slice(-1)[0] || r.path)
+    } else if (r.type === 'app') {
+      onOpenRecord?.(r.project_slug, r.slug)
+    } else {
+      openViewer(r)
+    }
+  }
+
+  const revealInFiles = (r: Pick<ArchiveRecord, 'path' | 'project_slug'>) => {
+    const p = projects.find(x => x.slug === r.project_slug)
+    if (p) onActiveProject?.(p)
+    // The right tool rail owns the Files panel; this event asks it to open on
+    // this record's file (see ToolDock).
+    window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: r.path } }))
+  }
+
+  if (projects.length === 0) return <section className="placeholder-view"><div className="assistant-bubble compact"><h1>Archive</h1><p>No projects yet.</p></div></section>
+
+  // ── Full record page (variant A: its own permanent address) ──
+  if (archiveRecord) {
+    return <section className="artifacts-view">
+      <ArchiveRecordPage
+        token={token}
+        project={archiveRecord.project}
+        slug={archiveRecord.slug}
+        onBack={() => onCloseRecord?.()}
+        onOpenRecord={(p, s) => onOpenRecord?.(p, s)}
+        onOpenSession={onOpenSession}
+        onOpenTask={onOpenTask}
+        onOpenViewer={openViewer}
+        onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
+        onRevealInFiles={revealInFiles}
+        onChanged={refresh}
+      />
+      {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} />}
+    </section>
+  }
+
+  const typeKeys = [...TYPE_ORDER.filter(t => counts.by_type[t]), ...Object.keys(counts.by_type).filter(t => !TYPE_ORDER.includes(t)).sort()]
+  const totalCount = Object.values(counts.by_type).reduce((a, b) => a + b, 0)
+
+  const row = (r: ArchiveRecord) => {
+    const meta = typeMeta(r.type)
+    const canApprove = r.status === 'draft' || r.status === 'review'
+    const expanded = expandedId === r.id
+    return <React.Fragment key={r.id}>
+      <button className={`archive-row ${expanded ? 'active' : ''} ${r.status === 'superseded' ? 'superseded' : ''}`} aria-expanded={expanded} onClick={() => setExpandedId(expanded ? null : r.id)}>
+        <span className="archive-row-name">
+          <span className={`archive-type-ic ${r.type === 'script-output' ? 'mono' : ''}`} aria-hidden="true">{meta.ic}</span>
+          <span className="archive-row-name-text">
+            <strong title={r.name}>{r.name}</strong>
+            <span className="archive-type-tag">{meta.label}{r.version > 1 ? ` · v${r.version}` : ''}{r.file_missing ? ' · file gone' : ''}</span>
+          </span>
+        </span>
+        <span className="archive-row-loc mono" title={`${r.project_slug} / ${r.path}`}><span className="proj">{clean(r.project_name)}</span>{r.area ? ` / ${r.area}` : ''}</span>
+        <span className="archive-row-lineage">{r.job_title ? <>by <em>{r.job_title}</em></> : r.session_title ? <>from <em>{r.session_title}</em></> : <span className="muted">before the registry</span>}</span>
+        <span className="archive-row-status"><StatusPill status={r.status} /></span>
+        <span className="archive-row-date">{fmtDate(r.produced_at)}</span>
+        <span className="archive-row-size mono">{fmtSize(r.size)}</span>
+        {/* Hover shortcut only (the row itself is a button, so no nested role);
+            keyboard users approve from the expanded row or the record page. */}
+        {canApprove && <span className="archive-approve-hover" onClick={e => { e.stopPropagation(); void approve(r) }}>✓ Approve</span>}
+      </button>
+      {expanded && <div className="archive-exp-row">
+        <div className="archive-exp-preview"><RecordPreview token={token} record={r} compact /></div>
+        <div className="archive-exp-info">
+          <LineageLine record={r} onOpenSession={onOpenSession} onOpenTask={onOpenTask} />
+          <div className="archive-exp-status">
+            <StatusPill status={r.status} />
+            {r.status === 'approved' && r.approved_at && <span className="muted">Approved {fmtDate(r.approved_at)}</span>}
+            {canApprove && <button className="archive-approve-button" onClick={() => void approve(r)}>✓ Approve</button>}
+            {r.status === 'approved' && <button className="archive-approve-button" disabled>✓ Approved</button>}
           </div>
-          {visualItems.length === 0 ? <div className="art-empty"><p className="muted">{loading ? 'Scanning project outputs…' : 'No visual artifacts found.'}</p></div>
-            : <div className="artifact-masonry">{pagedVisuals.map(a => <ArtifactCard key={`${a.type}:${a.path}:${a.command || ''}`} artifact={a} active={selected?.path === a.path} slug={slug} designThumb={designThumbs[a.path]} onOpen={() => openArtifact(a)} />)}</div>}
-        </section>}
-        {showList && <section className="artifact-section">
-          <div className="artifact-section-head"><div><h3>{filter === 'all' ? 'Files, apps, and documents' : FILTERS.find(f => f.key === filter)?.label || 'Artifacts'}</h3><p className="muted">{listItems.length} item{listItems.length === 1 ? '' : 's'}</p></div></div>
-          {listItems.length === 0 ? <div className="art-empty"><p className="muted">{loading ? 'Scanning project outputs…' : 'No artifacts found for this filter.'}</p></div> : <ArtifactList artifacts={listItems} selected={selected} onOpen={openArtifact} />}
-        </section>}
-      </div>
-      {(path || runner) && <div className="artifact-preview">
-        {runner && project ? <AppRunner token={token} slug={project.slug} initialDir={runner.dir || (runner.path === '.' ? '' : runner.path)} initialCommand={runner.command} onClose={() => setRunner(null)} />
-          : path && fs && project ? <FileView key={`${project.slug}:${path}`} token={token} slug={project.slug} path={path} fs={fs} onClose={() => setPath(null)} />
-          : <div className="art-preview-empty"><p className="muted">Select an artifact to preview it here.</p></div>}
+          <div className="archive-exp-foot">
+            <button className="archive-link-button" onClick={() => onOpenRecord?.(r.project_slug, r.slug)}>Open full record →</button>
+            <button className="archive-link-button" onClick={() => openRecord(r)} disabled={r.file_missing && r.type !== 'app'}>Open</button>
+            <span className="mono muted archive-exp-url" title={permalinkOf(r)}>{permalinkOf(r)}</span>
+          </div>
+        </div>
       </div>}
+    </React.Fragment>
+  }
+
+  return <section className="artifacts-view">
+    {loadError && <div className="error-bar">Could not load the archive: {loadError}</div>}
+    <div className="archive-head">
+      {onBack && <BackButton label={backLabel} onClick={onBack} />}
+      <div className="archive-head-titles">
+        <h2>Archive</h2>
+        <p className="muted">Every deliverable of record, with lineage and approval - across all projects.</p>
+      </div>
+      <div className="archive-head-controls">
+        <Dropdown value={project} onChange={pickProject} minWidth={180} options={[{ value: '', label: 'All projects' }, ...projects.map(p => ({ value: p.slug, label: clean(p.name) }))]} />
+        <input className="archive-search" type="search" placeholder="Search deliverables…" aria-label="Search deliverables" value={q} onChange={e => setQ(e.target.value)} />
+        <button className="ghost-button" onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+      </div>
     </div>
-    {viewer && project && <ArtifactViewer
-      token={token}
-      slug={project.slug}
-      items={viewer.items}
-      index={viewer.index}
-      onIndex={i => setViewer(v => v ? { ...v, index: i } : v)}
-      onClose={() => setViewer(null)}
-      onEditSource={a => { setViewer(null); setSelected(a); setPath(a.path); setRunner(null) }}
-    />}
+    <div className="archive-facets">
+      <div className="archive-facet-group" role="group" aria-label="Type">
+        <span className="archive-facet-label">Type</span>
+        <button className={`archive-chip ${type === '' ? 'active' : ''}`} onClick={() => setType('')}>All <span className="count">{totalCount}</span></button>
+        {typeKeys.map(t => <button key={t} className={`archive-chip ${type === t ? 'active' : ''}`} onClick={() => setType(type === t ? '' : t)}>{typeMeta(t).label} <span className="count">{counts.by_type[t]}</span></button>)}
+      </div>
+      <div className="archive-facet-group" role="group" aria-label="Status">
+        <span className="archive-facet-label">Status</span>
+        {STATUSES.map(s => <button key={s} className={`archive-chip status ${status === s ? 'active' : ''}`} data-status={s} onClick={() => setStatus(status === s ? '' : s)}><span className="dot" aria-hidden="true" />{s === 'review' ? 'In review' : s[0].toUpperCase() + s.slice(1)} <span className="count">{counts.by_status[s] || 0}</span></button>)}
+      </div>
+      <div className="archive-facet-group">
+        <span className="archive-facet-label">Date</span>
+        <select className="archive-date-select" aria-label="Date range" value={days} onChange={e => setDays(Number(e.target.value))}>
+          {DATE_CHOICES.map(c => <option key={c.days} value={c.days}>{c.label}</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="archive-registry">
+      <div className="archive-cols" aria-hidden="true">
+        <span>Deliverable</span>
+        <span className="col-loc">Location</span>
+        <span className="col-lineage">Produced by</span>
+        <span>Status</span>
+        <span>Produced</span>
+        <span className="col-size">Size</span>
+      </div>
+      <div className="archive-scroll">
+        {records.map(row)}
+        {records.length === 0 && <div className="archive-empty">
+          <h4>{loading ? 'Loading records…' : 'No records match these filters'}</h4>
+          {!loading && <p className="muted">Registry records are durable: even if a file moves or is deleted, its record - lineage, approvals, versions - stays right here.</p>}
+        </div>}
+      </div>
+      <div className="archive-foot">
+        <span className="archive-durable-note muted">Records survive file moves - the scanner only feeds the registry, it never owns it.</span>
+        <span className="archive-foot-count">
+          <span className="muted">Showing {records.length} of {total} record{total === 1 ? '' : 's'}</span>
+          {records.length < total && <button className="ghost-button" disabled={loading} onClick={() => void fetchPage(records.length, true)}>Load more</button>}
+        </span>
+      </div>
+    </div>
+    {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} />}
   </section>
 }

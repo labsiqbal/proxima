@@ -10,7 +10,7 @@ There is **one workspace**. The old Ops/Code split is gone — no workspace swit
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (the front door — talk it through), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Artifacts** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
+The left navigation is flow-ordered: **Chat** (the front door — talk it through), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
 
 ## Chat — the front door
 
@@ -61,7 +61,7 @@ Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail o
   closed panel.
 - **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
   its server is a managed backend process that survives on its own, and unmounting
-  stops the status polling. Artifacts and the recipe test bench keep their own
+  stops the status polling. The Archive and the recipe test bench keep their own
   Preview entry points for app-type artifacts.
 
 The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
@@ -70,7 +70,7 @@ The rail's bottom gear opens Settings. Escape closes the panel. The rail persist
 
 Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint.
 
-Projects remain shared application entities: one active project across the app. Artifacts and Designs remain owned by their Project.
+Projects remain shared application entities: one active project across the app. Archive records and Designs remain owned by their Project.
 
 ## Projects
 
@@ -88,13 +88,13 @@ Removal copy must distinguish the two cases, because the API does: a folder outs
 workspace root is only *unlinked* and its real files survive, while a project Proxima
 created is deleted from disk. Chats and tasks go in both cases.
 
-## Artifacts and Design
+## Archive and Design
 
-Artifacts is the durable destination for agent outputs and project files. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available.
+Archive is the durable deliverable registry (T4): every agent output lands as a record with lineage, ONE approval status (synced with the job-review approve), and a version chain; the combo detail is an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address - no right panel, no popup. Records survive file moves and deletion. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available.
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Recipes, Projects, Artifacts, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, or raw stack traces. The plain words are **agent** and **tools**. Technical detail — runner ids, managed homes, MCP servers, feature flags — belongs to Settings, the Agents screen, and the docs. New copy on primary surfaces must hold this line.
+Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, or raw stack traces. The plain words are **agent** and **tools**. Technical detail — runner ids, managed homes, MCP servers, feature flags — belongs to Settings, the Agents screen, and the docs. New copy on primary surfaces must hold this line.
 
 ## Feature gates
 
