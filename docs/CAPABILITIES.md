@@ -220,9 +220,12 @@ marked ambiguous with a question for the owner instead of a guess. The slicer is
 explicitly instructed to size each job to complete within ONE turn quota (T5 slice 5:
 continuation is the safety net, not the plan). The draft lands as
 a queued plan the owner reviews/edits and starts directly; saving it as a reusable
-Recipe is an optional, separate action (before or after the run). The feature flag
-remains an owner recovery switch; the legacy ordered-step path is retained only for
-existing data.
+Recipe is an optional, separate action (before or after the run). Slice-into-plan is
+single-flight on the button (double-click cannot start two promote runs), and the
+Recipes editor creates at most one graph job per draft object — React Strict Mode
+remounts reuse the in-flight create so Tasks does not list two identical queued plans.
+The feature flag remains an owner recovery switch; the legacy ordered-step path is
+retained only for existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
 ## 7. Recipes (plans worth repeating) + schedules
@@ -508,7 +511,8 @@ drain does the plan park. Answering (`…/answer`, usable while the plan RUNS) s
 `node_states.answer` and re-runs the node with the decision in its prompt.
 **No silent interventions (T10 #5):** every action is a `satpam_interventions` row
 (shown as the task's "Watchdog log" in TaskWorkspace and on the Recipes canvas, with
-the pending-restart approval card on top) plus a `satpam.*` timeline event
+the pending-restart approval card on top; each log row has a spaced accessible name
+so detection + reason do not smash together) plus a `satpam.*` timeline event
 (`satpam.steered` / `satpam.restart.queued` / `satpam.restarted` / `satpam.escalated`).
 Thresholds are a Settings panel (Agents → Watchdog): N no-progress turns (default 2)
 and the sweep cadence (default 60s), bounds-checked in `app_settings`.

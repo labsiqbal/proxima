@@ -32,10 +32,14 @@ export function ConvertToWorkflowButton({
 	const pendingRun = React.useRef<number | null>(null);
 	const actionSeq = React.useRef(0);
 	const mountedRef = React.useRef(true);
+	// State `pending` is too slow for double-clicks — both can pass `if (pending)`
+	// before React re-renders. The ref is the synchronous gate.
+	const pendingLock = React.useRef(false);
 
 	React.useEffect(() => {
 		actionSeq.current += 1;
 		pendingRun.current = null;
+		pendingLock.current = false;
 		setPending(false);
 	}, [sessionId]);
 
@@ -45,6 +49,7 @@ export function ConvertToWorkflowButton({
 			mountedRef.current = false;
 			actionSeq.current += 1;
 			pendingRun.current = null;
+			pendingLock.current = false;
 		};
 	}, []);
 
@@ -55,6 +60,7 @@ export function ConvertToWorkflowButton({
 				return;
 			if (event.type === "run.failed" || event.type === "run.cancelled") {
 				pendingRun.current = null;
+				pendingLock.current = false;
 				setPending(false);
 				onError?.(
 					event.type === "run.failed"
@@ -65,6 +71,7 @@ export function ConvertToWorkflowButton({
 			}
 			if (event.type !== "workflow.draft") return;
 			pendingRun.current = null;
+			pendingLock.current = false;
 			setPending(false);
 			const payload = event.payload as Record<string, unknown>;
 			if (typeof payload.error === "string") {
@@ -77,7 +84,8 @@ export function ConvertToWorkflowButton({
 	useEventStream(token, pending ? sessionId : null, onEvent);
 
 	async function start() {
-		if (pending) return;
+		if (pendingLock.current) return;
+		pendingLock.current = true;
 		const seq = ++actionSeq.current;
 		setPending(true);
 		try {
@@ -86,6 +94,7 @@ export function ConvertToWorkflowButton({
 			pendingRun.current = r.run_id;
 		} catch (e) {
 			if (mountedRef.current && seq === actionSeq.current) {
+				pendingLock.current = false;
 				setPending(false);
 				onError?.(String(e));
 			}

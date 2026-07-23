@@ -33,7 +33,9 @@ describe('SatpamCard', () => {
   it('shows the intervention log so automatic actions stay auditable', () => {
     render(<SatpamCard token="t" jobId={7} interventions={[steer]} />)
     expect(screen.getByText('Watchdog log')).toBeInTheDocument()
-    expect(screen.getByText(/Steered · stalled/)).toBeInTheDocument()
+    expect(screen.getByRole('listitem', {
+      name: /Steered · stalled\. No new repo changes/,
+    })).toBeInTheDocument()
     // No pending restart -> no approval buttons anywhere.
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
@@ -76,9 +78,10 @@ describe('SatpamCard', () => {
       created_at: '2026-07-22 10:00:00', resolved_at: null,
     }
     render(<SatpamCard token="t" jobId={7} interventions={[escalate]} jobStatus="done" />)
-    expect(screen.getByText(/Escalated \(earlier\) · confused/)).toBeInTheDocument()
+    expect(screen.getByRole('listitem', {
+      name: /Escalated \(earlier\) · confused\. .*review the job/i,
+    })).toBeInTheDocument()
     expect(screen.queryByText(/The plan is paused/i)).not.toBeInTheDocument()
-    expect(screen.getByText(/review the job/i)).toBeInTheDocument()
   })
 
   it('keeps live escalate wording while the job is still in review', () => {
@@ -88,9 +91,10 @@ describe('SatpamCard', () => {
       created_at: '2026-07-22 10:00:00', resolved_at: null,
     }
     render(<SatpamCard token="t" jobId={7} interventions={[escalate]} jobStatus="review" />)
-    expect(screen.getByText(/Escalated · confused/)).toBeInTheDocument()
+    expect(screen.getByRole('listitem', {
+      name: /Escalated · confused\. .*The plan is paused/i,
+    })).toBeInTheDocument()
     expect(screen.queryByText(/\(earlier\)/)).not.toBeInTheDocument()
-    expect(screen.getByText(/The plan is paused/i)).toBeInTheDocument()
   })
 })
 

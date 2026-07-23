@@ -89,14 +89,22 @@ export function SatpamCard({ token, jobId, interventions, jobStatus, onChanged }
       </div>
     </div>)}
     {error && <p className="error-text">{error}</p>}
-    {history.length > 0 && <div className="satpam-log">
+    {history.length > 0 && <div className="satpam-log" role="list" aria-label="Watchdog log">
       <p className="satpam-kicker">Watchdog log</p>
       {history.map(i => {
+        const what = historyLabel(i, jobStatus)
         const why = satpamReasonForDisplay(i.reason, jobStatus)
-        return <div key={i.id} className={`satpam-row ${i.action}`}>
+        // Label the row explicitly — adjacent what/why spans smash to
+        // "confusedThis job's…" in the accessibility tree without a gap.
+        return <div
+          key={i.id}
+          className={`satpam-row ${i.action}`}
+          role="listitem"
+          aria-label={`${what}. ${why}`}
+        >
           <span className="satpam-icon" aria-hidden>{ACTION_ICON[i.action]}</span>
-          <span className="satpam-what">{historyLabel(i, jobStatus)}</span>
-          <span className="satpam-why" title={why}>{why}</span>
+          <span className="satpam-what" aria-hidden>{what}</span>
+          <span className="satpam-why" title={why} aria-hidden>{why}</span>
         </div>
       })}
     </div>}

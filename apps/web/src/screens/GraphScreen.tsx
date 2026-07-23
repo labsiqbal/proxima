@@ -111,6 +111,32 @@ function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
   return false
 }
 
+// Module-level so React Strict Mode remounts share one in-flight create. A plain
+// component ref is wiped on remount and would POST /api/graph/jobs twice — the
+// live failure mode behind duplicate todo-storage-decision rows on Tasks.
+const inflightDraftCreates = new WeakMap<GraphWorkflowDraft, Promise<GraphJob>>()
+
+/**
+ * Start at most one createGraphJob per draft object. Strict Mode effect re-runs
+ * and parent-prop churn reuse the same promise; failures drop the entry so retry
+ * can try again.
+ */
+export function getOrStartDraftCreate(
+  draft: GraphWorkflowDraft,
+  start: () => Promise<GraphJob>,
+): Promise<GraphJob> {
+  const existing = inflightDraftCreates.get(draft)
+  if (existing) return existing
+  const promise = start().catch(err => {
+    inflightDraftCreates.delete(draft)
+    throw err
+  })
+  inflightDraftCreates.set(draft, promise)
+  return promise
+}
+
+
+
 
 export function GraphScreen({
   token,
@@ -269,6 +295,8 @@ export function GraphScreen({
   React.useEffect(() => { void refreshList() }, [refreshList])
 
   React.useEffect(() => {
+    // Opening is idempotent (GET + set state). Do not once-claim at module scope:
+    // Strict Mode discards the first loadJob via loadSeq, so the re-run must open again.
     if (!pendingJobId) return
     openJob(pendingJobId)
     onPendingConsumed?.()
@@ -276,17 +304,21 @@ export function GraphScreen({
 
   React.useEffect(() => {
     if (!pendingDraft) return
+    const draft = pendingDraft
     const seq = ++draftSeq.current
-    onDraftConsumed?.()
     setBusy('create')
     setError('')
-    void createGraphJob(token, {
-      title: pendingDraft.name,
-      graph: pendingDraft.graph,
+    // One POST per draft object (Strict Mode remounts reuse the promise). Parent
+    // draft prop is cleared only after this instance applies the created job so a
+    // remount can still attach and open the editor.
+    void getOrStartDraftCreate(draft, () => createGraphJob(token, {
+      title: draft.name,
+      graph: draft.graph,
       project_slug: activeProject?.slug,
       profile_id: profileId,
-    }).then(created => {
+    })).then(created => {
       if (!mounted.current || seq !== draftSeq.current) return
+      onDraftConsumed?.()
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -294,7 +326,10 @@ export function GraphScreen({
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       setNotice('Architect draft ready. Review or edit the frozen plan before starting.')
     }).catch(cause => {
-      if (mounted.current && seq === draftSeq.current) setError(String(cause))
+      if (mounted.current && seq === draftSeq.current) {
+        onDraftConsumed?.()
+        setError(String(cause))
+      }
     }).finally(() => {
       if (mounted.current && seq === draftSeq.current) setBusy(null)
     })
