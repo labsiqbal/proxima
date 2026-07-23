@@ -615,7 +615,10 @@ vs Failed with the log and a next-step hint instead of a silent bare dump.
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under
-`artifacts/media/images/`, and returns the artifact in the originating chat. Images
+`artifacts/media/images/`, returns the artifact in the originating chat, and feeds the
+same durable Archive registry as agent runs (so Image type filters and records list
+new media, not only the chat result card / fallback viewer). Chat Created-outputs
+cards expose a spaced `Open Image, <title>` accessible name. Images
 attached to the message or explicitly selected through `@` (rendered as
 `![name](path)` markdown by the composer) are used
 as reference/source images when the selected provider advertises `imageEdit` — the
@@ -673,7 +676,8 @@ a **registry, not a scanner**: the scanner discovers files, the registry remembe
 them as durable records that survive file moves and deletion (a missing file flips
 `file_missing` on the record; the record stays).
 
-**How:** every finished run (agent or script) feeds its scanned output links into
+**How:** every finished run (agent, script, or chat media such as `/image` and
+Design Studio drafts) feeds its output links into
 `artifact_records` (module `artifact_registry.py`): one row per deliverable
 **version** with name, type (scanner types + `script-output` for generic files a
 script step produced), project + path, size, produced date, lineage

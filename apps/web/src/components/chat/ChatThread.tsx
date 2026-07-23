@@ -402,6 +402,13 @@ const outputHint = (o: OutputLink, features: AppFeatures) =>
 							? "Document"
 							: o.path;
 
+/** Spaced accessible name for a Created-outputs open control (avoids ImageTitlepathOpen smash). */
+export function resultCardAriaLabel(link: Pick<OutputLink, "type" | "title" | "path">): string {
+	const kind = outputTypeLabel(link.type);
+	const title = (link.title || link.path || "output").trim();
+	return `Open ${kind}, ${title}`;
+}
+
 function ResultCards({
 	links,
 	onOpen,
@@ -455,8 +462,9 @@ function ResultCards({
 								onClick={() => onOpen?.(link)}
 								disabled={!onOpen}
 								title={link.path}
+								aria-label={resultCardAriaLabel(link)}
 							>
-								<img src={src} alt={link.title || link.path} loading="lazy" />
+								<img src={src} alt="" loading="lazy" />
 							</button>
 						)}
 						{link.type === "video-file" && src && (
@@ -470,15 +478,16 @@ function ResultCards({
 							onClick={() => onOpen?.(link)}
 							disabled={!onOpen}
 							title={link.path}
+							aria-label={resultCardAriaLabel(link)}
 						>
-							<span className={`result-badge rt-${link.type}`}>
+							<span className={`result-badge rt-${link.type}`} aria-hidden="true">
 								{outputTypeLabel(link.type)}
 							</span>
-							<span className="result-main">
+							<span className="result-main" aria-hidden="true">
 								<strong>{link.title || link.path}</strong>
 									<small>{outputHint(link, features)}</small>
 							</span>
-							<span className="result-open">Open</span>
+							<span className="result-open" aria-hidden="true">Open</span>
 						</button>
 							{canEditDesign &&
 								token &&

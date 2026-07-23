@@ -120,7 +120,13 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
     assert links[0]["path"].startswith("artifacts/media/images/")
     messages = client.get(f"/api/sessions/{body['session_id']}/messages", headers=headers).json()["messages"]
     assert "Design Studio" not in messages[-1]["content"]
+    assert "Archive" in messages[-1]["content"]
     assert links[0]["actions"] == ["use-as-reference"]
+    # Media runs must feed the durable Archive registry (not only chat output_links).
+    archive = client.get("/api/archive?type=image", headers=headers).json()
+    assert archive["total"] >= 1
+    assert any(item["path"] == links[0]["path"] for item in archive["items"])
+    assert archive["counts"]["by_type"].get("image", 0) >= 1
 
 
 def test_thin_image_brief_asks_question_form_instead_of_generating(tmp_path, monkeypatch):

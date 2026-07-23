@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { collabCardAriaLabel, stripRunnerPreamble } from "./ChatThread";
+import { collabCardAriaLabel, resultCardAriaLabel, stripRunnerPreamble } from "./ChatThread";
+
+describe("resultCardAriaLabel", () => {
+	it("spaces type and title so Open is not smashed into the path", () => {
+		expect(
+			resultCardAriaLabel({
+				type: "image",
+				title: "chat-1.png",
+				path: "artifacts/media/images/chat-1.png",
+			}),
+		).toBe("Open Image, chat-1.png");
+		expect(
+			resultCardAriaLabel({
+				type: "doc",
+				title: "",
+				path: "reports/note.md",
+			}),
+		).toBe("Open Document, reports/note.md");
+	});
+});
 
 describe("collabCardAriaLabel", () => {
 	it("keeps agent, lane, status, and action spaced without body text", () => {
