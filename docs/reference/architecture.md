@@ -125,9 +125,11 @@ work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a nod
 always derived from it (an authored value is never trusted), and an ambiguous binding
 is a first-class `target_ambiguous`/`target_question` state. `routes/graph.py` checks
 targets against the project's registered areas at plan create/edit (422 on an unknown
-area) and refuses to start a plan with an unresolved target question (409 carrying the
-question) — the target is pinned at slice time precisely so it cannot be discovered at
-runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+area); plan start refuses an unresolved target question (409 carrying the question) in
+the shared `bind_graph_job_repo_worktree` path, which checks ambiguity before the
+`feature_repo_worktrees` gate and the project binding — so a project-less ambiguous plan
+cannot start silently and the scheduler cannot skip the refuse. The target is pinned at
+slice time precisely so it cannot be discovered at runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
