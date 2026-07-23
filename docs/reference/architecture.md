@@ -258,9 +258,11 @@ First-class method commands also enter through this run seam. In particular,
 `/masterplan <idea>` stays visible in the transcript as typed, while
 `commands.agent_turn_for_command` expands the queued prompt into an explicit
 `bundled/masterplan` methodology instruction and tags the run `kind='masterplan'`.
-The worker uses that kind to include the bundled skill in an otherwise explicit
-profile capability subset before ACP setup; saved profile choices are unchanged. A
-bare command asks the agent to collect the idea first, and natural-language skill
+Before ACP setup, the worker checks whether the session has had that run kind and
+includes the bundled skill in an otherwise explicit profile capability subset; saved
+profile choices are unchanged. This session-scoped requirement keeps the skill active
+for ordinary chat turns that answer the methodology's clarification and review gates.
+A bare command asks the agent to collect the idea first, and natural-language skill
 invocation remains available.
 
 ```text

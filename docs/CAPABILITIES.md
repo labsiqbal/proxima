@@ -121,10 +121,12 @@ visible user message, but queues a real `kind='masterplan'` agent turn whose int
 prompt explicitly requires `bundled/masterplan` and passes the freeform idea into
 Phase 1. A bare `/masterplan` still starts the turn and tells the skill to ask for the
 idea first. Immediately before execution the worker adds that bundled skill to an
-explicit profile skill subset for this run without rewriting the profile's saved
-opt-out choices. The skill remains the methodology and writes its normal Markdown /
-HTML package folder artifacts; this command does not open Design Studio. Ordinary
-natural-language masterplan requests continue to work through skill discovery.
+explicit profile skill subset without rewriting the profile's saved opt-out choices.
+Once a session has started a `kind='masterplan'` run, the worker keeps the skill active
+for that session's ordinary chat follow-up turns so clarification and review cannot
+prune it mid-methodology. The skill remains the methodology and writes its normal
+Markdown / HTML package folder artifacts; this command does not open Design Studio.
+Ordinary natural-language masterplan requests continue to work through skill discovery.
 
 ### Project-file and artifact references (`@`)
 
