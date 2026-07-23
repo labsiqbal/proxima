@@ -8678,6 +8678,10 @@ div.result-media {
 .ds-layer-row:hover {
 	background: var(--ui-row-hover-background);
 }
+.ds-layer-row:focus-visible {
+	outline: 2px solid var(--ui-accent);
+	outline-offset: 1px;
+}
 .ds-layer-row.active {
 	background: color-mix(in srgb, var(--ui-accent) 16%, transparent);
 }

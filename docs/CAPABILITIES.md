@@ -664,7 +664,12 @@ selection-aware chat, undo/redo + version history, multi-image reference inputs,
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
 URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
 `artifacts/design/<id>/scene.json` and appear as design records in the Archive.
-See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
+The optional project component library (`artifacts/design/_components.json`) is
+loaded only when the design root listing already contains that file, so a fresh
+project does not probe a missing path. Zoom/Fit and Layers-panel rows expose
+explicit accessible names (and keyboard activation on layer rows) so symbol-only
+controls are not just symbols. See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the
+full contract.
 
 The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: on by default,
 with `proxima.env` as the owner opt-out (read at boot).

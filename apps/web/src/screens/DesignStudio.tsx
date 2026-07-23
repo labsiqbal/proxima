@@ -19,6 +19,7 @@ import { getImageGenSettings } from '../api/settings'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
 import { ColorInput } from '../components/design/ColorInput'
+import { DESIGN_COMPONENTS_FILE, hasDesignComponentsFile, layerRowAriaLabel, parseProjectComponentsJson } from '../components/design/studioHelpers'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
 import type { Project, RunEvent } from '../types'
 
@@ -1055,17 +1056,24 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
 
   const writeProjectComponents = React.useCallback((components: ProjectComponent[]) => {
     if (!designFs) return Promise.resolve()
-    return designFs.write('_components.json', JSON.stringify({ version: 1, components }, null, 2))
+    return designFs.write(DESIGN_COMPONENTS_FILE, JSON.stringify({ version: 1, components }, null, 2))
   }, [designFs])
 
   React.useEffect(() => {
     let cancelled = false
     if (!designFs) { setProjectComponents([]); return }
-    designFs.read('_components.json')
-      .then(f => {
+    // List first so a missing library file does not 400 the network console
+    // (same optional-probe pattern as design versions/_assets trees).
+    designFs.list('')
+      .then(async r => {
         if (cancelled) return
-        const parsed = JSON.parse(f.content)
-        setProjectComponents(Array.isArray(parsed?.components) ? parsed.components : [])
+        if (!hasDesignComponentsFile(r.entries)) {
+          setProjectComponents([])
+          return
+        }
+        const f = await designFs.read(DESIGN_COMPONENTS_FILE)
+        if (cancelled) return
+        setProjectComponents(parseProjectComponentsJson(f.content) as ProjectComponent[])
       })
       .catch(() => { if (!cancelled) setProjectComponents([]) })
     return () => { cancelled = true }
@@ -2029,8 +2037,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       <strong className="ds-title">{scene.title}</strong>
       <span className="muted ds-project-tag">· {cleanProjectName(project.name)}</span>
       <span className="ds-saved">{saved === 'saving' ? 'Saving…' : saved === 'saved' ? 'Saved' : ''}</span>
-      <div className="ds-undo"><button className="ghost-button" disabled={!hist.current.undo.length} onClick={undo} title="Undo (⌘Z)">↶</button><button className="ghost-button" disabled={!hist.current.redo.length} onClick={redo} title="Redo (⌘⇧Z)">↷</button></div>
-      <div className="ds-zoom"><button className="ghost-button" onClick={() => setView(v => ({ ...v, scale: Math.max(0.05, v.scale * 0.9) }))}>−</button><span>{Math.round(view.scale * 100)}%</span><button className="ghost-button" onClick={() => setView(v => ({ ...v, scale: Math.min(5, v.scale * 1.1) }))}>+</button><button className="ghost-button" onClick={fit}>Fit</button></div>
+      <div className="ds-undo"><button className="ghost-button" disabled={!hist.current.undo.length} onClick={undo} title="Undo (⌘Z)" aria-label="Undo">↶</button><button className="ghost-button" disabled={!hist.current.redo.length} onClick={redo} title="Redo (⌘⇧Z)" aria-label="Redo">↷</button></div>
+      <div className="ds-zoom"><button type="button" className="ghost-button" aria-label="Zoom out" title="Zoom out" onClick={() => setView(v => ({ ...v, scale: Math.max(0.05, v.scale * 0.9) }))}>−</button><span aria-live="polite">{Math.round(view.scale * 100)}%</span><button type="button" className="ghost-button" aria-label="Zoom in" title="Zoom in" onClick={() => setView(v => ({ ...v, scale: Math.min(5, v.scale * 1.1) }))}>+</button><button type="button" className="ghost-button" aria-label="Fit to canvas" title="Fit to canvas" onClick={fit}>Fit</button></div>
       <div className="ds-tools">
         <div className="ds-shape-dd">
           <button className="ghost-button" onClick={() => setArtboardMenu(v => !v)} title="Add an artboard / slide">+ Artboard ▾</button>
@@ -2136,19 +2144,65 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
               <button className="ghost-button" onClick={groupSelected}>Group</button>
               <button className="ghost-button" onClick={ungroupSelected}>Ungroup</button>
             </div>}
-            {layerRows.map(row => row.kind === 'group' ? (() => { const collapsed = collapsedGroups.has(row.id); return <React.Fragment key={row.id}>
-              <div className={`ds-layer-row ds-layer-group ${row.layers.every(l => selectedIds.includes(l.id)) ? 'active' : ''} ${row.layers.every(l => l.locked) ? 'locked' : ''}`} onClick={e => { setFocusAb(row.ai); const ids = row.layers.map(l => l.id); if (multiMode || e.metaKey || e.ctrlKey || e.shiftKey) setSelectedIds(prev => ids.every(id => prev.includes(id)) ? prev.filter(id => !ids.includes(id)) : Array.from(new Set([...prev, ...ids]))); else setSelectedIds(ids) }}>
-                <span className="ds-layer-name"><button className="ds-layer-caret" type="button" title={collapsed ? 'Expand group' : 'Collapse group'} onClick={e => { e.stopPropagation(); toggleGroupCollapsed(row.id) }}>{collapsed ? '▸' : '▾'}</button>{row.name} <small>{row.layers.length}</small>{scene.artboards.length > 1 ? ` · A${row.ai + 1}` : ''}</span>
-                <span className="ds-layer-acts"><button onClick={e => { e.stopPropagation(); toggleGroupLock(row.id) }} title={row.layers.every(l => l.locked) ? 'Unlock group' : 'Lock group'}>{row.layers.every(l => l.locked) ? '🔒' : '🔓'}</button><button onClick={e => { e.stopPropagation(); moveGroup(row.id, 1) }} title="Bring forward">↑</button><button onClick={e => { e.stopPropagation(); moveGroup(row.id, -1) }} title="Send back">↓</button></span>
+            {layerRows.map(row => row.kind === 'group' ? (() => {
+              const collapsed = collapsedGroups.has(row.id)
+              const groupSelected = row.layers.every(l => selectedIds.includes(l.id))
+              const groupLocked = row.layers.every(l => l.locked)
+              const selectGroup = (additive: boolean) => {
+                setFocusAb(row.ai)
+                const ids = row.layers.map(l => l.id)
+                if (additive) setSelectedIds(prev => ids.every(id => prev.includes(id)) ? prev.filter(id => !ids.includes(id)) : Array.from(new Set([...prev, ...ids])))
+                else setSelectedIds(ids)
+              }
+              return <React.Fragment key={row.id}>
+              <div
+                className={`ds-layer-row ds-layer-group ${groupSelected ? 'active' : ''} ${groupLocked ? 'locked' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-pressed={groupSelected}
+                aria-label={layerRowAriaLabel({ name: row.name, kind: 'group', selected: groupSelected, locked: groupLocked, artboardIndex: row.ai, artboardCount: scene.artboards.length })}
+                onClick={e => selectGroup(multiMode || e.metaKey || e.ctrlKey || e.shiftKey)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectGroup(multiMode || e.metaKey || e.ctrlKey || e.shiftKey) } }}
+              >
+                <span className="ds-layer-name" aria-hidden="true"><button className="ds-layer-caret" type="button" aria-label={collapsed ? 'Expand group' : 'Collapse group'} title={collapsed ? 'Expand group' : 'Collapse group'} onClick={e => { e.stopPropagation(); toggleGroupCollapsed(row.id) }}>{collapsed ? '▸' : '▾'}</button>{row.name} <small>{row.layers.length}</small>{scene.artboards.length > 1 ? ` · A${row.ai + 1}` : ''}</span>
+                <span className="ds-layer-acts"><button type="button" onClick={e => { e.stopPropagation(); toggleGroupLock(row.id) }} aria-label={groupLocked ? 'Unlock group' : 'Lock group'} title={groupLocked ? 'Unlock group' : 'Lock group'}>{groupLocked ? '🔒' : '🔓'}</button><button type="button" onClick={e => { e.stopPropagation(); moveGroup(row.id, 1) }} aria-label="Bring group forward" title="Bring forward">↑</button><button type="button" onClick={e => { e.stopPropagation(); moveGroup(row.id, -1) }} aria-label="Send group back" title="Send back">↓</button></span>
               </div>
-              {!collapsed && row.layers.slice().reverse().map(l => <div key={l.id} className={`ds-layer-row ds-layer-child ${selectedIds.includes(l.id) ? 'active' : ''} ${l.locked ? 'locked' : ''}`} onClick={e => { setFocusAb(row.ai); if (multiMode || e.metaKey || e.ctrlKey || e.shiftKey) toggleSelect(l.id); else setSelectedId(l.id) }}>
-                <span className="ds-layer-name">{l.locked ? '🔒 ' : ''}{l.type === 'text' ? ((l as TextLayer).text.slice(0, 22) || 'Text') : l.type === 'image' ? 'Image' : 'Shape'}</span>
-                <span className="ds-layer-acts"><button onClick={e => { e.stopPropagation(); toggleLayerLock(l.id) }} title={l.locked ? 'Unlock layer' : 'Lock layer'}>{l.locked ? '🔒' : '🔓'}</button><button onClick={e => { e.stopPropagation(); moveLayer(l.id, 1) }} title="Bring forward">↑</button><button onClick={e => { e.stopPropagation(); moveLayer(l.id, -1) }} title="Send back">↓</button></span>
-              </div>)}
-            </React.Fragment> })() : <div key={row.l.id} className={`ds-layer-row ${selectedIds.includes(row.l.id) ? 'active' : ''} ${row.l.locked ? 'locked' : ''}`} onClick={e => { setFocusAb(row.ai); if (multiMode || e.metaKey || e.ctrlKey || e.shiftKey) toggleSelect(row.l.id); else setSelectedId(row.l.id) }}>
-              <span className="ds-layer-name">{row.l.locked ? '🔒 ' : ''}{row.l.type === 'text' ? ((row.l as TextLayer).text.slice(0, 22) || 'Text') : row.l.type === 'image' ? 'Image' : 'Shape'}{scene.artboards.length > 1 ? ` · A${row.ai + 1}` : ''}</span>
-              <span className="ds-layer-acts"><button onClick={e => { e.stopPropagation(); toggleLayerLock(row.l.id) }} title={row.l.locked ? 'Unlock layer' : 'Lock layer'}>{row.l.locked ? '🔒' : '🔓'}</button><button onClick={e => { e.stopPropagation(); moveLayer(row.l.id, 1) }} title="Bring forward">↑</button><button onClick={e => { e.stopPropagation(); moveLayer(row.l.id, -1) }} title="Send back">↓</button></span>
-            </div>)}</>}</div>}
+              {!collapsed && row.layers.slice().reverse().map(l => {
+                const name = l.type === 'text' ? ((l as TextLayer).text.slice(0, 22) || 'Text') : l.type === 'image' ? 'Image' : 'Shape'
+                const selected = selectedIds.includes(l.id)
+                const selectLayer = (additive: boolean) => { setFocusAb(row.ai); if (additive) toggleSelect(l.id); else setSelectedId(l.id) }
+                return <div
+                  key={l.id}
+                  className={`ds-layer-row ds-layer-child ${selected ? 'active' : ''} ${l.locked ? 'locked' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
+                  aria-label={layerRowAriaLabel({ name, selected, locked: !!l.locked })}
+                  onClick={e => selectLayer(multiMode || e.metaKey || e.ctrlKey || e.shiftKey)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLayer(multiMode || e.metaKey || e.ctrlKey || e.shiftKey) } }}
+                >
+                  <span className="ds-layer-name" aria-hidden="true">{l.locked ? '🔒 ' : ''}{name}</span>
+                  <span className="ds-layer-acts"><button type="button" onClick={e => { e.stopPropagation(); toggleLayerLock(l.id) }} aria-label={l.locked ? 'Unlock layer' : 'Lock layer'} title={l.locked ? 'Unlock layer' : 'Lock layer'}>{l.locked ? '🔒' : '🔓'}</button><button type="button" onClick={e => { e.stopPropagation(); moveLayer(l.id, 1) }} aria-label="Bring layer forward" title="Bring forward">↑</button><button type="button" onClick={e => { e.stopPropagation(); moveLayer(l.id, -1) }} aria-label="Send layer back" title="Send back">↓</button></span>
+                </div>
+              })}
+            </React.Fragment> })() : (() => {
+              const name = row.l.type === 'text' ? ((row.l as TextLayer).text.slice(0, 22) || 'Text') : row.l.type === 'image' ? 'Image' : 'Shape'
+              const selected = selectedIds.includes(row.l.id)
+              const selectLayer = (additive: boolean) => { setFocusAb(row.ai); if (additive) toggleSelect(row.l.id); else setSelectedId(row.l.id) }
+              return <div
+                key={row.l.id}
+                className={`ds-layer-row ${selected ? 'active' : ''} ${row.l.locked ? 'locked' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selected}
+                aria-label={layerRowAriaLabel({ name, selected, locked: !!row.l.locked, artboardIndex: row.ai, artboardCount: scene.artboards.length })}
+                onClick={e => selectLayer(multiMode || e.metaKey || e.ctrlKey || e.shiftKey)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLayer(multiMode || e.metaKey || e.ctrlKey || e.shiftKey) } }}
+              >
+                <span className="ds-layer-name" aria-hidden="true">{row.l.locked ? '🔒 ' : ''}{name}{scene.artboards.length > 1 ? ` · A${row.ai + 1}` : ''}</span>
+                <span className="ds-layer-acts"><button type="button" onClick={e => { e.stopPropagation(); toggleLayerLock(row.l.id) }} aria-label={row.l.locked ? 'Unlock layer' : 'Lock layer'} title={row.l.locked ? 'Unlock layer' : 'Lock layer'}>{row.l.locked ? '🔒' : '🔓'}</button><button type="button" onClick={e => { e.stopPropagation(); moveLayer(row.l.id, 1) }} aria-label="Bring layer forward" title="Bring forward">↑</button><button type="button" onClick={e => { e.stopPropagation(); moveLayer(row.l.id, -1) }} aria-label="Send layer back" title="Send back">↓</button></span>
+              </div>
+            })())}</>}</div>}
         </div>
       </aside>
       <div className={`ds-canvas-wrap figma ${eyedrop ? 'ds-eyedropping' : ''}`} ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
