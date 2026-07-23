@@ -36,6 +36,7 @@ describe("isAgentTurnSlashCommand", () => {
 		expect(isAgentTurnSlashCommand("/masterplan")).toBe(true);
 		expect(isAgentTurnSlashCommand("/masterplan build a CLI")).toBe(true);
 		expect(isAgentTurnSlashCommand("/masterplanner")).toBe(false);
+		expect(isAgentTurnSlashCommand("/masterplan-foo")).toBe(false);
 		expect(isAgentTurnSlashCommand("/status")).toBe(false);
 	});
 });

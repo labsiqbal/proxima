@@ -376,7 +376,10 @@ def register(app, deps):
         prompt = agent_turn["message"] if agent_turn is not None else payload.message
         run_kind = agent_turn["runKind"] if agent_turn is not None else effective_prompt_mode
         goal = db().execute("SELECT goal_text, goal_status FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if agent_turn is None and goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
+        if agent_turn is not None:
+            if goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
+                db().execute("UPDATE sessions SET goal_status = 'cancelled' WHERE id = ? AND goal_status = 'blocked'", (session_id,))
+        elif goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
             prompt = payload.message + GOAL_INSTRUCTIONS
             db().execute("UPDATE sessions SET goal_status = 'running' WHERE id = ?", (session_id,))
         if payload.instant_result is not None:

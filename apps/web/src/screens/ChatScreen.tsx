@@ -44,7 +44,7 @@ const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
 
 /** Slash commands that intentionally continue through the ordinary agent-run path. */
 export function isAgentTurnSlashCommand(text: string): boolean {
-	return /^\/masterplan\b/i.test(text.trim());
+	return /^\/masterplan(?:\s|$)/i.test(text.trim());
 }
 
 /** Header label prefers the open session's project so a desynced shell pick cannot mislabel the chat. */
