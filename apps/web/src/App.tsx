@@ -291,14 +291,18 @@ export function App() {
     })
   }, [token, sessionEnabled])
 
-  // Defensive: any path that sets a session without flipping the shell project still
-  // realigns Files/header context to the conversation's project.
+  // When a session opens/changes, pull the shell project to match so Files and
+  // other rails start on the conversation's project. Do NOT depend on
+  // activeProject here - an intentional Projects/Tasks pick must stick even
+  // while an older chat session remains selected in memory (Chat header already
+  // prefers the session project over a desynced shell pick).
   React.useEffect(() => {
     if (!activeSession?.project_slug) return
-    if (activeProject?.slug === activeSession.project_slug) return
-    const match = projects.find(p => p.slug === activeSession.project_slug)
-    if (match) setActiveProject(match)
-  }, [activeSession?.id, activeSession?.project_slug, activeProject?.slug, projects])
+    setActiveProject(current => {
+      if (current?.slug === activeSession.project_slug) return current
+      return projects.find(p => p.slug === activeSession.project_slug) || current
+    })
+  }, [activeSession?.id, activeSession?.project_slug, projects])
 
   // On first load, treat existing sessions as already seen (only NEW activity dots).
   React.useEffect(() => {

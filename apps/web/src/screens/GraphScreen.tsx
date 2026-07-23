@@ -18,6 +18,7 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
+import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
 import { IconTrash } from '../components/shell/icons'
@@ -689,6 +690,20 @@ export function GraphScreen({
   }
 
   const allDone = !!job?.node_states.length && job.node_states.every(state => state.status === 'done')
+  // Mirror ChangesReview: final approve with an empty diff is "accept & close",
+  // not "merge changes" (agent finished with no file edits).
+  const [emptyReviewDiff, setEmptyReviewDiff] = React.useState(false)
+  React.useEffect(() => {
+    if (!job || job.status !== 'review' || !job.worktree || !allDone) {
+      setEmptyReviewDiff(false)
+      return
+    }
+    let cancelled = false
+    getJobDiff(token, job.id)
+      .then(body => { if (!cancelled) setEmptyReviewDiff(body.files.length === 0) })
+      .catch(() => { if (!cancelled) setEmptyReviewDiff(false) })
+    return () => { cancelled = true }
+  }, [token, job?.id, job?.status, job?.worktree?.status, allDone])
 
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
 
@@ -861,15 +876,21 @@ export function GraphScreen({
         {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act(
           'approve-job',
           () => approveGraphJob(token, job.id),
-          // Same door as ChangesReview: final approve is the local merge for repo plans.
+          // Same door as ChangesReview: final approve is the local merge for repo plans
+          // (or a quiet close when the agent left no file changes).
           job.worktree
-            ? `Changes merged into ${job.worktree.base_branch}.`
+            ? (emptyReviewDiff
+              ? `Closed with no file changes on ${job.worktree.base_branch}.`
+              : `Changes merged into ${job.worktree.base_branch}.`)
             : 'Final result approved.',
         )} disabled={!!busy}>
-          {/* A repo plan's final approve is also the local merge (slice 4) — say so. */}
+          {/* A repo plan's final approve is also the local merge (slice 4) — say so,
+              unless the diff is empty (accept & close, matching ChangesReview). */}
           {busy === 'approve-job'
-            ? (job.worktree ? 'Merging…' : 'Approving…')
-            : (job.worktree ? 'Approve & merge changes' : 'Approve final result')}
+            ? (job.worktree ? (emptyReviewDiff ? 'Closing…' : 'Merging…') : 'Approving…')
+            : (job.worktree
+              ? (emptyReviewDiff ? 'Accept & close' : 'Approve & merge changes')
+              : 'Approve final result')}
         </button>}
       </div>
     </header>
@@ -879,8 +900,9 @@ export function GraphScreen({
     {/* Durable merge/push outcome so a reopened Done plan still shows where the
         changes landed - the header Approve button disappears after the merge. */}
     {job?.worktree?.status === 'merged' && <p className="changes-note is-merged graph-merge-note">
-      ✓ Changes merged into <code>{job.worktree.base_branch}</code>
-      {job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}
+      {job.worktree.merge_commit && job.worktree.base_commit && job.worktree.merge_commit === job.worktree.base_commit
+        ? <>✓ Closed with no file changes on <code>{job.worktree.base_branch}</code>{job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}</>
+        : <>✓ Changes merged into <code>{job.worktree.base_branch}</code>{job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}</>}
     </p>}
     {job?.worktree?.status === 'merged' && job.worktree.push_status === 'pushed' && <p className="changes-note is-pushed graph-merge-note">
       ↑ Pushed to <code>{job.worktree.push_remote}</code>

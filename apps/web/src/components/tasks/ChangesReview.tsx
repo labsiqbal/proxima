@@ -113,6 +113,9 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
 
   const files = diff ? parseUnifiedPatch(diff.patch) : []
   const merged = worktree.status === 'merged'
+  // Agent finished with a clean tree (baseline already done, no-op node, etc.) —
+  // still needs an owner close, but "merge changes" is the wrong frame.
+  const emptyDiff = !!diff && diff.files.length === 0
 
   return <section className="changes-review" aria-label="Code changes">
     <div className="changes-head">
@@ -124,8 +127,9 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
     </div>
 
     {merged && <p className="changes-note is-merged">
-      ✓ Changes merged into <code>{worktree.base_branch}</code>
-      {worktree.merge_commit && <> · <code>{short(worktree.merge_commit)}</code></>}
+      {worktree.merge_commit && worktree.base_commit && worktree.merge_commit === worktree.base_commit
+        ? <>✓ Closed with no file changes on <code>{worktree.base_branch}</code>{worktree.merge_commit && <> · <code>{short(worktree.merge_commit)}</code></>}</>
+        : <>✓ Changes merged into <code>{worktree.base_branch}</code>{worktree.merge_commit && <> · <code>{short(worktree.merge_commit)}</code></>}</>}
     </p>}
     {/* Push-after-merge outcome (T9): only ever present when the code area's
         own toggle was on. Success is one quiet line; failure is a job-level
@@ -162,8 +166,16 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
         or mid-gate plan still has status=review + an active worktree, but the next
         step is fix/rerun (or open the plan) — the blocked note below covers that. */}
     {canDecide && jobStatus === 'review' && worktree.status === 'active' && <p className="changes-note">
-      This job worked in an isolated copy of the code. Approve to bring the changes
-      into <code>{worktree.base_branch}</code> — your project is untouched until then.
+      {emptyDiff
+        ? <>
+            This job finished without changing any files (the code already matched
+            what was asked, or the step made no edits). Accept to close it out —
+            your project stays as it is on <code>{worktree.base_branch}</code>.
+          </>
+        : <>
+            This job worked in an isolated copy of the code. Approve to bring the changes
+            into <code>{worktree.base_branch}</code> — your project is untouched until then.
+          </>}
     </p>}
 
     {error && <div className="error-bar">{error}</div>}
@@ -193,8 +205,12 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
       {!rejecting && <>
         <button className="primary-button" onClick={() => void approve()} disabled={!!busy}>
           {busy === 'approve'
-            ? 'Merging…'
-            : worktree.status === 'conflict' ? 'Approve again' : '✓ Approve & merge changes'}
+            ? (emptyDiff ? 'Closing…' : 'Merging…')
+            : worktree.status === 'conflict'
+              ? 'Approve again'
+              : emptyDiff
+                ? '✓ Accept & close'
+                : '✓ Approve & merge changes'}
         </button>
         <button className="ghost-button danger" onClick={() => { setRejecting(true); setError('') }} disabled={!!busy}>Reject…</button>
       </>}
@@ -205,11 +221,17 @@ export function ChangesReview({ token, jobId, jobStatus, worktree, rejectedReaso
           value={reason}
           maxLength={500}
           onChange={event => setReason(event.target.value)}
-          placeholder="Why is this rejected? (required — kept on the job record)"
+          placeholder={emptyDiff
+            ? 'Why close without accepting? (required — kept on the job record)'
+            : 'Why is this rejected? (required — kept on the job record)'}
           aria-label="Rejection reason"
         />
         <button type="submit" className="primary-button danger" disabled={!!busy || !reason.trim()}>
-          {busy === 'reject' ? 'Discarding…' : 'Reject & discard changes'}
+          {busy === 'reject'
+            ? 'Discarding…'
+            : emptyDiff
+              ? 'Reject & close'
+              : 'Reject & discard changes'}
         </button>
         <button type="button" className="ghost-button" onClick={() => setRejecting(false)} disabled={!!busy}>Keep reviewing</button>
       </form>}

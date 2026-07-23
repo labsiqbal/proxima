@@ -119,6 +119,21 @@ describe('ChangesReview', () => {
     expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument()
   })
 
+  it('no-op close (merge sha == base) keeps closed wording after done', async () => {
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="done"
+      worktree={{
+        ...worktree,
+        status: 'merged',
+        base_commit: 'samebase1',
+        merge_commit: 'samebase1',
+      }}
+      canDecide={false} onApprove={vi.fn()} onChanged={vi.fn()}
+    />)
+    expect(await screen.findByText(/Closed with no file changes on/)).toBeInTheDocument()
+    expect(screen.queryByText(/Changes merged into/)).not.toBeInTheDocument()
+  })
+
   it('shows the recorded reason after a rejection, without fetching a dead diff', () => {
     render(<ChangesReview
       token="token" jobId={7} jobStatus="failed"
@@ -194,5 +209,32 @@ describe('ChangesReview', () => {
     />)
     expect(await screen.findByText(/Approve to bring the changes/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve & merge changes/ })).toBeInTheDocument()
+  })
+
+  it('empty diff offers Accept & close instead of merge framing', async () => {
+    vi.mocked(getJobDiff).mockResolvedValue({
+      ...diff,
+      head_commit: diff.base_commit,
+      files: [],
+      patch: '',
+      summary: '',
+    } as never)
+    const onApprove = vi.fn().mockResolvedValue({})
+    const user = userEvent.setup()
+    render(<ChangesReview
+      token="token" jobId={7} jobStatus="review" worktree={worktree}
+      canDecide onApprove={onApprove} onChanged={vi.fn()}
+    />)
+    expect(await screen.findByText(/No file changes/)).toBeInTheDocument()
+    expect(screen.getByText(/finished without changing any files/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Approve to bring the changes/)).not.toBeInTheDocument()
+    const accept = screen.getByRole('button', { name: /Accept & close/ })
+    expect(accept).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Approve & merge changes/ })).not.toBeInTheDocument()
+    await user.click(accept)
+    await waitFor(() => expect(onApprove).toHaveBeenCalled())
+    // Reject wording also drops "discard changes" when there is nothing to land.
+    await user.click(screen.getByRole('button', { name: /Reject…/ }))
+    expect(screen.getByRole('button', { name: /Reject & close/ })).toBeInTheDocument()
   })
 })

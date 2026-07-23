@@ -200,9 +200,11 @@ a chat-side feature as-is (its timeout behavior is unchanged by slice 5).
 **How:** `wiki-note/draft` spawns a run that produces a `wiki.draft` event → preview
 → `wiki-note/commit` writes the markdown into **that chat session's project wiki** +
 rebuilds the wiki index. After approve, the chat shows an in-app status line with
-the saved path (desktop notifications stay background-only). The chat header and
-shell project follow the open session so Save to wiki / Files / @-mentions cannot
-point at a different project than the conversation.
+the saved path (desktop notifications stay background-only). Opening or switching
+a chat session pulls the shell project to match (so Files / @-mentions start on the
+conversation's project); an intentional Projects pick still sticks for Tasks/Files/
+Archive while an older session stays in memory. The chat header always prefers the
+open session's project over a desynced shell pick.
 **Endpoints:** `POST /api/sessions/{id}/wiki-note/draft`, `/wiki-note/commit`.
 
 ## 6. Chat → Plan (slice a goal into runnable jobs)
@@ -343,10 +345,15 @@ engine's approve (the slice-2 guarded merge; a conflict surfaces as a plain
 needs-attention banner with the server's reason and the job parks in review for a
 retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/reject`
 (either engine) marks the job `failed` with `jobs.rejected_reason` recorded and tears
-the worktree down unmerged - the project never sees the discarded change. After the
+the worktree down unmerged - the project never sees the discarded change. When the
+diff has **no file changes** (agent stopped because the baseline already matched, or
+the step made no edits), both the Tasks expand surface and the plan-canvas header door
+reframe to **Accept & close** / **Reject & close** with copy that says the project stays
+as it is - same approve endpoint, no fake "merge changes" promise. After a real
 merge the row shows what landed (base branch + merge commit) and keeps the change
-readable; the plan canvas header Approve door shows a success notice and keeps a
-durable "merged into <branch> · <sha>" line (plus push outcome when applicable) so a
+readable; a no-op close (merge sha equals base) keeps **Closed with no file changes**
+wording instead. The plan canvas header Approve door shows a success notice and keeps a
+durable landing line (plus push outcome when applicable) so a
 reopened Done plan still says where the work landed. Slice 12's satpam consumes these
 same review states.
 
