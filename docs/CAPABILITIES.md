@@ -585,6 +585,10 @@ These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
 file/artifact references — with the in-browser **Terminal** as the raw escape hatch.
+Inline New file / New folder / Rename rows share one tree input with an accessible
+name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
+placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
+box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`.
 

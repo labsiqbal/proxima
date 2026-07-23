@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceTree } from './WorkspaceTree'
 import type { FsAdapter } from '../../api/fsAdapter'
@@ -75,5 +76,53 @@ describe('WorkspaceTree reveal / activePath', () => {
     // Wiki owns the editor pane - tree should only highlight, not auto-open.
     expect(fs.read).not.toHaveBeenCalled()
     expect(onOpenFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceTree create / rename inline input', () => {
+  it('labels the new-file input and shows a name placeholder', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs({ '': entries(['README.md', 'file']) })
+    render(<WorkspaceTree fs={fs} title="Demo" onOpenFile={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'New file' }))
+    const input = await screen.findByRole('textbox', { name: 'New file name' })
+    expect(input).toHaveAttribute('placeholder', 'file-name')
+    expect(input).toHaveFocus()
+  })
+
+  it('labels the new-folder input and shows a folder placeholder', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs({ '': entries(['README.md', 'file']) })
+    render(<WorkspaceTree fs={fs} title="Demo" onOpenFile={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'New folder' }))
+    const input = await screen.findByRole('textbox', { name: 'New folder name' })
+    expect(input).toHaveAttribute('placeholder', 'folder-name')
+  })
+
+  it('labels rename with the current entry name', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs({ '': entries(['notes.md', 'file']) })
+    render(<WorkspaceTree fs={fs} title="Demo" onOpenFile={vi.fn()} />)
+
+    const row = await screen.findByRole('button', { name: /notes\.md/ })
+    await user.pointer({ keys: '[MouseRight>]', target: row })
+    await user.click(await screen.findByRole('button', { name: 'Rename' }))
+    expect(await screen.findByRole('textbox', { name: 'Rename notes.md' })).toBeInTheDocument()
+  })
+
+  it('creates a wiki note with the default .md extension from the labeled input', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs({ '': entries(['index.md', 'file']) })
+    const onOpenFile = vi.fn()
+    render(<WorkspaceTree fs={fs} title="Wiki" onOpenFile={onOpenFile} defaultExt="md" fileFilter={n => n.endsWith('.md')} />)
+
+    await user.click(screen.getByRole('button', { name: 'New file' }))
+    const input = await screen.findByRole('textbox', { name: 'New file name' })
+    await user.type(input, 'gnhf-e2e-tree-note{Enter}')
+
+    await waitFor(() => expect(fs.write).toHaveBeenCalledWith('gnhf-e2e-tree-note.md', ''))
+    expect(onOpenFile).toHaveBeenCalledWith('gnhf-e2e-tree-note.md')
   })
 })

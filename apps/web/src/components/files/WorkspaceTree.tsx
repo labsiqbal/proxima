@@ -25,7 +25,16 @@ type Ctl = {
 
 const base = (p: string) => p.split('/').pop() || p
 
-function InlineInput({ initial, icon, depth, onSubmit, onCancel }: { initial: string; icon: React.ReactNode; depth: number; onSubmit: (v: string) => void; onCancel: () => void }) {
+function InlineInput({ initial, icon, depth, label, placeholder, onSubmit, onCancel }: {
+  initial: string
+  icon: React.ReactNode
+  depth: number
+  /** Accessible name - New file / New folder / Rename otherwise stay unlabeled. */
+  label: string
+  placeholder?: string
+  onSubmit: (v: string) => void
+  onCancel: () => void
+}) {
   const [v, setV] = React.useState(initial)
   const done = React.useRef(false)
   const finish = (commit: boolean) => {
@@ -34,10 +43,17 @@ function InlineInput({ initial, icon, depth, onSubmit, onCancel }: { initial: st
     if (commit && v.trim() && v.trim() !== initial) onSubmit(v.trim()); else onCancel()
   }
   return <div className="tree-row inline" style={{ paddingLeft: 8 + depth * 12 }}>
-    <span className="tree-ico">{icon}</span>
-    <input autoFocus className="tree-input" value={v} onChange={e => setV(e.target.value)}
+    <span className="tree-ico" aria-hidden="true">{icon}</span>
+    <input
+      autoFocus
+      className="tree-input"
+      value={v}
+      aria-label={label}
+      placeholder={placeholder}
+      onChange={e => setV(e.target.value)}
       onKeyDown={e => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) }}
-      onBlur={() => finish(true)} />
+      onBlur={() => finish(true)}
+    />
   </div>
 }
 
@@ -60,10 +76,32 @@ function Level({ dir, depth, t }: { dir: string; depth: number; t: Ctl }) {
   }, [t.fs, dir, t.refreshKey])
 
   return <div className="tree-level">
-    {t.creating && t.creating.dir === dir && <InlineInput initial="" depth={depth} icon={t.creating.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />} onSubmit={t.submitCreate} onCancel={t.cancelCreate} />}
+    {t.creating && t.creating.dir === dir && (
+      <InlineInput
+        initial=""
+        depth={depth}
+        icon={t.creating.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />}
+        label={t.creating.type === 'dir' ? 'New folder name' : 'New file name'}
+        placeholder={t.creating.type === 'dir' ? 'folder-name' : 'file-name'}
+        onSubmit={t.submitCreate}
+        onCancel={t.cancelCreate}
+      />
+    )}
     {entries.filter(entry => entry.type === 'dir' || !t.fileFilter || t.fileFilter(entry.name)).map(entry => {
       const path = dir ? `${dir}/${entry.name}` : entry.name
-      if (t.renaming === path) return <InlineInput key={path} initial={entry.name} depth={depth} icon={entry.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />} onSubmit={n => t.submitRename(path, n)} onCancel={t.cancelRename} />
+      if (t.renaming === path) {
+        return (
+          <InlineInput
+            key={path}
+            initial={entry.name}
+            depth={depth}
+            icon={entry.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />}
+            label={`Rename ${entry.name}`}
+            onSubmit={n => t.submitRename(path, n)}
+            onCancel={t.cancelRename}
+          />
+        )
+      }
       if (entry.type === 'dir') {
         const open = t.expanded.has(path)
         return <div key={path}>
