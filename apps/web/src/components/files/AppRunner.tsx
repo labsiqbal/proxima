@@ -1,5 +1,5 @@
 import React from 'react'
-import { appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
+import { appExitSummary, appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
 import { IconMonitor, IconTablet, IconMobile } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
 import { usePolling } from '../../hooks/usePolling'
@@ -77,10 +77,24 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   React.useEffect(() => {
     const seq = ++appsSeq.current
     detectApps(token, slug)
-      .then(r => { if (mountedRef.current && seq === appsSeq.current) setApps(r.apps) })
+      .then(r => {
+        if (!mountedRef.current || seq !== appsSeq.current) return
+        setApps(r.apps)
+        // One clear match and the form is still on defaults → fill it so Run
+        // does the right thing without an extra click (empty projects stay on npm).
+        if (r.apps.length === 1 && !initialDir && !initialCommand) {
+          const savedCmd = localStorage.getItem('proxima.appcmd.' + slug)
+          const savedDir = localStorage.getItem('proxima.appdir.' + slug)
+          const atDefault = (!savedCmd || savedCmd === 'npm run dev') && !savedDir
+          if (atDefault) {
+            setDir(r.apps[0].dir)
+            setCommand(r.apps[0].command)
+          }
+        }
+      })
       .catch(() => { if (mountedRef.current && seq === appsSeq.current) setApps([]) })
     return () => { appsSeq.current += 1 }
-  }, [token, slug])
+  }, [token, slug, initialDir, initialCommand])
   React.useEffect(() => {
     if (initialDir != null) setDir(initialDir)
     if (initialCommand) setCommand(initialCommand)
@@ -163,11 +177,13 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   const openUrl = subdomainUrl || relayUrl || directUrl || appViewUrl(slug)
   const isolatedOrigin = Boolean(subdomainUrl || relayUrl || directUrl)
   const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
+  const exitInfo = status.exited && !status.running ? appExitSummary(status) : null
 
   return <div className="app-runner-dock">
     <div className="app-runner-head">
       <strong>Run &amp; Preview</strong>
       {status.running && <span className={`app-ready-badge ${status.ready ? 'ready' : 'starting'}`}>{status.ready ? '● Ready' : '◌ Starting…'}</span>}
+      {exitInfo && <span className={`app-ready-badge ${exitInfo.tone === 'fail' ? 'failed' : 'finished'}`}>{exitInfo.tone === 'fail' ? '● Failed' : '● Finished'}</span>}
       {status.running && status.ready && <div className="vp-seg">{VIEWPORTS.map(v => <button key={v.key} className={vw === v.key ? 'active' : ''} onClick={() => setVw(v.key)} title={v.label} aria-label={v.label}><v.Icon size={16} /></button>)}</div>}
       <span className="spacer" />
       {status.running && status.ready && <><a className="ghost-button sm app-act" href={openUrl} target="_blank" rel="noreferrer" title="Open in new tab"><span className="act-ico">↗</span><span className="btn-txt">Open</span></a><button className="ghost-button sm app-act" onClick={() => setReloadKey(k => k + 1)} title="Reload"><span className="act-ico">⟳</span><span className="btn-txt">Reload</span></button><button className="ghost-button sm danger app-act" onClick={() => void stop()} disabled={busy} title="Stop"><span className="act-ico">■</span><span className="btn-txt">Stop</span></button></>}
@@ -187,6 +203,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
           <span className="app-detected-dir">{a.dir || '(project root)'}</span><span className="app-detected-kind">{a.kind}</span>
         </button>)}</div>
       </div>}
+      {apps.length === 0 && <p className="app-runner-empty muted">No app detected here yet. Add a <code>package.json</code>, <code>app.py</code>/<code>main.py</code>, Django <code>manage.py</code>, or <code>index.html</code> — or type a command below.</p>}
       <div className="app-runner-power">
         <span>Owner-power execution</span>
         <small>Runs the selected command inside this project with your account permissions.</small>
@@ -199,7 +216,11 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       </div>
       <p className="app-runner-cwd muted">Working dir: <code>{slug}/{dir || ''}</code> · command runs here</p>
       {error && <p className="error-text">{error}</p>}
-      {status.exited && <pre className="app-log">{(status.log || []).join('\n')}</pre>}
+      {exitInfo && <div className={`app-exit-note ${exitInfo.tone}`} role="status">
+        <strong>{exitInfo.title}</strong>
+        <p>{exitInfo.hint}</p>
+      </div>}
+      {status.exited && (status.log || []).length > 0 && <pre className="app-log">{(status.log || []).join('\n')}</pre>}
     </div>}
 
     {status.running && status.ready && <div className="app-preview-area">

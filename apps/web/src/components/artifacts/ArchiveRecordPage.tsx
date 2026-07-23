@@ -77,8 +77,20 @@ export function ArchiveRecordPage({ token, project, slug, onBack, onOpenRecord, 
         <span className="mono">{permalinkOf(record)}</span>
       </span>
       <span className="archive-record-nav">
-        <button className="ghost-button" disabled={!record.prev_slug} onClick={() => record.prev_slug && onOpenRecord(project, record.prev_slug)}>‹ Newer</button>
-        <button className="ghost-button" disabled={!record.next_slug} onClick={() => record.next_slug && onOpenRecord(project, record.next_slug)}>Older ›</button>
+        <button
+          className="ghost-button"
+          disabled={!record.prev_slug}
+          title="Previous deliverable in this project by date (not a version of this file)"
+          aria-label="Newer record in project"
+          onClick={() => record.prev_slug && onOpenRecord(project, record.prev_slug)}
+        >‹ Newer record</button>
+        <button
+          className="ghost-button"
+          disabled={!record.next_slug}
+          title="Next deliverable in this project by date (not a version of this file)"
+          aria-label="Older record in project"
+          onClick={() => record.next_slug && onOpenRecord(project, record.next_slug)}
+        >Older record ›</button>
       </span>
     </div>
     <div className="archive-record-scroll">

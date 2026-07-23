@@ -9,6 +9,7 @@ import { usePolling } from '../hooks/usePolling'
 import { MiniPreview } from '../components/design/MiniPreview'
 import { AppRunner } from '../components/files/AppRunner'
 import { MessageContent } from '../components/chat/MessageContent'
+import { formatRunError } from '../components/chat/runError'
 import { confirmDialog } from '../components/ui/Dialog'
 import type { ChatMessage, RunEvent, WorkflowStep } from '../types'
 
@@ -268,7 +269,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
           label,
           status: m.role === 'error' ? 'failed' : 'done',
           content: m.content,
-          error: m.role === 'error' ? m.content : undefined,
+          error: m.role === 'error' ? formatRunError(m.content) : undefined,
           artifacts: [],
           historyCount: 1,
           runIds: [m.run_id],
@@ -284,7 +285,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
       cur.createdAt = cur.createdAt || e.created_at
       addArtifacts(cur.label, e.payload.output_links as Artifact[] | undefined)
       if (e.type === 'run.started' || e.type === 'run.queued') cur.status = 'running'
-      if (e.type === 'run.failed') { cur.status = 'failed'; cur.error = String(e.payload.error || 'Run failed') }
+      if (e.type === 'run.failed') { cur.status = 'failed'; cur.error = formatRunError(String(e.payload.error || 'Run failed')) }
       if (e.type === 'message.complete' && typeof e.payload.text === 'string' && !cur.content) cur.content = e.payload.text
       if (e.type === 'run.cancelled') cur.status = 'cancelled'
       if (e.type === 'run.completed' && cur.status === 'running') cur.status = 'done'

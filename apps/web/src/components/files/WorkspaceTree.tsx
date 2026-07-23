@@ -25,7 +25,16 @@ type Ctl = {
 
 const base = (p: string) => p.split('/').pop() || p
 
-function InlineInput({ initial, icon, depth, onSubmit, onCancel }: { initial: string; icon: React.ReactNode; depth: number; onSubmit: (v: string) => void; onCancel: () => void }) {
+function InlineInput({ initial, icon, depth, label, placeholder, onSubmit, onCancel }: {
+  initial: string
+  icon: React.ReactNode
+  depth: number
+  /** Accessible name - New file / New folder / Rename otherwise stay unlabeled. */
+  label: string
+  placeholder?: string
+  onSubmit: (v: string) => void
+  onCancel: () => void
+}) {
   const [v, setV] = React.useState(initial)
   const done = React.useRef(false)
   const finish = (commit: boolean) => {
@@ -34,10 +43,17 @@ function InlineInput({ initial, icon, depth, onSubmit, onCancel }: { initial: st
     if (commit && v.trim() && v.trim() !== initial) onSubmit(v.trim()); else onCancel()
   }
   return <div className="tree-row inline" style={{ paddingLeft: 8 + depth * 12 }}>
-    <span className="tree-ico">{icon}</span>
-    <input autoFocus className="tree-input" value={v} onChange={e => setV(e.target.value)}
+    <span className="tree-ico" aria-hidden="true">{icon}</span>
+    <input
+      autoFocus
+      className="tree-input"
+      value={v}
+      aria-label={label}
+      placeholder={placeholder}
+      onChange={e => setV(e.target.value)}
       onKeyDown={e => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) }}
-      onBlur={() => finish(true)} />
+      onBlur={() => finish(true)}
+    />
   </div>
 }
 
@@ -60,10 +76,32 @@ function Level({ dir, depth, t }: { dir: string; depth: number; t: Ctl }) {
   }, [t.fs, dir, t.refreshKey])
 
   return <div className="tree-level">
-    {t.creating && t.creating.dir === dir && <InlineInput initial="" depth={depth} icon={t.creating.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />} onSubmit={t.submitCreate} onCancel={t.cancelCreate} />}
+    {t.creating && t.creating.dir === dir && (
+      <InlineInput
+        initial=""
+        depth={depth}
+        icon={t.creating.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />}
+        label={t.creating.type === 'dir' ? 'New folder name' : 'New file name'}
+        placeholder={t.creating.type === 'dir' ? 'folder-name' : 'file-name'}
+        onSubmit={t.submitCreate}
+        onCancel={t.cancelCreate}
+      />
+    )}
     {entries.filter(entry => entry.type === 'dir' || !t.fileFilter || t.fileFilter(entry.name)).map(entry => {
       const path = dir ? `${dir}/${entry.name}` : entry.name
-      if (t.renaming === path) return <InlineInput key={path} initial={entry.name} depth={depth} icon={entry.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />} onSubmit={n => t.submitRename(path, n)} onCancel={t.cancelRename} />
+      if (t.renaming === path) {
+        return (
+          <InlineInput
+            key={path}
+            initial={entry.name}
+            depth={depth}
+            icon={entry.type === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />}
+            label={`Rename ${entry.name}`}
+            onSubmit={n => t.submitRename(path, n)}
+            onCancel={t.cancelRename}
+          />
+        )
+      }
       if (entry.type === 'dir') {
         const open = t.expanded.has(path)
         return <div key={path}>
@@ -75,7 +113,7 @@ function Level({ dir, depth, t }: { dir: string; depth: number; t: Ctl }) {
           {open && <Level dir={path} depth={depth + 1} t={t} />}
         </div>
       }
-      return <button key={path} className={`tree-row file ${t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path)} onContextMenu={e => t.openMenu(e, path, false)}>
+      return <button key={path} data-path={path} className={`tree-row file ${t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path)} onContextMenu={e => t.openMenu(e, path, false)}>
         <span className="tree-ico"><IconFile size={15} /></span>
         <span className="tree-name">{entry.name}</span>
       </button>
@@ -95,6 +133,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   const [busy, setBusy] = React.useState(false)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
+  const treeScrollRef = React.useRef<HTMLDivElement | null>(null)
   const refresh = () => setRefreshKey(k => k + 1)
   React.useEffect(() => {
     mountedRef.current = true
@@ -112,6 +151,45 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     window.addEventListener('proxima:files-changed', onChange)
     return () => window.removeEventListener('proxima:files-changed', onChange)
   }, [])
+
+  // "Reveal in Files" (and any external activePath): expand every ancestor so the
+  // highlighted row is actually visible, not buried under a collapsed folder.
+  // Close any inline editor too - it is absolute-positioned over the tree and
+  // would hide the highlight Reveal is supposed to show. Archive already has
+  // Open for content.
+  // Re-run when `fs` changes too: the reset effect above clears `expanded`, and
+  // a same-path reveal after a project switch would otherwise stay collapsed.
+  React.useEffect(() => {
+    if (!activePath) return
+    setEditing(null)
+    const parts = activePath.split('/').filter(Boolean)
+    if (parts.length <= 1) return
+    setExpanded(s => {
+      const next = new Set(s)
+      let acc = ''
+      for (let i = 0; i < parts.length - 1; i++) {
+        acc = acc ? `${acc}/${parts[i]}` : parts[i]
+        next.add(acc)
+      }
+      return next
+    })
+  }, [activePath, fs])
+
+  // After ancestors expand and their children load, scroll the highlighted row
+  // into view inside the tree scroller (not the whole page).
+  React.useEffect(() => {
+    if (!activePath) return
+    const scroller = treeScrollRef.current
+    if (!scroller) return
+    const frame = window.requestAnimationFrame(() => {
+      const row = scroller.querySelector(`[data-path="${CSS.escape(activePath)}"]`)
+      // jsdom has no scrollIntoView; real browsers do.
+      if (row && typeof (row as HTMLElement).scrollIntoView === 'function') {
+        ;(row as HTMLElement).scrollIntoView({ block: 'nearest' })
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activePath, expanded, refreshKey])
   React.useEffect(() => {
     if (!menu) return
     const close = () => setMenu(null)
@@ -187,7 +265,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
       <button title="New folder" aria-label="New folder" onClick={() => startCreate('', 'dir')} disabled={busy}><IconFolderPlus size={16} /></button>
     </div></div>
     {treeError && <p className="tree-error">{treeError}</p>}
-    <div className="tree-scroll" onContextMenu={e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) }}><Level dir="" depth={0} t={t} /></div>
+    <div className="tree-scroll" ref={treeScrollRef} onContextMenu={e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) }}><Level dir="" depth={0} t={t} /></div>
     {!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} path={editing} onClose={() => setEditing(null)} /></React.Suspense>}
     {menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
       <button onClick={() => { startCreate(menuDir, 'file'); setMenu(null) }} disabled={busy}>New File</button>

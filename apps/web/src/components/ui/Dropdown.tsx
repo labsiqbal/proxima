@@ -33,17 +33,27 @@ export function Dropdown({ value, options, onChange, placeholder, className, dis
   }, [open])
 
   const current = options.find(o => o.value === value)
+  const triggerLabel = current
+    ? dropdownOptionAriaLabel(current)
+    : (placeholder || 'Select…')
   return <div className={`dd ${className || ''}`} ref={ref}>
-    <button type="button" className="dd-btn" disabled={disabled} onClick={() => setOpen(o => !o)} style={minWidth ? { minWidth } : undefined} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId}>
+    <button type="button" className="dd-btn" disabled={disabled} onClick={() => setOpen(o => !o)} style={minWidth ? { minWidth } : undefined} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} aria-label={triggerLabel}>
       {icon && <span className="dd-icon">{icon}</span>}
       <span className="dd-label">{current ? current.label : (placeholder || 'Select…')}</span>
       {current?.badge && <span className="dd-badge">{current.badge}</span>}
       <span className="dd-caret"><IconChevronRight size={14} /></span>
     </button>
     {open && !disabled && <div className={`dd-menu ${dropUp ? 'up' : ''}`} id={menuId} role="listbox">
-      {options.map(o => <button type="button" role="option" aria-selected={o.value === value} key={o.value} className={`dd-item ${o.value === value ? 'active' : ''}`} onClick={() => { onChange(o.value); setOpen(false) }}>
+      {options.map(o => <button type="button" role="option" aria-selected={o.value === value} key={o.value} className={`dd-item ${o.value === value ? 'active' : ''}`} aria-label={dropdownOptionAriaLabel(o)} onClick={() => { onChange(o.value); setOpen(false) }}>
         <span className="dd-label" style={o.style}>{o.label}</span>{o.badge && <span className="dd-badge">{o.badge}</span>}
       </button>)}
     </div>}
   </div>
+}
+
+/** Spaced name so label+badge never read as 'Auto-pickDifferent agent'. */
+export function dropdownOptionAriaLabel(option: Pick<DropdownOption, 'label' | 'badge'>): string {
+  const label = (option.label || '').trim()
+  const badge = (option.badge || '').trim()
+  return badge ? `${label}, ${badge}` : label
 }

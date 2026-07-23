@@ -125,9 +125,11 @@ work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a nod
 always derived from it (an authored value is never trusted), and an ambiguous binding
 is a first-class `target_ambiguous`/`target_question` state. `routes/graph.py` checks
 targets against the project's registered areas at plan create/edit (422 on an unknown
-area) and refuses to start a plan with an unresolved target question (409 carrying the
-question) — the target is pinned at slice time precisely so it cannot be discovered at
-runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+area); plan start refuses an unresolved target question (409 carrying the question) in
+the shared `bind_graph_job_repo_worktree` path, which checks ambiguity before the
+`feature_repo_worktrees` gate and the project binding — so a project-less ambiguous plan
+cannot start silently and the scheduler cannot skip the refuse. The target is pinned at
+slice time precisely so it cannot be discovered at runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
@@ -448,8 +450,11 @@ POST /api/jobs/{id}/start
 RunWorker: the run's cwd = the worktree (missing worktree fails the run
     loudly - never a silent fallback to the primary tree)
     ▼
-GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch,
-    then per-file status + unified patch vs base_commit (slice-4 review surface)
+GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch
+    (runtime cache/bytecode like __pycache__/*.pyc is dropped from the
+    checkpoint so a missing .gitignore cannot pollute review or merge),
+    then per-file status + unified patch vs base_commit (slice-4 review surface;
+    the same noise paths are omitted from the rendered file list/patch)
     ▼
 POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
     the branch the worktree was cut from (T1 local-first)
@@ -539,7 +544,10 @@ stores the answer, re-runs the node with the decision in its prompt, and resumes
 
 `schedules` rows carry a 5-field cron + overlap policy. The scheduler loop wakes each
 minute, finds _due_ schedules (matching the current minute, not a backlog), and
-materializes a `job` for each — respecting `overlap_policy` (skip / allow).
+materializes a `job` for each — respecting `overlap_policy` (skip / allow). A scheduled
+graph recipe goes through the same `bind_graph_job_repo_worktree` path as manual plan
+start (pin `target_area_id`, cut isolated worktree); a refused cut fails the job with
+an owner-facing reason instead of running unisolated.
 
 ### 8. Run & Preview app
 
@@ -555,7 +563,9 @@ else loopback - never `0.0.0.0` unless set explicitly; `off` disables) - the app
 origin by port. The relay guards only its own port: the dev server itself is defaulted
 onto loopback (suggested commands bind `127.0.0.1`, `HOST=127.0.0.1` in the child env)
 and app status flags `broad_bind` when its port is found listening beyond loopback,
-because that listener is LAN/tailnet-reachable with no auth. When
+because that listener is LAN/tailnet-reachable with no auth. A self-exit is reaped into
+a sticky `{exited, exit_code, log, command}` status (kept until the next start) so the
+UI can distinguish Finished vs Failed after short-lived commands. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
 `preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to

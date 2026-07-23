@@ -39,9 +39,20 @@ def register(app, deps):
     _project_root = deps["_project_root"]
 
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
+        """Project-scoped path audit (file writes, app starts, tree ops)."""
+        _audit(user, action, "project", slug, {"path": path})
+
+    def _audit(
+        user: dict[str, Any],
+        action: str,
+        target_type: str,
+        target_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Generic audit row. Metadata is stored once as JSON — never pre-stringified."""
         db().execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
-            (user["id"], action, slug, json.dumps({"path": path})),
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], action, target_type, target_id, json.dumps(metadata or {})),
         )
 
     @app.get("/api/projects/{slug}/tree")
@@ -267,7 +278,12 @@ def register(app, deps):
         }
         app_settings.set_json(db(), app_settings.IMAGE_GEN_KEY, cfg)
         auth_health.invalidate()  # Home Connections card re-checks on its next poll
-        _audit_fs(user, "settings.image_gen", "-", json.dumps({"provider": cfg["provider"], "model": cfg["model"], "baseUrl": cfg["baseUrl"], "key_set": bool(cfg["apiKey"])}))
+        _audit(user, "settings.image_gen", "settings", "image_gen", {
+            "provider": cfg["provider"],
+            "model": cfg["model"],
+            "baseUrl": cfg["baseUrl"],
+            "key_set": bool(cfg["apiKey"]),
+        })
         return {"ok": True, "provider": cfg["provider"], "model": cfg["model"], "hasApiKey": bool(cfg["apiKey"])}
 
     @app.post("/api/settings/image-gen/test")
@@ -283,7 +299,10 @@ def register(app, deps):
         result = image_providers.test_connection(provider_id, key, base_url=payload.get("baseUrl"))
         ok = bool(result.get("ok", result.get("ready", False)))
         status = "ok" if ok else "fail"
-        _audit_fs(user, "settings.image_gen.test", "-", json.dumps({"provider": provider_id, "status": status}))
+        _audit(user, "settings.image_gen.test", "settings", "image_gen", {
+            "provider": provider_id,
+            "status": status,
+        })
         return result
 
 
@@ -304,13 +323,15 @@ def register(app, deps):
         }
         app_settings.set_json(db(), app_settings.HIGGSFIELD_KEY, cfg)
         auth_health.invalidate()  # Home Connections card re-checks on its next poll
-        _audit_fs(user, "settings.higgsfield", "-", json.dumps({"imagePolicy": cfg["imagePolicy"]}))
+        _audit(user, "settings.higgsfield", "settings", "higgsfield", {"imagePolicy": cfg["imagePolicy"]})
         return {"ok": True, "settings": cfg, "status": higgsfield.status()}
 
     @app.post("/api/settings/higgsfield/test")
     def test_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
         result = higgsfield.status()
-        _audit_fs(user, "settings.higgsfield.test", "-", json.dumps({"status": "ok" if result.get("ready") else "fail"}))
+        _audit(user, "settings.higgsfield.test", "settings", "higgsfield", {
+            "status": "ok" if result.get("ready") else "fail",
+        })
         return result
 
     @app.get("/api/projects/{slug}/artifacts")
@@ -399,10 +420,11 @@ def register(app, deps):
             # gated relay only protects its own port), while remote preview
             # works fine on loopback - the relay connects via 127.0.0.1.
             elif (d / "manage.py").is_file():
-                found.append({"dir": rel(d), "command": "python manage.py runserver 127.0.0.1:$PORT", "kind": "django"})
+                # python3 first: many hosts (Debian/Ubuntu, Nix) ship only python3.
+                found.append({"dir": rel(d), "command": "python3 manage.py runserver 127.0.0.1:$PORT", "kind": "django"})
             elif (d / "app.py").is_file() or (d / "main.py").is_file():
                 entry = "app.py" if (d / "app.py").is_file() else "main.py"
-                found.append({"dir": rel(d), "command": f"python {entry}", "kind": "python"})
+                found.append({"dir": rel(d), "command": f"python3 {entry}", "kind": "python"})
             elif (d / "index.html").is_file():
                 found.append({"dir": rel(d), "command": "python3 -m http.server $PORT --bind 127.0.0.1", "kind": "static · index.html"})
             for c in entries:

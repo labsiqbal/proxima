@@ -652,13 +652,20 @@ button:disabled {
 	padding: var(--mention-list-padding);
 	border-width: var(--mention-list-border-width);
 }
+/* Mentions are title+path, not short slash-command names. Stack the two lines
+   full-width so long artifact titles stay readable instead of living in the
+   86px first column inherited from .slash-popover button. */
 .slash-popover.mention-results button {
+	grid-template-columns: minmax(0, 1fr);
+	align-content: center;
+	gap: 2px;
 	height: var(--mention-option-height);
 }
 .slash-popover.mention-results strong {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-2);
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -668,6 +675,10 @@ button:disabled {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.slash-popover.mention-results button > span {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
 }
 .slash-popover.mention-results .mention-kind,
 .mention-popover .mention-kind {
@@ -816,6 +827,24 @@ button:disabled {
 	display: block;
 	font-size: var(--text-xs);
 }
+.container-settings-lead {
+	margin: 0 0 var(--space-3);
+	font-size: var(--text-sm);
+}
+.container-empty {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+}
+.container-empty p {
+	margin: 0;
+}
+.container-empty-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
 .panel {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-lg);
@@ -898,6 +927,23 @@ button:disabled {
 		var(--ui-accent) 35%,
 		var(--ui-stroke-secondary)
 	);
+}
+.runner-card.not-ready {
+	border-color: color-mix(
+		in srgb,
+		var(--ui-warning) 40%,
+		var(--ui-stroke-secondary)
+	);
+}
+.runner-card.not-ready .runner-card-head span {
+	background: var(--ui-warning-bg);
+	color: var(--ui-text-primary);
+}
+.runner-card-hint {
+	margin: 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	line-height: 1.35;
 }
 .runner-card.detected {
 	border-color: var(--ui-stroke-secondary);
@@ -2946,7 +2992,12 @@ button:disabled {
 
 /* ── Tool dock: right icon rail + overlay panel (Terminal / Files / Preview) ──
    Tools open above the current screen instead of replacing it, so the plan or
-   chat being read keeps its place. The panel slides in from the right edge. */
+   chat being read keeps its place. The panel slides in from the right edge.
+   When open, `.app-shell.tool-open` reserves matching padding on `.main-pane`
+   so right-edge primary actions (Generate, Send, etc.) are not covered. */
+.app-shell.tool-open > .main-pane {
+	padding-right: min(var(--toolpanel-w), 74%);
+}
 .tool-rail {
 	display: flex;
 	flex-direction: column;
@@ -3285,6 +3336,14 @@ button:disabled {
 }
 .toggle-pill.on .toggle-knob {
 	background: var(--ui-accent);
+}
+.toggle-pill.blocked {
+	border-color: color-mix(in srgb, var(--ui-warning) 45%, var(--ui-stroke-secondary));
+	color: var(--ui-warning);
+	background: var(--ui-warning-bg);
+}
+.toggle-pill.blocked .toggle-knob {
+	background: var(--ui-warning);
 }
 
 /* Account / profile menu (top-right) */
@@ -3701,6 +3760,14 @@ button:disabled {
 	height: 100%;
 	padding: 24px;
 	text-align: center;
+}
+.wiki-create-error {
+	margin: 0;
+	padding: 8px 12px;
+	border-bottom: 1px solid color-mix(in srgb, var(--ui-danger) 35%, transparent);
+	background: color-mix(in srgb, var(--ui-danger) 12%, var(--ui-bg-editor));
+	color: var(--ui-danger);
+	font-size: var(--text-sm);
 }
 .wiki-pane-msg {
 	display: grid;
@@ -4770,7 +4837,8 @@ div.result-media {
 }
 .kanban {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	/* Five status columns (Queued…Failed); minmax keeps cards readable and lets narrow viewports scroll horizontally instead of wrapping the Failed column under Queued. */
+	grid-template-columns: repeat(5, minmax(150px, 1fr));
 	gap: 14px;
 	padding: 18px 20px;
 	overflow: auto;
@@ -5320,7 +5388,9 @@ div.result-media {
 	background: var(--ui-surface-subtle);
 	font-size: var(--text-xs);
 	font-weight: 700;
-	text-transform: capitalize;
+	/* Labels are already proper-cased (planStatusLabel / statusLabel). Do not
+	   capitalize here - multi-word phrases like "Ready to approve" must keep
+	   their sentence case. */
 }
 .graph-status.st-running,
 .graph-status.st-ready {
@@ -5842,12 +5912,25 @@ div.result-media {
 	font-size: var(--text-sm);
 	white-space: pre-wrap;
 }
+.chat-notice,
 .graph-notice {
 	padding: var(--space-2) var(--space-4);
 	border-bottom: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-success-bg);
 	color: var(--ui-success-strong);
 	font-size: var(--text-sm);
+}
+/* Plan-canvas durable merge/push lines (same copy family as ChangesReview). */
+.graph-merge-note {
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	margin: 0;
+}
+.graph-merge-note.changes-push-failed {
+	border-radius: 0;
+	border-left: 0;
+	border-right: 0;
+	border-top: 0;
 }
 .graph-inspector-head {
 	justify-content: space-between;
@@ -6346,6 +6429,9 @@ div.result-media {
 	color: var(--ui-success-strong);
 }
 .changes-note.is-discarded {
+	color: var(--ui-danger-strong);
+}
+.changes-note.is-failed {
 	color: var(--ui-danger-strong);
 }
 .changes-note.is-pushed {
@@ -7072,6 +7158,43 @@ div.result-media {
 .app-ready-badge.starting {
 	color: #9a6700;
 	background: color-mix(in srgb, #f59e0b 16%, transparent);
+}
+.app-ready-badge.finished {
+	color: var(--ui-text-secondary);
+	background: color-mix(in srgb, var(--ui-text-secondary) 12%, transparent);
+}
+.app-ready-badge.failed {
+	color: #cf222e;
+	background: color-mix(in srgb, #cf222e 14%, transparent);
+}
+.app-exit-note {
+	display: grid;
+	gap: var(--space-1);
+	padding: var(--space-3) var(--space-3);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface-subtle);
+	font-size: var(--text-sm);
+}
+.app-exit-note strong {
+	font-size: var(--text-sm);
+	font-weight: 600;
+}
+.app-exit-note p {
+	margin: 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	line-height: 1.45;
+}
+.app-exit-note.fail {
+	border-color: color-mix(in srgb, #cf222e 35%, var(--ui-stroke-secondary));
+	background: color-mix(in srgb, #cf222e 8%, var(--ui-surface));
+}
+.app-exit-note.fail strong {
+	color: #cf222e;
+}
+.app-exit-note.ok strong {
+	color: var(--ui-text-primary);
 }
 .app-booting {
 	flex: 1;
@@ -8563,6 +8686,10 @@ div.result-media {
 }
 .ds-layer-row:hover {
 	background: var(--ui-row-hover-background);
+}
+.ds-layer-row:focus-visible {
+	outline: 2px solid var(--ui-accent);
+	outline-offset: 1px;
 }
 .ds-layer-row.active {
 	background: color-mix(in srgb, var(--ui-accent) 16%, transparent);
@@ -11297,6 +11424,30 @@ div.result-media {
 	margin: 0;
 	font-size: var(--text-xs);
 	max-width: 320px;
+}
+/* Design records reuse MiniPreview (same first-artboard thumb as Design gallery). */
+.archive-preview-box.design {
+	display: grid;
+	place-items: center;
+	padding: var(--space-3);
+	background: var(--ui-bg-secondary, var(--ui-bg));
+}
+.archive-preview-box.design .archive-design-thumb {
+	width: min(100%, 560px);
+	container-type: inline-size;
+}
+.archive-preview-box.compact.design .archive-design-thumb {
+	width: min(100%, 320px);
+}
+.archive-preview-box.design .ds-mini {
+	width: 100%;
+	max-height: 420px;
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	box-shadow: 0 1px 3px color-mix(in srgb, var(--ui-ink) 12%, transparent);
+}
+.archive-preview-box.compact.design .ds-mini {
+	max-height: 200px;
 }
 /* Full record page (variant A) */
 .archive-record-page {

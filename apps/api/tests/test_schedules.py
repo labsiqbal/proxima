@@ -379,3 +379,143 @@ def test_a_paused_workflow_does_not_fire_its_schedule(tmp_path):
         "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
     ).fetchone()["last_run_minute"]
     assert claimed == "2026-07-17T11:00"
+
+
+def _scratch_repo(path):
+    import subprocess
+    from pathlib import Path
+
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    def git(*args: str) -> None:
+        res = subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+            cwd=str(path), capture_output=True, text=True,
+        )
+        assert res.returncode == 0, f"git {args}: {res.stderr}"
+
+    git("init", "-q", "-b", "main")
+    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+
+
+def test_scheduled_repo_graph_binds_worktree_like_manual_start(tmp_path):
+    """Cron / Run-now used to spawn graph jobs without target_area_id or a worktree,
+    so a repo recipe could write into the live code area. Isolation must match
+    POST /api/graph/jobs/{id}/start."""
+    import json as _json
+    from pathlib import Path
+
+    from proxima_api.graph import normalize_graph
+
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "link_roots": [str(tmp_path)],
+            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "feature_workflow_graph": True,
+            "feature_repo_worktrees": True,
+            "start_worker": False,
+        }
+    )
+    c = _client(app)
+    repo = tmp_path / "myrepo"
+    _scratch_repo(repo)
+    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+    assert linked.status_code == 201, linked.text
+    db = app.state.worker_db
+    project_id = db.execute("SELECT id FROM projects WHERE slug = 'myrepo'").fetchone()["id"]
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    graph = normalize_graph({
+        "nodes": [{
+            "id": "fix",
+            "name": "Fix",
+            "instruction": "edit README",
+            "target": ".",
+        }],
+    })
+    wcur = db.execute(
+        "INSERT INTO workflows(name, description, category, status, steps, graph, inputs, project_id, created_by) "
+        "VALUES ('Repo recipe', '', 'other', 'active', '[]', ?, '[]', ?, ?)",
+        (_json.dumps(graph), project_id, owner),
+    )
+    workflow_id = int(wcur.lastrowid)
+    scur = db.execute(
+        "INSERT INTO schedules(workflow_id, project_id, cron, input, enabled, overlap_policy, created_by) "
+        "VALUES (?, ?, '* * * * *', '{}', 1, 'skip', ?)",
+        (workflow_id, project_id, owner),
+    )
+    sched = dict(db.execute("SELECT * FROM schedules WHERE id = ?", (scur.lastrowid,)).fetchone())
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T12:00")
+
+    assert job_id is not None
+    job = dict(db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["status"] == "running"
+    assert job["target_area_id"] is not None
+    wt = db.execute("SELECT * FROM job_worktrees WHERE job_id = ?", (job_id,)).fetchone()
+    assert wt is not None, "scheduled repo graph must cut an isolated worktree"
+    assert wt["status"] == "active"
+    assert Path(wt["worktree_path"]).is_dir()
+    # Live project tree stays clean — work happens only in the worktree.
+    assert (repo / "README.md").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_scheduled_repo_graph_fails_visibly_when_worktree_cut_refused(tmp_path):
+    """A dirty live repo must not spawn an unisolated running plan — fail the job."""
+    import json as _json
+
+    from proxima_api.graph import normalize_graph
+
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "link_roots": [str(tmp_path)],
+            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "feature_workflow_graph": True,
+            "feature_repo_worktrees": True,
+            "start_worker": False,
+        }
+    )
+    c = _client(app)
+    repo = tmp_path / "dirty"
+    _scratch_repo(repo)
+    (repo / "README.md").write_text("dirty\n", encoding="utf-8")
+    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "dirty"})
+    assert linked.status_code == 201, linked.text
+    db = app.state.worker_db
+    project_id = db.execute("SELECT id FROM projects WHERE slug = 'dirty'").fetchone()["id"]
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    graph = normalize_graph({
+        "nodes": [{"id": "fix", "name": "Fix", "instruction": "x", "target": "."}],
+    })
+    wcur = db.execute(
+        "INSERT INTO workflows(name, description, category, status, steps, graph, inputs, project_id, created_by) "
+        "VALUES ('Dirty recipe', '', 'other', 'active', '[]', ?, '[]', ?, ?)",
+        (_json.dumps(graph), project_id, owner),
+    )
+    scur = db.execute(
+        "INSERT INTO schedules(workflow_id, project_id, cron, input, enabled, overlap_policy, created_by) "
+        "VALUES (?, ?, '* * * * *', '{}', 1, 'skip', ?)",
+        (int(wcur.lastrowid), project_id, owner),
+    )
+    sched = dict(db.execute("SELECT * FROM schedules WHERE id = ?", (scur.lastrowid,)).fetchone())
+
+    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T13:00")
+
+    assert job_id is not None
+    job = dict(db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    assert job["status"] == "failed"
+    assert job["rejected_reason"] and "cannot start repo plan" in job["rejected_reason"]
+    assert db.execute("SELECT COUNT(*) AS c FROM job_worktrees WHERE job_id = ?", (job_id,)).fetchone()["c"] == 0
+    # No node run was dispatched against the live tree.
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM runs r JOIN node_states n ON n.run_id = r.id WHERE n.job_id = ?",
+        (job_id,),
+    ).fetchone()["c"] == 0

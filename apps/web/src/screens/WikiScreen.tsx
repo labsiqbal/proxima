@@ -4,7 +4,7 @@ import { WorkspaceTree } from '../components/files/WorkspaceTree'
 import { projectFs } from '../api/fsAdapter'
 import { type WikiNoteRaw } from '../api/wiki'
 import { projectWikiAll } from '../api/files'
-import { buildWikiModel } from '../components/wiki/wikiGraph'
+import { baseName, buildWikiModel, notePathForTarget } from '../components/wiki/wikiGraph'
 import { WikiSearch } from '../components/wiki/WikiSearch'
 import { IconFolder, IconChevronRight } from '../components/shell/icons'
 
@@ -23,10 +23,13 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
   // only when there is no active one yet.
   const [tab, setTab] = React.useState<Tab>('files')
   const [openNote, setOpenNote] = React.useState<string | null>(null)
+  const [openInEdit, setOpenInEdit] = React.useState(false)
   const [notes, setNotes] = React.useState<WikiNoteRaw[]>([])
   const [version, setVersion] = React.useState(0)
   const [pickerOpen, setPickerOpen] = React.useState(false)
+  const [createError, setCreateError] = React.useState<string | null>(null)
   const loadSeq = React.useRef(0)
+  const createSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
 
   React.useEffect(() => {
@@ -51,7 +54,7 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
     [token, selected?.slug],
   )
 
-  React.useEffect(() => { setOpenNote(null) }, [fs])
+  React.useEffect(() => { setOpenNote(null); setOpenInEdit(false); setCreateError(null) }, [fs])
   React.useEffect(() => {
     const seq = ++loadSeq.current
     loadAll()
@@ -70,7 +73,30 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
   const isMd = (name: string) => /\.(md|markdown)$/i.test(name)
   const title = selected ? `${selected.name} · wiki` : 'Wiki'
   const reload = () => setVersion(v => v + 1)
-  const openInFiles = (p: string) => { setOpenNote(p); setTab('files') }
+  const openInFiles = React.useCallback((p: string, opts?: { edit?: boolean }) => {
+    setCreateError(null)
+    setOpenNote(p)
+    setOpenInEdit(!!opts?.edit)
+    setTab('files')
+  }, [])
+
+  // Missing [[wikilink]] click: create an empty note (with a title heading) and open it.
+  const createAndOpen = React.useCallback(async (target: string) => {
+    if (!fs) return
+    const existing = model.resolve(target)
+    if (existing) { openInFiles(existing); return }
+    const path = notePathForTarget(target, openNote || '')
+    const seq = ++createSeq.current
+    setCreateError(null)
+    try {
+      await fs.write(path, `# ${baseName(path)}\n`)
+      if (!mountedRef.current || seq !== createSeq.current) return
+      reload()
+      openInFiles(path, { edit: true })
+    } catch (e) {
+      if (mountedRef.current && seq === createSeq.current) setCreateError(String(e))
+    }
+  }, [fs, model, openNote, openInFiles])
 
   if (!selected) {
     return <section className="wiki-view"><div className="wiki-placeholder"><p className="muted">No project yet. Create a project to start its wiki — each project (private by default) is your personal space.</p></div></section>
@@ -99,11 +125,12 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
     </div>
 
     {tab === 'files' && fs && <div className="wiki-files">
-      <WorkspaceTree key={title} fs={fs} title={title} className="wiki-tree" onOpenFile={setOpenNote} onChange={reload} activePath={openNote} fileFilter={isMd} defaultExt="md" />
+      <WorkspaceTree key={title} fs={fs} title={title} className="wiki-tree" refreshSignal={version} onOpenFile={p => openInFiles(p)} onChange={reload} activePath={openNote} fileFilter={isMd} defaultExt="md" />
       <div className="wiki-main">
+        {createError && <p className="wiki-create-error" role="alert">{createError}</p>}
         {openNote
-          ? <React.Suspense fallback={<div className="wiki-pane-msg muted">Loading note…</div>}><WikiNote fs={fs} path={openNote} backlinks={model.backlinks[openNote] || []} resolve={model.resolve} onOpenNote={openInFiles} onClose={() => setOpenNote(null)} onSaved={reload} /></React.Suspense>
-          : <div className="wiki-placeholder"><p className="muted">Select or create a note. Link notes with <code>[[Note]]</code> — backlinks &amp; graph update automatically.</p></div>}
+          ? <React.Suspense fallback={<div className="wiki-pane-msg muted">Loading note…</div>}><WikiNote fs={fs} path={openNote} backlinks={model.backlinks[openNote] || []} resolve={model.resolve} onOpenNote={p => openInFiles(p)} onCreateNote={target => { void createAndOpen(target) }} onClose={() => { setOpenNote(null); setOpenInEdit(false) }} onSaved={reload} defaultMode={openInEdit ? 'edit' : 'preview'} /></React.Suspense>
+          : <div className="wiki-placeholder"><p className="muted">Select or create a note. Link notes with <code>[[Note]]</code> — backlinks &amp; graph update automatically. Red links create the missing note on click.</p></div>}
       </div>
     </div>}
 

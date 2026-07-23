@@ -106,3 +106,63 @@ export function planProgress(job: GraphJob): string {
   const done = jobs.filter(node => states.get(node.id) === 'done').length
   return `${done}/${jobs.length}`
 }
+
+/**
+ * Plan statuses phrased as what the owner can do next.
+ *
+ * The graph engine parks failed nodes under job status `review` so the owner
+ * can rerun/correct. The bare word "review" is therefore ambiguous — inspect
+ * node_states and say the real next step.
+ */
+export function planStatusLabel(job: Pick<GraphJob, 'status' | 'node_states'>): string {
+  switch (job.status) {
+    case 'queued': return 'Draft — editable'
+    case 'running': return 'Running…'
+    case 'review': {
+      const states = job.node_states ?? []
+      if (states.some(state => state.status === 'failed')) return 'Step failed — fix or rerun'
+      if (states.some(state => state.status === 'review' && state.question)) return 'Needs your answer'
+      if (states.some(state => state.status === 'review')) return 'A step needs your review'
+      if (states.length > 0 && states.every(state => state.status === 'done')) return 'Ready to approve'
+      return 'Needs your review'
+    }
+    case 'done': return 'Done'
+    case 'failed': return 'Failed'
+    default: return job.status.replaceAll('_', ' ')
+  }
+}
+
+/**
+ * Visual tone for the status chip. Failed steps keep job.status=`review` so
+ * the owner can act, but the chip should still read as a problem, not a soft
+ * "please approve" yellow.
+ */
+export function planStatusTone(job: Pick<GraphJob, 'status' | 'node_states'>): string {
+  if (job.status === 'review' && (job.node_states ?? []).some(state => state.status === 'failed')) {
+    return 'failed'
+  }
+  return job.status
+}
+
+/**
+ * Why the Tasks-row merge surface cannot approve yet.
+ *
+ * Final approve is the local merge, but only once every step is done. The graph
+ * engine also parks failed / decision-hold steps under job status `review`, so
+ * a single static "still need review" line misleads when the real next step is
+ * fix/rerun or answer a question. Null when every node is done (ready to merge).
+ */
+export function planMergeBlockedNote(job: Pick<GraphJob, 'node_states'>): string | null {
+  const states = job.node_states ?? []
+  if (states.length > 0 && states.every(state => state.status === 'done')) return null
+  if (states.some(state => state.status === 'failed')) {
+    return 'A step failed — open the plan to fix or rerun it before approving.'
+  }
+  if (states.some(state => state.status === 'review' && state.question)) {
+    return 'A step is waiting on your answer — open the plan to reply before approving.'
+  }
+  if (states.some(state => state.status === 'review')) {
+    return 'A step still needs your review — open the plan to approve it first.'
+  }
+  return 'Some jobs in this plan are not finished yet — open the plan to continue.'
+}

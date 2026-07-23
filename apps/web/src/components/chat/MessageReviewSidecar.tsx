@@ -34,6 +34,13 @@ function statusLabel(r?: MessageReview | null): string {
 	return r.status;
 }
 
+/** Head control label - never smash "Validate" into the summary. */
+export function reviewTitleAriaLabel(summary: string, expanded: boolean): string {
+	const detail = (summary || "").trim() || "sidecar review";
+	const action = expanded ? "Collapse" : "Expand";
+	return `Validate, ${detail}. ${action}`;
+}
+
 export function MessageReviewSidecar({
 	token,
 	message,
@@ -270,9 +277,12 @@ export function MessageReviewSidecar({
 							type="button"
 							className="review-title"
 							onClick={() => setExpanded((v) => !v)}
+							aria-expanded={expanded}
+							aria-label={reviewTitleAriaLabel(summary, expanded)}
 						>
 							<strong>Validate</strong>
-							<small>{summary}</small>
+							{/* Leading space keeps accessible fallback from reading ValidatePi. */}
+							<small> {summary}</small>
 						</button>
 						<div className="review-head-actions">
 							<span className={`review-status ${selected?.status || "ready"}`}>

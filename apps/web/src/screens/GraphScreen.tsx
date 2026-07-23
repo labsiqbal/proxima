@@ -18,6 +18,7 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { Dropdown } from '../components/ui/Dropdown'
+import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
 import { IconTrash } from '../components/shell/icons'
@@ -46,6 +47,7 @@ import type {
   WorkflowGraph,
   WorkflowInput,
 } from '../types'
+import { planStatusLabel, planStatusTone } from '../components/tasks/planProjection'
 import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
@@ -53,19 +55,6 @@ const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
 function outputText(state?: GraphNodeState): string {
   if (state?.output == null) return ''
   return typeof state.output === 'string' ? state.output : JSON.stringify(state.output, null, 2)
-}
-
-/** Plan statuses phrased as what the owner can do next — "kok gak bisa diedit?" should
- *  be answered by the label itself, not by trial and error. */
-function planStatusLabel(status: GraphJob['status']): string {
-  switch (status) {
-    case 'queued': return 'Draft — editable'
-    case 'running': return 'Running…'
-    case 'review': return 'Needs your review'
-    case 'done': return 'Done'
-    case 'failed': return 'Failed'
-    default: return statusLabel(status)
-  }
 }
 
 const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -121,6 +110,32 @@ function wouldCycle(graph: WorkflowGraph, from: string, to: string): boolean {
   }
   return false
 }
+
+// Module-level so React Strict Mode remounts share one in-flight create. A plain
+// component ref is wiped on remount and would POST /api/graph/jobs twice — the
+// live failure mode behind duplicate todo-storage-decision rows on Tasks.
+const inflightDraftCreates = new WeakMap<GraphWorkflowDraft, Promise<GraphJob>>()
+
+/**
+ * Start at most one createGraphJob per draft object. Strict Mode effect re-runs
+ * and parent-prop churn reuse the same promise; failures drop the entry so retry
+ * can try again.
+ */
+export function getOrStartDraftCreate(
+  draft: GraphWorkflowDraft,
+  start: () => Promise<GraphJob>,
+): Promise<GraphJob> {
+  const existing = inflightDraftCreates.get(draft)
+  if (existing) return existing
+  const promise = start().catch(err => {
+    inflightDraftCreates.delete(draft)
+    throw err
+  })
+  inflightDraftCreates.set(draft, promise)
+  return promise
+}
+
+
 
 
 export function GraphScreen({
@@ -280,6 +295,8 @@ export function GraphScreen({
   React.useEffect(() => { void refreshList() }, [refreshList])
 
   React.useEffect(() => {
+    // Opening is idempotent (GET + set state). Do not once-claim at module scope:
+    // Strict Mode discards the first loadJob via loadSeq, so the re-run must open again.
     if (!pendingJobId) return
     openJob(pendingJobId)
     onPendingConsumed?.()
@@ -287,17 +304,21 @@ export function GraphScreen({
 
   React.useEffect(() => {
     if (!pendingDraft) return
+    const draft = pendingDraft
     const seq = ++draftSeq.current
-    onDraftConsumed?.()
     setBusy('create')
     setError('')
-    void createGraphJob(token, {
-      title: pendingDraft.name,
-      graph: pendingDraft.graph,
+    // One POST per draft object (Strict Mode remounts reuse the promise). Parent
+    // draft prop is cleared only after this instance applies the created job so a
+    // remount can still attach and open the editor.
+    void getOrStartDraftCreate(draft, () => createGraphJob(token, {
+      title: draft.name,
+      graph: draft.graph,
       project_slug: activeProject?.slug,
       profile_id: profileId,
-    }).then(created => {
+    })).then(created => {
       if (!mounted.current || seq !== draftSeq.current) return
+      onDraftConsumed?.()
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -305,7 +326,10 @@ export function GraphScreen({
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       setNotice('Architect draft ready. Review or edit the frozen plan before starting.')
     }).catch(cause => {
-      if (mounted.current && seq === draftSeq.current) setError(String(cause))
+      if (mounted.current && seq === draftSeq.current) {
+        onDraftConsumed?.()
+        setError(String(cause))
+      }
     }).finally(() => {
       if (mounted.current && seq === draftSeq.current) setBusy(null)
     })
@@ -428,8 +452,23 @@ export function GraphScreen({
   React.useEffect(() => {
     if (!pendingTest || !chatOpen || !plan) return
     const index = plan.nodes.findIndex(node => node.id === pendingTest)
-    if (index >= 0) chatRef.current?.runThrough(index, plan.nodes[index].name || pendingTest)
-    setPendingTest(null)
+    if (index < 0) { setPendingTest(null); return }
+    let cancelled = false
+    let frames = 0
+    // The authoring chat mounts with chatOpen; retry a few frames until its
+    // imperative handle exists so Test in chat is not dropped on first paint.
+    const tryRun = () => {
+      if (cancelled) return
+      if (!chatRef.current) {
+        if (frames++ < 30) requestAnimationFrame(tryRun)
+        else setPendingTest(null)
+        return
+      }
+      chatRef.current.runThrough(index, plan.nodes[index].name || pendingTest)
+      setPendingTest(null)
+    }
+    tryRun()
+    return () => { cancelled = true }
   }, [pendingTest, chatOpen, plan])
 
   async function deletePlan(item: { id: number; title: string }) {
@@ -686,6 +725,20 @@ export function GraphScreen({
   }
 
   const allDone = !!job?.node_states.length && job.node_states.every(state => state.status === 'done')
+  // Mirror ChangesReview: final approve with an empty diff is "accept & close",
+  // not "merge changes" (agent finished with no file edits).
+  const [emptyReviewDiff, setEmptyReviewDiff] = React.useState(false)
+  React.useEffect(() => {
+    if (!job || job.status !== 'review' || !job.worktree || !allDone) {
+      setEmptyReviewDiff(false)
+      return
+    }
+    let cancelled = false
+    getJobDiff(token, job.id)
+      .then(body => { if (!cancelled) setEmptyReviewDiff(body.files.length === 0) })
+      .catch(() => { if (!cancelled) setEmptyReviewDiff(false) })
+    return () => { cancelled = true }
+  }, [token, job?.id, job?.status, job?.worktree?.status, allDone])
 
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
 
@@ -741,7 +794,7 @@ export function GraphScreen({
                 <span className="graph-card-glyph" aria-hidden="true"><i /><i /><i /></span>
                 <span className="graph-card-meta">
                   <strong>{item.title}</strong>
-                  <small className={`graph-card-status st-${item.status}`}>{planStatusLabel(item.status)}</small>
+                  <small className={`graph-card-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</small>
                 </span>
               </button>
               <div className="graph-card-actions">
@@ -833,7 +886,7 @@ export function GraphScreen({
       />}
       <h1>{job?.title ?? 'Recipes'}</h1>
       {job && <>
-        <span className={`graph-status st-${job.status}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job.status)}</span>
+        <span className={`graph-status st-${planStatusTone(job)}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
       </>}
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
@@ -855,18 +908,51 @@ export function GraphScreen({
             {busy === 'start' ? 'Starting…' : 'Approve plan & start'}
           </button>
         </>}
-        {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act('approve-job', () => approveGraphJob(token, job.id))} disabled={!!busy}>
-          {/* A repo plan's final approve is also the local merge (slice 4) — say so. */}
+        {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act(
+          'approve-job',
+          () => approveGraphJob(token, job.id),
+          // Same door as ChangesReview: final approve is the local merge for repo plans
+          // (or a quiet close when the agent left no file changes).
+          job.worktree
+            ? (emptyReviewDiff
+              ? `Closed with no file changes on ${job.worktree.base_branch}.`
+              : `Changes merged into ${job.worktree.base_branch}.`)
+            : 'Final result approved.',
+        )} disabled={!!busy}>
+          {/* A repo plan's final approve is also the local merge (slice 4) — say so,
+              unless the diff is empty (accept & close, matching ChangesReview). */}
           {busy === 'approve-job'
-            ? (job.worktree ? 'Merging…' : 'Approving…')
-            : (job.worktree ? 'Approve & merge changes' : 'Approve final result')}
+            ? (job.worktree ? (emptyReviewDiff ? 'Closing…' : 'Merging…') : 'Approving…')
+            : (job.worktree
+              ? (emptyReviewDiff ? 'Accept & close' : 'Approve & merge changes')
+              : 'Approve final result')}
         </button>}
       </div>
     </header>
 
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
-    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} onChanged={() => void loadJob(job.id)} />}
+    {/* Durable merge/push outcome so a reopened Done plan still shows where the
+        changes landed - the header Approve button disappears after the merge. */}
+    {job?.worktree?.status === 'merged' && <p className="changes-note is-merged graph-merge-note">
+      {job.worktree.merge_commit && job.worktree.base_commit && job.worktree.merge_commit === job.worktree.base_commit
+        ? <>✓ Closed with no file changes on <code>{job.worktree.base_branch}</code>{job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}</>
+        : <>✓ Changes merged into <code>{job.worktree.base_branch}</code>{job.worktree.merge_commit && <> · <code>{job.worktree.merge_commit.slice(0, 7)}</code></>}</>}
+    </p>}
+    {job?.worktree?.status === 'merged' && job.worktree.push_status === 'pushed' && <p className="changes-note is-pushed graph-merge-note">
+      ↑ Pushed to <code>{job.worktree.push_remote}</code>
+      {job.worktree.push_web_url && <> · <a href={job.worktree.push_web_url} target="_blank" rel="noreferrer">open repo</a></>}
+    </p>}
+    {job?.worktree?.status === 'merged' && job.worktree.push_status === 'failed' && <div className="changes-push-failed graph-merge-note" role="alert">
+      <p><strong>Merged into your project, but pushing to the remote failed.</strong></p>
+      {job.worktree.push_error && <pre className="changes-push-error">{job.worktree.push_error}</pre>}
+      <p>
+        Nothing was undone - the changes are safely in <code>{job.worktree.base_branch}</code>.
+        Fix the cause with your own git, then retry from the task Changes panel.
+        {job.worktree.push_web_url && <> <a href={job.worktree.push_web_url} target="_blank" rel="noreferrer">Open the repo</a>.</>}
+      </p>
+    </div>}
+    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={() => void loadJob(job.id)} />}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace" style={{

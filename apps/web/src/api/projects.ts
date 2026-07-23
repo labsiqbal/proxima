@@ -3,6 +3,12 @@ import type { AreaRemote, Project, ProjectAreas } from '../types'
 
 export const listProjects = (token: string) => api<{ projects: Project[] }>('/api/projects', token)
 export const listProjectAreas = (token: string, slug: string) => api<ProjectAreas>(`/api/projects/${slug}/areas`, token)
+// Manually register a code area (folder need not be a git repo yet).
+export const addProjectArea = (token: string, slug: string, body: { rel_path: string }) =>
+  api<{ id: number; rel_path: string; source: string }>(`/api/projects/${slug}/areas`, token, { method: 'POST', body: JSON.stringify(body) })
+// Re-scan the project folder for git repos and refresh auto-detected areas.
+export const detectProjectAreas = (token: string, slug: string) =>
+  api<ProjectAreas & { detect: { detected: string[]; added: string[]; removed: string[] } }>(`/api/projects/${slug}/areas/detect`, token, { method: 'POST' })
 // The T9 per-code-area push-after-merge toggle. Enabling needs a detected git
 // remote - the server refuses otherwise (the UI never offers it then).
 export const updateProjectArea = (token: string, slug: string, areaId: number, body: { push_on_merge: boolean }) =>

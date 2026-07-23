@@ -1,7 +1,58 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+# Some runners (notably Pi) print a version banner + full skills catalog before
+# the real answer. That noise poisons main chat, collab previews, and synthesis.
+# Real answers may start with ## Heading OR **bold** / plain prose (no second ##),
+# so the dump must end on skill path lines/bullets and --- separators, not only on ##.
+# Pi ACP has used both compact markdown (## Skills - /path) and a plain multiline
+# catalog (Skills\n/path\n/path). Match both.
+_SKILLS_ITEM = (
+    r"(?:"
+    r"[ \t]*-[ \t]+/\S+"  # markdown bullet paths
+    r"|[ \t]*\n[ \t]*/\S+"  # bare absolute path lines
+    r"|\s"  # whitespace between items only (stops at non-ws answer text)
+    r")"
+)
+_PI_PREAMBLE = re.compile(
+    r"(?is)^\s*pi\s+v[\d.]+\b"
+    r"(?:"
+    r"\s*---"
+    r"|\s*##\s+skills\b" + _SKILLS_ITEM + r"+"
+    r"|\s*skills\b" + _SKILLS_ITEM + r"+"
+    r")*"
+    r"\s*(?:---\s*)?"
+)
+_SKILLS_HEADING = re.compile(
+    r"(?is)^\s*(?:##\s+)?skills\b" + _SKILLS_ITEM + r"*"
+    r"(?:---\s*)?"
+)
+_UPDATE_NOTICE = re.compile(
+    r"(?is)^\s*New version available:\s*\S+"
+    r"(?:\s*\([^)]*\))?"
+    # Backticked command (older Pi) or bare rest-of-line (current Pi ACP).
+    r"(?:\.\s*Run:\s*(?:`[^`]+`|[^\n]+))?"
+    r"\s*"
+)
+
+
+def strip_runner_preamble(text: str | None) -> str:
+    """Drop leading runner banners/skills dumps; keep the real answer body."""
+    if not text:
+        return ""
+    cleaned = text.strip()
+    for _ in range(3):
+        nxt = _PI_PREAMBLE.sub("", cleaned, count=1)
+        nxt = _SKILLS_HEADING.sub("", nxt, count=1)
+        nxt = _UPDATE_NOTICE.sub("", nxt, count=1)
+        nxt = nxt.lstrip(" \t\r\n-")
+        if nxt == cleaned:
+            break
+        cleaned = nxt
+    return cleaned.strip()
 
 
 def loads_list(raw: str | None) -> list[dict[str, Any]]:
@@ -89,7 +140,7 @@ def build_brainstorm_child_prompt(user_prompt: str, profile: dict[str, Any], ind
 
 def build_brainstorm_synthesis_prompt(user_prompt: str, outputs: list[dict[str, Any]]) -> str:
     parts = "\n\n".join(
-        f"## {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     return (
@@ -130,13 +181,13 @@ def build_debate_rebuttal_prompt(user_prompt: str, prior: dict[str, Any], profil
         "4. What your side concedes.\n\n"
         f"Participant: {profile_label(profile)}\n\n"
         f"Original user prompt:\n{user_prompt}\n\n"
-        f"First stance from {prior.get('profile_name')} ({prior.get('runner_id')}):\n{prior.get('content', '').strip()}"
+        f"First stance from {prior.get('profile_name')} ({prior.get('runner_id')}):\n{strip_runner_preamble(prior.get('content', ''))}"
     )
 
 
 def build_debate_followup_prompt(user_prompt: str, outputs: list[dict[str, Any]], profile: dict[str, Any], role: str) -> str:
     transcript = "\n\n".join(
-        f"## {collaboration_round_label('debate', o.get('role'))} — {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {collaboration_round_label('debate', o.get('role'))} — {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     if role == "counter_rebuttal":
@@ -157,7 +208,7 @@ def build_debate_followup_prompt(user_prompt: str, outputs: list[dict[str, Any]]
 
 def build_debate_synthesis_prompt(user_prompt: str, outputs: list[dict[str, Any]]) -> str:
     parts = "\n\n".join(
-        f"## {o.get('role')} — {o.get('profile_name')} ({o.get('runner_id')})\n{o.get('content', '').strip()}"
+        f"## {o.get('role')} — {o.get('profile_name')} ({o.get('runner_id')})\n{strip_runner_preamble(o.get('content', ''))}"
         for o in outputs
     )
     return (

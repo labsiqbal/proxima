@@ -7,18 +7,21 @@ import remarkGfm from 'remark-gfm'
 import type { FsAdapter } from '../../api/fsAdapter'
 import { baseName, linkifyWiki } from './wikiGraph'
 
-export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onClose, onSaved }: {
+export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNote, onClose, onSaved, defaultMode = 'preview' }: {
   fs: FsAdapter
   path: string
   backlinks: string[]
   resolve: (name: string) => string | null
   onOpenNote: (path: string) => void
+  /** Create-and-open a missing [[wikilink]] target (Obsidian-style). */
+  onCreateNote?: (target: string) => void
   onClose: () => void
   onSaved: () => void
+  defaultMode?: 'edit' | 'preview'
 }) {
   const [content, setContent] = React.useState('')
   const [dirty, setDirty] = React.useState(false)
-  const [mode, setMode] = React.useState<'edit' | 'preview'>('preview')
+  const [mode, setMode] = React.useState<'edit' | 'preview'>(defaultMode)
   const [status, setStatus] = React.useState('loading')
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
   const requestSeq = React.useRef(0)
@@ -35,7 +38,7 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onClose, on
 
   React.useEffect(() => {
     const seq = ++requestSeq.current
-    setStatus('loading'); setDirty(false)
+    setStatus('loading'); setDirty(false); setMode(defaultMode)
     fs.read(path)
       .then(b => {
         if (!mountedRef.current || seq !== requestSeq.current) return
@@ -45,7 +48,7 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onClose, on
       .catch(e => {
         if (mountedRef.current && seq === requestSeq.current) setStatus(String(e))
       })
-  }, [fs, path])
+  }, [fs, path, defaultMode])
 
   const save = async () => {
     if (status === 'loading' || status === 'saving') return
@@ -94,10 +97,20 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onClose, on
               if (href && href.startsWith('#wiki:')) {
                 const target = decodeURIComponent(href.slice(6))
                 const tp = resolve(target)
-                return <a className={`wikilink ${tp ? '' : 'missing'}`} href="#" onClick={e => { e.preventDefault(); if (tp) onOpenNote(tp) }}>{children}</a>
+                const label = String(typeof children === 'string' ? children : target).trim() || target.trim()
+                return <a
+                  className={`wikilink ${tp ? '' : 'missing'}`}
+                  href="#"
+                  title={tp ? `Open ${baseName(tp)}` : `Create note “${label}”`}
+                  onClick={e => {
+                    e.preventDefault()
+                    if (tp) onOpenNote(tp)
+                    else onCreateNote?.(target)
+                  }}
+                >{children}</a>
               }
               const tp = relativeWikiPath(href)
-              if (tp) return <a className="wikilink" href="#" onClick={e => { e.preventDefault(); onOpenNote(tp) }}>{children}</a>
+              if (tp) return <a className="wikilink" href="#" title={`Open ${baseName(tp)}`} onClick={e => { e.preventDefault(); onOpenNote(tp) }}>{children}</a>
               return <a href={href} target="_blank" rel="noreferrer">{children}</a>
             }
           }}>{linkifyWiki(content)}</ReactMarkdown></div>}

@@ -2,7 +2,7 @@ import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { listAudit, type AuditEntry } from '../api/audit'
-import { getDebugLogs, reapOrphanedJobs, type DebugLogs } from '../api/debug'
+import { debugLogLineLabel, getDebugLogs, reapOrphanedJobs, type DebugLogs } from '../api/debug'
 import { cancelRun } from '../api/runs'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
@@ -25,6 +25,7 @@ import {
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
 import type { Profile, Project, Runner, User } from '../types'
+import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
 
@@ -160,12 +161,12 @@ function PermissionsPanel({ token }: { token: string }) {
     try { const r = await savePermissionSettings(token, !on); setOn(r.auto_approve) } catch { /* ignore */ } finally { setBusy(false) }
   }
   return <div className="panel"><div className="panel-head"><h3>Agent permissions</h3><span>{on ? 'auto-approve' : 'ask each time'}</span></div>
-    <p className="muted">When on, agents run tools (commands, file edits) without asking — no approval cards. Off = you approve each sensitive action. Faster, but removes the safety prompt.</p>
-    <button className={`toggle-pill ${on ? 'on' : ''}`} onClick={() => void toggle()} disabled={busy}><span className="toggle-knob" />{busy ? '…' : on ? 'Auto-approve on' : 'Ask each time'}</button>
+    <p className="muted">When on, agents run tools (commands, file edits) without asking - no approval cards. Off = you approve each sensitive action. Faster, but removes the safety prompt.</p>
+    <button type="button" className={`toggle-pill ${on ? 'on' : ''}`} onClick={() => void toggle()} disabled={busy} aria-pressed={on} aria-label={on ? 'Auto-approve on' : 'Ask each time'}><span className="toggle-knob" aria-hidden="true" />{busy ? '…' : on ? 'Auto-approve on' : 'Ask each time'}</button>
   </div>
 }
 import { THEMES, FONTS, FONT_SIZE_MIN, FONT_SIZE_MAX, getTheme, getFont, getFontSize, applyTheme, applyFont, applyFontSize, type ThemeKey, type FontKey } from '../theme'
-import { notifySupported, notifyEnabled, enableNotifications, setNotifyPref } from '../lib/notify'
+import { notifySupported, notifyEnabled, notifyBlocked, notifyEnableFailureHint, enableNotifications, setNotifyPref } from '../lib/notify'
 import { getGoalMaxIter, setGoalMaxIter } from '../lib/goal'
 import { Dropdown } from '../components/ui/Dropdown'
 
@@ -174,6 +175,35 @@ const auditTone = (a: string) => /error|delete|remove|revoke/.test(a) ? 'danger'
 const shortText = (s?: string | null, max = 120) => {
   const clean = (s || '').replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
+}
+
+/** Pretty-print audit metadata JSON for the owner-facing log (not raw dumps). */
+export function formatAuditMeta(raw: string | null | undefined, max = 160): string {
+  const text = (raw || '').trim()
+  if (!text || text === '{}') return ''
+  let value: unknown = text
+  try { value = JSON.parse(text) } catch { return shortText(text, max) }
+  // Historical bug: settings audits stored json.dumps(obj) inside {"path": "..."}.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    const keys = Object.keys(obj)
+    if (keys.length === 1 && keys[0] === 'path' && typeof obj.path === 'string') {
+      const pathVal = obj.path.trim()
+      if ((pathVal.startsWith('{') && pathVal.endsWith('}')) || (pathVal.startsWith('[') && pathVal.endsWith(']'))) {
+        try { value = JSON.parse(pathVal) } catch { return shortText(pathVal, max) }
+      } else {
+        return shortText(pathVal, max)
+      }
+    }
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const parts = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    return shortText(parts.join(' · ') || text, max)
+  }
+  if (typeof value === 'string') return shortText(value, max)
+  return shortText(JSON.stringify(value), max)
 }
 type SettingsSectionKey = 'account' | 'agents' | 'knowledge' | 'media' | 'remote' | 'diagnostics'
 
@@ -185,6 +215,19 @@ const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string 
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
 ]
+
+/** Spaced accessible name so title+hint do not smash (Account & PreferencesAccount…). */
+export function settingsMenuItemAriaLabel(label: string, hint: string): string {
+  const l = (label || '').trim()
+  const h = (hint || '').trim()
+  return h ? `${l}. ${h}` : l
+}
+
+/** Theme swatch name with selected state for assistive tech. */
+export function themeSwatchAriaLabel(label: string, selected: boolean): string {
+  const name = (label || '').trim() || 'Theme'
+  return selected ? `${name}, selected` : name
+}
 
 function DebugLogsPanel({ token }: { token: string }) {
   const [data, setData] = React.useState<DebugLogs | null>(null)
@@ -261,8 +304,8 @@ function DebugLogsPanel({ token }: { token: string }) {
   }
 
   return <div className="panel debug-panel">
-    <div className="panel-head"><h3>Debug logs</h3><span>{busy ? 'loading' : `${lineCount} lines`}</span></div>
-    <p className="muted">Service journal, queued/running sessions, and recent runs for quick error checks.</p>
+    <div className="panel-head"><h3>Debug logs</h3><span>{busy ? 'loading' : debugLogLineLabel(lineCount)}</span></div>
+    <p className="muted">Service journal{data?.serviceUnit ? ` (${data.serviceUnit})` : ''}, queued/running sessions, and recent runs for quick error checks.</p>
     <div className="debug-toolbar">
       <button className="ghost-button" type="button" onClick={() => void load()} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</button>
       <Dropdown value={String(limit)} onChange={v => setLimit(Number(v))} minWidth={130} options={[120, 240, 500, 1000].map(n => ({ value: String(n), label: `${n} lines` }))} />
@@ -300,6 +343,7 @@ function DebugLogsPanel({ token }: { token: string }) {
       {runs.length === 0 && <p className="muted">No recent runs.</p>}
     </div>
     {data?.logError && <p className="error-text">{data.logError}</p>}
+    {data?.logHint && !data?.logError && <p className="muted">{data.logHint}</p>}
     {error && <p className="error-text">{error}</p>}
     <pre className="debug-log">{data?.logs || 'No journal output.'}</pre>
   </div>
@@ -348,13 +392,16 @@ function AuditPanel({ token }: { token: string }) {
       <input className="ui-select audit-search" placeholder="Filter by actor, action, target…" value={q} onChange={e => setQ(e.target.value)} />
       <div className="audit-list scrollable">
         {rows.length === 0 && <p className="muted">No entries.</p>}
-        {rows.map(e => <div className="audit-row" key={e.id}>
-          <span className="audit-time">{fmtTime(e.created_at)}</span>
-          <span className="audit-actor">{e.actor || 'system'}</span>
-          <span className={`audit-action ${auditTone(e.action)}`}>{e.action}</span>
-          <span className="audit-target" title={`${e.target_type}:${e.target_id}`}>{e.target_type}:{e.target_id}</span>
-          {e.metadata && e.metadata !== '{}' ? <span className="audit-meta" title={e.metadata}>{e.metadata}</span> : <span />}
-        </div>)}
+        {rows.map(e => {
+          const meta = formatAuditMeta(e.metadata)
+          return <div className="audit-row" key={e.id}>
+            <span className="audit-time">{fmtTime(e.created_at)}</span>
+            <span className="audit-actor">{e.actor || 'system'}</span>
+            <span className={`audit-action ${auditTone(e.action)}`}>{e.action}</span>
+            <span className="audit-target" title={`${e.target_type}:${e.target_id}`}>{e.target_type}:{e.target_id}</span>
+            {meta ? <span className="audit-meta" title={e.metadata}>{meta}</span> : <span />}
+          </div>
+        })}
       </div>
       {error && <p className="error-text">{error}</p>}
     </div></div>}
@@ -483,22 +530,27 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   }
   return <div className="panel"><div className="panel-head"><h3>Password</h3><span>security</span></div>
     <form className="settings-rows auth-change-form" onSubmit={submit}>
-      <input className="auth-input" type="password" placeholder="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
-      <input className="auth-input" type="password" placeholder="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
-      <input className="auth-input" type="password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
-      {msg && <p className={msg.ok ? 'muted' : 'auth-error'}>{msg.text}</p>}
+      {/* Hidden username satisfies password-manager / a11y heuristics for a single-owner account. */}
+      <input type="text" name="username" autoComplete="username" value="owner" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
+      <input className="auth-input" type="password" name="current-password" placeholder="Current password" aria-label="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
+      <input className="auth-input" type="password" name="new-password" placeholder="New password" aria-label="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
+      <input className="auth-input" type="password" name="confirm-password" placeholder="Confirm new password" aria-label="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
+      {msg && <p className={msg.ok ? 'muted' : 'auth-error'} role={msg.ok ? undefined : 'alert'}>{msg.text}</p>}
       <button className="primary-button" type="submit" disabled={busy || !cur || !next}>{busy ? 'Changing…' : 'Change password'}</button>
     </form>
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
   const [fontSize, setFontSize] = React.useState<number>(getFontSize())
   const [notif, setNotif] = React.useState(notifyEnabled())
   const [notifBusy, setNotifBusy] = React.useState(false)
+  const [notifHint, setNotifHint] = React.useState<string | null>(
+    () => (notifyBlocked() ? notifyEnableFailureHint('denied') : null),
+  )
   const [goalMax, setGoalMax] = React.useState(getGoalMaxIter())
   const mountedRef = React.useRef(true)
   const notifSeq = React.useRef(0)
@@ -513,12 +565,25 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
 
   async function toggleNotif() {
     if (notifBusy) return
-    if (notif) { setNotifyPref(false); setNotif(false); return }
+    if (notif) {
+      setNotifyPref(false)
+      setNotif(false)
+      setNotifHint(null)
+      return
+    }
+    // Already blocked by the browser — don't pretend the toggle can succeed.
+    if (notifyBlocked()) {
+      setNotifHint(notifyEnableFailureHint('denied'))
+      return
+    }
     const seq = ++notifSeq.current
     setNotifBusy(true)
+    setNotifHint(null)
     try {
       const next = await enableNotifications()
-      if (mountedRef.current && seq === notifSeq.current) setNotif(next)
+      if (!mountedRef.current || seq !== notifSeq.current) return
+      setNotif(next)
+      if (!next) setNotifHint(notifyEnableFailureHint())
     } finally {
       if (mountedRef.current && seq === notifSeq.current) setNotifBusy(false)
     }
@@ -540,14 +605,28 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       {/* AGPL §13: network users must be able to get the source of the running app. */}
       {sourceLink}
     </div></div>
-  const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
-  const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <button className={`toggle-pill ${notif ? 'on' : ''}`} onClick={() => void toggleNotif()} disabled={notifBusy}><span className="toggle-knob" />{notifBusy ? 'Requesting…' : notif ? 'On' : 'Off'}</button> : <p className="muted">Not supported in this browser.</p>}</div>
+  const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid" role="group" aria-label="Theme">{THEMES.map(t => {
+    const selected = theme === t.key
+    return <button key={t.key} className={`theme-swatch ${selected ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button" aria-pressed={selected} aria-label={themeSwatchAriaLabel(t.label, selected)}><span className="swatch-pv" style={{ background: t.surface }} aria-hidden="true"><i style={{ background: t.accent }} /></span><small aria-hidden="true">{t.label}</small></button>
+  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
+  const notifBlocked = notifyBlocked()
+  const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <>
+    <button
+      type="button"
+      className={`toggle-pill ${notif ? 'on' : ''}${notifBlocked && !notif ? ' blocked' : ''}`}
+      onClick={() => void toggleNotif()}
+      disabled={notifBusy}
+      aria-pressed={notif}
+      aria-label={notifBlocked && !notif ? 'Desktop notifications blocked by browser' : `Desktop notifications ${notif ? 'on' : 'off'}`}
+    ><span className="toggle-knob" aria-hidden="true" />{notifBusy ? 'Requesting…' : notif ? 'On' : notifBlocked ? 'Blocked' : 'Off'}</button>
+    {notifHint && <p className="auth-error" role="alert">{notifHint}</p>}
+  </> : <p className="muted">Not supported in this browser.</p>}</div>
   const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><SatpamPanel token={token} /><PermissionsPanel token={token} /></>
 
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : activeSection === 'agents'
-      ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
+      ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : activeSection === 'media'
@@ -566,9 +645,10 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
           className={`settings-menu-item ${activeSection === section.key ? 'active' : ''}`}
           onClick={() => setActiveSection(section.key)}
           aria-current={activeSection === section.key ? 'page' : undefined}
+          aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
         >
-          <strong>{section.label}</strong>
-          <small>{section.hint}</small>
+          <strong aria-hidden="true">{section.label}</strong>
+          <small aria-hidden="true">{section.hint}</small>
         </button>)}
       </div>
     </aside>

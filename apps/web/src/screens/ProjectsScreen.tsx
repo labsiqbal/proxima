@@ -135,11 +135,21 @@ export function ProjectsScreen({ token, projects, activeProject, onActiveProject
               </span>
             </button>
             <div className="wf-card-foot">
-              <button className="ghost-button" disabled={!!busy} onClick={() => void rename(project)}>
+              <button
+                className="ghost-button"
+                disabled={!!busy}
+                aria-label={`Rename project ${project.name}`}
+                onClick={() => void rename(project)}
+              >
                 {working ? 'Working…' : 'Rename'}
               </button>
-              <button className="ghost-button" disabled={!!busy} onClick={() => setSettingsFor(project)}>
-                Settings
+              <button
+                className="ghost-button"
+                disabled={!!busy}
+                aria-label={`Code areas for ${project.name}`}
+                onClick={() => setSettingsFor(project)}
+              >
+                Code areas
               </button>
             </div>
           </div>

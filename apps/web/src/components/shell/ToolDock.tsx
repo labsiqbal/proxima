@@ -43,6 +43,16 @@ export function ToolDock({ token, project, onOpenSettings }: {
     return () => window.removeEventListener('keydown', dismiss)
   }, [open])
 
+  // Tell the shell a tool panel is open so main content can reserve space for
+  // it. Without this the overlay covers right-edge primary actions (e.g.
+  // Design Studio's "Generate →") while Files/Terminal/Preview is open.
+  React.useEffect(() => {
+    const shell = document.querySelector('.app-shell')
+    if (!shell) return
+    shell.classList.toggle('tool-open', open != null)
+    return () => { shell.classList.remove('tool-open') }
+  }, [open])
+
   // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
   // so far-away screens ask for it with an event instead of prop-drilling
   // through the whole shell. detail.path highlights the file in the tree.

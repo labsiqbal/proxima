@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .runner_specs import runner_spec
+from .acp import format_rpc_error
 from . import wiki_memory
 from . import app_settings
 from . import features
@@ -39,6 +40,7 @@ from .prompt_collaborations import (
     final_header,
     format_final,
     loads_list,
+    strip_runner_preamble,
 )
 from . import graph as graph_mod
 from . import workflows as wf
@@ -235,7 +237,7 @@ class RunWorker:
             if str(cur["kind"]).startswith("collab_"):
                 self._fail_collaboration_run(run_id, session_id, project_id, reason)
                 return
-            salvaged = self._reconstruct_text(run_id)
+            salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
             if salvaged:
                 db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
             self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
@@ -523,6 +525,9 @@ class RunWorker:
             profile = self._collaboration_profile(_as_int(run.get("profile_id") or 0))
             outputs = loads_list(collab["child_outputs"])
             outputs = [o for o in outputs if _as_int(o.get("run_id") or 0) != run_id]
+            # Strip runner banners/skills dumps before they land in cards or later
+            # synthesis prompts (Pi often prefixes the real answer with a catalog).
+            clean_answer = strip_runner_preamble(answer)
             if not kind.endswith("_synthesis"):
                 outputs.append({
                     "run_id": run_id,
@@ -530,7 +535,7 @@ class RunWorker:
                     "profile_name": profile.get("name") or self._agent_name(run_id) or "Agent",
                     "runner_id": profile.get("runner_id") or run.get("runner_id"),
                     "role": run.get("collaboration_role") or "participant",
-                    "content": answer,
+                    "content": clean_answer,
                 })
                 db.execute(
                     "UPDATE prompt_collaborations SET child_outputs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -542,7 +547,7 @@ class RunWorker:
             ).rowcount > 0
             if completed:
                 self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason, "kind": kind, "collaboration_id": collab_id})
-                self._emit_collaboration_child_event("completed", run, "done", answer, collab=collab, profile=profile)
+                self._emit_collaboration_child_event("completed", run, "done", clean_answer, collab=collab, profile=profile)
             collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
             if not collab:
                 return True
@@ -660,6 +665,7 @@ class RunWorker:
 
     def _fail_run_exception(self, run: dict[str, Any], detail: str) -> bool:
         """Persist an execution/setup exception iff the run is still live."""
+        detail = format_rpc_error(detail)
         db = self.app.state.worker_db
         run_id = _as_int(run["id"])
         session_id = _as_int(run["session_id"])
@@ -951,7 +957,7 @@ class RunWorker:
                 if crow and crow["parent_run_id"]:
                     synth_parent_id = _as_int(crow["parent_run_id"])
         except Exception as exc:
-            self._fail_run_exception(run, str(exc)[-2000:])
+            self._fail_run_exception(run, format_rpc_error(str(exc)[-2000:]))
             return
 
         def on_update(u: dict[str, Any]) -> None:
@@ -1098,6 +1104,9 @@ class RunWorker:
                 return
             if self.drafts.handle_draft_run(run, answer, stop_reason, self.add_event):
                 return
+            # Strip before save + auto-title so main chat and sidebar titles keep
+            # the real answer, not Pi's version/skills banner.
+            answer = strip_runner_preamble(answer)
             output_links = self.outputs.output_links_for_project(project_id, run_start_ts)
             trow = self.outputs.save_assistant_message(
                 run_id,
@@ -1202,7 +1211,7 @@ class RunWorker:
                 if str(run.get("kind", "")).startswith("collab_"):
                     self._fail_collaboration_run(run_id, session_id, project_id, reason)
                     return
-                salvaged = self._reconstruct_text(run_id)
+                salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
                 # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,
@@ -1242,7 +1251,7 @@ class RunWorker:
                 # card, not just a failed run. Fail-quiet inside.
                 self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
         except Exception as exc:
-            detail = str(exc)[-2000:]
+            detail = format_rpc_error(str(exc)[-2000:])
             self._fail_run_exception(run, detail)
         finally:
             if hb_task:

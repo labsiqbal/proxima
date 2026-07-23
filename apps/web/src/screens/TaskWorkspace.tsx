@@ -133,7 +133,7 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
             <button className="primary-button" onClick={() => void approve()} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve → Done'}</button>
           </div>)}
     {error && <div className="error-bar">{error}</div>}
-    <SatpamCard token={token} jobId={job.id} interventions={job.satpam} onChanged={updated => { setJob(updated); onChanged?.() }} />
+    <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={updated => { setJob(updated); onChanged?.() }} />
     {job.worktree && <ChangesReview
       token={token}
       jobId={job.id}

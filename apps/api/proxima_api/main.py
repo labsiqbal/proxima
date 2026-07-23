@@ -25,6 +25,7 @@ from .preview_proxy import (
     mint_preview_token,
     valid_preview_token,
 )
+from .runners import augmented_path
 from .settings import DEFAULT_CONFIG, hermes_home_for, normalize_config
 from .updates import (
     UPDATE_CHECK_INTERVAL_SECONDS,
@@ -140,6 +141,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     cfg = normalize_config(config)
+    # Align shim root with this app instance, then prime process PATH so Terminal
+    # PTYs and bare-env children see the same local bins + python→python3 shim
+    # as agent/app subprocesses built via subprocess_env.
+    os.environ.setdefault("PROXIMA_WORKSPACE_ROOT", str(cfg["workspace_root"]))
+    os.environ["PATH"] = augmented_path(os.environ.get("PATH"))
     app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
     app.state.db = connect(cfg["database_path"])
@@ -333,6 +339,8 @@ def _config_from_env() -> dict[str, Any]:
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "1").lower() in ("1", "true", "yes", "on"),
         "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
         "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "1").lower() in ("1", "true", "yes", "on"),
+        # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
+        "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
     }
 
 

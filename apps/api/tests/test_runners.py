@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
-from proxima_api.runners import RunnerDefinition, detect_runners, hermes_status, subprocess_env
+from proxima_api.runners import (
+    RunnerDefinition,
+    augmented_path,
+    detect_runners,
+    ensure_python_compat_shim,
+    hermes_status,
+    subprocess_env,
+)
 
 
 def _make_hermes_bin(tmp_path: Path) -> str:
@@ -27,6 +35,59 @@ def test_hermes_status_ready_when_bin_and_home_present(tmp_path):
     assert st["binary"].endswith("/hermes")
     assert st["home"] == str(home)
     assert st["guidance"] == ""
+
+
+def test_hermes_status_not_ready_when_auth_requires_relogin(tmp_path):
+    import json
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    (home / "auth.json").write_text(json.dumps({
+        "active_provider": "xai-oauth",
+        "providers": {
+            "xai-oauth": {
+                "last_auth_error": {
+                    "message": 'xAI token refresh failed. Response: {"error":"invalid_grant","error_description":"Refresh token has been revoked"}',
+                    "relogin_required": True,
+                }
+            }
+        },
+    }))
+    bindir = _make_hermes_bin(tmp_path)
+    st = hermes_status(source_home=str(home), path_env=bindir)
+    assert st["ready"] is False
+    assert st["home"] == str(home)
+    assert "expired" in st["guidance"].lower() or "revoked" in st["guidance"].lower()
+    assert "hermes -z" in st["guidance"] or "hermes setup" in st["guidance"]
+    assert "Agents menu" in st["guidance"]
+
+
+def test_runner_readiness_marks_hermes_not_ready_on_relogin(tmp_path, monkeypatch):
+    import json
+    import proxima_api.runners as r
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    (home / "auth.json").write_text(json.dumps({
+        "active_provider": "xai-oauth",
+        "providers": {
+            "xai-oauth": {
+                "last_auth_error": {"message": "token refresh failed", "relogin_required": True}
+            }
+        },
+    }))
+    bindir = _make_hermes_bin(tmp_path)
+    real_expand = os.path.expanduser
+    monkeypatch.setattr(
+        r.os.path,
+        "expanduser",
+        lambda p: str(home) if p == "~/.hermes" else real_expand(p),
+    )
+    out = r.runner_readiness(path_env=bindir)
+    assert out["hermes"]["installed"] is True
+    assert out["hermes"]["ready"] is False
+    assert out["hermes"]["authHint"]
+    assert "Agents menu" in out["hermes"]["authHint"] or "hermes" in out["hermes"]["authHint"]
 
 
 def test_hermes_status_missing_binary(tmp_path):
@@ -177,3 +238,46 @@ def test_app_subprocess_env_requires_explicit_allowlist(monkeypatch):
 
     assert env["PROJECT_PUBLIC_URL"] == "https://example.test"
     assert "OPENAI_API_KEY" not in env
+
+
+def test_python_compat_shim_when_only_python3(tmp_path, monkeypatch):
+    """Hosts with python3 but no python get a workspace shim on PATH."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    py3 = bindir / "python3"
+    py3.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    py3.chmod(0o755)
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    path = augmented_path(str(bindir))
+    assert shutil_which_python(path) is not None
+    assert path.split(":")[0].endswith("/shims")
+    shim = Path(path.split(":")[0]) / "python"
+    assert shim.exists()
+    assert os.path.realpath(shim) == os.path.realpath(py3)
+
+
+def test_python_compat_shim_not_added_when_python_exists(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    py = bindir / "python"
+    py.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    py.chmod(0o755)
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    assert ensure_python_compat_shim(str(bindir)) is None
+    path = augmented_path(str(bindir))
+    assert not path.startswith(str(tmp_path / "ws" / "shims"))
+
+
+def test_python_compat_shim_skipped_without_python3(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    monkeypatch.setenv("PROXIMA_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    assert ensure_python_compat_shim(str(bindir)) is None
+
+
+def shutil_which_python(path: str) -> str | None:
+    import shutil
+
+    return shutil.which("python", path=path)

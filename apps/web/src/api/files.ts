@@ -66,7 +66,39 @@ export const fileUrl = (slug: string, path: string) =>
 
 // Run & preview a project app (managed dev server). preview_port is the app's
 // credential-stripping relay listener — the preview origin for remote clients.
-export type AppStatus = { running: boolean; ready?: boolean; port?: number; preview_port?: number; command?: string; log?: string[]; exited?: boolean; broad_bind?: boolean }
+export type AppStatus = {
+  running: boolean
+  ready?: boolean
+  port?: number
+  preview_port?: number
+  command?: string
+  log?: string[]
+  exited?: boolean
+  /** Present when the managed process self-exited (sticky until next start). */
+  exit_code?: number
+  broad_bind?: boolean
+}
+
+/** Plain-language summary after a managed app process self-exits without staying up. */
+export function appExitSummary(status: Pick<AppStatus, 'exit_code' | 'command'>): {
+  tone: 'ok' | 'fail'
+  title: string
+  hint: string
+} {
+  const code = typeof status.exit_code === 'number' ? status.exit_code : 0
+  if (code !== 0) {
+    return {
+      tone: 'fail',
+      title: `Command failed (exit ${code})`,
+      hint: 'Check the log below, fix the command or folder, and Run again.',
+    }
+  }
+  return {
+    tone: 'ok',
+    title: 'Command finished (exit 0)',
+    hint: 'No preview server came up. For live preview, run a long-lived server such as npm run dev or python3 -m http.server $PORT.',
+  }
+}
 export const appStart = (token: string, slug: string, command: string, port: number, dir = '') =>
   api<{ ok: boolean }>(`/api/projects/${slug}/app/start`, token, { method: 'POST', body: JSON.stringify({ command, port, dir }) })
 export const appStop = (token: string, slug: string) =>

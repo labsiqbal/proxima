@@ -80,7 +80,15 @@ def resolve_in_project(root: Path, rel: str) -> Path:
 
 
 def list_tree(root: Path, rel: str) -> list[dict]:
+    """List one project-relative directory.
+
+    Missing paths return an empty listing (callers often probe optional folders
+    like design versions/assets). A path that exists but is not a directory is
+    still an error.
+    """
     target = resolve_in_project(root, rel)
+    if not target.exists():
+        return []
     if not target.is_dir():
         raise FsError("not a directory")
     entries: list[dict] = []

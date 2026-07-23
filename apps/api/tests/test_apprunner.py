@@ -60,6 +60,37 @@ def test_app_runner_ignores_stale_drain_from_replaced_process():
     assert "detected_port" not in manager._apps["demo"]
 
 
+def test_app_runner_keeps_exit_log_across_status_polls(tmp_path):
+    """A failed start must stay visible on later polls — the UI polls every 2s
+    and used to wipe the exit log the moment the process was reaped."""
+    manager = AppManager()
+
+    async def run_case():
+        try:
+            await manager.start("demo", str(tmp_path), "bash -lc 'echo boom-fail; exit 7'", 5180)
+            status = None
+            for _ in range(40):
+                status = manager.status("demo")
+                if status.get("exited"):
+                    break
+                await asyncio.sleep(0.05)
+            assert status is not None
+            assert status["running"] is False
+            assert status["exited"] is True
+            assert status["exit_code"] == 7
+            assert any("boom-fail" in line for line in status.get("log") or [])
+            # Second poll must still carry the same exit payload.
+            again = manager.status("demo")
+            assert again.get("exited") is True
+            assert again.get("exit_code") == 7
+            assert again.get("log") == status.get("log")
+            assert again.get("command") == "bash -lc 'echo boom-fail; exit 7'"
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
 def test_app_runner_reports_ready_when_port_accepts_connections():
     manager = AppManager()
     try:

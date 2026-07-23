@@ -15,6 +15,28 @@ export const baseName = (p: string) => (p.split('/').pop() || p).replace(/\.md$/
 const LINK_RE = /\[\[([^\]]+)\]\]/g
 export const ROOT_ID = '__project_root__'
 
+/** Wiki-relative .md path for a [[target]] name. Nested fromPath keeps new notes as siblings. */
+export function notePathForTarget(target: string, fromPath = ''): string {
+  let name = target.trim().split('|')[0].split('#')[0].trim()
+  name = name.replace(/^\/+/, '').replace(/^wiki\//i, '')
+  const parts: string[] = []
+  for (const part of name.split(/[/\\]+/)) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  if (!parts.length) parts.push('Untitled')
+  let file = parts.pop() as string
+  if (!/\.(md|markdown)$/i.test(file)) file = `${file}.md`
+  const dirParts = parts
+  const nested = [...dirParts, file].join('/')
+  if (dirParts.length === 0 && fromPath.includes('/')) {
+    const dir = fromPath.split('/').slice(0, -1).join('/')
+    return dir ? `${dir}/${file}` : file
+  }
+  return nested
+}
+
 // `rootName` injects a synthetic project node linked to every note, so the graph
 // is centered on the project itself (not whichever leaf note has the most
 // backlinks). The root is graph-only — it never appears in `backlinks`.

@@ -15,6 +15,7 @@ import { designFromImage, previewUrl } from "../../api/files";
 import { ApiError } from "../../api/client";
 import { IconSparkle, IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
+import { formatRunError } from "./runError";
 import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -219,7 +220,7 @@ const stripDesignScene = (s: string): string =>
 		.replace(/<design-scene[^>]*>[\s\S]*$/i, "")
 		.trimEnd();
 const cleanAssistant = (s: string): string =>
-	stripDesignScene(stripGoalStatus(s));
+	stripRunnerPreamble(stripDesignScene(stripGoalStatus(s)));
 
 function parseChoices(content: string): string[] {
 	const lines = content
@@ -401,6 +402,13 @@ const outputHint = (o: OutputLink, features: AppFeatures) =>
 							? "Document"
 							: o.path;
 
+/** Spaced accessible name for a Created-outputs open control (avoids ImageTitlepathOpen smash). */
+export function resultCardAriaLabel(link: Pick<OutputLink, "type" | "title" | "path">): string {
+	const kind = outputTypeLabel(link.type);
+	const title = (link.title || link.path || "output").trim();
+	return `Open ${kind}, ${title}`;
+}
+
 function ResultCards({
 	links,
 	onOpen,
@@ -454,8 +462,9 @@ function ResultCards({
 								onClick={() => onOpen?.(link)}
 								disabled={!onOpen}
 								title={link.path}
+								aria-label={resultCardAriaLabel(link)}
 							>
-								<img src={src} alt={link.title || link.path} loading="lazy" />
+								<img src={src} alt="" loading="lazy" />
 							</button>
 						)}
 						{link.type === "video-file" && src && (
@@ -469,15 +478,16 @@ function ResultCards({
 							onClick={() => onOpen?.(link)}
 							disabled={!onOpen}
 							title={link.path}
+							aria-label={resultCardAriaLabel(link)}
 						>
-							<span className={`result-badge rt-${link.type}`}>
+							<span className={`result-badge rt-${link.type}`} aria-hidden="true">
 								{outputTypeLabel(link.type)}
 							</span>
-							<span className="result-main">
+							<span className="result-main" aria-hidden="true">
 								<strong>{link.title || link.path}</strong>
 									<small>{outputHint(link, features)}</small>
 							</span>
-							<span className="result-open">Open</span>
+							<span className="result-open" aria-hidden="true">Open</span>
 						</button>
 							{canEditDesign &&
 								token &&
@@ -590,6 +600,51 @@ function renderableCollaborationCards(
 		.sort((a, b) => a.order - b.order);
 }
 
+/** Head control label for a collab card - never includes body text. */
+export function collabCardAriaLabel(
+	card: { agentName: string; roundLabel: string; status: string },
+	closed: boolean,
+): string {
+	const action = closed ? "Expand" : "Collapse";
+	return `${card.agentName}, ${card.roundLabel}, ${card.status}. ${action}`;
+}
+
+/**
+ * Drop leading runner banners/skills dumps (Pi often prefixes the real answer
+ * with `pi v…` plus a Skills catalog). Used for main chat bubbles, collab
+ * previews, and matches server-side strip_runner_preamble for stored rows.
+ * Handles compact markdown (`## Skills - /path`) and plain multiline catalogs
+ * (`Skills\n/path\n/path`). Real answers may start with a ## heading OR
+ * bold/plain prose, so the dump ends on skill path lines and --- separators.
+ */
+export function stripRunnerPreamble(text: string): string {
+	if (!text) return "";
+	let cleaned = text.trim();
+	// Skill path item: markdown bullet, bare absolute path line, or whitespace.
+	const skillItem = "(?:[ \\t]*-[ \\t]+\\/\\S+|[ \\t]*\\n[ \\t]*\\/\\S+|\\s)";
+	const piPreamble = new RegExp(
+		`^\\s*pi\\s+v[\\d.]+\\b(?:\\s*---|\\s*##\\s+skills\\b${skillItem}+|\\s*skills\\b${skillItem}+)*\\s*(?:---\\s*)?`,
+		"i",
+	);
+	const skillsHeading = new RegExp(
+		`^\\s*(?:##\\s+)?skills\\b${skillItem}*(?:---\\s*)?`,
+		"i",
+	);
+	// Backticked Run: command (older Pi) or bare rest-of-line (current ACP).
+	const updateNotice =
+		/^\s*New version available:\s*\S+(?:\s*\([^)]*\))?(?:\.\s*Run:\s*(?:`[^`]+`|[^\n]+))?\s*/i;
+	for (let i = 0; i < 3; i += 1) {
+		const next = cleaned
+			.replace(piPreamble, "")
+			.replace(skillsHeading, "")
+			.replace(updateNotice, "")
+			.replace(/^[ \t\r\n-]+/, "");
+		if (next === cleaned) break;
+		cleaned = next;
+	}
+	return cleaned.trim();
+}
+
 function CollaborationCards({
 	group,
 	token,
@@ -669,20 +724,17 @@ function CollaborationCards({
 				{cards.map((card) => {
 					const closed = collapsed.has(card.runId);
 					const isBrainstormCard = isCollapsibleMode;
-					const preview = (card.text || card.error || "Waiting for this agent…")
+					const bodyText = stripRunnerPreamble(card.text || "");
+					const preview = (bodyText || card.error || "Waiting for this agent…")
 						.replace(/\s+/g, " ")
 						.trim();
 					const cardClass = `collab-card ${card.status} ${closed ? "collapsed" : ""} ${isBrainstormCard ? "clickable" : ""} ${debateSide.get(card.runId) || ""}`;
+					// Mouse users can still click the collapsed preview body; keyboard
+					// focus stays on the head button (the only real control).
 					const toggleOnClick = (event: React.MouseEvent<HTMLDivElement>) => {
 						if (!isBrainstormCard) return;
 						const target = event.target as HTMLElement;
 						if (target.closest("a, button, input, textarea, select")) return;
-						toggle(card.runId);
-					};
-					const toggleOnKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
-						if (!isBrainstormCard) return;
-						if (event.key !== "Enter" && event.key !== " ") return;
-						event.preventDefault();
 						toggle(card.runId);
 					};
 					const busy = ["queued", "running"].includes(card.status);
@@ -694,51 +746,50 @@ function CollaborationCards({
 							preview || "No output yet."
 						)}
 						</div>
-					) : card.text.trim() ? (
-						<MessageContent content={card.text} token={token} slug={slug} />
+					) : bodyText.trim() ? (
+						<MessageContent content={bodyText} token={token} slug={slug} />
 					) : card.error ? (
-						<div className="collab-card-error">{card.error}</div>
+						<div className="collab-card-error">{formatRunError(card.error)}</div>
 					) : (
 						<div className="collab-card-empty">Waiting for this agent…</div>
 					);
+					const headLabel = collabCardAriaLabel(card, closed);
 					return (
 						<div
 							key={card.runId}
 							className={cardClass}
 							onClick={toggleOnClick}
-							onKeyDown={toggleOnKey}
-							role={isBrainstormCard ? "button" : undefined}
-							tabIndex={isBrainstormCard ? 0 : undefined}
-							aria-expanded={isBrainstormCard ? !closed : undefined}
 						>
-							{isBrainstormCard ? (
-								<div className="collab-card-head">
-									<span className="collab-card-title">
-										<strong>{card.agentName}</strong>
-										<span>{card.roundLabel}</span>
+							{/* Head is the real control so body text never becomes the name. */}
+							<button
+								className="collab-card-head"
+								type="button"
+								onClick={(event) => {
+									event.stopPropagation();
+									toggle(card.runId);
+								}}
+								aria-expanded={!closed}
+								aria-label={headLabel}
+							>
+								{!isBrainstormCard && (
+									<span className="collab-card-caret" aria-hidden="true">
+										{closed ? "▸" : "▾"}
 									</span>
-									<span className="collab-card-controls">
-										<em>{card.status}</em>
-										<span className="collab-card-action">
+								)}
+								<span className="collab-card-title">
+									<strong>{card.agentName}</strong>
+									{/* Leading space keeps fallback names from reading as "DefaultIdea lane 1". */}
+									<span> {card.roundLabel}</span>
+								</span>
+								<span className="collab-card-controls">
+									<em>{card.status}</em>
+									{isBrainstormCard && (
+										<span className="collab-card-action" aria-hidden="true">
 											{closed ? "Expand" : "Collapse"}
 										</span>
-									</span>
-								</div>
-							) : (
-								<button
-									className="collab-card-head"
-									type="button"
-									onClick={() => toggle(card.runId)}
-									aria-expanded={!closed}
-								>
-									<span className="collab-card-caret">{closed ? "▸" : "▾"}</span>
-									<span className="collab-card-title">
-										<strong>{card.agentName}</strong>
-										<span>{card.roundLabel}</span>
-									</span>
-									<em>{card.status}</em>
-								</button>
-							)}
+									)}
+								</span>
+							</button>
 							{!isBrainstormCard && (
 								<div className="collab-card-meta">{card.runnerId}</div>
 							)}
@@ -945,7 +996,8 @@ export function ChatThread({
 						>
 							<strong>
 								{labelFor(message)}
-								{ts && <span className="chat-time">{timeLabel(ts)}</span>}
+								{/* Leading space keeps screen readers from reading "owner04:16 AM". */}
+								{ts && <span className="chat-time"> {timeLabel(ts)}</span>}
 							</strong>
 							{message.role === "assistant" &&
 							message.content.includes("<question-form") ? (
@@ -973,7 +1025,9 @@ export function ChatThread({
 									content={
 										message.role === "assistant"
 											? cleanAssistant(message.content)
-											: message.content
+											: message.role === "error"
+												? formatRunError(message.content)
+												: message.content
 									}
 									token={token}
 									slug={slug}

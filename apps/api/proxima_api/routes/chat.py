@@ -24,6 +24,7 @@ from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import StreamingResponse
 
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
+from .. import artifact_registry
 from ..db import connect
 from ..terminal import TerminalSession
 from .. import fsapi
@@ -170,13 +171,22 @@ def register(app, deps):
             "SELECT p.slug, p.name FROM projects p "
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
             (uid, like, like)).fetchall()]
+        # Include mode + project so the client can open design sessions in Studio
+        # (they are excluded from GET /api/sessions) and switch project on click.
         chats = [dict(r) for r in db().execute(
-            "SELECT id, title FROM sessions WHERE owner_user_id = ? AND job_id IS NULL "
-            "AND workflow_id IS NULL AND title LIKE ? ESCAPE '\\' "
-            "ORDER BY updated_at DESC LIMIT 10", (uid, like)).fetchall()]
+            "SELECT s.id, s.title, IFNULL(s.mode, 'chat') AS mode, "
+            "p.slug AS project_slug, p.name AS project_name "
+            "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
+            "WHERE s.owner_user_id = ? AND s.job_id IS NULL "
+            "AND s.workflow_id IS NULL AND s.title LIKE ? ESCAPE '\\' "
+            "ORDER BY s.updated_at DESC LIMIT 10", (uid, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
-            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, s.title AS session_title "
-            "FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.owner_user_id = ? "
+            "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, "
+            "s.title AS session_title, IFNULL(s.mode, 'chat') AS mode, "
+            "p.slug AS project_slug, p.name AS project_name "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "LEFT JOIN projects p ON p.id = s.project_id "
+            "WHERE s.owner_user_id = ? "
             "AND s.job_id IS NULL AND s.workflow_id IS NULL "
             "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
         return {"projects": projects, "chats": chats, "messages": msgs}
@@ -596,6 +606,11 @@ def register(app, deps):
         run_id = _as_int(cur.lastrowid)
         msg = db().execute("INSERT INTO messages(session_id, role, content, author, run_id, output_links) VALUES (?, 'assistant', ?, ?, ?, ?)", (session["id"], text, profile["name"], run_id, json.dumps([artifact])))
         _merge_session_artifact(db(), session["id"], artifact)
+        # Same durable registry feed as agent runs (Archive list/type filters).
+        try:
+            artifact_registry.record_run_outputs(db(), run_id, session["id"], session["project_id"], [artifact])
+        except Exception:
+            logging.getLogger("proxima.api").exception("media artifact registry feed failed (non-fatal)")
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": f"media_{kind}"})
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": [artifact]})
@@ -729,6 +744,12 @@ def register(app, deps):
                     return
                 msg = conn.execute("INSERT INTO messages(session_id, role, content, author, run_id, output_links) VALUES (?, 'assistant', ?, ?, ?, ?)", (session_id, text, profile_name, run_id, json.dumps([artifact])))
                 _merge_session_artifact(conn, session_id, artifact)
+                # Chat /image (and other async media) must land in Archive too -
+                # agent runs already feed the registry via RunOutputs; media was missing.
+                try:
+                    artifact_registry.record_run_outputs(conn, run_id, session_id, project_id, [artifact])
+                except Exception:
+                    logging.getLogger("proxima.api").exception("media artifact registry feed failed (non-fatal)")
                 conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
             worker.add_event(run_id, session_id, project_id, "message.complete", {"message_id": msg.lastrowid, "text": text, "output_links": [artifact]})
             worker.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": "media"})
@@ -841,7 +862,10 @@ def register(app, deps):
                 if features.enabled(feature_cfg, features.DESIGN_STUDIO):
                     actions.insert(0, "open-design-studio")
                 artifact = {"type": "image", "title": target.name, "path": str(target.relative_to(root)), "project_slug": slug, "actions": actions}
-                text = f"Generated image artifact: `{artifact['path']}`. Saved as a reusable project artifact."
+                text = (
+                    f"Generated image artifact: `{artifact['path']}`. "
+                    "Saved to the project Archive as a reusable deliverable."
+                )
                 if refs_ignored:
                     text += " Note: the attached image was not used as a reference — the selected image provider is text-to-image only. Pick a provider that supports image editing to compose with attachments."
                 elif sources:

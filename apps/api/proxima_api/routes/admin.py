@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import Depends
 
 from ..run_state import active_run_clause, stale_params
+from ..settings import systemd_user_unit
 
 
 def register(app, deps):
@@ -31,6 +32,9 @@ def register(app, deps):
         line_limit = max(20, min(int(limit or 240), 1000))
         log_text = ""
         log_error = ""
+        log_hint = ""
+        cfg = getattr(app.state, "config", {}) or {}
+        unit = systemd_user_unit(cfg.get("service_name"))
 
         try:
             proc = subprocess.run(
@@ -38,7 +42,7 @@ def register(app, deps):
                     "journalctl",
                     "--user",
                     "-u",
-                    "proxima.service",
+                    unit,
                     "-n",
                     str(line_limit),
                     "--no-pager",
@@ -56,6 +60,14 @@ def register(app, deps):
                 log_error = f"journalctl exited with code {proc.returncode}"
         except Exception as exc:
             log_error = str(exc)
+
+        stripped = log_text.strip()
+        if not log_error and (not stripped or stripped == "-- No entries --"):
+            log_hint = (
+                f"No journal entries for user unit {unit}. "
+                "If Proxima runs under a different systemd unit, set PROXIMA_SERVICE_NAME "
+                "to that unit name (without .service) and restart."
+            )
 
         runs = db().execute(
             "SELECT r.id, r.session_id, r.status, r.runner_id, r.kind, r.prompt, "
@@ -115,6 +127,8 @@ def register(app, deps):
         return {
             "logs": log_text,
             "logError": log_error,
+            "logHint": log_hint,
+            "serviceUnit": unit,
             "runs": [dict(r) for r in runs],
             "rawActiveSessionIds": [r["session_id"] for r in active_rows],
             "activeRuns": [dict(r) for r in active_run_rows],

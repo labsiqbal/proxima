@@ -31,11 +31,20 @@ export type DebugJob = {
 export type DebugLogs = {
   logs: string
   logError?: string
+  /** Empty-journal guidance when the configured systemd unit has no entries. */
+  logHint?: string
+  /** systemd --user unit journalctl queried (e.g. proxima.service). */
+  serviceUnit?: string
   runs: DebugRun[]
   rawActiveSessionIds: number[]
   activeRuns: DebugRun[]
   staleRuns: DebugRun[]
   orphanedJobs: DebugJob[]
+}
+
+/** Panel-head label for journal line counts ("1 line" / "N lines"). */
+export function debugLogLineLabel(count: number): string {
+  return count === 1 ? '1 line' : `${count} lines`
 }
 
 export const getDebugLogs = (token: string, limit = 240) =>

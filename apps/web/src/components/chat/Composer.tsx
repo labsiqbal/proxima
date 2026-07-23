@@ -26,6 +26,15 @@ import {
 
 const isImg = (n: string) => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(n);
 
+/** Spaced accessible name for a slash-command row (avoids "/helpShow…proxima"). */
+export function slashCommandAriaLabel(command: {
+	name: string;
+	description: string;
+	surface: string;
+}): string {
+	return `${command.name} ${command.description} (${command.surface})`;
+}
+
 type Att = { path: string; name: string; img: boolean };
 type ModeOption = {
 	id: PromptMode;
@@ -377,16 +386,27 @@ export function Composer({
 				</div>
 			)}
 			{commandMatches.length > 0 && (
-				<div className="slash-popover">
+				<div
+					className="slash-popover"
+					role="listbox"
+					aria-label="Chat commands"
+				>
 					{commandMatches.map((c) => (
 						<button
 							type="button"
 							key={c.name}
-							onClick={() => setDraft(c.name + " ")}
+							role="option"
+							aria-label={slashCommandAriaLabel(c)}
+							onMouseDown={(e) => {
+								// Keep focus in the textarea (same as @-mention pick).
+								e.preventDefault();
+								setDraft(c.name + " ");
+							}}
 						>
 							<strong>{c.name}</strong>
-							<span>{c.description}</span>
-							<em>{c.surface}</em>
+							{/* Leading spaces keep a fallback accessible name readable. */}
+							<span> {c.description}</span>
+							<em> {c.surface}</em>
 						</button>
 					))}
 				</div>

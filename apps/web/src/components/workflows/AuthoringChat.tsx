@@ -64,7 +64,11 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   const [applied, setApplied] = React.useState('')
   const [error, setError] = React.useState('')
   const mounted = React.useRef(true)
-  const openSeq = React.useRef(0)
+  // Share one in-flight open so Start chat, Test in chat, and a Strict Mode
+  // double-effect all await the same promise instead of racing on `opening`
+  // state (a second caller used to return null while the first was abandoned
+  // by openSeq++, leaving the button stuck on Opening…). 
+  const openPromiseRef = React.useRef<Promise<number | null> | null>(null)
   // Newest assistant message already scanned, so we apply each reply exactly once.
   const appliedMsgId = React.useRef(0)
   // Keep the newest callbacks reachable without resubscribing the stream to them.
@@ -72,7 +76,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   live.current = { buildPrompt, applyReply, stripBlock, buildTestPrompt }
   React.useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false; openSeq.current += 1 }
+    return () => { mounted.current = false }
   }, [])
 
   const { events, busyRun, setBusyRun } = useRunStream(token, session)
@@ -130,32 +134,41 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
 
   // Open the chat if it isn't open yet, and return it. Both the idle "Start chat" and an
   // outline-driven test go through here, so a test can open the chat on demand rather
-  // than making the owner start it first.
-  async function ensureSession(): Promise<number | null> {
-    if (sessionRef.current) return sessionRef.current
-    if (opening) return null
-    const seq = ++openSeq.current
+  // than making the owner start it first. Concurrent callers share one promise so a
+  // Test-in-chat click during Strict Mode's effect cycle cannot leave Opening… stuck.
+  function ensureSession(): Promise<number | null> {
+    if (sessionRef.current != null) return Promise.resolve(sessionRef.current)
+    if (openPromiseRef.current) return openPromiseRef.current
     setOpening(true); setError('')
-    try {
-      const s = await ensure()
-      if (s == null) return null           // the caller reports why
-      if (!mounted.current || seq !== openSeq.current) return null
-      sessionRef.current = s
-      setSession(s)
-      const body = await listMessages(token, s)
-      if (mounted.current && seq === openSeq.current) {
+    const pending = (async (): Promise<number | null> => {
+      try {
+        const s = await ensure()
+        if (s == null) {
+          // Graph jobs normally own a session; surface a real error when one is missing
+          // instead of leaving the idle card silent after Opening… ends.
+          setError('Could not open the plan chat for this plan.')
+          return null
+        }
+        sessionRef.current = s
+        setSession(s)
+        const body = await listMessages(token, s)
         // Adopt existing replies as already-applied — reopening must not re-apply an
         // old artifact over edits made since.
         appliedMsgId.current = body.messages.reduce((m, x) => Math.max(m, x.id ?? 0), 0)
         setMessages(body.messages)
+        return s
+      } catch (e) {
+        setError(String(e))
+        return null
+      } finally {
+        openPromiseRef.current = null
+        // Always clear Opening… — React 18 Strict Mode flips mounted false/true around
+        // the same instance; gating on mounted+seq previously abandoned the flag forever.
+        setOpening(false)
       }
-      return s
-    } catch (e) {
-      if (mounted.current && seq === openSeq.current) setError(String(e))
-      return null
-    } finally {
-      if (mounted.current && seq === openSeq.current) setOpening(false)
-    }
+    })()
+    openPromiseRef.current = pending
+    return pending
   }
 
   async function fire(sessionId: number, message: string, displayMessage: string) {

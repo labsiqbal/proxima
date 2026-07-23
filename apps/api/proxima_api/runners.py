@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -87,11 +88,63 @@ RUNNER_REGISTRY: tuple[RunnerDefinition, ...] = tuple(
 )
 
 
+def compat_shim_root() -> Path:
+    """Workspace-local directory for host-compat command shims.
+
+    Lives under PROXIMA_WORKSPACE_ROOT (default ~/.local/share/proxima) so shims
+    stay with runtime data and never touch the owner's real ~/.local/bin.
+    """
+    root = os.environ.get("PROXIMA_WORKSPACE_ROOT") or str(Path.home() / ".local" / "share" / "proxima")
+    return Path(root) / "shims"
+
+
+def ensure_python_compat_shim(path_env: str) -> str | None:
+    """If `python` is missing but `python3` exists, expose `python` via a shim dir.
+
+    Many Linux hosts (Debian/Ubuntu, Nix-adjacent setups) ship only `python3`.
+    Agent plan steps and project scripts still invoke `python`, which then fails
+    with command-not-found even though the interpreter is installed. Return the
+    shim directory to prepend, or None when no shim is needed/possible.
+    """
+    if os.name == "nt":
+        return None
+    if shutil.which("python", path=path_env):
+        return None
+    python3 = shutil.which("python3", path=path_env)
+    if not python3:
+        return None
+
+    shim_dir = compat_shim_root()
+    try:
+        shim_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    target = shim_dir / "python"
+    try:
+        real_py3 = os.path.realpath(python3)
+        if target.is_symlink() or target.exists():
+            if target.is_symlink() and os.path.realpath(target) == real_py3:
+                return str(shim_dir)
+            target.unlink(missing_ok=True)
+        target.symlink_to(real_py3)
+        return str(shim_dir)
+    except OSError:
+        try:
+            target.write_text(f"#!/bin/sh\nexec '{python3}' \"$@\"\n", encoding="utf-8")
+            target.chmod(0o755)
+            return str(shim_dir)
+        except OSError:
+            return None
+
+
 def augmented_path(path_env: str | None = None) -> str:
     """PATH used by non-interactive service processes.
 
     GUI/server processes often miss Homebrew/user-local bins. Add the common
-    local paths without replacing the provided environment.
+    local paths without replacing the provided environment. When the host has
+    python3 but not python, prepend a workspace shim so agent/app subprocesses
+    can still run `python`.
     """
 
     base = path_env or os.environ.get("PATH", "")
@@ -114,6 +167,11 @@ def augmented_path(path_env: str | None = None) -> str:
     for extra in extras:
         if extra not in parts:
             parts.append(extra)
+    # Build the candidate path first so the python probe does not see our shim.
+    candidate = os.pathsep.join(parts)
+    shim_dir = ensure_python_compat_shim(candidate)
+    if shim_dir and shim_dir not in parts:
+        parts.insert(0, shim_dir)
     return os.pathsep.join(parts)
 
 
@@ -170,7 +228,13 @@ def detect_runners(path_env: str | None = None, registry: Iterable[RunnerDefinit
 
 def runner_readiness(path_env: str | None = None) -> dict:
     """For each runner that has a spawn spec, report whether its CLI is
-    installed (selectable) and a hint for authenticating it."""
+    installed (selectable) and a hint for authenticating it.
+
+    Most runners are "ready" when the binary is on PATH; auth failures surface
+    at run time. Hermes is deeper: its home may exist with credentials that
+    Hermes itself has already marked as needing re-login, so we consult
+    ``hermes_status`` rather than lying that a dead token is ready.
+    """
     resolved = augmented_path(path_env)
     out: dict[str, dict] = {}
     for rid, spec in selectable_runner_specs().items():
@@ -180,15 +244,70 @@ def runner_readiness(path_env: str | None = None) -> dict:
             "displayName": spec.display_name,
             "installed": binary is not None,
             "binary": binary,
-            "ready": binary is not None,   # auth is verified at run time (surfaced via stderr)
+            "ready": binary is not None,
             "authHint": "" if binary else spec.auth_hint,
         }
+    # Hermes: binary alone is not enough when auth.json says relogin_required.
+    hermes = hermes_status(path_env=resolved)
+    if "hermes" in out:
+        out["hermes"]["ready"] = bool(hermes.get("ready"))
+        if not hermes.get("ready"):
+            out["hermes"]["authHint"] = str(hermes.get("guidance") or out["hermes"]["authHint"] or "")
+        if hermes.get("binary"):
+            out["hermes"]["binary"] = hermes["binary"]
+            out["hermes"]["installed"] = True
     return out
 
 
 def _hermes_home_usable(home: str) -> bool:
     p = Path(home)
     return p.is_dir() and ((p / "auth.json").exists() or (p / "config.yaml").exists())
+
+
+def _hermes_auth_problem(home: str) -> str | None:
+    """Return owner-facing guidance when auth.json says credentials need re-login.
+
+    Hermes writes ``last_auth_error.relogin_required`` onto a provider after a
+    failed token refresh (revoked grant, expired refresh token, etc.). Presence
+    of auth.json alone used to count as ready, so Settings/Home showed Hermes
+    green while every Default-profile run failed with a vague provider error.
+    """
+    auth_path = Path(home) / "auth.json"
+    if not auth_path.is_file():
+        return None
+    try:
+        data = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    providers = data.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        return None
+
+    active = data.get("active_provider")
+    names: list[str] = []
+    if isinstance(active, str) and active in providers:
+        names.append(active)
+    names.extend(name for name in providers if name not in names)
+
+    for name in names:
+        prov = providers.get(name)
+        if not isinstance(prov, dict):
+            continue
+        err = prov.get("last_auth_error")
+        if not isinstance(err, dict) or not err.get("relogin_required"):
+            continue
+        msg = str(err.get("message") or "").lower()
+        if "revoked" in msg or "invalid_grant" in msg:
+            short = "Hermes login expired or was revoked"
+        else:
+            short = "Hermes login expired"
+        return (
+            f"{short} ({name}). Run `hermes -z` or `hermes setup` to re-authenticate, "
+            "then retry - or pick a different agent in the Agents menu."
+        )
+    return None
 
 
 def hermes_status(source_home: str | None = None, binary: str | None = None, path_env: str | None = None) -> dict:
@@ -207,9 +326,12 @@ def hermes_status(source_home: str | None = None, binary: str | None = None, pat
         resolved_binary = resolve_binary("hermes", resolved)
     home = source_home or os.path.expanduser("~/.hermes")
     home_ok = _hermes_home_usable(home)
-    ready = bool(resolved_binary) and home_ok
+    auth_problem = _hermes_auth_problem(home) if home_ok else None
+    ready = bool(resolved_binary) and home_ok and not auth_problem
     if ready:
         guidance = ""
+    elif auth_problem and resolved_binary:
+        guidance = auth_problem
     elif not resolved_binary and not home_ok:
         guidance = ("Hermes not found. Install the Hermes agent CLI, run `hermes -z` "
                     "to authenticate, then restart Proxima. See docs/installation.md.")

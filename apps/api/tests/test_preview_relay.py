@@ -270,7 +270,7 @@ def test_detect_apps_suggested_commands_bind_loopback(tmp_path):
                    json={"content": "#"}, headers=auth)
         apps = {a["kind"]: a["command"] for a in client.get("/api/projects/demo/apps", headers=auth).json()["apps"]}
         assert apps["static · index.html"] == "python3 -m http.server $PORT --bind 127.0.0.1"
-        assert apps["django"] == "python manage.py runserver 127.0.0.1:$PORT"
+        assert apps["django"] == "python3 manage.py runserver 127.0.0.1:$PORT"
 
 
 def _wait_ready(client, auth) -> dict:

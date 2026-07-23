@@ -17,7 +17,6 @@ from ..graph import (
     normalize_graph,
     plan_target_problems,
     repo_target_paths,
-    unresolved_target_questions,
 )
 from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: ignore[reportMissingImports]
 from ..schemas import (
@@ -485,53 +484,18 @@ def register(app, deps):
         job = graph_job_or_404(job_id, user)
         if job["status"] != "queued":
             return graph_job_payload(job)
-        graph = normalize_graph(job["graph"] or "")
-        # T1: an ambiguous target surfaces as the owner's question, never a
-        # runtime guess. Flag-independent - it is a property of the plan.
-        questions = unresolved_target_questions(graph)
-        if questions:
-            raise HTTPException(
-                status_code=409,
-                detail="this plan has an unresolved question - pick a work area first: "
-                + "; ".join(questions),
-            )
         # Repo jobs reserve their path (slice 2 wiring, flag-gated): cut the
         # plan's worktree BEFORE claiming running, so a refused cut (dirty
         # repo, detached HEAD, no commits) surfaces loudly and leaves the plan
-        # queued for a clean retry - same ordering as the linear start.
-        if features.enabled(app.state.config, features.REPO_WORKTREES):
-            repo_targets = repo_target_paths(graph)
-            if len(repo_targets) > 1:
-                raise HTTPException(
-                    status_code=409,
-                    detail="this plan's repo jobs target more than one code area "
-                    f"({', '.join(repo_targets)}) - a plan works one code area; split the others into their own plan",
-                )
-            if repo_targets:
-                area = db().execute(
-                    "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' "
-                    "AND rel_path = ? AND source != 'excluded'",
-                    (job["project_id"], repo_targets[0]),
-                ).fetchone()
-                if not area:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"code area '{repo_targets[0]}' is no longer registered in this project",
-                    )
-                # Pin the plan's one repo area on the job row: that is what the
-                # whole slice-2 surface (worktree cut, diff, merge, teardown)
-                # keys off, so graph plans reuse it without a parallel path.
-                db().execute(
-                    "UPDATE jobs SET target_area_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (_as_int(area["id"]), job_id),
-                )
-                job = graph_job_or_404(job_id, user)
-                try:
-                    worktrees.ensure_job_worktree(db(), app.state.config, job)
-                except worktrees.WorktreeError as exc:
-                    raise HTTPException(
-                        status_code=409, detail=f"cannot start repo plan: {exc}"
-                    ) from exc
+        # queued for a clean retry - same ordering as the linear start. Shared
+        # with the scheduler so cron / Run-now cannot skip isolation.
+        try:
+            worktrees.bind_graph_job_repo_worktree(db(), app.state.config, job)
+        except worktrees.WorktreeError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"cannot start repo plan: {exc}"
+            ) from exc
+        job = graph_job_or_404(job_id, user)
         claimed = db().execute(
             "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, "
             "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued' AND engine='graph'",

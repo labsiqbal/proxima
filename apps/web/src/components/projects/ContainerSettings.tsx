@@ -1,5 +1,5 @@
 import React from 'react'
-import { listProjectAreas, updateProjectArea } from '../../api/projects'
+import { addProjectArea, detectProjectAreas, listProjectAreas, updateProjectArea } from '../../api/projects'
 import type { Project, ProjectAreas } from '../../types'
 
 // The container's settings surface (T9, slice 11): the project's code areas,
@@ -9,6 +9,10 @@ import type { Project, ProjectAreas } from '../../types'
 // and no toggle at all. BYO to the letter: pushing uses this machine's own
 // git, so there is nothing to sign into here and no remote to configure -
 // only the opt-in.
+//
+// Empty projects used to dead-end here ("link or create a git repo…") with only
+// Close. The API already supports manual register + detect - expose those so
+// the owner can take a next step without leaving the dialog.
 
 export function ContainerSettingsModal({ token, project, onClose }: {
   token: string
@@ -18,7 +22,8 @@ export function ContainerSettingsModal({ token, project, onClose }: {
   const [areas, setAreas] = React.useState<ProjectAreas | null>(null)
   const [error, setError] = React.useState('')
   // The area id being toggled, so one row's spinner never freezes the rest.
-  const [busy, setBusy] = React.useState<number | null>(null)
+  // 'scan' / 'use-root' mark the empty-state actions.
+  const [busy, setBusy] = React.useState<number | 'scan' | 'use-root' | null>(null)
   const mounted = React.useRef(true)
 
   React.useEffect(() => {
@@ -57,15 +62,79 @@ export function ContainerSettingsModal({ token, project, onClose }: {
     }
   }
 
+  async function scanForRepos() {
+    if (busy != null) return
+    setBusy('scan')
+    setError('')
+    try {
+      const body = await detectProjectAreas(token, project.slug)
+      if (mounted.current) {
+        setAreas({ code_areas: body.code_areas, ops_area: body.ops_area })
+        if (body.code_areas.length === 0 && body.detect.added.length === 0) {
+          setError('No git repos found under this project folder yet.')
+        }
+      }
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  async function useProjectRoot() {
+    if (busy != null) return
+    setBusy('use-root')
+    setError('')
+    try {
+      await addProjectArea(token, project.slug, { rel_path: '.' })
+      // Re-list so remotes + push toggles stay consistent with the list endpoint.
+      const body = await listProjectAreas(token, project.slug)
+      if (mounted.current) setAreas(body)
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  const empty = !!areas && areas.code_areas.length === 0
+  const scanning = busy === 'scan'
+  const registering = busy === 'use-root'
+
   return <div className="modal-scrim" onClick={onClose}>
-    <div className="modal-card container-settings-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Container settings for ${project.name}`}>
-      <h3>Container settings - {project.name}</h3>
+    <div className="modal-card container-settings-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Code areas for ${project.name}`}>
+      <h3>Code areas - {project.name}</h3>
       <p className="eyebrow">Code areas</p>
-      {error && <p className="error-text">{error}</p>}
+      <p className="muted container-settings-lead">
+        Folders where agent jobs can edit code in an isolated copy. Usually a git repo
+        inside the project - the project folder itself counts too.
+      </p>
+      {error && <p className="error-text" role="alert">{error}</p>}
       {!areas && !error && <p className="muted">Loading…</p>}
-      {areas && areas.code_areas.length === 0 && <p className="muted">
-        No code areas yet - link or create a git repo inside this project's folder.
-      </p>}
+      {empty && <div className="container-empty">
+        <p className="muted">
+          No code areas yet. Scan for git repos under this project, or treat the whole
+          project folder as one so jobs have a place to work.
+        </p>
+        <div className="container-empty-actions">
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy != null}
+            onClick={() => void scanForRepos()}
+          >
+            {scanning ? 'Scanning…' : 'Scan for git repos'}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={busy != null}
+            onClick={() => void useProjectRoot()}
+          >
+            {registering ? 'Adding…' : 'Use project folder'}
+          </button>
+        </div>
+      </div>}
       {areas && areas.code_areas.length > 0 && <ul className="container-areas">
         {areas.code_areas.map(area => <li className="container-area" key={area.id}>
           <div className="container-area-head">
@@ -99,6 +168,14 @@ export function ContainerSettingsModal({ token, project, onClose }: {
         </li>)}
       </ul>}
       <div className="confirm-actions">
+        {areas && areas.code_areas.length > 0 && <button
+          type="button"
+          className="ghost-button"
+          disabled={busy != null}
+          onClick={() => void scanForRepos()}
+        >
+          {scanning ? 'Scanning…' : 'Scan again'}
+        </button>}
         <button type="button" className="ghost-button" onClick={onClose}>Close</button>
       </div>
     </div>

@@ -27,6 +27,27 @@ Most runners speak ACP; the **Codex** runner drives the owner's own
 current system Codex CLI instead of a stale bundled adapter core - newer models
 like `gpt-5.6-sol` work as soon as `codex update` has them. Default resolves via
 `default_runner()` (env → first *ready* runner → fallback).
+Failed runs surface owner-facing reasons via `format_rpc_error` (API) and
+`formatRunError` (chat/UI): JSON-RPC dumps like Hermes
+`{code, message: "Internal error", data: {details: "No LLM provider…"}}` become the
+plain details line in the error bubble (and in stored `runs.error`), not a raw dict.
+Known Hermes auth/provider failures (no LLM provider, expired/revoked OAuth,
+`hermes setup`/`hermes model` guidance) also get a Proxima next step - pick another
+agent from the Agents menu, or re-authenticate Hermes - so owners are not stuck
+with CLI-only advice. Hermes readiness (`hermes_status` / `runner_readiness` /
+Home auth health) treats `auth.json` `last_auth_error.relogin_required` as not
+ready, instead of green-lighting a home that only has stale credential files.
+The chat and Home task Agents menus badge each profile from that map (`not ready`
+vs the runner display name), Settings → Agents runner pickers show
+`ready` / `not ready`, and the Settings → Agents runner grid chips each installed
+runner as `Ready` / `Not ready` (with the auth hint under the card when auth
+failed) instead of a blanket `Runnable` - so the banner, profile pickers, and
+runner cards all agree when Hermes login is expired.
+Agent/app/script subprocesses share `subprocess_env` / `augmented_path`: common
+user-local bins are appended, and when the host has `python3` but no `python`, a
+workspace-local shim (`$PROXIMA_WORKSPACE_ROOT/shims/python` → python3) is
+prepended so plan steps and scripts that still call `python` do not die with
+command-not-found on Debian/Ubuntu-style hosts.
 **Endpoints:** `GET /api/runners/detect` (installed/ready status).
 
 ## 2. Profiles (agent personas)
@@ -130,10 +151,16 @@ chat shows inline cards labelled with the actual agent/profile name and
 round/lane: collapsed by default (a cycling "thinking" shimmer while an agent
 works, a 2-line preview when done), click to expand one at a time. Brainstorm
 stacks cards vertically; Debate alternates them left/right per speaker so
-rounds read as a conversation. The synthesis is NOT a card — it streams into
-the parent bubble like a normal reply and lands as the final assistant message
-(synthesis only; per-agent detail lives in the cards). Child runs still do not
-save ordinary assistant messages; the card history replays from events.
+rounds read as a conversation. Leading runner banners and skills catalogs (e.g.
+Pi's `pi v…` plus a Skills path list) are stripped from **main chat bubbles**
+(display and newly stored answers), collab card bodies/previews, stored child
+outputs, and synthesis prompts so owners see the answer, not the path list —
+including compact `## Skills - /path` dumps, plain multiline `Skills\n/path`
+catalogs from Pi ACP, and answers that start with bold/plain prose rather than
+a `##` heading. The synthesis is NOT a card — it streams into the parent bubble like a
+normal reply and lands as the final assistant message (synthesis only; per-agent
+detail lives in the cards). Child runs still do not save ordinary assistant
+messages; the card history replays from events.
 Settings groups these defaults under **Agents & Collaboration**. The mode
 resets after send, so there is no global Meeting Mode toggle.
 
@@ -146,8 +173,10 @@ assistant message, queues a `kind='message_review'` run, streams review deltas t
 inline sidecar, then stores a structured verdict, gaps/risks, unanswered-input notes,
 revised content, and suggested next move. The sidecar offers an `Auto` reviewer choice
 (defaulting to a different runner) plus a local profile picker override. It can be
-minimized to a compact summary. `Replace answer` overwrites the original assistant
-message while preserving the original in the review row for `Restore original`.
+minimized to a compact summary (the head control keeps a spaced accessible name
+such as `Validate, Pi · needs_work · 5 gaps. Expand`). `Replace answer` overwrites
+the original assistant message while preserving the original in the review row
+for `Restore original`.
 `Ask source to merge` queues a `kind='message_review_merge'` run by the source profile
 and writes its result back into the same sidecar, not as a normal chat message. Review
 output is never saved as a normal assistant message unless explicitly replacing the
@@ -171,7 +200,13 @@ a chat-side feature as-is (its timeout behavior is unchanged by slice 5).
 
 **Why:** Distill a conversation into a durable wiki note.
 **How:** `wiki-note/draft` spawns a run that produces a `wiki.draft` event → preview
-→ `wiki-note/commit` writes the markdown + rebuilds the wiki index.
+→ `wiki-note/commit` writes the markdown into **that chat session's project wiki** +
+rebuilds the wiki index. After approve, the chat shows an in-app status line with
+the saved path (desktop notifications stay background-only). Opening or switching
+a chat session pulls the shell project to match (so Files / @-mentions start on the
+conversation's project); an intentional Projects pick still sticks for Tasks/Files/
+Archive while an older session stays in memory. The chat header always prefers the
+open session's project over a desynced shell pick.
 **Endpoints:** `POST /api/sessions/{id}/wiki-note/draft`, `/wiki-note/commit`.
 
 ## 6. Chat → Plan (slice a goal into runnable jobs)
@@ -187,9 +222,12 @@ marked ambiguous with a question for the owner instead of a guess. The slicer is
 explicitly instructed to size each job to complete within ONE turn quota (T5 slice 5:
 continuation is the safety net, not the plan). The draft lands as
 a queued plan the owner reviews/edits and starts directly; saving it as a reusable
-Recipe is an optional, separate action (before or after the run). The feature flag
-remains an owner recovery switch; the legacy ordered-step path is retained only for
-existing data.
+Recipe is an optional, separate action (before or after the run). Slice-into-plan is
+single-flight on the button (double-click cannot start two promote runs), and the
+Recipes editor creates at most one graph job per draft object — React Strict Mode
+remounts reuse the in-flight create so Tasks does not list two identical queued plans.
+The feature flag remains an owner recovery switch; the legacy ordered-step path is
+retained only for existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
 ## 7. Recipes (plans worth repeating) + schedules
@@ -204,14 +242,19 @@ Tasks plan row.
 edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
 run time and substituted into node text. An **authoring chat** beside the canvas emits
 `<workflow-graph>` blocks that are applied to the plan on screen, never the database.
+**Start chat** and a node's **Test in chat** share one open path onto the plan's
+session (concurrent clicks await the same load) so the panel cannot stick on
+Opening…; a missing session surfaces an error instead of a silent idle card.
 The **Sequential recipe editor is retired** — a linear recipe is a graph with no
 branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
 **Schedules** target saved graph templates: a due tick (or **Run now**) spawns the same
-`engine='graph'` job a manual create + start produces. With the graph feature flag off,
-a graph schedule is skipped with a logged warning rather than left as a job nothing will
-advance.
+`engine='graph'` job a manual create + start produces — including repo isolation
+(`target_area_id` + worktree cut via the shared `bind_graph_job_repo_worktree` path).
+A refused cut fails the scheduled job in place with an owner-facing reason rather than
+running unisolated against the live code area. With the graph feature flag off, a graph
+schedule is skipped with a logged warning rather than left as a job nothing will advance.
 **Endpoints:** graph routes (§Graph workflow engine), `GET/POST /api/schedules`,
 `POST /api/schedules/{id}/run`; legacy linear rows keep `GET/PATCH /api/workflows/{id}`.
 
@@ -238,7 +281,11 @@ branch-less plans render as a plain list, branching plans offer the read-only
 dependency canvas as a toggle (the editor's own `GraphCanvas`, reused). Plan rows
 carry **Open plan** (the canvas, where review acts live) and **Save as Recipe**
 (promotes the plan's graph to a reusable template via the existing save mechanics).
-With the graph feature off, the screen shows classic tasks only, exactly as before.
+**Board** columns are Queued → Running → Review → Done → **Failed** so a failed plan
+stays visible without switching to List → Failed; list/board cards use spaced
+`aria-label`s (`title · Plan · status · progress · age`) so assistive tech does not
+smash the plan pill into the title. With the graph feature off, the screen shows
+classic tasks only, exactly as before.
 **Endpoints:** `GET /api/graph/jobs` (+ the linear list above), `POST /api/graph/jobs/{id}/save-template`.
 
 ### Repo jobs: isolated worktrees + review + local merge (Phase-1 slices 2+4 - LIVE, on by default)
@@ -260,7 +307,10 @@ crash leftovers are cleaned idempotently by job id. With the flag on, the run wo
 sets the run's cwd to the active worktree (a missing worktree fails the run loudly -
 never a silent fallback to the primary tree). Diff and merge operate on commits:
 outstanding edits are snapshotted onto the job branch first, so partial work also
-survives crashes (feeds T5 continuation, slice 5). Final approve = guarded `--no-ff`
+survives crashes (feeds T5 continuation, slice 5). Snapshot commits drop runtime
+cache/bytecode (`__pycache__`, `*.pyc`, pytest/mypy/ruff caches, …) even when the
+target repo has no `.gitignore`, and the review diff hides those paths if an older
+snapshot already committed them. Final approve = guarded `--no-ff`
 merge: refuses a dirty repo or switched-away base branch, aborts on conflicts and
 parks the job in `review` with the surfaced error (worktree kept; approve again after
 resolving) - never forced. Success records `merge_commit` on the job's worktree row
@@ -304,9 +354,17 @@ engine's approve (the slice-2 guarded merge; a conflict surfaces as a plain
 needs-attention banner with the server's reason and the job parks in review for a
 retry), and **Reject…** demands a one-line reason, then `POST /api/jobs/{id}/reject`
 (either engine) marks the job `failed` with `jobs.rejected_reason` recorded and tears
-the worktree down unmerged - the project never sees the discarded change. After the
+the worktree down unmerged - the project never sees the discarded change. When the
+diff has **no file changes** (agent stopped because the baseline already matched, or
+the step made no edits), both the Tasks expand surface and the plan-canvas header door
+reframe to **Accept & close** / **Reject & close** with copy that says the project stays
+as it is - same approve endpoint, no fake "merge changes" promise. After a real
 merge the row shows what landed (base branch + merge commit) and keeps the change
-readable; slice 12's satpam consumes these same review states.
+readable; a no-op close (merge sha equals base) keeps **Closed with no file changes**
+wording instead. The plan canvas header Approve door shows a success notice and keeps a
+durable landing line (plus push outcome when applicable) so a
+reopened Done plan still says where the work landed. Slice 12's satpam consumes these
+same review states.
 
 ### Repo-remote connector: BYO push-after-merge (Phase-1 slice 11, T9 - LIVE)
 
@@ -459,7 +517,8 @@ drain does the plan park. Answering (`…/answer`, usable while the plan RUNS) s
 `node_states.answer` and re-runs the node with the decision in its prompt.
 **No silent interventions (T10 #5):** every action is a `satpam_interventions` row
 (shown as the task's "Watchdog log" in TaskWorkspace and on the Recipes canvas, with
-the pending-restart approval card on top) plus a `satpam.*` timeline event
+the pending-restart approval card on top; each log row has a spaced accessible name
+so detection + reason do not smash together) plus a `satpam.*` timeline event
 (`satpam.steered` / `satpam.restart.queued` / `satpam.restarted` / `satpam.escalated`).
 Thresholds are a Settings panel (Agents → Watchdog): N no-progress turns (default 2)
 and the sweep cadence (default 60s), bounds-checked in `app_settings`.
@@ -475,10 +534,11 @@ and the sweep cadence (default 60s), bounds-checked in `app_settings`.
 **Run now** fires a schedule on demand and opens the task it spawned, so the owner can
 prove a schedule before leaving it to fire unattended. It reuses the tick's own
 `_spawn_scheduled_job`, so it exercises the real cron target (workflow, project,
-profile, stored input) instead of a lookalike; it passes no minute key, so a manual run
-cannot claim — and thereby swallow — the scheduler's slot for that minute. It works on a
-disabled schedule (`enabled` gates the tick, and trying a schedule out is exactly when it
-is still off) and reports an overlap skip as a 409 rather than silently no-op'ing.
+profile, stored input, and repo worktree binding) instead of a lookalike; it passes no
+minute key, so a manual run cannot claim — and thereby swallow — the scheduler's slot
+for that minute. It works on a disabled schedule (`enabled` gates the tick, and trying a
+schedule out is exactly when it is still off) and reports an overlap skip as a 409 rather
+than silently no-op'ing.
 **Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`, `POST /api/schedules/{id}/run`.
 
 ## 10. Projects (workspaces)
@@ -531,6 +591,10 @@ These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
 file/artifact references — with the in-browser **Terminal** as the raw escape hatch.
+Inline New file / New folder / Rename rows share one tree input with an accessible
+name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
+placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
+box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`.
 
@@ -556,13 +620,19 @@ as the Proxima service user. The relay only guards its own port: detected-app
 suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
 and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
+When a command self-exits (short script, crash, or non-server entry point), status keeps
+a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
+vs Failed with the log and a next-step hint instead of a silent bare dump.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under
-`artifacts/media/images/`, and returns the artifact in the originating chat. Images
+`artifacts/media/images/`, returns the artifact in the originating chat, and feeds the
+same durable Archive registry as agent runs (so Image type filters and records list
+new media, not only the chat result card / fallback viewer). Chat Created-outputs
+cards expose a spaced `Open Image, <title>` accessible name. Images
 attached to the message or explicitly selected through `@` (rendered as
 `![name](path)` markdown by the composer) are used
 as reference/source images when the selected provider advertises `imageEdit` — the
@@ -600,7 +670,12 @@ selection-aware chat, undo/redo + version history, multi-image reference inputs,
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
 URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
 `artifacts/design/<id>/scene.json` and appear as design records in the Archive.
-See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the full contract.
+The optional project component library (`artifacts/design/_components.json`) is
+loaded only when the design root listing already contains that file, so a fresh
+project does not probe a missing path. Zoom/Fit and Layers-panel rows expose
+explicit accessible names (and keyboard activation on layer rows) so symbol-only
+controls are not just symbols. See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the
+full contract.
 
 The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: on by default,
 with `proxima.env` as the owner opt-out (read at boot).
@@ -620,7 +695,8 @@ a **registry, not a scanner**: the scanner discovers files, the registry remembe
 them as durable records that survive file moves and deletion (a missing file flips
 `file_missing` on the record; the record stays).
 
-**How:** every finished run (agent or script) feeds its scanned output links into
+**How:** every finished run (agent, script, or chat media such as `/image` and
+Design Studio drafts) feeds its output links into
 `artifact_records` (module `artifact_registry.py`): one row per deliverable
 **version** with name, type (scanner types + `script-output` for generic files a
 script step produced), project + path, size, produced date, lineage
@@ -639,7 +715,11 @@ Never two separate approval states.
 **Registry queries replace the item cap:** paginated newest-first list with
 project/type/status/date filters, text search, and facet counts; each record has a
 permanent per-project address (`/api/archive/{project}/{slug}` — the UI's
-`#archive/<project>/<slug>` permalink) with version history and prev/next.
+`#archive/<project>/<slug>` permalink) with same-path version history plus
+project-level newer/older record navigation (by produce date, not version).
+Inline and full-record previews cover docs (markdown), pages (HTML iframe),
+images/video, and **designs** (first artboard via the same `MiniPreview` thumb as
+Design gallery, loaded from `scene.json`). Apps and other types still point at Open.
 Chat result cards and the iterate Result view keep using the live scan
 (`GET /api/projects/{slug}/artifacts`, unchanged).
 
@@ -650,7 +730,11 @@ Chat result cards and the iterate Result view keep using the live scan
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
-aggregation. Fed by Chat→Wiki (§5).
+aggregation. Fed by Chat→Wiki (§5). Opened from **Settings → Knowledge & Wiki**
+(Files / Graph / Search). Preview renders `[[wikilinks]]`; existing targets open
+the note, and **missing (red) links create the note on click** (title heading stub,
+open in edit beside the current note when nested) so owners are never stuck on a
+dead link.
 **Endpoints:** `/api/projects/{slug}/wiki/all`, `/api/wiki/all`, `/tree`, `/file`, `/fs/*`.
 
 ## 16. Terminal
@@ -677,18 +761,60 @@ on the right rail; once opened it stays mounted so shells survive closing the pa
 **Chat** — the launcher opens from the Tasks screen's `+ New task`.
 **How:** The launcher is deliberately minimal — a greeting, the **Task Composer**
 (project + agent + Guarded/Autonomous policy), and an **attention strip** when
-jobs are waiting in review (jump to the first, or open Tasks). It polls
+jobs are waiting in review (jump to the first, or open Tasks). **Start task**
+creates the durable job then always opens its hash-addressable task workspace
+(errors stay on the launcher with the brief restored); the composer re-arms its
+mounted flag on each mount so React Strict Mode cleanup cannot swallow that
+navigation or the failure alert. It polls
 `GET /api/dashboard` every 5s; the dashboard payload also carries `authHealth` —
 cached background checks (`auth_health.py`, 60s TTL, never on the request path)
 of the selected image provider plus every runner referenced by a profile —
 though the current Home renders only the review-attention data. Global **Search**
-(magnifier in the top bar) covers chats, messages, projects, and designs.
+(magnifier in the top bar / Ctrl+K) covers chats, messages, projects, and designs.
+Chat hits include `mode` + project so a Design Studio session (excluded from the
+main chat list) opens in Studio on click instead of silently closing the modal;
+ordinary chats still open in Chat and switch project when needed. The search field
+is labeled for assistive tech, and each result exposes a short spaced `aria-label`
+(title · project / role · snippet) so screen readers do not hear full markdown bodies.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
+
+## 18b. Account preferences (password, appearance, notifications)
+
+**Why:** Owner security and desktop alerts without babysitting a tab.
+**How:** Settings → Account & Preferences. Password change fields are named and
+labeled (with a visually hidden username for password-manager heuristics). Desktop
+notifications use the browser Notification API while the tab is backgrounded; the
+toggle shows **On** / **Off**, or **Blocked** with an alert when the browser has
+denied permission for this site (so a click never fails silently). Re-enable by
+allowing notifications in the browser site settings, then try the toggle again.
+The left Settings section list exposes spaced accessible names (`Account &
+Preferences. Account, appearance and notifications`) so title+hint never smash;
+the active section keeps `aria-current="page"`. Theme swatches are a labeled
+group with `aria-pressed` and `Sunset, selected`-style names; the font-size
+slider reports its value in pixels. Agent permissions uses a pressed toggle
+with an explicit On/Ask label.
 
 ## 19. Audit log
 
 **Why:** An activity trail of meaningful actions.
+**How:** Settings → Diagnostics → Audit log opens a filterable modal of recent
+entries (`GET /api/audit`). File/tree/app actions stay project-scoped with a
+`path` metadata field; settings tests and saves (image generation, Higgsfield)
+use `target_type=settings` and store flat JSON metadata (provider, status, …) —
+never a double-encoded string under `path`. The modal pretty-prints metadata
+(`provider: codex · status: ok`) and still unwraps older double-encoded rows.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
+
+## 19b. Diagnostics debug logs
+
+**Why:** Owners need the service journal plus stuck-run state without SSHing to the host.
+**How:** Settings → Diagnostics → Debug logs calls `GET /api/debug/logs`, which runs
+`journalctl --user -u <unit>` for the configured systemd unit (`PROXIMA_SERVICE_NAME`,
+default `proxima` → `proxima.service`), and lists active/stale runs and orphaned jobs.
+Empty journals return a `logHint` naming the unit and how to point `PROXIMA_SERVICE_NAME`
+at staging/preview units; the panel head uses correct singular/plural line counts and
+shows the unit under the description.
+**Endpoints:** `GET /api/debug/logs`, `POST /api/debug/reap-orphaned-jobs`.
 
 ## 20. Reliability (cross-cutting)
 

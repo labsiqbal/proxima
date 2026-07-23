@@ -2,6 +2,10 @@ import React from "react";
 import { Composer } from "../chat/Composer";
 import { Dropdown } from "../ui/Dropdown";
 import { IconAgents, IconAudit, IconChevronRight, IconFolder } from "../shell/icons";
+import {
+	profileAgentOption,
+	type RunnerReadinessMap,
+} from "../shell/runnerReadiness";
 import type { AppFeatures, Profile, Project } from "../../types";
 
 export type OpsExecutionPolicy = "guarded" | "autonomous";
@@ -127,6 +131,7 @@ export function TaskComposer({
 	activeProject,
 	activeProfile,
 	profiles,
+	runnerReadiness,
 	onActiveProject,
 	onActiveProfile,
 	onManageProjects,
@@ -139,6 +144,7 @@ export function TaskComposer({
 	activeProject: Project | null;
 	activeProfile: Profile | null;
 	profiles: Profile[];
+	runnerReadiness?: RunnerReadinessMap;
 	onActiveProject: (project: Project | null) => void;
 	onActiveProfile: (profile: Profile) => void;
 	onManageProjects: () => void;
@@ -150,13 +156,16 @@ export function TaskComposer({
 		React.useState<OpsExecutionPolicy>("guarded");
 	const mountedRef = React.useRef(true);
 	const actionSeq = React.useRef(0);
-	React.useEffect(
-		() => () => {
+	// Must re-arm mounted on mount: React Strict Mode runs cleanup then remounts
+	// the same instance, and a cleanup-only effect leaves mountedRef=false forever
+	// so successful starts never open the task workspace (and errors stay silent).
+	React.useEffect(() => {
+		mountedRef.current = true;
+		return () => {
 			mountedRef.current = false;
 			actionSeq.current += 1;
-		},
-		[],
-	);
+		};
+	}, []);
 
 	const submit = async (brief: string) => {
 		if (!activeProject)
@@ -188,10 +197,9 @@ export function TaskComposer({
 					const profile = profiles.find((item) => item.id === Number(id));
 					if (profile) onActiveProfile(profile);
 				}}
-				options={profiles.map((profile) => ({
-					value: String(profile.id),
-					label: profile.name,
-				}))}
+				options={profiles.map((profile) =>
+					profileAgentOption(profile, runnerReadiness),
+				)}
 			/>
 		</label>
 	);

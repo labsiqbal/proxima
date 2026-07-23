@@ -12,6 +12,7 @@ import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile,
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
+import type { RunnerReadinessMap } from './components/shell/runnerReadiness'
 import { ChatScreen } from './screens/ChatScreen'
 import { HomeScreen } from './screens/HomeScreen'
 import type { OpsTaskRequest } from './components/tasks/TaskComposer'
@@ -97,6 +98,9 @@ export function App() {
   // the tabs while a workflow is open.
   const [graphStage, setGraphStage] = React.useState<'home' | 'editor'>('home')
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
+  // When a plan is opened from Tasks, Back should return there — not the Recipes
+  // home the canvas lives under. Null means the editor was reached from Recipes.
+  const [graphCameFrom, setGraphCameFrom] = React.useState<'activity' | null>(null)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
   // Bumped by the iterate stage's "Run recipe" button → ChatScreen sends the dry-run.
@@ -121,6 +125,7 @@ export function App() {
     setReturnToChat(null)
     setReturnToTask(null)
     setDesignCameFrom(null)
+    setGraphCameFrom(null)
   }, [])
   const clearTaskHash = React.useCallback(() => {
     if (window.location.hash.startsWith('#task/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
@@ -156,12 +161,13 @@ export function App() {
   // A review lands where it can be acted on: a graph job's review gates live on the
   // canvas, so sending it to the linear TaskWorkspace would show a task that view has
   // no way to approve — a dangling "needs review" the owner cannot resolve.
-  const openJobByEngine = React.useCallback((jobId: number, engine?: string) => {
+  const openJobByEngine = React.useCallback((jobId: number, engine?: string, origin?: 'activity') => {
     if (engine === 'graph') {
       clearTaskHash()
       clearPendingNavigation()
       setPendingGraphJob(jobId)
       setWorkflowMode('graph')
+      setGraphCameFrom(origin === 'activity' ? 'activity' : null)
       setView('workflows')
       return
     }
@@ -173,7 +179,16 @@ export function App() {
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
-    if (v === 'workflows') setWorkflowMode('graph')
+    if (v === 'workflows') {
+      setWorkflowMode('graph')
+      // Sidebar Recipes means the Recipes home. Re-clicking while a plan is open
+      // (including one reached from Tasks) used to no-op on the canvas — bump the
+      // same back signal the in-editor Back control uses so the list returns.
+      if (view === 'workflows' && graphStage === 'editor') {
+        setGraphCameFrom(null)
+        setGraphBackNonce(n => n + 1)
+      }
+    }
     // Chat in the nav means the conversation front door — never a recipe's
     // iteration thread, which belongs to Recipes.
     if (v === 'chat' && activeSession?.workflow_id) {
@@ -192,6 +207,7 @@ export function App() {
   const [projects, setProjects] = React.useState<Project[]>([])
   const [sessions, setSessions] = React.useState<ChatSession[]>([])
   const [runners, setRunners] = React.useState<Runner[]>([])
+  const [runnerReadiness, setRunnerReadiness] = React.useState<RunnerReadinessMap>({})
   const [activeProfile, setActiveProfile] = React.useState<Profile | null>(null)
   const [activeProject, setActiveProject] = React.useState<Project | null>(null)
   const [activeSession, setActiveSession] = React.useState<ChatSession | null>(null)
@@ -242,21 +258,51 @@ export function App() {
       listProfiles(authToken),
       listProjects(authToken),
       listSessions(authToken),
-      api<{ runners: Runner[] }>('/api/runners/detect', authToken)
+      api<{ runners: Runner[]; runnerReadiness?: RunnerReadinessMap }>('/api/runners/detect', authToken)
     ])
     if (!mountedRef.current || seq !== refreshSeq.current) return
     setProfiles(profileBody.profiles)
     setProjects(projectBody.projects)
     if (sessionSeq === sessionsSeq.current) setSessions(sessionBody.sessions)
     setRunners(runnerBody.runners)
+    setRunnerReadiness(runnerBody.runnerReadiness || {})
     setActiveProfile(current => current && profileBody.profiles.some(p => p.id === current.id) ? current : profileBody.profiles.find(p => p.is_default) || profileBody.profiles[0] || null)
-    // Every chat lives in a project. Default to the user's personal project (their
-    // private one), not a "No project" limbo. Keep the current pick if still valid.
-    setActiveProject(current => current && projectBody.projects.some(p => p.slug === current.slug)
-      ? current
-      : projectBody.projects.find(p => p.visibility === 'private') || projectBody.projects[0] || null)
-    if (sessionSeq === sessionsSeq.current) setActiveSession(current => current && sessionBody.sessions.some(s => s.id === current.id && sessionEnabled(s)) ? current : sessionBody.sessions.find(sessionEnabled) || null)
+    // Couple the open chat and shell project in one pass. Picking them independently
+    // left Files/header/@-mentions on project A while the conversation (and Save to
+    // wiki) used project B after boot.
+    let nextSession: ChatSession | null | undefined
+    if (sessionSeq === sessionsSeq.current) {
+      setActiveSession(current => {
+        nextSession = current && sessionBody.sessions.some(s => s.id === current.id && sessionEnabled(s))
+          ? current
+          : sessionBody.sessions.find(sessionEnabled) || null
+        return nextSession
+      })
+    }
+    setActiveProject(current => {
+      if (nextSession?.project_slug) {
+        const fromSession = projectBody.projects.find(p => p.slug === nextSession!.project_slug)
+        if (fromSession) return fromSession
+      }
+      // No open chat (or chat has no project): keep the current pick if still valid,
+      // else the owner's personal/private project - never a "No project" limbo.
+      if (current && projectBody.projects.some(p => p.slug === current.slug)) return current
+      return projectBody.projects.find(p => p.visibility === 'private') || projectBody.projects[0] || null
+    })
   }, [token, sessionEnabled])
+
+  // When a session opens/changes, pull the shell project to match so Files and
+  // other rails start on the conversation's project. Do NOT depend on
+  // activeProject here - an intentional Projects/Tasks pick must stick even
+  // while an older chat session remains selected in memory (Chat header already
+  // prefers the session project over a desynced shell pick).
+  React.useEffect(() => {
+    if (!activeSession?.project_slug) return
+    setActiveProject(current => {
+      if (current?.slug === activeSession.project_slug) return current
+      return projects.find(p => p.slug === activeSession.project_slug) || current
+    })
+  }, [activeSession?.id, activeSession?.project_slug, projects])
 
   // On first load, treat existing sessions as already seen (only NEW activity dots).
   React.useEffect(() => {
@@ -517,14 +563,14 @@ export function App() {
     >
       {error && <div className="error-bar">{error}</div>}
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
-      {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles}
+      {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
       {view === 'chat' && (() => {
         // A design-kind session belongs to Design Studio; never render it as the main
         // chat (kind is authoritative — this is the last-line guard behind the session
         // list + Home routing already excluding design sessions).
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
+        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
         // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
         return activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
@@ -533,14 +579,21 @@ export function App() {
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
-      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} onGraphBack={() => setGraphBackNonce(n => n + 1)} /></React.Suspense>}
-      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph')} onNewTask={() => goView('home')} /></React.Suspense>}
+      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} graphBackLabel={graphCameFrom === 'activity' ? 'Tasks' : 'Recipes'} onGraphBack={() => {
+        if (graphCameFrom === 'activity') {
+          setGraphCameFrom(null)
+          setView('activity')
+          return
+        }
+        setGraphBackNonce(n => n + 1)
+      }} /></React.Suspense>}
+      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph', 'activity')} onNewTask={() => goView('home')} /></React.Suspense>}
       {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setDesignCameFrom('task'); setView('design') } : undefined} onOpenFile={(slug, path) => { clearTaskHash(); setReturnToTask(activeTaskId); setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} /></React.Suspense>}
       {features.designStudio && view === 'design' &&<React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
+      {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />
