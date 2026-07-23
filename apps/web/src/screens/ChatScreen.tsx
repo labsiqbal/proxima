@@ -33,6 +33,10 @@ import { WikiNotePreview } from "../components/wiki/WikiNotePreview";
 import { ConvertToWorkflowButton } from "../components/ConvertToWorkflowButton";
 import { Composer } from "../components/chat/Composer";
 import { Dropdown } from "../components/ui/Dropdown";
+import {
+	profileAgentOption,
+	type RunnerReadinessMap,
+} from "../components/shell/runnerReadiness";
 import { IconAgents, IconClose, IconNewChat, IconWiki } from "../components/shell/icons";
 import { notify } from "../lib/notify";
 
@@ -88,6 +92,8 @@ export function ChatScreen(props: {
 	activeSession: ChatSession | null;
 	profiles: Profile[];
 	projects: Project[];
+	/** Runner auth/ready map so the Agents menu can mark broken runners. */
+	runnerReadiness?: RunnerReadinessMap;
 	onActiveProfile: (p: Profile) => void;
 	onActiveProject: (p: Project | null) => void;
 	onSession: (s: ChatSession) => void;
@@ -686,10 +692,9 @@ export function ChatScreen(props: {
 								);
 						}
 					}}
-					options={props.profiles.map((p) => ({
-						value: String(p.id),
-						label: p.name,
-					}))}
+					options={props.profiles.map((p) =>
+						profileAgentOption(p, props.runnerReadiness),
+					)}
 				/>
 			</label>
 			{(activeSession?.project_slug || props.activeProject?.slug) && (

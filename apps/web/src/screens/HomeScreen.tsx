@@ -5,6 +5,7 @@ import {
 	type OpsTaskRequest,
 } from "../components/tasks/TaskComposer";
 import { IconActivity } from "../components/shell/icons";
+import type { RunnerReadinessMap } from "../components/shell/runnerReadiness";
 import { usePolling } from "../hooks/usePolling";
 import type { AppFeatures, Profile, Project, View } from "../types";
 
@@ -16,6 +17,7 @@ export function HomeScreen({
 	activeProject,
 	activeProfile,
 	profiles,
+	runnerReadiness,
 	onActiveProject,
 	onActiveProfile,
 	onCreateTask,
@@ -29,6 +31,7 @@ export function HomeScreen({
 	activeProject: Project | null;
 	activeProfile: Profile | null;
 	profiles: Profile[];
+	runnerReadiness?: RunnerReadinessMap;
 	onActiveProject: (project: Project | null) => void;
 	onActiveProfile: (profile: Profile) => void;
 	onCreateTask: (request: OpsTaskRequest) => Promise<number>;
@@ -95,6 +98,7 @@ export function HomeScreen({
 						activeProject={activeProject}
 						activeProfile={activeProfile}
 						profiles={profiles}
+						runnerReadiness={runnerReadiness}
 						onActiveProject={onActiveProject}
 						onActiveProfile={onActiveProfile}
 						onManageProjects={() => onSelectView("projects")}

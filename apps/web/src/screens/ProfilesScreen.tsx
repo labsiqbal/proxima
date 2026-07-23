@@ -2,8 +2,10 @@ import React from 'react'
 import { createProfile, deleteProfile, updateProfile, runnerCapabilities } from '../api/profiles'
 import type { Profile, RunnerCapabilities } from '../types'
 import { Dropdown } from '../components/ui/Dropdown'
-
-type RunnerReadiness = Record<string, { displayName: string; installed: boolean; ready: boolean; authHint: string }>
+import {
+  runnerOptionBadge,
+  type RunnerReadinessMap,
+} from '../components/shell/runnerReadiness'
 
 // Per-card instructions editor (the profile's "soul" / AGENTS.md). Saves on demand.
 function InstructionsEditor({ token, profile, onSaved }: { token: string; profile: Profile; onSaved: () => Promise<void> }) {
@@ -216,7 +218,7 @@ export function ProfilesScreen({ token, profiles, onActiveProfile, onRefresh }: 
   const [name, setName] = React.useState('')
   const [runner, setRunner] = React.useState('')
   const [instructions, setInstructions] = React.useState('')
-  const [readiness, setReadiness] = React.useState<RunnerReadiness>({})
+  const [readiness, setReadiness] = React.useState<RunnerReadinessMap>({})
   const [error, setError] = React.useState('')
   const [busy, setBusy] = React.useState<'create' | `default:${number}` | `delete:${number}` | `runner:${number}` | null>(null)
   const mountedRef = React.useRef(true)
@@ -300,7 +302,14 @@ export function ProfilesScreen({ token, profiles, onActiveProfile, onRefresh }: 
   }
 
   const runnerOptions = Object.values(readiness).length
-    ? Object.entries(readiness).map(([id, r]) => ({ value: id, label: r.displayName + (r.installed ? '' : ' (not installed)'), badge: r.ready ? 'ready' : undefined }))
+    ? Object.entries(readiness).map(([id, r]) => {
+        const badge = runnerOptionBadge({ ...r, id })
+        return {
+          value: id,
+          label: r.displayName + (r.installed ? '' : ' (not installed)'),
+          ...(badge ? { badge } : {}),
+        }
+      })
     : []
 
   return <section className="profiles-view">

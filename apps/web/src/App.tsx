@@ -12,6 +12,7 @@ import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile,
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
+import type { RunnerReadinessMap } from './components/shell/runnerReadiness'
 import { ChatScreen } from './screens/ChatScreen'
 import { HomeScreen } from './screens/HomeScreen'
 import type { OpsTaskRequest } from './components/tasks/TaskComposer'
@@ -206,6 +207,7 @@ export function App() {
   const [projects, setProjects] = React.useState<Project[]>([])
   const [sessions, setSessions] = React.useState<ChatSession[]>([])
   const [runners, setRunners] = React.useState<Runner[]>([])
+  const [runnerReadiness, setRunnerReadiness] = React.useState<RunnerReadinessMap>({})
   const [activeProfile, setActiveProfile] = React.useState<Profile | null>(null)
   const [activeProject, setActiveProject] = React.useState<Project | null>(null)
   const [activeSession, setActiveSession] = React.useState<ChatSession | null>(null)
@@ -256,13 +258,14 @@ export function App() {
       listProfiles(authToken),
       listProjects(authToken),
       listSessions(authToken),
-      api<{ runners: Runner[] }>('/api/runners/detect', authToken)
+      api<{ runners: Runner[]; runnerReadiness?: RunnerReadinessMap }>('/api/runners/detect', authToken)
     ])
     if (!mountedRef.current || seq !== refreshSeq.current) return
     setProfiles(profileBody.profiles)
     setProjects(projectBody.projects)
     if (sessionSeq === sessionsSeq.current) setSessions(sessionBody.sessions)
     setRunners(runnerBody.runners)
+    setRunnerReadiness(runnerBody.runnerReadiness || {})
     setActiveProfile(current => current && profileBody.profiles.some(p => p.id === current.id) ? current : profileBody.profiles.find(p => p.is_default) || profileBody.profiles[0] || null)
     // Couple the open chat and shell project in one pass. Picking them independently
     // left Files/header/@-mentions on project A while the conversation (and Save to
@@ -556,14 +559,14 @@ export function App() {
     >
       {error && <div className="error-bar">{error}</div>}
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
-      {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles}
+      {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
       {view === 'chat' && (() => {
         // A design-kind session belongs to Design Studio; never render it as the main
         // chat (kind is authoritative — this is the last-line guard behind the session
         // list + Home routing already excluding design sessions).
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
+        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
         // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
         return activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>

@@ -37,6 +37,10 @@ agent from the Agents menu, or re-authenticate Hermes - so owners are not stuck
 with CLI-only advice. Hermes readiness (`hermes_status` / `runner_readiness` /
 Home auth health) treats `auth.json` `last_auth_error.relogin_required` as not
 ready, instead of green-lighting a home that only has stale credential files.
+The chat and Home task Agents menus badge each profile from that map (`not ready`
+vs the runner display name), and Settings → Agents runner pickers show
+`ready` / `not ready`, so the banner's "pick another agent" maps to a concrete
+choice instead of a bare Default/Pi list.
 Agent/app/script subprocesses share `subprocess_env` / `augmented_path`: common
 user-local bins are appended, and when the host has `python3` but no `python`, a
 workspace-local shim (`$PROXIMA_WORKSPACE_ROOT/shims/python` → python3) is
