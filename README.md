@@ -113,9 +113,12 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
   and per-profile skills/MCP selection detected from your host.
 - **Baked-in capability bundle** — every profile ships with
   [`bundled-skills/`](bundled-skills/README.md) (opt-out per profile), starting
-  with the [masterplan](https://github.com/labsiqbal/masterplan) skill (MIT),
-  plus a distilled work-discipline preamble and detect-and-advertise for
-  recommended host CLIs (binaries stay bring-your-own).
+  with the [masterplan](https://github.com/labsiqbal/masterplan) skill (MIT).
+  Type `/masterplan <idea>` in Chat to run that methodology as a first-class
+  planning turn and produce its execution-ready package; natural-language asks
+  still invoke the same skill. The bundle also includes a distilled
+  work-discipline preamble and detect-and-advertise for recommended host CLIs
+  (binaries stay bring-your-own).
 - **Schedules** — five-field cron for saved Recipes, with overlap
   policy and a "Run now" that exercises the real spawn path.
 - **Self-update, audit log, themes & PWA** — one-click update from GitHub

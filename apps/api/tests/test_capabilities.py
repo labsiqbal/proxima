@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
 from proxima_api import capabilities as cap
+from proxima_api.runner_specs import runner_spec
 
 
 def _app(tmp_path):
@@ -249,6 +250,47 @@ def test_apply_symlinks_bundled_skills_and_optout_prunes(tmp_path):
     # opting back in restores it
     cap.apply_capabilities(spec, home, {"skills": ["bundled/masterplan"], "mcp": []}, bundle_dir=bundle)
     assert link.is_symlink()
+
+
+def test_required_command_skill_temporarily_overrides_profile_opt_out(tmp_path):
+    bundle = _bundle(tmp_path, "masterplan")
+    app = create_app({
+        "database_path": str(tmp_path / "required.db"),
+        "workspace_root": str(tmp_path / "required-ws"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "bundled_skills_dir": str(bundle),
+    })
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
+    profile = client.post(
+        "/api/profiles",
+        headers=headers,
+        json={"name": "Planner", "runner_id": "claude-code"},
+    ).json()
+    client.patch(
+        f"/api/profiles/{profile['id']}",
+        headers=headers,
+        json={"capabilities": {"skills": [], "mcp": []}},
+    )
+    skill_link = Path(profile["hermes_home"]) / "skills" / "bundled" / "masterplan"
+    assert not skill_link.exists()
+
+    app.state.worker.prompting.reapply_capabilities(
+        app.state.config,
+        runner_spec(profile["runner_id"]),
+        profile["hermes_home"],
+        profile["id"],
+        required_skill_ids=("bundled/masterplan",),
+    )
+
+    assert skill_link.is_symlink()
+    persisted = next(
+        item
+        for item in client.get("/api/profiles", headers=headers).json()["profiles"]
+        if item["id"] == profile["id"]
+    )
+    assert persisted["capabilities"] == {"skills": [], "mcp": []}
 
 
 def test_bundled_skill_never_clobbers_same_named_host_skill(tmp_path):

@@ -50,6 +50,57 @@ def test_chat_send_accepts_non_hermes_runner(tmp_path):
     assert res.status_code == 202
 
 
+def test_masterplan_command_enqueues_skill_directed_agent_turn(tmp_path):
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
+
+    response = client.post(
+        "/api/chat/send",
+        headers=headers,
+        json={"message": "/masterplan build a durable CLI for release notes"},
+    )
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    run = client.get(f"/api/runs/{body['run_id']}", headers=headers).json()
+    messages = client.get(
+        f"/api/sessions/{body['session_id']}/messages", headers=headers
+    ).json()["messages"]
+    assert run["kind"] == "masterplan"
+    assert "bundled/masterplan" in run["prompt"]
+    assert "build a durable CLI for release notes" in run["prompt"]
+    assert messages[0]["content"] == "/masterplan build a durable CLI for release notes"
+
+
+def test_empty_masterplan_command_prompts_agent_to_ask_for_idea(tmp_path):
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
+
+    response = client.post("/api/chat/send", headers=headers, json={"message": "/masterplan"})
+
+    assert response.status_code == 202, response.text
+    run = client.get(f"/api/runs/{response.json()['run_id']}", headers=headers).json()
+    assert run["kind"] == "masterplan"
+    assert "ask the owner for their product idea" in run["prompt"].lower()
+
+
 def test_chat_send_hermes_enqueues_async_run(tmp_path):
     app = create_app(
         {

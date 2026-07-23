@@ -133,11 +133,20 @@ class RunPrompting:
     def __init__(self, app: Any) -> None:
         self.app = app
 
-    def reapply_capabilities(self, cfg: dict[str, Any], spec: Any, hermes_home: str, profile_id: Any) -> None:
+    def reapply_capabilities(
+        self,
+        cfg: dict[str, Any],
+        spec: Any,
+        hermes_home: str,
+        profile_id: Any,
+        required_skill_ids: Iterable[str] = (),
+    ) -> None:
         """Re-activate the run's profile skill/MCP selection into its home before the
         run. Idempotent (symlinks/config write) and self-healing: newly installed host
         skills show up, and profiles created before this feature get their selection
-        applied. Live-home claude is a no-op (home already IS the host config)."""
+        applied. A first-class command may require one bundled methodology for this
+        run even when the profile normally opts out. Live-home claude is a no-op
+        (home already IS the host config)."""
         if not hermes_home or profile_id in (None, 0):
             return
         if cfg.get("claude_live_home") and getattr(spec, "id", "") == "claude-code":
@@ -147,6 +156,16 @@ class RunPrompting:
                 "SELECT capabilities FROM profiles WHERE id = ?", (profile_id,)
             ).fetchone()
             selection = parse_selection(row["capabilities"] if row else None)
+            required = [str(skill_id) for skill_id in required_skill_ids if str(skill_id)]
+            # None, or a selection without an explicit skills list, already means
+            # inherit every detected skill. Only an explicit subset needs a
+            # temporary addition. Do not rewrite profiles.capabilities: invoking
+            # one command must not silently change the owner's normal profile.
+            if selection is not None and isinstance(selection.get("skills"), list) and required:
+                selection = {
+                    **selection,
+                    "skills": list(dict.fromkeys([*selection["skills"], *required])),
+                }
             override = cfg.get("source_hermes_home") if getattr(spec, "id", "") == "hermes" else None
             apply_capabilities(spec, Path(hermes_home), selection, override,
                                bundle_dir=cfg.get("bundled_skills_dir"))

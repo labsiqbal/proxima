@@ -7,6 +7,10 @@ from . import features
 from .runner_specs import default_runner
 
 
+MASTERPLAN_SKILL_ID = "bundled/masterplan"
+MASTERPLAN_RUN_KIND = "masterplan"
+
+
 @dataclass(frozen=True)
 class CommandDefinition:
     name: str
@@ -25,6 +29,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
     CommandDefinition("/project", "Show or select project context", "Project", "proxima"),
     CommandDefinition("/runner", "Show or switch active runner", "Runner", "proxima"),
     CommandDefinition("/goal", "Autonomous goal loop — agent works across turns until done", "Session", "proxima"),
+    CommandDefinition("/masterplan", "Turn a product idea into an execution-ready masterplan package", "Planning", "proxima"),
     CommandDefinition("/image", "Generate an image with the selected image provider (Settings → Image generation)", "Media", "proxima"),
     CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima", feature=features.DESIGN_STUDIO),
     CommandDefinition("/model", "Open/select model via UI", "Runner", "ui-owned", "/model is managed by Proxima model picker, not raw chat."),
@@ -48,7 +53,9 @@ def normalize_command(raw: str) -> tuple[str, str, bool]:
         text = "/" + text[2:]
     if not text.startswith("/"):
         text = "/" + text
-    name, _, arg = text.partition(" ")
+    parts = text.split(maxsplit=1)
+    name = parts[0]
+    arg = parts[1] if len(parts) > 1 else ""
     name = name.lower()
     name = ALIASES.get(name, name)
     return name, arg.strip(), force_raw
@@ -74,6 +81,56 @@ def command_catalog(config: dict[str, Any] | None = None) -> dict:
 
 def find_command(name: str) -> CommandDefinition | None:
     return next((cmd for cmd in COMMANDS if cmd.name == name), None)
+
+
+def _masterplan_prompt(idea: str) -> str:
+    owner_ask = idea.strip()
+    if owner_ask:
+        next_step = (
+            "Use the owner's idea below as the input to Phase 1. Start the "
+            "masterplan pipeline now and continue skill-native, including its "
+            "clarification and review gates."
+        )
+    else:
+        owner_ask = "No idea was supplied with the command."
+        next_step = (
+            "The owner invoked the command without an idea. Ask the owner for their "
+            "product idea as the first skill-native intake question, then continue "
+            "the masterplan pipeline from Phase 1."
+        )
+    return f"""# Proxima command: /masterplan
+
+Required skill: `{MASTERPLAN_SKILL_ID}`
+
+Load and follow the bundled masterplan skill as the controlling methodology for this turn and subsequent turns in this session. Do not substitute generic planning, a status reply, or a Design Studio canvas. The deliverable remains the masterplan package folder and artifacts defined by the skill.
+
+{next_step}
+
+## Owner request
+
+{owner_ask}
+"""
+
+
+def agent_turn_for_command(raw_command: str) -> dict[str, Any] | None:
+    """Resolve slash commands that intentionally become real agent turns.
+
+    The command endpoint and chat run route share this expansion so the catalog
+    action cannot drift from what the agent actually receives.
+    """
+    name, arg, force_raw = normalize_command(raw_command)
+    if force_raw or name != "/masterplan":
+        return None
+    display = f"/masterplan{(' ' + arg) if arg else ''}"
+    return {
+        "kind": "agent_turn",
+        "surface": "proxima",
+        "command": name,
+        "skillId": MASTERPLAN_SKILL_ID,
+        "runKind": MASTERPLAN_RUN_KIND,
+        "message": _masterplan_prompt(arg),
+        "displayMessage": display,
+    }
 
 
 def execute_command(
@@ -113,6 +170,10 @@ def execute_command(
     if name == "/help":
         names = ", ".join(c.name for c in _available_commands(config) if c.surface == "proxima")
         return {"kind": "system_message", "surface": "proxima", "message": f"Proxima commands: {names}. Use //command for raw runner passthrough."}
+
+    agent_turn = agent_turn_for_command(raw_command)
+    if agent_turn is not None:
+        return agent_turn
 
     if name == "/status":
         return {

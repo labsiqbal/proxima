@@ -229,6 +229,12 @@ describe("Composer slash commands", () => {
 							surface: "proxima",
 							unavailableMessage: null,
 						},
+						{
+							name: "/masterplan",
+							description: "Turn a product idea into an execution-ready masterplan package",
+							surface: "proxima",
+							unavailableMessage: null,
+						},
 					],
 				},
 			],
@@ -263,6 +269,9 @@ describe("Composer slash commands", () => {
 			name: "/help Show Proxima chat commands (proxima)",
 		});
 		expect(help).toBeInTheDocument();
+		expect(screen.getByRole("option", {
+			name: "/masterplan Turn a product idea into an execution-ready masterplan package (proxima)",
+		})).toBeInTheDocument();
 		expect(
 			screen.queryByRole("option", {
 				name: "/helpShow Proxima chat commandsproxima",

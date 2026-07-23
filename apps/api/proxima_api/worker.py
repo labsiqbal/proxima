@@ -24,6 +24,7 @@ from fastapi import FastAPI
 
 from .runner_specs import runner_spec
 from .acp import format_rpc_error
+from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
 from . import features
@@ -1008,7 +1009,18 @@ class RunWorker:
 
         try:
             await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
-            self.prompting.reapply_capabilities(cfg, spec, hermes_home, run.get("profile_id"))
+            required_skills = (
+                (MASTERPLAN_SKILL_ID,)
+                if str(run.get("kind") or "") == MASTERPLAN_RUN_KIND
+                else ()
+            )
+            self.prompting.reapply_capabilities(
+                cfg,
+                spec,
+                hermes_home,
+                run.get("profile_id"),
+                required_skill_ids=required_skills,
+            )
             proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
                 run_id,
                 session_id,

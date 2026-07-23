@@ -10,12 +10,18 @@ def test_normalize_command_alias_and_force_raw():
     assert normalize_command("status") == ("/status", "", False)
     assert normalize_command("/reset") == ("/new", "", False)
     assert normalize_command("//model sonnet") == ("/model", "sonnet", True)
+    assert normalize_command("/masterplan\nship a CLI") == ("/masterplan", "ship a CLI", False)
 
 
 def test_execute_command_surfaces():
     user = {"username": "bob", "role": "member"}
     assert execute_command("/help", user=user)["message"].startswith("Proxima commands")
     assert "Command router: ready" in execute_command("/status", user=user, project_slug="demo", runner_id="hermes")["message"]
+    masterplan = execute_command("/masterplan build a durable CLI", user=user)
+    assert masterplan["kind"] == "agent_turn"
+    assert masterplan["skillId"] == "bundled/masterplan"
+    assert masterplan["runKind"] == "masterplan"
+    assert "build a durable CLI" in masterplan["message"]
     assert execute_command("/model", user=user)["surface"] == "ui-owned"
     assert execute_command("/clear", user=user)["surface"] == "terminal-only"
     assert execute_command("//model sonnet", user=user)["kind"] == "runner_raw"
@@ -38,6 +44,8 @@ def test_command_endpoints_catalog_and_execute(tmp_path):
     catalog = client.get("/api/commands/catalog", headers={"Authorization": f"Bearer {token}"})
     assert catalog.status_code == 200
     assert any(group["label"] == "Session" for group in catalog.json()["groups"])
+    planning = next(group for group in catalog.json()["groups"] if group["label"] == "Planning")
+    assert any(command["name"] == "/masterplan" for command in planning["commands"])
 
     executed = client.post(
         "/api/commands/execute",
@@ -56,3 +64,12 @@ def test_command_endpoints_catalog_and_execute(tmp_path):
     assert scoped.status_code == 200
     assert "Project: alpha" in scoped.json()["message"]
     assert "Runner: codex" in scoped.json()["message"]
+
+    masterplan = client.post(
+        "/api/commands/execute",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"command": "/masterplan build a durable CLI", "project_slug": "alpha"},
+    )
+    assert masterplan.status_code == 200
+    assert masterplan.json()["kind"] == "agent_turn"
+    assert masterplan.json()["skillId"] == "bundled/masterplan"
