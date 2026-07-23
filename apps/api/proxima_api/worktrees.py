@@ -427,16 +427,20 @@ def bind_graph_job_repo_worktree(
     if not features.enabled(cfg, features.REPO_WORKTREES):
         return None
     job_id = int(job["id"])
-    project_id = job["project_id"]
-    if not project_id:
-        return None
     graph = normalize_graph(job["graph"] or "")
+    # Ambiguous targets block start even when the plan has no project yet -
+    # the owner must pick a work area before anything dispatches (T1). Checking
+    # before the project_id early-return keeps a project-less ambiguous plan
+    # from silently starting as a plain ops graph.
     questions = unresolved_target_questions(graph)
     if questions:
         raise WorktreeError(
             "this plan has an unresolved question - pick a work area first: "
             + "; ".join(questions)
         )
+    project_id = job["project_id"]
+    if not project_id:
+        return None
     repo_targets = repo_target_paths(graph)
     if not repo_targets:
         return None
