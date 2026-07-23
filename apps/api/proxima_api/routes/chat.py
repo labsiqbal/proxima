@@ -376,9 +376,11 @@ def register(app, deps):
         prompt = agent_turn["message"] if agent_turn is not None else payload.message
         run_kind = agent_turn["runKind"] if agent_turn is not None else effective_prompt_mode
         goal = db().execute("SELECT goal_text, goal_status FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        goal_superseded = False
         if agent_turn is not None:
             if goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
                 db().execute("UPDATE sessions SET goal_status = 'cancelled' WHERE id = ? AND goal_status = 'blocked'", (session_id,))
+                goal_superseded = True
         elif goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
             prompt = payload.message + GOAL_INSTRUCTIONS
             db().execute("UPDATE sessions SET goal_status = 'running' WHERE id = ?", (session_id,))
@@ -396,6 +398,8 @@ def register(app, deps):
                 (session_id, payload.instant_result.strip(), profile["name"], run_id),
             )
             app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": effective_prompt_mode})
+            if goal_superseded:
+                app.state.worker.add_event(run_id, session_id, session["project_id"], "goal.update", {"status": "cancelled"})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "run.started", {})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "message.complete", {"message_id": msg.lastrowid, "text": payload.instant_result.strip(), "output_links": []})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "run.completed", {"stop_reason": "instant"})
@@ -410,6 +414,8 @@ def register(app, deps):
         )
         run_id = _as_int(cur.lastrowid)
         app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": effective_prompt_mode})
+        if goal_superseded:
+            app.state.worker.add_event(run_id, session_id, session["project_id"], "goal.update", {"status": "cancelled"})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 
