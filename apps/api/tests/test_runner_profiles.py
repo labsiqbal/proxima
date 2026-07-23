@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
@@ -27,6 +29,29 @@ def test_create_profile_with_claude_code_runner(tmp_path):
     r = c.post("/api/profiles", headers=h, json={"name": "CC", "runner_id": "claude-code"})
     assert r.status_code in (200, 201), r.text
     assert r.json()["runner_id"] == "claude-code"
+
+
+def test_create_grok_profile_seeds_authenticated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    source = tmp_path / ".grok"
+    source.mkdir()
+    (source / "auth.json").write_text('{"session": "test"}')
+    (source / "config.toml").write_text("[ui]\ncompact_mode = true\n")
+
+    c = TestClient(_app(tmp_path))
+    tok = c.post("/auth/auto").json()["token"]
+    response = c.post(
+        "/api/profiles",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"name": "Grok", "runner_id": "grok"},
+    )
+
+    assert response.status_code == 201, response.text
+    profile = response.json()
+    assert profile["runner_id"] == "grok"
+    profile_home = Path(profile["hermes_home"])
+    assert (profile_home / "auth.json").read_text() == '{"session": "test"}'
+    assert "compact_mode = true" in (profile_home / "config.toml").read_text()
 
 
 def test_unknown_runner_rejected(tmp_path):

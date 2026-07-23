@@ -11,6 +11,7 @@ from proxima_api.runners import (
     augmented_path,
     detect_runners,
     ensure_python_compat_shim,
+    grok_status,
     hermes_status,
     subprocess_env,
 )
@@ -20,6 +21,15 @@ def _make_hermes_bin(tmp_path: Path) -> str:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     exe = bindir / "hermes"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+    return str(bindir)
+
+
+def _make_grok_bin(tmp_path: Path) -> str:
+    bindir = tmp_path / "grok-bin"
+    bindir.mkdir()
+    exe = bindir / "grok"
     exe.write_text("#!/bin/sh\nexit 0\n")
     exe.chmod(0o755)
     return str(bindir)
@@ -108,10 +118,61 @@ def test_hermes_status_missing_home(tmp_path):
     assert "hermes -z" in st["guidance"]
 
 
+def test_grok_status_ready_when_bin_and_auth_present(tmp_path):
+    home = tmp_path / "grok-home"
+    home.mkdir()
+    (home / "auth.json").write_text('{"session": "test"}')
+    bindir = _make_grok_bin(tmp_path)
+
+    status = grok_status(source_home=str(home), path_env=bindir)
+
+    assert status["ready"] is True
+    assert status["binary"].endswith("/grok")
+    assert status["home"] == str(home)
+    assert status["guidance"] == ""
+
+
+def test_grok_status_not_ready_without_login(tmp_path):
+    home = tmp_path / "grok-home"
+    home.mkdir()
+    bindir = _make_grok_bin(tmp_path)
+
+    status = grok_status(source_home=str(home), path_env=bindir)
+
+    assert status["ready"] is False
+    assert status["binary"].endswith("/grok")
+    assert status["home"] is None
+    assert "grok login" in status["guidance"]
+
+
+def test_runner_readiness_requires_grok_login(tmp_path, monkeypatch):
+    import proxima_api.runners as runners
+
+    home = tmp_path / "grok-home"
+    home.mkdir()
+    bindir = _make_grok_bin(tmp_path)
+    real_expand = os.path.expanduser
+    monkeypatch.setattr(
+        runners.os.path,
+        "expanduser",
+        lambda path: str(home) if path == "~/.grok" else real_expand(path),
+    )
+
+    before = runners.runner_readiness(path_env=bindir)["grok"]
+    (home / "auth.json").write_text('{"session": "test"}')
+    after = runners.runner_readiness(path_env=bindir)["grok"]
+
+    assert before["installed"] is True
+    assert before["ready"] is False
+    assert "grok login" in before["authHint"]
+    assert after["ready"] is True
+    assert after["authHint"] == ""
+
+
 def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ["hermes", "codex", "aider"]:
+    for name in ["hermes", "codex", "grok", "aider"]:
         file = bin_dir / name
         file.write_text("#!/bin/sh\nexit 0\n")
         file.chmod(0o755)
@@ -120,6 +181,7 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
         RunnerDefinition("hermes", "Hermes", ("hermes",), True),
         RunnerDefinition("claude-code", "Claude Code", ("definitely-missing-claude",), True),
         RunnerDefinition("codex", "Codex", ("codex",), True),
+        RunnerDefinition("grok", "Grok", ("grok",), True),
         RunnerDefinition("aider", "Aider", ("aider",), False, detection_only=True),
     )
     result = {runner["id"]: runner for runner in detect_runners(path_env=str(bin_dir), registry=registry)}
@@ -130,6 +192,10 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
 
     assert result["codex"]["installed"] is True
     assert result["codex"]["runnable"] is True
+
+    assert result["grok"]["installed"] is True
+    assert result["grok"]["runnable"] is True
+    assert result["grok"]["path"] == str(bin_dir / "grok")
 
     assert result["claude-code"]["installed"] is False
     assert result["claude-code"]["runnable"] is False
@@ -171,7 +237,7 @@ def test_hermes_status_explicit_binary_missing_falls_back(tmp_path):
 def test_runner_readiness_reports_specs():
     from proxima_api.runners import runner_readiness
     r = runner_readiness()
-    assert "hermes" in r and "claude-code" in r
+    assert "hermes" in r and "claude-code" in r and "grok" in r
     for v in r.values():
         assert set(["id", "displayName", "installed", "ready", "authHint"]).issubset(v.keys())
 
@@ -193,7 +259,7 @@ def test_detect_endpoint_includes_runner_readiness(tmp_path):
     tok = api.post("/auth/auto").json()["token"]
     body = api.get("/api/runners/detect", headers={"Authorization": f"Bearer {tok}"}).json()
     assert "runnerReadiness" in body
-    assert "hermes" in body["runnerReadiness"] and "claude-code" in body["runnerReadiness"]
+    assert {"hermes", "claude-code", "grok"}.issubset(body["runnerReadiness"])
 
 
 def test_runners_detect_endpoint_lists_runners(tmp_path: Path):
@@ -214,6 +280,7 @@ def test_runners_detect_endpoint_lists_runners(tmp_path: Path):
     body = res.json()
     assert body["user"] == "bob"
     assert any(runner["id"] == "hermes" for runner in body["runners"])
+    assert any(runner["id"] == "grok" for runner in body["runners"])
     assert all(runner["id"] != "manual" for runner in body["runners"])
 
 

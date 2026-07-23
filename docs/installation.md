@@ -9,10 +9,28 @@ are no invites, memberships, roles, or team-user flows.
 - Linux or macOS host (Windows packaging exists, but the PTY backend is not yet portable)
 - `uv`
 - Node.js + `npm`
-- At least one authenticated agent CLI: Claude Code, Codex, Hermes, or Pi
+- At least one authenticated agent CLI: Claude Code, Codex, Grok, Hermes, or Pi
 
 Proxima ships no provider credentials. It uses the runner CLIs already installed
 and authenticated on the host.
+
+### Grok Build CLI
+
+Install the official Grok Build CLI, then authenticate it with grok.com:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+# On a headless host, use: grok login --device-auth
+grok models  # confirms the login and available model
+```
+
+Restart Proxima after installation, open **Settings -> Agents**, and rescan. Grok
+will be selectable and marked ready when the `grok` binary is on the service's
+`PATH` and `~/.grok/auth.json` contains the login. New Grok profiles seed
+`auth.json` and `config.toml` from `~/.grok` into their managed `GROK_HOME` and
+run the official native ACP endpoint (`grok agent stdio`). Proxima does not install
+an adapter package or handle the provider password.
 
 ### Recommended tools (optional)
 

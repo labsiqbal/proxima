@@ -62,21 +62,26 @@ def test_media_check_exception_becomes_failed_check(monkeypatch):
 
 def test_runner_checks_cover_runners_used_by_profiles(monkeypatch):
     conn = _conn()
-    conn.executemany("INSERT INTO profiles(runner_id) VALUES (?)", [("hermes",), ("hermes",), ("codex",), ("claude-code",)])
+    conn.executemany(
+        "INSERT INTO profiles(runner_id) VALUES (?)",
+        [("hermes",), ("hermes",), ("codex",), ("claude-code",), ("grok",)],
+    )
     monkeypatch.setattr("proxima_api.auth_health.runner_readiness", lambda: {
         "hermes": {"id": "hermes", "displayName": "Hermes", "installed": True, "ready": True, "authHint": ""},
         "codex": {"id": "codex", "displayName": "Codex", "installed": True, "ready": True, "authHint": ""},
         "claude-code": {"id": "claude-code", "displayName": "Claude Code", "installed": False, "ready": False, "authHint": "Install the claude CLI."},
+        "grok": {"id": "grok", "displayName": "Grok", "installed": True, "ready": False, "authHint": "Run `grok login`."},
     })
     monkeypatch.setattr("proxima_api.auth_health.hermes_status", lambda: {"ready": False, "guidance": "hermes home has no auth.json"})
     monkeypatch.setattr("proxima_api.image_providers.codex_ready", lambda: {"ready": True, "detail": "Codex is logged in."})
 
     checks = {c["id"]: c for c in auth_health._runner_checks(conn)}
 
-    assert set(checks) == {"runner:hermes", "runner:codex", "runner:claude-code"}  # deduped
+    assert set(checks) == {"runner:hermes", "runner:codex", "runner:claude-code", "runner:grok"}  # deduped
     assert checks["runner:hermes"]["ok"] is False and "auth.json" in checks["runner:hermes"]["detail"]
     assert checks["runner:codex"]["ok"] is True
     assert checks["runner:claude-code"]["ok"] is False and "Install" in checks["runner:claude-code"]["detail"]
+    assert checks["runner:grok"]["ok"] is False and "grok login" in checks["runner:grok"]["detail"]
 
 
 # ── snapshot cache ───────────────────────────────────────────────────────────

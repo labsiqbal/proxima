@@ -1,11 +1,10 @@
-"""Agent Client Protocol (ACP) integration for the Hermes runner.
+"""Agent Client Protocol (ACP) integration for native and adapted runners.
 
-Proxima drives Hermes through ACP (the same standard editors like Zed/VS Code
-use): a persistent `hermes acp` subprocess per profile, JSON-RPC 2.0 over stdio
-(newline-delimited). This gives native session continuity (load/resume), token
-streaming, and tool events — without coupling to any vendor-specific gateway.
+Proxima drives ACP-capable CLIs through persistent JSON-RPC 2.0 subprocesses over
+stdio. This gives native session continuity (load/resume), token streaming, and
+tool events without coupling the run layer to a vendor-specific gateway.
 
-One AcpProcess per HERMES_HOME hosts many ACP sessions (one per Proxima chat).
+One AcpProcess per managed profile home hosts many ACP sessions.
 """
 from __future__ import annotations
 
@@ -36,7 +35,8 @@ def config_sig(hermes_home: str) -> tuple:
     sig = []
     # Watch every runner's skill/MCP surface so activating skills or toggling MCP
     # (which mutates these in the profile home) recycles the cached agent process:
-    #   hermes → config.yaml; claude → skills/ + .claude.json; codex → config.toml.
+    #   hermes -> config.yaml; claude -> skills/ + .claude.json;
+    #   codex/grok -> config.toml.
     for rel in ("config.yaml", "skills", ".skills_prompt_snapshot.json", ".claude.json", "config.toml"):
         try:
             sig.append(round((base / rel).stat().st_mtime, 3))
@@ -266,7 +266,7 @@ class AcpProcess:
         # process exited: fail any pending requests
         for fut in self._pending.values():
             if not fut.done():
-                fut.set_exception(AcpError("hermes acp process exited"))
+                fut.set_exception(AcpError("agent ACP process exited"))
         self._pending.clear()
         self._started = False
 

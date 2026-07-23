@@ -74,6 +74,20 @@ RUNNER_SPECS: dict[str, RunnerSpec] = {
         seed_files=("auth.json", "config.toml"),
         refresh_files=("auth.json",),
     ),
+    "grok": RunnerSpec(
+        id="grok",
+        # Grok Build exposes ACP directly over stdio. Drive the owner's installed
+        # CLI rather than depending on an unofficial third-party adapter.
+        spawn_argv=["grok", "agent", "stdio"],
+        home_env="GROK_HOME",
+        binary="grok",
+        display_name="Grok",
+        auth_hint="Install the Grok Build CLI and run `grok login` (or `grok login --device-auth` on a headless host).",
+        notes="xAI Grok Build CLI (native ACP over stdio)",
+        source_dir="~/.grok",
+        seed_files=("auth.json", "config.toml"),
+        refresh_files=("auth.json",),
+    ),
     "pi": RunnerSpec(
         id="pi",
         spawn_argv=["npx", "-y", "pi-acp"],

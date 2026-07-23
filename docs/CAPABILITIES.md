@@ -18,15 +18,19 @@ this cockpit is actually capable of. (Derived from the code, not aspirational.)
 ## 1. Agents & runners (bring-your-own-agent)
 
 **Why:** Proxima drives the AI agents you already own (Claude Code, Codex,
-Hermes, and Pi) over ACP — no baked-in model.
+Grok, Hermes, and Pi) over ACP - no baked-in model.
 **How:** `runner_specs.py` defines each runner's spawn argv + credential home +
 wire `protocol`. The worker (`worker.py`) starts one agent subprocess per (runner,
 home, cwd) on demand; `runner_spec(run.runner_id)` makes it runner-agnostic.
-Most runners speak ACP; the **Codex** runner drives the owner's own
-`codex app-server` (`codex_appserver.py`, same call surface) so it tracks the
-current system Codex CLI instead of a stale bundled adapter core - newer models
-like `gpt-5.6-sol` work as soon as `codex update` has them. Default resolves via
-`default_runner()` (env → first *ready* runner → fallback).
+Most runners speak ACP. Grok uses the official CLI's native
+`grok agent stdio` endpoint, with `~/.grok/auth.json` and `config.toml` seeded
+into each profile's `GROK_HOME`; no third-party adapter is involved. Its readiness
+requires both the `grok` binary and a non-empty JSON auth file, so an installed but
+logged-out CLI appears as not ready with `grok login` guidance. The **Codex** runner
+drives the owner's own `codex app-server` (`codex_appserver.py`, same call surface)
+so it tracks the current system Codex CLI instead of a stale bundled adapter core -
+newer models like `gpt-5.6-sol` work as soon as `codex update` has them. Default
+resolves via `default_runner()` (env -> first *ready* runner -> fallback).
 Failed runs surface owner-facing reasons via `format_rpc_error` (API) and
 `formatRunError` (chat/UI): JSON-RPC dumps like Hermes
 `{code, message: "Internal error", data: {details: "No LLM provider…"}}` become the
@@ -61,8 +65,8 @@ its runner actually has on this host — detected from the runner's own config d
 (`capabilities.py`, driven off `RunnerSpec.source_dir` so it's portable, no hardcoded
 paths). The user checks which to enable per profile (`profiles.capabilities` JSON; NULL =
 inherit all). Enabled skills are symlinked into the profile home and its MCP config is
-filtered to the selection for Claude (`.claude.json`), Codex (`config.toml`), and
-Hermes (`config.yaml`). Selection is re-applied idempotently before each run so newly
+filtered to the selection for Claude (`.claude.json`), Codex/Grok (`config.toml`),
+and Hermes (`config.yaml`). Selection is re-applied idempotently before each run so newly
 installed host skills appear automatically. Pi still uses its runner-global home;
 `claude_live_home` profiles likewise use the host config directly.
 **Endpoints:** `GET/POST /api/profiles`, `PATCH/DELETE /api/profiles/{id}`,

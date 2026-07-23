@@ -65,6 +65,32 @@ def test_per_runner_skill_subpath_and_hidden_filter(tmp_path):
     assert [s["id"] for s in cap.detect_for_runner(_Spec("codex", str(cx)))["skills"]] == ["grill-me"]
 
 
+def test_detect_and_apply_grok_native_skills_and_mcp(tmp_path):
+    source = tmp_path / ".grok"
+    (source / "skills" / "review").mkdir(parents=True)
+    (source / "skills" / "review" / "SKILL.md").write_text("---\nname: review\n---\n")
+    (source / "config.toml").write_text(
+        '[ui]\ncompact_mode = true\n[mcp_servers.keep]\ncommand = "keep"\n'
+        '[mcp_servers.drop]\ncommand = "drop"\n'
+    )
+    spec = _Spec("grok", str(source))
+
+    detected = cap.detect_for_runner(spec)
+    assert [skill["id"] for skill in detected["skills"]] == ["review"]
+    assert {server["name"] for server in detected["mcp"]} == {"keep", "drop"}
+
+    home = tmp_path / "profile-home"
+    home.mkdir()
+    (home / "config.toml").write_text((source / "config.toml").read_text())
+    applied = cap.apply_capabilities(spec, home, {"skills": ["review"], "mcp": ["keep"]})
+
+    assert applied == {"skills": ["review"], "mcp": ["keep"]}
+    assert (home / "skills" / "review").is_symlink()
+    rendered = (home / "config.toml").read_text()
+    assert "mcp_servers.keep" in rendered
+    assert "mcp_servers.drop" not in rendered
+
+
 # ── activation (unit) ────────────────────────────────────────────────────────
 
 def test_apply_symlinks_selected_and_prunes(tmp_path):

@@ -1,12 +1,13 @@
 # Feature Guides — the per-feature "good by default" standard
 
 > Every Proxima feature that produces creative work should ship with a **default
-> quality bar** baked into the runner preamble, so *any* runner (Claude / Codex / Hermes)
-> produces good output on the first try — even when the user gives minimal direction.
+> quality bar** baked into the runner preamble, so *any* runner (Claude / Codex / Grok /
+> Hermes / Pi) produces good output on the first try - even when the user gives minimal
+> direction.
 
-> **Current release:** image generation remains active. Design Studio is disabled by
-> default, so its guide is retained on disk but excluded from prompt composition while
-> its server-owned feature flag is false. Video Studio is not a product surface.
+> **Current release:** image generation and Design Studio are active by default; the
+> Design guide is excluded only when the server-owned feature flag is turned off. Video
+> Studio is not a product surface.
 
 This doc defines **how those guides are written** (the authoring standard) and **how they
 are wired** (the registry). It is the source of truth for adding or upgrading a guide.
@@ -60,7 +61,7 @@ Write each guide in this order. Keep it plain text, runner-agnostic, and tight
 ### Meta-rules for the standard itself
 
 - **Runner-agnostic.** No tool-specific assumptions (no "use the AskUserQuestion tool").
-  Plain text that Claude, Codex, and Hermes all obey.
+  Plain text that Claude, Codex, Grok, Hermes, and Pi all obey.
 - **Reference-anchored (chimera).** Creative bars are ports of a trusted skill, not
   freehand opinion. Cite the source so upgrades are mechanical.
 - **Tight.** If a line doesn't change the output, cut it. Tokens ship on every run.

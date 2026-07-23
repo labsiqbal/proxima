@@ -36,7 +36,7 @@ from typing import Any
 import tomlkit
 import yaml
 
-try:  # tomllib is stdlib on 3.11+; codex config is TOML
+try:  # tomllib is stdlib on 3.11+; Codex and Grok configs are TOML
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
     tomllib = None  # type: ignore
@@ -53,7 +53,7 @@ def _host_dir(spec: Any, source_override: str | None = None) -> Path:
     return Path(os.path.expanduser(raw)) if raw else Path("/nonexistent")
 
 
-# ── skill detection (dir-of-skills convention: claude, hermes) ───────────────
+# ── skill detection (runner-owned directories) ───────────────────────────────
 
 def _read_skill_meta(skill_dir: Path, fallback_name: str) -> dict[str, str]:
     """Pull `name` + `description` from a skill's SKILL.md YAML frontmatter,
@@ -177,8 +177,8 @@ def _mcp_from_claude(host: Path) -> list[dict[str, Any]]:
     return _norm_mcp(servers)
 
 
-def _mcp_from_codex(host: Path) -> list[dict[str, Any]]:
-    """Codex MCP lives in ~/.codex/config.toml under [mcp_servers.<name>]."""
+def _mcp_from_toml(host: Path) -> list[dict[str, Any]]:
+    """Codex and Grok keep MCP servers in config.toml [mcp_servers.*]."""
     cfg = host / "config.toml"
     if not cfg.is_file() or tomllib is None:
         return []
@@ -214,6 +214,7 @@ SKILL_SUBPATH: dict[str, str] = {
     "claude-code": "skills",
     "codex": "skills",       # symlinked in from the shared ~/_agent/skills registry
     "hermes": "skills",
+    "grok": "skills",
     "pi": "agent/skills",    # pi reads Agent-Skills from ~/.pi/agent/skills
 }
 
@@ -236,8 +237,8 @@ def detect_for_runner(spec: Any, source_override: str | None = None,
             skills = _detect_dir_skills(host / rel) + detect_bundled_skills(bundle_dir)
         if rid == "claude-code":
             mcp = _mcp_from_claude(host)
-        elif rid == "codex":
-            mcp = _mcp_from_codex(host)
+        elif rid in ("codex", "grok"):
+            mcp = _mcp_from_toml(host)
         elif rid == "hermes":
             # Hermes keeps MCP inline in config.yaml.
             mcp = _mcp_from_hermes(host)
@@ -309,8 +310,8 @@ def apply_capabilities(spec: Any, home: Path, selection: dict[str, Any] | None,
         if rid == "claude-code":
             applied["mcp"] = _apply_claude_mcp(
                 home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
-        elif rid == "codex":
-            applied["mcp"] = _apply_codex_mcp(
+        elif rid in ("codex", "grok"):
+            applied["mcp"] = _apply_toml_mcp(
                 home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
         elif rid == "hermes":
             applied["mcp"] = _apply_hermes_mcp(
@@ -412,9 +413,9 @@ def _apply_claude_mcp(home: Path, selected: list[dict[str, Any]], source_overrid
     return list(subset.keys())
 
 
-def _apply_codex_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
-                     spec: Any) -> list[str]:
-    """Filter Codex's [mcp_servers.*] tables while preserving unrelated TOML."""
+def _apply_toml_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
+                    spec: Any) -> list[str]:
+    """Filter Codex/Grok [mcp_servers.*] while preserving unrelated TOML."""
     host_cfg = _host_dir(spec, source_override) / "config.toml"
     home_cfg = home / "config.toml"
     try:

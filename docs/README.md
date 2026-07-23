@@ -6,8 +6,8 @@
 audits — kept for context, not maintained).
 
 > **One-line what-it-is:** a self-hosted, single-user **control plane for AI
-> agents** — a FastAPI backend + React PWA that drives Claude Code / Codex / Hermes /
-> Pi over ACP. It ships no model and no credentials of its own; the work it
+> agents** - a FastAPI backend + React PWA that drives Claude Code / Codex / Grok /
+> Hermes / Pi over ACP. It ships no model and no credentials of its own; the work it
 > orchestrates (chat → plans of reviewable jobs → recipes, plus designs and
 > archive records) is domain-neutral — code, content, and ops alike.
 

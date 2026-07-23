@@ -4,7 +4,7 @@ Your self-hosted **cockpit for delegating real work to the AI agents you
 already own**: think it through in chat, let AI slice it into reviewable jobs,
 run them safely, and keep the good runs as repeatable recipes - code, content,
 and ops, all on **your own machine**. Bring your own agent CLI: **Claude Code,
-Codex, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
+Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
 
 ![One workspace — Chat is the front door](docs/screenshots/deck-chat.png)
 
@@ -108,8 +108,8 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 - **Goal loop** — `/goal` keeps the agent iterating until done or blocked.
 - **Wiki + knowledge** — per-project linked notes (`[[Note]]`) with an
   auto-updating graph; distill any chat into a wiki note.
-- **Multi-runner profiles** — each agent profile picks a runner (Claude Code,
-  Codex, Hermes, Pi) with an isolated credential home, its own instructions,
+- **Multi-runner profiles** - each agent profile picks a runner (Claude Code,
+  Codex, Grok, Hermes, Pi) with an isolated credential home, its own instructions,
   and per-profile skills/MCP selection detected from your host.
 - **Baked-in capability bundle** — every profile ships with
   [`bundled-skills/`](bundled-skills/README.md) (opt-out per profile), starting
@@ -132,7 +132,7 @@ surface.
 
 - **Linux, macOS, or Windows** (no Docker required)
 - [`uv`](https://docs.astral.sh/uv/) and Node.js / `npm`
-- At least one **agent CLI** installed + logged in: Claude Code, Codex, Hermes, or Pi
+- At least one **agent CLI** installed + logged in: Claude Code, Codex, Grok, Hermes, or Pi
 
 See [docs/installation.md](docs/installation.md) for per-OS steps.
 
@@ -165,8 +165,10 @@ systemctl --user restart proxima
 ## Bring your own agent
 
 Proxima ships **no credentials**. Each profile picks a runner (Claude Code, Codex,
-Hermes, or Pi). Log into that agent's own CLI the way you normally would —
+Grok, Hermes, or Pi). Log into that agent's own CLI the way you normally would -
 Proxima uses your existing login and **never asks for or stores provider passwords**.
+The Grok runner drives the official CLI through native ACP (`grok agent stdio`);
+see [installation](docs/installation.md#grok-build-cli) for install and login steps.
 With `PROXIMA_CLAUDE_LIVE_HOME=1`, the Claude Code runner points at your live
 `~/.claude`, so all your installed skills, plugins, rules and MCP servers come along.
 

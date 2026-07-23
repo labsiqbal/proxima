@@ -1,6 +1,6 @@
 # Development tools guide
 
-This document is the source of truth for future Claude Code/Codex/Hermes sessions that develop Proxima.
+This document is the source of truth for future Claude Code/Codex/Grok/Hermes/Pi sessions that develop Proxima.
 
 ## Product context
 
@@ -111,7 +111,7 @@ When a future agent edits this repo:
 2. Do not treat single-user app access as OS-level isolation.
 3. Do not expose arbitrary filesystem browsing beyond the configured owner/link-root model.
 4. Do not let client-supplied paths decide source/runtime/project access.
-5. Keep Hermes/Codex/Claude runner adapters behind Proxima policy checks.
+5. Keep all runner integrations behind Proxima policy checks.
 6. Run API tests and web build after changes.
 7. Never print or commit secrets, tokens, `.env`, DB files, or Hermes profile contents.
 

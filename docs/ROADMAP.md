@@ -6,8 +6,8 @@ Proxima is a **self-hosted control plane for the AI agents you already own** —
 not an IDE, not a closed agent product. Every feature is judged against
 five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
-1. **Bring-your-own-agent** — drives *your* local runners (Claude Code, Codex,
-   Hermes, Pi — local models later) over ACP. No baked-in model, no lock-in.
+1. **Bring-your-own-agent** - drives *your* local runners (Claude Code, Codex,
+   Grok, Hermes, Pi - local models later) over ACP. No baked-in model, no lock-in.
 2. **Orchestration** — many agents/personas working in parallel, steerable,
    with humans in the loop.
 3. **Self-hosted & local-first** — your machine, your data, your keys. Privacy by
@@ -49,7 +49,7 @@ decision-hold with independent branches continuing).
 ## Now — make daily use sharp (low/med effort, high DNA fit)
 
 - **MCP config editing UI** — detection plus per-profile enable/disable is shipped for
-  Claude, Codex, and Hermes; add/edit/test server definitions still uses each runner's
+  Claude, Codex, Grok, and Hermes; add/edit/test server definitions still uses each runner's
   native config and remains a future convenience. *(BYO-agent)*
 - **Skills / slash-command palette** — browse and invoke the skills your runner
   has, from chat. Surfaces capability you already own. *(BYO-agent)*
