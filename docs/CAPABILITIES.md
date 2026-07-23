@@ -124,9 +124,12 @@ idea first. Immediately before execution the worker adds that bundled skill to a
 explicit profile skill subset without rewriting the profile's saved opt-out choices.
 Once a session has started a `kind='masterplan'` run, the worker keeps the skill active
 for that session's ordinary chat follow-up turns so clarification and review cannot
-prune it mid-methodology. The skill remains the methodology and writes its normal
-Markdown / HTML package folder artifacts; this command does not open Design Studio.
-Ordinary natural-language masterplan requests continue to work through skill discovery.
+prune it mid-methodology. Starting the command in a session with a blocked goal cancels
+that old goal, preventing the next clarification reply from accidentally resuming goal
+mode instead of continuing the masterplan. The skill remains the methodology and writes
+its normal Markdown / HTML package folder artifacts; this command does not open Design
+Studio. Ordinary natural-language masterplan requests continue to work through skill
+discovery.
 
 ### Project-file and artifact references (`@`)
 

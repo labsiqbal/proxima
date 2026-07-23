@@ -262,8 +262,9 @@ Before ACP setup, the worker checks whether the session has had that run kind an
 includes the bundled skill in an otherwise explicit profile capability subset; saved
 profile choices are unchanged. This session-scoped requirement keeps the skill active
 for ordinary chat turns that answer the methodology's clarification and review gates.
-A bare command asks the agent to collect the idea first, and natural-language skill
-invocation remains available.
+Starting this method command also cancels a blocked goal on the same session, so a later
+clarification reply cannot resume stale goal instructions. A bare command asks the agent
+to collect the idea first, and natural-language skill invocation remains available.
 
 ```text
 UI  @ picker (files + artifacts) ─────► relative path / explicit image reference
