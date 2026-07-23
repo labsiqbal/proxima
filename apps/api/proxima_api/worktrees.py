@@ -414,30 +414,33 @@ def bind_graph_job_repo_worktree(
 
     Shared by ``POST /api/graph/jobs/{id}/start`` and the scheduler's graph
     spawn so a cron / Run-now recipe cannot drift from a manual start and write
-    into the live code area. No-op when ``feature_repo_worktrees`` is off or the
-    graph has no repo targets. Returns the ``job_worktrees`` row when one was
-    cut, else None.
+    into the live code area. No worktree is cut when ``feature_repo_worktrees``
+    is off or the graph has no repo targets. Returns the ``job_worktrees`` row
+    when one was cut, else None.
 
     Raises ``WorktreeError`` with an owner-facing message when the plan cannot
     start safely (unresolved area, multi-area graph, missing area, dirty repo).
+    The unresolved-area refuse is flag-independent - it is checked before the
+    ``feature_repo_worktrees`` gate so an ambiguous plan never starts silently.
     """
     from . import features
     from .graph import normalize_graph, repo_target_paths, unresolved_target_questions
 
-    if not features.enabled(cfg, features.REPO_WORKTREES):
-        return None
     job_id = int(job["id"])
     graph = normalize_graph(job["graph"] or "")
-    # Ambiguous targets block start even when the plan has no project yet -
-    # the owner must pick a work area before anything dispatches (T1). Checking
-    # before the project_id early-return keeps a project-less ambiguous plan
-    # from silently starting as a plain ops graph.
+    # Ambiguous targets block start regardless of the feature_repo_worktrees
+    # flag and even when the plan has no project yet - it is a property of the
+    # plan, not of worktree isolation. Checking before the flag gate and the
+    # project_id early-return keeps a project-less ambiguous plan from silently
+    # starting as a plain ops graph when the owner's escape-hatch flag is off.
     questions = unresolved_target_questions(graph)
     if questions:
         raise WorktreeError(
             "this plan has an unresolved question - pick a work area first: "
             + "; ".join(questions)
         )
+    if not features.enabled(cfg, features.REPO_WORKTREES):
+        return None
     project_id = job["project_id"]
     if not project_id:
         return None
