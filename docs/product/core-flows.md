@@ -36,7 +36,7 @@ First-time user flow:
 
 ```text
 Onboarding
-→ create new project or connect existing folder
+→ link an existing folder, create a new empty folder on disk, or skip to the starter project
 → setup/select agent
 → enter Chat in the default project
 ```

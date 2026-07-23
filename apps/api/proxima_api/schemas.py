@@ -169,6 +169,9 @@ class ProjectLinkRequest(BaseModel):
     path: str = Field(min_length=1)
     name: str | None = Field(default=None, max_length=120)
     slug: str | None = None
+    # When true, create `path` as a new empty directory under an existing parent
+    # (inside link roots) and then register it. Never deletes or moves content.
+    mkdir: bool = False
 
 
 class ProjectAreaAddRequest(BaseModel):

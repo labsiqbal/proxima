@@ -102,8 +102,9 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
   credential-stripping proxy.
 - **In-browser terminal** — a real PTY shell scoped to the project. Work in the
   shell from anywhere, no SSH.
-- **Link existing folders** — register any folder on disk as a project;
-  chat/terminal/files operate on it. Removing a linked project only unlinks it.
+- **Use a folder on disk** — register a folder you already have as a project, or
+  create a new empty one under a parent you pick; chat/terminal/files operate on it.
+  Removing such a project only unlinks it (the real files stay).
 - **Goal loop** — `/goal` keeps the agent iterating until done or blocked.
 - **Wiki + knowledge** — per-project linked notes (`[[Note]]`) with an
   auto-updating graph; distill any chat into a wiki note.

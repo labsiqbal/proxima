@@ -82,7 +82,8 @@ on the left of the bar, **Add project** on the right, one card per project.
 A card shows the name and slug, marks the **active** project (the one the rest of the app
 is pointed at), and carries its own actions: the card body selects it, **Rename** opens a
 prompt dialog, and the hover/focus **×** removes it. Add opens a modal holding both ways in:
-create a new project, or link a folder you already work in.
+create a new project, or point Proxima at a folder on disk - link one you already work
+in, or create a new empty one under a parent you pick.
 
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima

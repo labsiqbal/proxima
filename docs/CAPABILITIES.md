@@ -543,18 +543,21 @@ than silently no-op'ing.
 
 ## 10. Projects (workspaces)
 
-**Why:** Scope agents to a folder — your real code, not a sandbox.
-**How:** `projects` table. Create a scaffolded project OR **link an existing folder**
-(`/api/projects/link`, jailed to configured link roots). Chat/terminal/files all
-operate on the project path. The screen is a card grid (one card per project: select,
-Rename, remove), with both ways in behind one **Add project** modal — a project holds a
-name and a slug, which does not earn a detail panel. Removal distinguishes what the API
-actually does: a linked folder is unlinked and its real files stay; a Proxima-created
-project is deleted from disk. On **first run**, right after setting a password, an
-onboarding step (`screens/WorkspaceOnboarding.tsx`, reusing the `FolderLinker`
-browser) offers to link a real code folder before landing in the app; skipping
-uses the starter project auto-provisioned under the data dir.
-**Endpoints:** `GET/POST /api/projects`, `/projects/link`, `GET /api/fs/dirs`,
+**Why:** Scope agents to a folder - your real code, not a sandbox.
+**How:** `projects` table. Three ways in: (1) scaffold a project under the data dir
+(`POST /api/projects`), (2) **link an existing folder** on disk, or (3) **create a new
+empty folder** under a browsable parent and register it - both (2) and (3) go through
+`POST /api/projects/link` (jailed to configured link roots; (3) sets `mkdir: true`).
+Chat/terminal/files all operate on the project path. The screen is a card grid (one card
+per project: select, Rename, remove), with add flows behind one **Add project** modal -
+a project holds a name and a slug, which does not earn a detail panel. The shared
+`FolderLinker` component covers link + create-on-disk (mode toggle). Removal
+distinguishes what the API actually does: a linked/created-on-disk folder is unlinked
+and its real files stay; a Proxima-scaffolded project is deleted from disk. On
+**first run**, right after setting a password, an onboarding step
+(`screens/WorkspaceOnboarding.tsx`, reusing `FolderLinker`) offers link, create-new-folder,
+or skip (starter project under the data dir).
+**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
 ### Work-container areas (Phase-1 slice 1 - data layer only)

@@ -6884,11 +6884,21 @@ div.result-media {
 	}
 }
 
-/* Folder linker (register existing folder as project) */
+/* Folder linker (link existing folder or create a new one on disk) */
 .folder-linker {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: var(--space-2);
+}
+.folder-linker .fl-mode {
+	align-self: stretch;
+}
+.folder-linker .fl-mode button {
+	flex: 1;
+}
+.fl-hint {
+	margin: 0;
+	font-size: var(--text-sm);
 }
 .fl-path {
 	font-size: var(--text-sm);
@@ -6905,7 +6915,7 @@ div.result-media {
 	overflow: auto;
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-md);
-	padding: 4px;
+	padding: var(--space-1);
 	background: var(--ui-surface);
 }
 .fl-row {
@@ -6924,20 +6934,43 @@ div.result-media {
 .fl-row.up {
 	color: var(--ui-text-tertiary);
 }
+.fl-empty {
+	margin: 0;
+	padding: var(--space-2) var(--space-1);
+}
 .fl-link {
 	display: flex;
-	gap: 8px;
+	gap: var(--space-2);
 	align-items: center;
 }
-.fl-link input {
+.fl-link input,
+.fl-create input {
 	flex: 1;
 	min-width: 120px;
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-md);
 	background: var(--ui-surface);
 	color: var(--ui-text-primary);
-	padding: 8px 10px;
+	padding: var(--space-2) 10px;
 	font-size: var(--text-base);
+}
+.fl-create {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.fl-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	font-size: var(--text-sm);
+	text-align: left;
+}
+.fl-optional {
+	font-size: var(--text-xs);
+}
+.fl-create .primary-button {
+	align-self: stretch;
 }
 
 /* Terminal dark mode (follows app theme) */
