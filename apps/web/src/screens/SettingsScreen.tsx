@@ -161,8 +161,8 @@ function PermissionsPanel({ token }: { token: string }) {
     try { const r = await savePermissionSettings(token, !on); setOn(r.auto_approve) } catch { /* ignore */ } finally { setBusy(false) }
   }
   return <div className="panel"><div className="panel-head"><h3>Agent permissions</h3><span>{on ? 'auto-approve' : 'ask each time'}</span></div>
-    <p className="muted">When on, agents run tools (commands, file edits) without asking — no approval cards. Off = you approve each sensitive action. Faster, but removes the safety prompt.</p>
-    <button className={`toggle-pill ${on ? 'on' : ''}`} onClick={() => void toggle()} disabled={busy}><span className="toggle-knob" />{busy ? '…' : on ? 'Auto-approve on' : 'Ask each time'}</button>
+    <p className="muted">When on, agents run tools (commands, file edits) without asking - no approval cards. Off = you approve each sensitive action. Faster, but removes the safety prompt.</p>
+    <button type="button" className={`toggle-pill ${on ? 'on' : ''}`} onClick={() => void toggle()} disabled={busy} aria-pressed={on} aria-label={on ? 'Auto-approve on' : 'Ask each time'}><span className="toggle-knob" aria-hidden="true" />{busy ? '…' : on ? 'Auto-approve on' : 'Ask each time'}</button>
   </div>
 }
 import { THEMES, FONTS, FONT_SIZE_MIN, FONT_SIZE_MAX, getTheme, getFont, getFontSize, applyTheme, applyFont, applyFontSize, type ThemeKey, type FontKey } from '../theme'
@@ -215,6 +215,19 @@ const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string 
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
 ]
+
+/** Spaced accessible name so title+hint do not smash (Account & PreferencesAccount…). */
+export function settingsMenuItemAriaLabel(label: string, hint: string): string {
+  const l = (label || '').trim()
+  const h = (hint || '').trim()
+  return h ? `${l}. ${h}` : l
+}
+
+/** Theme swatch name with selected state for assistive tech. */
+export function themeSwatchAriaLabel(label: string, selected: boolean): string {
+  const name = (label || '').trim() || 'Theme'
+  return selected ? `${name}, selected` : name
+}
 
 function DebugLogsPanel({ token }: { token: string }) {
   const [data, setData] = React.useState<DebugLogs | null>(null)
@@ -592,7 +605,10 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       {/* AGPL §13: network users must be able to get the source of the running app. */}
       {sourceLink}
     </div></div>
-  const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
+  const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid" role="group" aria-label="Theme">{THEMES.map(t => {
+    const selected = theme === t.key
+    return <button key={t.key} className={`theme-swatch ${selected ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button" aria-pressed={selected} aria-label={themeSwatchAriaLabel(t.label, selected)}><span className="swatch-pv" style={{ background: t.surface }} aria-hidden="true"><i style={{ background: t.accent }} /></span><small aria-hidden="true">{t.label}</small></button>
+  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
   const notifBlocked = notifyBlocked()
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <>
     <button
@@ -629,9 +645,10 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
           className={`settings-menu-item ${activeSection === section.key ? 'active' : ''}`}
           onClick={() => setActiveSection(section.key)}
           aria-current={activeSection === section.key ? 'page' : undefined}
+          aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
         >
-          <strong>{section.label}</strong>
-          <small>{section.hint}</small>
+          <strong aria-hidden="true">{section.label}</strong>
+          <small aria-hidden="true">{section.hint}</small>
         </button>)}
       </div>
     </aside>

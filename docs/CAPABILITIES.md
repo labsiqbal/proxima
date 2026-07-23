@@ -787,6 +787,12 @@ notifications use the browser Notification API while the tab is backgrounded; th
 toggle shows **On** / **Off**, or **Blocked** with an alert when the browser has
 denied permission for this site (so a click never fails silently). Re-enable by
 allowing notifications in the browser site settings, then try the toggle again.
+The left Settings section list exposes spaced accessible names (`Account &
+Preferences. Account, appearance and notifications`) so title+hint never smash;
+the active section keeps `aria-current="page"`. Theme swatches are a labeled
+group with `aria-pressed` and `Sunset, selected`-style names; the font-size
+slider reports its value in pixels. Agent permissions uses a pressed toggle
+with an explicit On/Ask label.
 
 ## 19. Audit log
 
