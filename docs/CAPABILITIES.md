@@ -752,6 +752,12 @@ ordinary chats still open in Chat and switch project when needed.
 ## 19. Audit log
 
 **Why:** An activity trail of meaningful actions.
+**How:** Settings → Diagnostics → Audit log opens a filterable modal of recent
+entries (`GET /api/audit`). File/tree/app actions stay project-scoped with a
+`path` metadata field; settings tests and saves (image generation, Higgsfield)
+use `target_type=settings` and store flat JSON metadata (provider, status, …) —
+never a double-encoded string under `path`. The modal pretty-prints metadata
+(`provider: codex · status: ok`) and still unwraps older double-encoded rows.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
 
 ## 19b. Diagnostics debug logs

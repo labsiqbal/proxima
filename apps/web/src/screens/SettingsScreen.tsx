@@ -176,6 +176,35 @@ const shortText = (s?: string | null, max = 120) => {
   const clean = (s || '').replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
 }
+
+/** Pretty-print audit metadata JSON for the owner-facing log (not raw dumps). */
+export function formatAuditMeta(raw: string | null | undefined, max = 160): string {
+  const text = (raw || '').trim()
+  if (!text || text === '{}') return ''
+  let value: unknown = text
+  try { value = JSON.parse(text) } catch { return shortText(text, max) }
+  // Historical bug: settings audits stored json.dumps(obj) inside {"path": "..."}.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    const keys = Object.keys(obj)
+    if (keys.length === 1 && keys[0] === 'path' && typeof obj.path === 'string') {
+      const pathVal = obj.path.trim()
+      if ((pathVal.startsWith('{') && pathVal.endsWith('}')) || (pathVal.startsWith('[') && pathVal.endsWith(']'))) {
+        try { value = JSON.parse(pathVal) } catch { return shortText(pathVal, max) }
+      } else {
+        return shortText(pathVal, max)
+      }
+    }
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const parts = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    return shortText(parts.join(' · ') || text, max)
+  }
+  if (typeof value === 'string') return shortText(value, max)
+  return shortText(JSON.stringify(value), max)
+}
 type SettingsSectionKey = 'account' | 'agents' | 'knowledge' | 'media' | 'remote' | 'diagnostics'
 
 const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
@@ -350,13 +379,16 @@ function AuditPanel({ token }: { token: string }) {
       <input className="ui-select audit-search" placeholder="Filter by actor, action, target…" value={q} onChange={e => setQ(e.target.value)} />
       <div className="audit-list scrollable">
         {rows.length === 0 && <p className="muted">No entries.</p>}
-        {rows.map(e => <div className="audit-row" key={e.id}>
-          <span className="audit-time">{fmtTime(e.created_at)}</span>
-          <span className="audit-actor">{e.actor || 'system'}</span>
-          <span className={`audit-action ${auditTone(e.action)}`}>{e.action}</span>
-          <span className="audit-target" title={`${e.target_type}:${e.target_id}`}>{e.target_type}:{e.target_id}</span>
-          {e.metadata && e.metadata !== '{}' ? <span className="audit-meta" title={e.metadata}>{e.metadata}</span> : <span />}
-        </div>)}
+        {rows.map(e => {
+          const meta = formatAuditMeta(e.metadata)
+          return <div className="audit-row" key={e.id}>
+            <span className="audit-time">{fmtTime(e.created_at)}</span>
+            <span className="audit-actor">{e.actor || 'system'}</span>
+            <span className={`audit-action ${auditTone(e.action)}`}>{e.action}</span>
+            <span className="audit-target" title={`${e.target_type}:${e.target_id}`}>{e.target_type}:{e.target_id}</span>
+            {meta ? <span className="audit-meta" title={e.metadata}>{meta}</span> : <span />}
+          </div>
+        })}
       </div>
       {error && <p className="error-text">{error}</p>}
     </div></div>}

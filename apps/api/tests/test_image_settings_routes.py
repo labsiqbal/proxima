@@ -45,7 +45,32 @@ def test_image_gen_test_codex_accepts_ready_shape(tmp_path):
     assert "ready" in data or "ok" in data
 
 
+def test_image_gen_test_audit_is_not_double_encoded(tmp_path):
+    """Settings tests must land as settings:image_gen with flat metadata JSON."""
+    import json
+
+    c = _client(tmp_path)
+    r = c.post("/api/settings/image-gen/test", json={"provider": "codex"})
+    assert r.status_code == 200, r.text
+
+    row = c.app.state.db.execute(
+        "SELECT action, target_type, target_id, metadata FROM audit_log "
+        "WHERE action = 'settings.image_gen.test' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    assert row["target_type"] == "settings"
+    assert row["target_id"] == "image_gen"
+    meta = json.loads(row["metadata"])
+    assert meta["provider"] == "codex"
+    assert meta["status"] in {"ok", "fail"}
+    # Must not wrap the payload as {"path": "{...json...}"}
+    assert "path" not in meta
+    assert not isinstance(meta.get("provider"), str) or "{" not in meta.get("provider", "")
+
+
 def test_image_gen_save_openai_compatible_masks_key(tmp_path):
+    import json
+
     c = _client(tmp_path)
     r = c.put("/api/settings/image-gen", json={
         "provider": "openai-compatible",
@@ -62,6 +87,19 @@ def test_image_gen_save_openai_compatible_masks_key(tmp_path):
     assert data["model"] == "image-model"
     assert data["hasApiKey"] is True
     assert "secret-key" not in str(data)
+
+    row = c.app.state.db.execute(
+        "SELECT target_type, target_id, metadata FROM audit_log "
+        "WHERE action = 'settings.image_gen' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row["target_type"] == "settings"
+    assert row["target_id"] == "image_gen"
+    meta = json.loads(row["metadata"])
+    assert meta["provider"] == "openai-compatible"
+    assert meta["model"] == "image-model"
+    assert meta["key_set"] is True
+    assert "secret-key" not in row["metadata"]
+    assert "path" not in meta
 
 
 def test_image_gen_partial_save_preserves_existing_provider_fields(tmp_path):
