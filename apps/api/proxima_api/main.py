@@ -339,6 +339,8 @@ def _config_from_env() -> dict[str, Any]:
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "1").lower() in ("1", "true", "yes", "on"),
         "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
         "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "1").lower() in ("1", "true", "yes", "on"),
+        # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
+        "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
     }
 
 

@@ -110,6 +110,9 @@ app = create_app(
         "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
         # On by default since slice 4 (review UI); the env var is the escape hatch.
         "feature_repo_worktrees": env_bool("PROXIMA_FEATURE_REPO_WORKTREES", True),
+        # systemd --user unit Diagnostics reads via journalctl (CLI + staging use the same env).
+        "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip()
+            or DEFAULT_CONFIG["service_name"],
     }
 )
 

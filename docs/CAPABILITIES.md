@@ -754,6 +754,17 @@ ordinary chats still open in Chat and switch project when needed.
 **Why:** An activity trail of meaningful actions.
 **Endpoints:** `GET /api/audit`. (Roles/users management removed in single-user.)
 
+## 19b. Diagnostics debug logs
+
+**Why:** Owners need the service journal plus stuck-run state without SSHing to the host.
+**How:** Settings → Diagnostics → Debug logs calls `GET /api/debug/logs`, which runs
+`journalctl --user -u <unit>` for the configured systemd unit (`PROXIMA_SERVICE_NAME`,
+default `proxima` → `proxima.service`), and lists active/stale runs and orphaned jobs.
+Empty journals return a `logHint` naming the unit and how to point `PROXIMA_SERVICE_NAME`
+at staging/preview units; the panel head uses correct singular/plural line counts and
+shows the unit under the description.
+**Endpoints:** `GET /api/debug/logs`, `POST /api/debug/reap-orphaned-jobs`.
+
 ## 20. Reliability (cross-cutting)
 
 Heartbeat/reaper for hung runs, the satpam supervision loop for alive-but-unproductive

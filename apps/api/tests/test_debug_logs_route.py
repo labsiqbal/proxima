@@ -13,6 +13,7 @@ def test_debug_logs_returns_journal_and_run_state(tmp_path, monkeypatch):
 
     def fake_run(*args, **kwargs):
         assert "journalctl" in args[0]
+        assert "proxima.service" in args[0]
         assert kwargs["timeout"] == 5
         return Result()
 
@@ -33,10 +34,69 @@ def test_debug_logs_returns_journal_and_run_state(tmp_path, monkeypatch):
     data = r.json()
     assert "test log line" in data["logs"]
     assert data["logError"] == ""
+    assert data["logHint"] == ""
+    assert data["serviceUnit"] == "proxima.service"
     assert data["runs"] == []
     assert data["rawActiveSessionIds"] == []
     assert data["activeRuns"] == []
     assert data["staleRuns"] == []
+
+
+def test_debug_logs_uses_configured_service_name(tmp_path, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "2026-06-27T10:00:00 preview-proxima ready\n"
+        stderr = ""
+
+    seen: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(list(args))
+        return Result()
+
+    monkeypatch.setattr("proxima_api.routes.admin.subprocess.run", fake_run)
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "service_name": "preview-proxima",
+    })
+    c = TestClient(app)
+    token = c.post("/auth/auto").json()["token"]
+    c.headers.update({"Authorization": f"Bearer {token}"})
+
+    data = c.get("/api/debug/logs").json()
+
+    assert seen and "preview-proxima.service" in seen[0]
+    assert data["serviceUnit"] == "preview-proxima.service"
+    assert "preview-proxima ready" in data["logs"]
+    assert data["logHint"] == ""
+
+
+def test_debug_logs_empty_journal_explains_service_unit(tmp_path, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "-- No entries --\n"
+        stderr = ""
+
+    monkeypatch.setattr("proxima_api.routes.admin.subprocess.run", lambda *args, **kwargs: Result())
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "service_name": "proxima-staging.service",
+    })
+    c = TestClient(app)
+    token = c.post("/auth/auto").json()["token"]
+    c.headers.update({"Authorization": f"Bearer {token}"})
+
+    data = c.get("/api/debug/logs").json()
+
+    assert data["serviceUnit"] == "proxima-staging.service"
+    assert "proxima-staging.service" in data["logHint"]
+    assert "PROXIMA_SERVICE_NAME" in data["logHint"]
 
 
 def test_debug_logs_separates_stale_runs_from_active_sessions(tmp_path, monkeypatch):

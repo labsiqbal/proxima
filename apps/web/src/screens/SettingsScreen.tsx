@@ -2,7 +2,7 @@ import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { listAudit, type AuditEntry } from '../api/audit'
-import { getDebugLogs, reapOrphanedJobs, type DebugLogs } from '../api/debug'
+import { debugLogLineLabel, getDebugLogs, reapOrphanedJobs, type DebugLogs } from '../api/debug'
 import { cancelRun } from '../api/runs'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
@@ -262,8 +262,8 @@ function DebugLogsPanel({ token }: { token: string }) {
   }
 
   return <div className="panel debug-panel">
-    <div className="panel-head"><h3>Debug logs</h3><span>{busy ? 'loading' : `${lineCount} lines`}</span></div>
-    <p className="muted">Service journal, queued/running sessions, and recent runs for quick error checks.</p>
+    <div className="panel-head"><h3>Debug logs</h3><span>{busy ? 'loading' : debugLogLineLabel(lineCount)}</span></div>
+    <p className="muted">Service journal{data?.serviceUnit ? ` (${data.serviceUnit})` : ''}, queued/running sessions, and recent runs for quick error checks.</p>
     <div className="debug-toolbar">
       <button className="ghost-button" type="button" onClick={() => void load()} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh'}</button>
       <Dropdown value={String(limit)} onChange={v => setLimit(Number(v))} minWidth={130} options={[120, 240, 500, 1000].map(n => ({ value: String(n), label: `${n} lines` }))} />
@@ -301,6 +301,7 @@ function DebugLogsPanel({ token }: { token: string }) {
       {runs.length === 0 && <p className="muted">No recent runs.</p>}
     </div>
     {data?.logError && <p className="error-text">{data.logError}</p>}
+    {data?.logHint && !data?.logError && <p className="muted">{data.logHint}</p>}
     {error && <p className="error-text">{error}</p>}
     <pre className="debug-log">{data?.logs || 'No journal output.'}</pre>
   </div>

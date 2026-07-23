@@ -67,6 +67,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # still set an explicit interface (including 0.0.0.0) via
     # PROXIMA_PREVIEW_BIND, or "off" for strict loopback-only installs.
     "preview_bind_host": "auto",
+    # systemd --user unit name for Diagnostics journal (without .service).
+    # Staging/preview installs set PROXIMA_SERVICE_NAME so debug logs match the
+    # real unit instead of always reading proxima.service.
+    "service_name": "proxima",
 }
 
 
@@ -92,7 +96,17 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
     cfg["feature_repo_worktrees"] = _bool_flag(cfg.get("feature_repo_worktrees"))
+    raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
+    cfg["service_name"] = raw_service.removesuffix(".service")
     return cfg
+
+
+def systemd_user_unit(service_name: str | None = None) -> str:
+    """Return the systemd --user unit name Diagnostics should journalctl."""
+    name = str(service_name or "proxima").strip() or "proxima"
+    if name.endswith(".service"):
+        return name
+    return f"{name}.service"
 
 
 def validate_slug(slug: str) -> str:
