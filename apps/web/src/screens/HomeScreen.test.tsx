@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeScreen } from "./HomeScreen";
 import { getDashboard } from "../api/dashboard";
@@ -158,6 +159,28 @@ describe("HomeScreen Ops task composer", () => {
 		resolveTask(77);
 		await Promise.resolve();
 		expect(onOpenJob).not.toHaveBeenCalled();
+	});
+
+	it("still opens the task workspace after React Strict Mode remount", async () => {
+		const user = userEvent.setup();
+		const onCreateTask = vi.fn().mockResolvedValue(88);
+		const onOpenJob = vi.fn();
+		render(
+			<React.StrictMode>
+				<HomeScreen
+					{...base}
+					onCreateTask={onCreateTask}
+					onOpenJob={onOpenJob}
+				/>
+			</React.StrictMode>,
+		);
+		await user.type(
+			await screen.findByRole("textbox", { name: "Task brief" }),
+			"Strict mode task",
+		);
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(onCreateTask).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(onOpenJob).toHaveBeenCalledWith(88));
 	});
 
 	it("keeps the brief and announces task failure", async () => {

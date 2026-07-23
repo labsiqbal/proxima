@@ -759,7 +759,11 @@ on the right rail; once opened it stays mounted so shells survive closing the pa
 **Chat** — the launcher opens from the Tasks screen's `+ New task`.
 **How:** The launcher is deliberately minimal — a greeting, the **Task Composer**
 (project + agent + Guarded/Autonomous policy), and an **attention strip** when
-jobs are waiting in review (jump to the first, or open Tasks). It polls
+jobs are waiting in review (jump to the first, or open Tasks). **Start task**
+creates the durable job then always opens its hash-addressable task workspace
+(errors stay on the launcher with the brief restored); the composer re-arms its
+mounted flag on each mount so React Strict Mode cleanup cannot swallow that
+navigation or the failure alert. It polls
 `GET /api/dashboard` every 5s; the dashboard payload also carries `authHealth` —
 cached background checks (`auth_health.py`, 60s TTL, never on the request path)
 of the selected image provider plus every runner referenced by a profile —

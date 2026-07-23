@@ -156,13 +156,16 @@ export function TaskComposer({
 		React.useState<OpsExecutionPolicy>("guarded");
 	const mountedRef = React.useRef(true);
 	const actionSeq = React.useRef(0);
-	React.useEffect(
-		() => () => {
+	// Must re-arm mounted on mount: React Strict Mode runs cleanup then remounts
+	// the same instance, and a cleanup-only effect leaves mountedRef=false forever
+	// so successful starts never open the task workspace (and errors stay silent).
+	React.useEffect(() => {
+		mountedRef.current = true;
+		return () => {
 			mountedRef.current = false;
 			actionSeq.current += 1;
-		},
-		[],
-	);
+		};
+	}, []);
 
 	const submit = async (brief: string) => {
 		if (!activeProject)
