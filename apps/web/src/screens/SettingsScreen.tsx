@@ -25,6 +25,7 @@ import {
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
 import type { Profile, Project, Runner, User } from '../types'
+import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
 
@@ -492,7 +493,7 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
@@ -547,7 +548,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : activeSection === 'agents'
-      ? <><RunnersScreen token={token} runners={runners} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
+      ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : activeSection === 'media'

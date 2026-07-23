@@ -928,6 +928,23 @@ button:disabled {
 		var(--ui-stroke-secondary)
 	);
 }
+.runner-card.not-ready {
+	border-color: color-mix(
+		in srgb,
+		var(--ui-warning) 40%,
+		var(--ui-stroke-secondary)
+	);
+}
+.runner-card.not-ready .runner-card-head span {
+	background: var(--ui-warning-bg);
+	color: var(--ui-text-primary);
+}
+.runner-card-hint {
+	margin: 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	line-height: 1.35;
+}
 .runner-card.detected {
 	border-color: var(--ui-stroke-secondary);
 }

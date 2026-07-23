@@ -54,3 +54,34 @@ export function runnerOptionBadge(entry: RunnerReady): string | undefined {
 	if (!entry.installed) return undefined;
 	return entry.ready ? "ready" : "not ready";
 }
+
+/** Card chip + tone for Settings → Agents runner grid. */
+export type RunnerGridStatus = {
+	label: string;
+	tone: "ready" | "detected" | "missing" | "not-ready";
+	hint?: string;
+};
+
+/**
+ * Status for one runner card. Adapter presence alone is not enough: a
+ * Runnable binary with revoked auth must read "Not ready" so the grid
+ * matches the top Hermes banner and profile pickers.
+ */
+export function runnerGridStatus(
+	runner: { id: string; installed: boolean; runnable: boolean },
+	readiness: RunnerReadinessMap | null | undefined,
+): RunnerGridStatus {
+	if (!runner.installed) return { label: "Missing", tone: "missing" };
+	if (!runner.runnable) return { label: "Future adapter", tone: "detected" };
+	const entry = readiness?.[runner.id];
+	if (entry && !entry.ready) {
+		return {
+			label: "Not ready",
+			tone: "not-ready",
+			...(entry.authHint ? { hint: entry.authHint } : {}),
+		};
+	}
+	if (entry?.ready) return { label: "Ready", tone: "ready" };
+	// Readiness still loading or unknown — keep the established adapter word.
+	return { label: "Runnable", tone: "ready" };
+}
