@@ -72,6 +72,9 @@ def format_rpc_error(error: Any) -> str:
     ``str()`` of that dict is unreadable in chat; prefer ``data.details``,
     then ``message``, and accept already-stringified JSON or Python-repr dumps
     so worker failure paths and historical rows clean up the same way.
+
+    Known Hermes auth/provider failures also get a short Proxima next step
+    (switch agent / re-auth) so owners are not stuck with CLI-only advice.
     """
     text = _rpc_error_text(error).strip()
     if not text:
@@ -79,7 +82,38 @@ def format_rpc_error(error: Any) -> str:
     # Drop a single outer "Run failed:" so callers can re-prefix cleanly.
     if text.lower().startswith("run failed:"):
         text = text[11:].strip()
-    return text or "Agent run failed"
+    return _enrich_runner_error(text) or "Agent run failed"
+
+
+def _enrich_runner_error(text: str) -> str:
+    """Append a Proxima next step for known Hermes auth/provider failures."""
+    body = (text or "").strip()
+    if not body:
+        return body
+    lower = body.lower()
+    # Already carries our next-step line (idempotent on re-format).
+    if "agents menu" in lower or "pick a different agent" in lower:
+        return body
+    needs_switch = (
+        "no llm provider configured" in lower
+        or "relogin_required" in lower
+        or "token refresh failed" in lower
+        or "invalid_grant" in lower
+        or ("refresh token" in lower and "revoked" in lower)
+        or "hermes setup" in lower
+        or "hermes model" in lower
+        or "hermes -z" in lower
+    )
+    if not needs_switch:
+        return body
+    hint = (
+        "In Proxima, pick another agent from the Agents menu while you fix this, "
+        "or re-authenticate Hermes with `hermes -z` / `hermes setup`."
+    )
+    if hint.lower() in lower:
+        return body
+    return f"{body.rstrip('. ')}. {hint}"
+
 
 
 def _rpc_error_text(error: Any) -> str:

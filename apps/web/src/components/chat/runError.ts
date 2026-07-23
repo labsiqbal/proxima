@@ -5,6 +5,10 @@
  *   Run failed: {'code': -32603, 'message': 'Internal error', 'data': {'details': '…'}}
  * Prefer data.details (or message) so chat shows the real reason, not the dump.
  * Safe on ordinary plain-text errors — those pass through unchanged.
+ *
+ * Known Hermes auth/provider failures also get a short Proxima next step so
+ * historical bubbles (and plan-chat Test runs) tell the owner to switch agent
+ * or re-authenticate, not only to run a Hermes CLI command.
  */
 export function formatRunError(raw: string | null | undefined): string {
 	if (!raw) return "Run failed";
@@ -15,10 +19,35 @@ export function formatRunError(raw: string | null | undefined): string {
 	if (hadPrefix) text = text.replace(/^run failed:\s*/i, "").trim();
 
 	const extracted = extractRpcMessage(text);
-	const body = (extracted || text).trim() || "Agent run failed";
+	const body = enrichRunnerError((extracted || text).trim() || "Agent run failed");
 	// Keep a single Run failed: prefix for chat error bubbles.
 	if (hadPrefix || extracted) return `Run failed: ${body}`;
 	return body;
+}
+
+/** Append a Proxima next step for known Hermes auth/provider failures. */
+export function enrichRunnerError(text: string): string {
+	const body = (text || "").trim();
+	if (!body) return body;
+	const lower = body.toLowerCase();
+	if (lower.includes("agents menu") || lower.includes("pick a different agent")) {
+		return body;
+	}
+	const needsSwitch =
+		lower.includes("no llm provider configured") ||
+		lower.includes("relogin_required") ||
+		lower.includes("token refresh failed") ||
+		lower.includes("invalid_grant") ||
+		(lower.includes("refresh token") && lower.includes("revoked")) ||
+		lower.includes("hermes setup") ||
+		lower.includes("hermes model") ||
+		lower.includes("hermes -z");
+	if (!needsSwitch) return body;
+	const hint =
+		"In Proxima, pick another agent from the Agents menu while you fix this, " +
+		"or re-authenticate Hermes with `hermes -z` / `hermes setup`.";
+	if (lower.includes(hint.toLowerCase())) return body;
+	return `${body.replace(/[.\s]+$/, "")}. ${hint}`;
 }
 
 function extractRpcMessage(text: string): string | null {

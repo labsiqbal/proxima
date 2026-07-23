@@ -37,6 +37,59 @@ def test_hermes_status_ready_when_bin_and_home_present(tmp_path):
     assert st["guidance"] == ""
 
 
+def test_hermes_status_not_ready_when_auth_requires_relogin(tmp_path):
+    import json
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    (home / "auth.json").write_text(json.dumps({
+        "active_provider": "xai-oauth",
+        "providers": {
+            "xai-oauth": {
+                "last_auth_error": {
+                    "message": 'xAI token refresh failed. Response: {"error":"invalid_grant","error_description":"Refresh token has been revoked"}',
+                    "relogin_required": True,
+                }
+            }
+        },
+    }))
+    bindir = _make_hermes_bin(tmp_path)
+    st = hermes_status(source_home=str(home), path_env=bindir)
+    assert st["ready"] is False
+    assert st["home"] == str(home)
+    assert "expired" in st["guidance"].lower() or "revoked" in st["guidance"].lower()
+    assert "hermes -z" in st["guidance"] or "hermes setup" in st["guidance"]
+    assert "Agents menu" in st["guidance"]
+
+
+def test_runner_readiness_marks_hermes_not_ready_on_relogin(tmp_path, monkeypatch):
+    import json
+    import proxima_api.runners as r
+
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    (home / "auth.json").write_text(json.dumps({
+        "active_provider": "xai-oauth",
+        "providers": {
+            "xai-oauth": {
+                "last_auth_error": {"message": "token refresh failed", "relogin_required": True}
+            }
+        },
+    }))
+    bindir = _make_hermes_bin(tmp_path)
+    real_expand = os.path.expanduser
+    monkeypatch.setattr(
+        r.os.path,
+        "expanduser",
+        lambda p: str(home) if p == "~/.hermes" else real_expand(p),
+    )
+    out = r.runner_readiness(path_env=bindir)
+    assert out["hermes"]["installed"] is True
+    assert out["hermes"]["ready"] is False
+    assert out["hermes"]["authHint"]
+    assert "Agents menu" in out["hermes"]["authHint"] or "hermes" in out["hermes"]["authHint"]
+
+
 def test_hermes_status_missing_binary(tmp_path):
     home = tmp_path / "hermes-home"
     home.mkdir()
