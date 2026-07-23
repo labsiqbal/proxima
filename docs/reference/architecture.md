@@ -10,7 +10,7 @@ A self-hosted, **single-user control plane for AI agents**. It provides a PWA
 
 + backend for chat, projects, files, terminal, workflows, jobs, schedules, wiki,
 artifacts, design, and runner profiles. It does **not** run models itself — it drives
-agent CLIs you already own (Claude Code, Codex, Hermes, Pi) over the **Agent
+agent CLIs you already own (Claude Code, Codex, Grok, Hermes, Pi) over the **Agent
 Client Protocol (ACP)**. The work it orchestrates is domain-neutral (content,
 ops, research, code alike); the runners it drives today happen to be coding-agent
 CLIs.
@@ -33,7 +33,7 @@ Owner ── Profile ── Runner ── Project / Workspace
   primary boundary, with application authentication as defense in depth.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
   model, and system instructions ("soul").
-+ **Runner** — the agent CLI a profile drives (Claude Code / Codex / Hermes / Pi),
++ **Runner** - the agent CLI a profile drives (Claude Code / Codex / Grok / Hermes / Pi),
   resolved by a _runner spec_.
 + **Project** - a scaffolded, linked, or newly-created-on-disk folder. Chat,
   terminal, files, wiki, and workflows all operate on the project path.
@@ -59,7 +59,7 @@ Owner ── Profile ── Runner ── Project / Workspace
                          SQLite DB  (see database.md)
                                  │  spawns / talks ACP
                                  ▼
-                Agent CLIs: claude-code · codex · hermes · pi
+                Agent CLIs: claude-code · codex · grok · hermes · pi
 ```
 
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
@@ -88,7 +88,7 @@ code never mixes with per-install state:
 
 > **Naming note:** `hermes-profiles/` — like the `hermes_home` columns on
 > `profiles`/`runs`/`agent_sessions` and the `HERMES_*` env names — is legacy naming
-> from the Hermes-first era. Every runner (Claude Code, Codex, Hermes, Pi) stores its
+> from the Hermes-first era. Every runner (Claude Code, Codex, Grok, Hermes, Pi) stores its
 > per-profile credential home there; the mechanism is fully runner-agnostic. The
 > schema/paths are intentionally not renamed.
 
@@ -623,6 +623,14 @@ regardless of CLI:
 { "type": "artifact", "path": "..." }
 { "type": "run.completed" }
 ```
+
+**Grok runner (native ACP).** Grok's spec spawns the owner's official Grok Build
+CLI as `grok agent stdio`. The CLI speaks ACP directly, so Proxima uses the normal
+persistent `AcpProcess` path without an npm or editor adapter. New profile homes
+seed `auth.json` and `config.toml` from `~/.grok`, refresh the auth file before a
+run, and set `GROK_HOME` to keep profile state isolated. Detection marks Grok ready
+only when both the binary and a non-empty JSON auth file are present; operators log
+in with `grok login` or `grok login --device-auth`.
 
 **Codex runner (native app-server, not the Zed ACP adapter).** Most runners speak
 ACP through a persistent subprocess (`acp.py`, `AcpProcess`). Codex is the

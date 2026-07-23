@@ -20,9 +20,20 @@ def test_unknown_runner_falls_back_to_default():
 
 def test_registry_has_expected_runners():
     # Exact set: detection-only stubs (opencode/aider/cursor-agent) and the Gemini
-    # runner were removed by owner decision 2026-07-10 — they must not come back
+    # runner were removed by owner decision 2026-07-10 - they must not come back
     # silently.
-    assert set(RUNNER_SPECS.keys()) == {"hermes", "claude-code", "codex", "pi"}
+    assert set(RUNNER_SPECS.keys()) == {"hermes", "claude-code", "codex", "grok", "pi"}
+
+
+def test_grok_spec_uses_native_acp_cli():
+    s = runner_spec("grok")
+    assert s.spawn_argv == ["grok", "agent", "stdio"]
+    assert s.protocol == "acp"
+    assert s.home_env == "GROK_HOME"
+    assert s.binary == "grok"
+    assert s.source_dir == "~/.grok"
+    assert s.seed_files == ("auth.json", "config.toml")
+    assert s.refresh_files == ("auth.json",)
 
 
 def test_codex_spec():

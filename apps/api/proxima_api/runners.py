@@ -231,9 +231,9 @@ def runner_readiness(path_env: str | None = None) -> dict:
     installed (selectable) and a hint for authenticating it.
 
     Most runners are "ready" when the binary is on PATH; auth failures surface
-    at run time. Hermes is deeper: its home may exist with credentials that
-    Hermes itself has already marked as needing re-login, so we consult
-    ``hermes_status`` rather than lying that a dead token is ready.
+    at run time. Hermes and Grok have local auth files we can inspect, so their
+    status checks require both the CLI and a usable login instead of claiming a
+    bare binary is ready.
     """
     resolved = augmented_path(path_env)
     out: dict[str, dict] = {}
@@ -256,7 +256,72 @@ def runner_readiness(path_env: str | None = None) -> dict:
         if hermes.get("binary"):
             out["hermes"]["binary"] = hermes["binary"]
             out["hermes"]["installed"] = True
+
+    # Grok: `grok agent stdio` uses the login in ~/.grok/auth.json (copied into
+    # each profile's GROK_HOME). An installed but logged-out CLI cannot run.
+    grok = grok_status(path_env=resolved)
+    if "grok" in out:
+        out["grok"]["ready"] = bool(grok.get("ready"))
+        if not grok.get("ready"):
+            out["grok"]["authHint"] = str(grok.get("guidance") or out["grok"]["authHint"] or "")
+        if grok.get("binary"):
+            out["grok"]["binary"] = grok["binary"]
+            out["grok"]["installed"] = True
     return out
+
+
+def _grok_home_usable(home: str) -> bool:
+    """A non-empty JSON object is evidence that Grok completed login.
+
+    We deliberately do not inspect or expose token values. Grok refreshes the
+    copied auth file itself, while Proxima refreshes profiles from the host copy
+    before each run.
+    """
+    auth_path = Path(home) / "auth.json"
+    if not auth_path.is_file():
+        return False
+    try:
+        data = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and bool(data)
+
+
+def grok_status(source_home: str | None = None, binary: str | None = None, path_env: str | None = None) -> dict:
+    """Detect an installed and authenticated Grok Build runner.
+
+    Grok's native ACP endpoint is available whenever the `grok` binary is on
+    PATH, but a run still needs a login stored in ~/.grok/auth.json. Checking
+    both keeps Settings and profile pickers from advertising a logged-out CLI as
+    ready. ``binary`` and ``source_home`` exist for deterministic tests and
+    operator-specific probes; normal readiness uses the host's ~/.grok home.
+    """
+    if binary and os.path.isfile(binary) and os.access(binary, os.X_OK):
+        resolved_binary = binary
+    else:
+        resolved = path_env if path_env is not None else augmented_path()
+        resolved_binary = resolve_binary("grok", resolved)
+    home = source_home or os.path.expanduser("~/.grok")
+    home_ok = _grok_home_usable(home)
+    ready = bool(resolved_binary) and home_ok
+    if ready:
+        guidance = ""
+    elif not resolved_binary and not home_ok:
+        guidance = (
+            "Grok is not ready. Install the Grok Build CLI and run `grok login` "
+            "(or `grok login --device-auth` on a headless host), then restart Proxima."
+        )
+    elif not resolved_binary:
+        guidance = (
+            "Grok credentials were found, but the `grok` binary is not on PATH. "
+            "Install or expose the Grok Build CLI, then restart Proxima."
+        )
+    else:
+        guidance = (
+            f"`grok` is installed but no usable login was found at {home}. "
+            "Run `grok login` (or `grok login --device-auth` on a headless host), then rescan."
+        )
+    return {"ready": ready, "binary": resolved_binary, "home": home if home_ok else None, "guidance": guidance}
 
 
 def _hermes_home_usable(home: str) -> bool:

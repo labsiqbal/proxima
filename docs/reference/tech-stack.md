@@ -20,7 +20,7 @@ it ships no model and no credentials of its own.
 | HTTP client | **httpx** (`>=0.27`) | outbound calls (image providers, Cloudflare, proxy) |
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
-| Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex TOML MCP selections while preserving unrelated settings |
+| Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex/Grok TOML MCP selections while preserving unrelated settings |
 | Database | **SQLite** (stdlib `sqlite3`, WAL mode) | one file per install; no server |
 | Package manager | **uv** (`uv.lock`) | `uv run …`, `uv sync` |
 | Tests | **pytest** (`>=8.3`) | `apps/api/tests/` |
@@ -32,11 +32,12 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 
 ### Key backend concepts
 
-- **ACP runners** (`acp.py`, `runners.py`, `runner_specs.py`) — each supported CLI
-  (Claude Code, Codex, Hermes, Pi) is described by a _runner spec_ (spawn
+- **ACP runners** (`acp.py`, `runners.py`, `runner_specs.py`) - each supported CLI
+  (Claude Code, Codex, Grok, Hermes, Pi) is described by a _runner spec_ (spawn
   argv + credential home + readiness check + wire `protocol`). The app spawns one
-  agent subprocess per `(runner, home, cwd)` on demand. Most runners speak ACP;
-  **Codex** instead drives the owner's own `codex app-server`
+  agent subprocess per `(runner, home, cwd)` on demand. Grok speaks ACP natively
+  through the official CLI's `grok agent stdio`; **Codex** instead drives the
+  owner's own `codex app-server`
   (`codex_appserver.py`) so it always tracks the up-to-date system Codex CLI
   rather than a bundled adapter core (see architecture.md → "Codex runner").
 - **Run worker** (`worker.py`) — a bounded-concurrency background worker that

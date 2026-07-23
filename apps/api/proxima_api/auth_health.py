@@ -67,7 +67,7 @@ def _media_checks(conn) -> list[dict[str, Any]]:
 
 def _runner_checks(conn) -> list[dict[str, Any]]:
     """Runners referenced by at least one profile. Installed check for all; deeper
-    auth check where one exists (hermes home/config, codex login)."""
+    auth check where one exists (Hermes/Grok home credentials, Codex login)."""
     used = [r["runner_id"] for r in conn.execute("SELECT DISTINCT runner_id FROM profiles ORDER BY runner_id").fetchall()]
     readiness = runner_readiness()
     checks: list[dict[str, Any]] = []
@@ -80,7 +80,8 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
             checks.append(_check(f"runner:{rid}", "runner", label, False,
                                  info.get("authHint") or f"{info.get('displayName') or rid} CLI is not installed on the Proxima server."))
             continue
-        ok, detail = True, "Ready."
+        ok = bool(info.get("ready"))
+        detail = "Ready." if ok else str(info.get("authHint") or f"{info.get('displayName') or rid} is not authenticated.")
         try:
             if rid == "hermes":
                 st = hermes_status()

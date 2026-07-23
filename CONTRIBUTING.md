@@ -18,7 +18,7 @@ re-litigate one.
 
 ## Dev setup
 
-Prerequisites: Linux, `uv`, `npm`, and (for real agent runs) a working Hermes CLI install.
+Prerequisites: Linux, `uv`, `npm`, and (for real agent runs) an authenticated supported CLI: Claude Code, Codex, Grok, Hermes, or Pi.
 
 ```bash
 git clone https://github.com/labsiqbal/proxima

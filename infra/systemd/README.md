@@ -77,6 +77,13 @@ sudo -u proxima -H env HOME=/var/lib/proxima \
   PATH=/usr/local/bin:/usr/bin:/bin hermes -z
 ```
 
+For Grok on a headless service host, use device authentication:
+
+```bash
+sudo -u proxima -H env HOME=/var/lib/proxima \
+  PATH=/usr/local/bin:/usr/bin:/bin grok login --device-auth
+```
+
 Use the equivalent login command for Claude Code, Codex, or Pi. Confirm both
 the runner executable and its authenticated files are readable by `proxima`; do
 not copy an operator's master credentials into `/etc/proxima`.

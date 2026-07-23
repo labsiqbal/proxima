@@ -2,21 +2,24 @@
 
 ## 1. Prerequisite checks
 
-Confirm all three tools are available before you start:
+Confirm the build tools are available before you start:
 
 ```bash
 uv --version
 npm --version
-hermes --version
 ```
 
-You also need an authenticated Hermes install. Check for credentials:
+You also need at least one authenticated agent CLI: Claude Code, Codex, Grok,
+Hermes, or Pi. For example, to use Grok:
 
 ```bash
-ls ~/.hermes/auth.json ~/.hermes/config.yaml 2>/dev/null && echo "Hermes credentials found"
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+grok models
 ```
 
-If Hermes is missing or not authenticated, install and authenticate it first. Proxima will install without it but agents won't run until Hermes is set up.
+Proxima installs without a runner, but agents cannot run until one is installed and
+logged in. See [the installation guide](docs/installation.md) for runner details.
 
 ## 2. Clone and install
 
@@ -31,7 +34,7 @@ The install script:
 - Writes a config file at `~/.config/proxima/proxima.env`.
 - Installs and enables a systemd **user** service (`proxima.service`) that starts automatically on login/boot and restarts on crash.
 - Installs a daily backup timer (`proxima-backup.timer`) that runs at 03:00.
-- Keeps Design Studio disabled; image generation and Workflow Graph remain available.
+- Builds Design Studio (enabled by default); image generation and Workflow Graph remain available.
 
 ## 3. First run
 
@@ -67,7 +70,7 @@ All runtime data lives outside the repository. Default paths:
 |---|---|
 | Database | `~/.local/share/proxima/proxima.db` |
 | Workspace / project files | `~/.local/share/proxima/` |
-| Hermes profiles | `~/.local/share/proxima/hermes-profiles/` |
+| Agent profile homes (legacy directory name) | `~/.local/share/proxima/hermes-profiles/` |
 | Config file | `~/.config/proxima/proxima.env` |
 | Daily backups | `~/.local/share/proxima/backups/` |
 
@@ -85,7 +88,7 @@ Key variables:
 | `PROXIMA_HERMES_BIN` | _(unset, uses PATH)_ | Explicit path to the `hermes` binary |
 | `PROXIMA_UPDATE_REPO` | `labsiqbal/proxima` | GitHub release source |
 | `PROXIMA_SERVICE_NAME` | `proxima` | Managed service selected by the CLI |
-| `PROXIMA_FEATURE_DESIGN_STUDIO` | `0` | Temporarily disables Design Studio |
+| `PROXIMA_FEATURE_DESIGN_STUDIO` | `1` | Set to `0` to disable Design Studio |
 
 ## 6. Phone and other devices (Tailscale)
 
@@ -116,6 +119,6 @@ bash scripts/backup
 ## Troubleshooting
 
 - **Web UI not loading**: run `bash scripts/build` to rebuild the PWA dist, then restart the service.
-- **Agents not running / "Hermes not found"**: install the Hermes CLI, authenticate with `hermes -z`, confirm it is on `PATH`, then `systemctl --user restart proxima`.
+- **Agents not running / runner not ready**: install and authenticate the selected CLI, confirm it is on the service's `PATH`, restart Proxima, then rescan in Settings -> Agents. For Grok, run `grok login` and verify with `grok models`.
 - **PWA cannot install on phone**: the browser requires HTTPS. Use Tailscale Serve (step 6 above).
 - **Want a fresh install**: stop the service, delete `~/.local/share/proxima/proxima.db`, and restart.

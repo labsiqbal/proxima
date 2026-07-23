@@ -41,7 +41,7 @@ def seed_agent_home(source: Path, target: Path, files: tuple[str, ...]) -> list[
 
 def refresh_agent_credentials(source: Path, target: Path, files: tuple[str, ...]) -> list[str]:
     """Force-copy an agent's credential files from source into target, overwriting
-    when they differ. Agents (Hermes/Codex/Claude Code) rotate OAuth tokens, so a
+    when they differ. Agents (Hermes/Codex/Claude Code/Grok) rotate OAuth tokens, so a
     one-time per-profile copy goes stale; refreshing before each run keeps the
     profile on the host's current auth. Returns the names that actually changed.
     """
