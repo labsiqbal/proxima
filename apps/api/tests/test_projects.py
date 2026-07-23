@@ -182,3 +182,26 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
     assert r.status_code == 400
     assert "parent" in r.json()["detail"].lower()
     assert not (root / "missing-parent").exists()
+
+
+def test_link_mkdir_removes_dir_on_unexpected_error(tmp_path: Path, monkeypatch):
+    """Unexpected post-mkdir failure (before the project row lands) must not leave an orphan dir."""
+    parent = tmp_path / "code"
+    parent.mkdir()
+    c, h = _link_client(tmp_path)
+    target = parent / "orphan-me"
+
+    def boom(_slug: str) -> str:
+        raise RuntimeError("simulated unexpected failure")
+
+    monkeypatch.setattr("proxima_api.routes.projects.validate_slug", boom)
+    try:
+        c.post(
+            "/api/projects/link",
+            headers=h,
+            json={"path": str(target), "name": "Orphan Me", "mkdir": True},
+        )
+        raise AssertionError("expected unexpected failure to propagate")
+    except RuntimeError as exc:
+        assert "simulated unexpected failure" in str(exc)
+    assert not target.exists()
