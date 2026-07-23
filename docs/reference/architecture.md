@@ -35,8 +35,8 @@ Owner ── Profile ── Runner ── Project / Workspace
   model, and system instructions ("soul").
 + **Runner** — the agent CLI a profile drives (Claude Code / Codex / Hermes / Pi),
   resolved by a _runner spec_.
-+ **Project** — a scaffolded or linked folder. Chat, terminal, files, wiki, and
-  workflows all operate on the project path.
++ **Project** - a scaffolded, linked, or newly-created-on-disk folder. Chat,
+  terminal, files, wiki, and workflows all operate on the project path.
 
 ## Component map
 

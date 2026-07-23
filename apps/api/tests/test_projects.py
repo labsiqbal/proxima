@@ -96,3 +96,89 @@ def test_link_project_invalid_slug_returns_422_not_500(tmp_path):
     h = {"Authorization": f"Bearer {tok}"}
     r = c.post("/api/projects/link", headers=h, json={"path": str(folder), "slug": "Bad_Slug"})
     assert r.status_code == 422
+
+
+def _link_client(tmp_path: Path, roots: list[Path] | None = None) -> tuple[TestClient, dict[str, str]]:
+    app = create_app({
+        "database_path": str(tmp_path / "h.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "link_roots": [str(p) for p in (roots or [tmp_path])],
+        "start_worker": False,
+    })
+    c = TestClient(app)
+    tok = c.post("/auth/auto").json()["token"]
+    return c, {"Authorization": f"Bearer {tok}"}
+
+
+def test_link_mkdir_creates_folder_and_registers_project(tmp_path: Path):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    c, h = _link_client(tmp_path)
+    target = parent / "fresh-app"
+    assert not target.exists()
+    r = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "name": "Fresh App", "mkdir": True},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["slug"] == "fresh-app"
+    assert body["name"] == "Fresh App"
+    assert body["path"] == str(target.resolve())
+    assert target.is_dir()
+    assert list(target.iterdir()) == []  # empty; never scaffolded or copied into
+
+
+def test_link_mkdir_rejects_existing_name(tmp_path: Path):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    existing = parent / "taken"
+    existing.mkdir()
+    (existing / "keep-me.txt").write_text("stay", encoding="utf-8")
+    c, h = _link_client(tmp_path)
+    r = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(existing), "mkdir": True},
+    )
+    assert r.status_code == 409
+    assert "already exists" in r.json()["detail"].lower()
+    # Must not delete or alter the existing folder.
+    assert (existing / "keep-me.txt").read_text(encoding="utf-8") == "stay"
+
+
+def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    c, h = _link_client(tmp_path, roots=[root])
+
+    outside_target = outside / "nope"
+    r = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(outside_target), "mkdir": True},
+    )
+    assert r.status_code == 403
+    assert "outside" in r.json()["detail"].lower()
+    assert not outside_target.exists()
+
+    r = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(root / ".."), "mkdir": True},
+    )
+    assert r.status_code == 400
+    assert "invalid folder name" in r.json()["detail"].lower()
+
+    r = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(root / "missing-parent" / "child"), "mkdir": True},
+    )
+    assert r.status_code == 400
+    assert "parent" in r.json()["detail"].lower()
+    assert not (root / "missing-parent").exists()

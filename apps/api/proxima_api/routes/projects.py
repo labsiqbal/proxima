@@ -66,15 +66,65 @@ def register(app, deps):
         parent = str(base.parent) if (base not in roots and _within_link_roots(base.parent)) else None
         return {"path": str(base), "parent": parent, "dirs": dirs, "roots": [str(r) for r in roots]}
 
+    def _validate_new_folder_name(name: str) -> str:
+        """Single path component only - no separators, traversal, or empty names."""
+        cleaned = name.strip()
+        if not cleaned or cleaned in (".", ".."):
+            raise HTTPException(status_code=400, detail="invalid folder name")
+        if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
+            raise HTTPException(status_code=400, detail="invalid folder name")
+        if len(cleaned) > 255:
+            raise HTTPException(status_code=400, detail="folder name is too long")
+        return cleaned
+
+    def _rmdir_if_empty(path: Path) -> None:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
     @app.post("/api/projects/link", status_code=201)
     def link_project(payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)):
-        """Register an EXISTING folder as a project (no scaffold). The project's
-        path points at the real folder, so chat/terminal/files operate on it."""
-        target = Path(payload.path).expanduser().resolve()
-        if not _within_link_roots(target):
-            raise HTTPException(status_code=403, detail="path is outside the allowed roots")
-        if not target.is_dir():
-            raise HTTPException(status_code=400, detail="not a directory")
+        """Register a folder as a project (no scaffold under the data dir). The
+        project's path points at the real folder, so chat/terminal/files operate
+        on it. Pass mkdir=true to create a brand-new empty directory first
+        (parent must already exist inside the link roots)."""
+        created_dir: Path | None = None
+        if payload.mkdir:
+            raw = Path(payload.path).expanduser()
+            folder_name = _validate_new_folder_name(raw.name)
+            try:
+                parent = raw.parent.resolve()
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail="parent directory is not reachable") from exc
+            if not _within_link_roots(parent):
+                raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+            if not parent.is_dir():
+                raise HTTPException(status_code=400, detail="parent directory does not exist")
+            target = parent / folder_name
+            # Refuse anything that would resolve outside the chosen parent (symlink games).
+            if target.exists():
+                raise HTTPException(status_code=409, detail="a folder with that name already exists")
+            try:
+                target.mkdir(mode=0o755)  # single level only; never parents=True
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail="permission denied - cannot create folder here") from exc
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail="a folder with that name already exists") from exc
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"could not create folder: {exc.strerror or exc}") from exc
+            created_dir = target
+            target = target.resolve()
+            if not _within_link_roots(target):
+                # Extremely defensive: if resolve() jumped (unexpected), remove the empty dir we made.
+                _rmdir_if_empty(created_dir)
+                raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+        else:
+            target = Path(payload.path).expanduser().resolve()
+            if not _within_link_roots(target):
+                raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+            if not target.is_dir():
+                raise HTTPException(status_code=400, detail="not a directory")
         name = (payload.name or target.name).strip()
         # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
         # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
@@ -82,9 +132,13 @@ def register(app, deps):
         try:
             slug = validate_slug(base_slug)
         except ValueError as exc:
+            if created_dir is not None:
+                _rmdir_if_empty(created_dir)
             raise HTTPException(status_code=422, detail=f"invalid project slug: {exc}") from exc
         if db().execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone():
-            raise HTTPException(status_code=409, detail=f"slug '{slug}' already exists — pick another")
+            if created_dir is not None:
+                _rmdir_if_empty(created_dir)
+            raise HTTPException(status_code=409, detail=f"slug '{slug}' already exists - pick another")
         cur = db().execute(
             "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
             (slug, name, str(target), user["id"]),
@@ -93,7 +147,11 @@ def register(app, deps):
         # Container areas (T1): register the ops area + auto-detect code areas.
         ensure_ops_area(db(), pid)
         sync_code_areas(db(), pid, target)
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.link', 'project', ?, ?)", (user["id"], slug, json.dumps({"path": str(target)})))
+        audit_action = "project.link.mkdir" if created_dir is not None else "project.link"
+        db().execute(
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
+            (user["id"], audit_action, slug, json.dumps({"path": str(target), "mkdir": bool(created_dir)})),
+        )
         row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
         return project_payload(row)
 

@@ -239,8 +239,8 @@ function AddProjectModal({ token, onClose, onAdded }: {
         </button>
       </form>
       <div className="divider" />
-      <p className="eyebrow">Link existing folder</p>
-      <p className="muted project-add-hint">Connect work you already have. The folder stays where it is.</p>
+      <p className="eyebrow">Use a folder on disk</p>
+      <p className="muted project-add-hint">Link work you already have, or create a new empty folder under a parent you pick. Nothing is moved or copied into Proxima's data dir.</p>
       <FolderLinker token={token} onLinked={onAdded} />
       {error && <p className="error-text">{error}</p>}
       <div className="confirm-actions">
