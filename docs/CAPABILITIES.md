@@ -763,8 +763,20 @@ though the current Home renders only the review-attention data. Global **Search*
 (magnifier in the top bar / Ctrl+K) covers chats, messages, projects, and designs.
 Chat hits include `mode` + project so a Design Studio session (excluded from the
 main chat list) opens in Studio on click instead of silently closing the modal;
-ordinary chats still open in Chat and switch project when needed.
+ordinary chats still open in Chat and switch project when needed. The search field
+is labeled for assistive tech, and each result exposes a short spaced `aria-label`
+(title · project / role · snippet) so screen readers do not hear full markdown bodies.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
+
+## 18b. Account preferences (password, appearance, notifications)
+
+**Why:** Owner security and desktop alerts without babysitting a tab.
+**How:** Settings → Account & Preferences. Password change fields are named and
+labeled (with a visually hidden username for password-manager heuristics). Desktop
+notifications use the browser Notification API while the tab is backgrounded; the
+toggle shows **On** / **Off**, or **Blocked** with an alert when the browser has
+denied permission for this site (so a click never fails silently). Re-enable by
+allowing notifications in the browser site settings, then try the toggle again.
 
 ## 19. Audit log
 

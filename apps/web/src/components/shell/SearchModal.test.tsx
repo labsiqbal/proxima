@@ -2,7 +2,15 @@ import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { SearchModal, isDesignSearchHit, sessionFromSearchHit } from './SearchModal'
+import {
+  SearchModal,
+  compactSearchLabel,
+  isDesignSearchHit,
+  searchChatAriaLabel,
+  searchMessageAriaLabel,
+  searchProjectAriaLabel,
+  sessionFromSearchHit,
+} from './SearchModal'
 import type { ChatSession } from '../../types'
 
 const searchMock = vi.fn()
@@ -20,6 +28,29 @@ const baseSession = (over: Partial<ChatSession> = {}): ChatSession => ({
   project_slug: 'demo-scratch',
   project_name: 'Demo Scratch',
   ...over,
+})
+
+describe('search accessible labels', () => {
+  it('joins parts with middle dots and truncates long labels', () => {
+    expect(compactSearchLabel(['Hello', 'world'])).toBe('Hello · world')
+    expect(compactSearchLabel(['a', '', null, 'b'])).toBe('a · b')
+    const long = 'x'.repeat(200)
+    expect(compactSearchLabel([long], 40).endsWith('…')).toBe(true)
+    expect(compactSearchLabel([long], 40).length).toBeLessThanOrEqual(40)
+  })
+
+  it('builds project / chat / message labels without dumping full bodies', () => {
+    expect(searchProjectAriaLabel('Demo Scratch', 'demo-scratch')).toBe('Demo Scratch · demo-scratch')
+    expect(searchProjectAriaLabel('Same', 'Same')).toBe('Same')
+    expect(searchChatAriaLabel('Ice cream', 'Demo', true)).toBe('Ice cream · Demo · Design')
+    const label = searchMessageAriaLabel(
+      'Ice cream flavors',
+      'assistant',
+      '# Brainstorm result\n\n**Prompt:** long markdown body that should not flood the accessible name forever',
+    )
+    expect(label.startsWith('Ice cream flavors · assistant:')).toBe(true)
+    expect(label.length).toBeLessThanOrEqual(160)
+  })
 })
 
 describe('sessionFromSearchHit / isDesignSearchHit', () => {
@@ -82,10 +113,10 @@ describe('SearchModal open routing', () => {
         onSelectView={vi.fn()}
       />,
     )
-    await user.type(screen.getByPlaceholderText(/Search chats/), 'farewell')
+    await user.type(screen.getByLabelText(/Search chats, projects, messages/i), 'farewell')
     await waitFor(() => expect(screen.getByText(/farewell announcement/i)).toBeInTheDocument())
     expect(screen.getByText(/Demo Scratch · Design/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /farewell announcement/i }))
+    await user.click(screen.getByRole('option', { name: /farewell announcement/i }))
     expect(onOpenDesign).toHaveBeenCalledTimes(1)
     expect(onOpenDesign.mock.calls[0][0]).toMatchObject({
       id: 12,
@@ -120,9 +151,9 @@ describe('SearchModal open routing', () => {
         onSelectView={onSelectView}
       />,
     )
-    await user.type(screen.getByPlaceholderText(/Search chats/), 'farewell')
+    await user.type(screen.getByLabelText(/Search chats, projects, messages/i), 'farewell')
     await waitFor(() => expect(screen.getByText('Plan the farewell copy')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Plan the farewell copy/i }))
+    await user.click(screen.getByRole('option', { name: /Plan the farewell copy/i }))
     expect(onSelectSession).toHaveBeenCalledWith(live)
     expect(onSelectView).toHaveBeenCalledWith('chat')
     expect(onOpenDesign).not.toHaveBeenCalled()

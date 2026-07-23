@@ -3337,6 +3337,14 @@ button:disabled {
 .toggle-pill.on .toggle-knob {
 	background: var(--ui-accent);
 }
+.toggle-pill.blocked {
+	border-color: color-mix(in srgb, var(--ui-warning) 45%, var(--ui-stroke-secondary));
+	color: var(--ui-warning);
+	background: var(--ui-warning-bg);
+}
+.toggle-pill.blocked .toggle-knob {
+	background: var(--ui-warning);
+}
 
 /* Account / profile menu (top-right) */
 .avatar.xs {

@@ -30,6 +30,28 @@ export function isDesignSearchHit(session: { title?: string | null; mode?: strin
   return session.mode === 'design' || /^(Design:|Design System:)/i.test(title)
 }
 
+/** Collapse whitespace and cap length so accessible names stay scannable. */
+export function compactSearchLabel(parts: Array<string | null | undefined>, max = 140): string {
+  const text = parts
+    .map(p => (p || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' · ')
+  if (text.length <= max) return text
+  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+}
+
+export function searchProjectAriaLabel(name: string, slug: string): string {
+  return compactSearchLabel([name, slug !== name ? slug : null])
+}
+
+export function searchChatAriaLabel(title: string, projectName?: string | null, design?: boolean): string {
+  return compactSearchLabel([title, projectName, design ? 'Design' : null])
+}
+
+export function searchMessageAriaLabel(sessionTitle: string, role: string, snippet: string): string {
+  return compactSearchLabel([sessionTitle, `${role}: ${snippet}`], 160)
+}
+
 export function SearchModal(props: {
   token: string
   sessions: ChatSession[]
@@ -96,13 +118,23 @@ export function SearchModal(props: {
   const messages = res.messages.filter(m => sessionEnabled({ id: m.session_id, title: m.session_title, mode: m.mode }))
   const total = res.projects.length + chats.length + messages.length
   return <div className="modal-scrim" onClick={props.onClose}><div className="modal-card search-modal" role="dialog" aria-modal="true" aria-label="Search" onClick={e => e.stopPropagation()}>
-    <input autoFocus className="ui-select search-input" placeholder="Search chats, projects, messages…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') props.onClose() }} />
-    <div className="search-results">
+    <input
+      autoFocus
+      className="ui-select search-input"
+      type="search"
+      name="proxima-search"
+      placeholder="Search chats, projects, messages…"
+      aria-label="Search chats, projects, messages"
+      value={q}
+      onChange={e => setQ(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Escape') props.onClose() }}
+    />
+    <div className="search-results" role="listbox" aria-label="Search results">
       {q.trim().length >= 2 && loading && <p className="muted">Searching…</p>}
       {q.trim().length >= 2 && !loading && total === 0 && <p className="muted">No matches.</p>}
-      {res.projects.length > 0 && <div className="search-group"><p className="eyebrow">Projects</p>{res.projects.map(p => <button className="search-item" key={'p' + p.slug} onClick={() => openProject(p.slug)}><strong>{p.name}</strong><small>{p.slug}</small></button>)}</div>}
-      {chats.length > 0 && <div className="search-group"><p className="eyebrow">Chats</p>{chats.map(c => <button className="search-item" key={'c' + c.id} onClick={() => openSession(c)}><strong>{c.title}</strong>{c.project_name ? <small>{c.project_name}{isDesignSearchHit(c) ? ' · Design' : ''}</small> : isDesignSearchHit(c) ? <small>Design</small> : null}</button>)}</div>}
-      {messages.length > 0 && <div className="search-group"><p className="eyebrow">Messages</p>{messages.map((m, i) => <button className="search-item" key={'m' + i} onClick={() => openSession({ id: m.session_id, title: m.session_title, mode: m.mode, project_slug: m.project_slug, project_name: m.project_name })}><strong>{m.session_title}</strong><small>{m.role}: {m.snippet}</small></button>)}</div>}
+      {res.projects.length > 0 && <div className="search-group"><p className="eyebrow">Projects</p>{res.projects.map(p => <button type="button" role="option" className="search-item" key={'p' + p.slug} aria-label={searchProjectAriaLabel(p.name, p.slug)} onClick={() => openProject(p.slug)}><strong aria-hidden="true">{p.name}</strong><small aria-hidden="true">{p.slug}</small></button>)}</div>}
+      {chats.length > 0 && <div className="search-group"><p className="eyebrow">Chats</p>{chats.map(c => <button type="button" role="option" className="search-item" key={'c' + c.id} aria-label={searchChatAriaLabel(c.title, c.project_name, isDesignSearchHit(c))} onClick={() => openSession(c)}><strong aria-hidden="true">{c.title}</strong>{c.project_name ? <small aria-hidden="true">{c.project_name}{isDesignSearchHit(c) ? ' · Design' : ''}</small> : isDesignSearchHit(c) ? <small aria-hidden="true">Design</small> : null}</button>)}</div>}
+      {messages.length > 0 && <div className="search-group"><p className="eyebrow">Messages</p>{messages.map((m, i) => <button type="button" role="option" className="search-item" key={'m' + i} aria-label={searchMessageAriaLabel(m.session_title, m.role, m.snippet)} onClick={() => openSession({ id: m.session_id, title: m.session_title, mode: m.mode, project_slug: m.project_slug, project_name: m.project_name })}><strong aria-hidden="true">{m.session_title}</strong><small aria-hidden="true">{m.role}: {m.snippet}</small></button>)}</div>}
     </div>
   </div></div>
 }

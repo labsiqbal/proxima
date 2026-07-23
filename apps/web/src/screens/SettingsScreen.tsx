@@ -166,7 +166,7 @@ function PermissionsPanel({ token }: { token: string }) {
   </div>
 }
 import { THEMES, FONTS, FONT_SIZE_MIN, FONT_SIZE_MAX, getTheme, getFont, getFontSize, applyTheme, applyFont, applyFontSize, type ThemeKey, type FontKey } from '../theme'
-import { notifySupported, notifyEnabled, enableNotifications, setNotifyPref } from '../lib/notify'
+import { notifySupported, notifyEnabled, notifyBlocked, notifyEnableFailureHint, enableNotifications, setNotifyPref } from '../lib/notify'
 import { getGoalMaxIter, setGoalMaxIter } from '../lib/goal'
 import { Dropdown } from '../components/ui/Dropdown'
 
@@ -517,10 +517,12 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   }
   return <div className="panel"><div className="panel-head"><h3>Password</h3><span>security</span></div>
     <form className="settings-rows auth-change-form" onSubmit={submit}>
-      <input className="auth-input" type="password" placeholder="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
-      <input className="auth-input" type="password" placeholder="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
-      <input className="auth-input" type="password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
-      {msg && <p className={msg.ok ? 'muted' : 'auth-error'}>{msg.text}</p>}
+      {/* Hidden username satisfies password-manager / a11y heuristics for a single-owner account. */}
+      <input type="text" name="username" autoComplete="username" value="owner" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
+      <input className="auth-input" type="password" name="current-password" placeholder="Current password" aria-label="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
+      <input className="auth-input" type="password" name="new-password" placeholder="New password" aria-label="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
+      <input className="auth-input" type="password" name="confirm-password" placeholder="Confirm new password" aria-label="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
+      {msg && <p className={msg.ok ? 'muted' : 'auth-error'} role={msg.ok ? undefined : 'alert'}>{msg.text}</p>}
       <button className="primary-button" type="submit" disabled={busy || !cur || !next}>{busy ? 'Changing…' : 'Change password'}</button>
     </form>
   </div>
@@ -533,6 +535,9 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const [fontSize, setFontSize] = React.useState<number>(getFontSize())
   const [notif, setNotif] = React.useState(notifyEnabled())
   const [notifBusy, setNotifBusy] = React.useState(false)
+  const [notifHint, setNotifHint] = React.useState<string | null>(
+    () => (notifyBlocked() ? notifyEnableFailureHint('denied') : null),
+  )
   const [goalMax, setGoalMax] = React.useState(getGoalMaxIter())
   const mountedRef = React.useRef(true)
   const notifSeq = React.useRef(0)
@@ -547,12 +552,25 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
 
   async function toggleNotif() {
     if (notifBusy) return
-    if (notif) { setNotifyPref(false); setNotif(false); return }
+    if (notif) {
+      setNotifyPref(false)
+      setNotif(false)
+      setNotifHint(null)
+      return
+    }
+    // Already blocked by the browser — don't pretend the toggle can succeed.
+    if (notifyBlocked()) {
+      setNotifHint(notifyEnableFailureHint('denied'))
+      return
+    }
     const seq = ++notifSeq.current
     setNotifBusy(true)
+    setNotifHint(null)
     try {
       const next = await enableNotifications()
-      if (mountedRef.current && seq === notifSeq.current) setNotif(next)
+      if (!mountedRef.current || seq !== notifSeq.current) return
+      setNotif(next)
+      if (!next) setNotifHint(notifyEnableFailureHint())
     } finally {
       if (mountedRef.current && seq === notifSeq.current) setNotifBusy(false)
     }
@@ -575,7 +593,18 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       {sourceLink}
     </div></div>
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid">{THEMES.map(t => <button key={t.key} className={`theme-swatch ${theme === t.key ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button"><span className="swatch-pv" style={{ background: t.surface }}><i style={{ background: t.accent }} /></span><small>{t.label}</small></button>)}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" /><span className="fontsize-value">{fontSize}px</span></div></div></div>
-  const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <button className={`toggle-pill ${notif ? 'on' : ''}`} onClick={() => void toggleNotif()} disabled={notifBusy}><span className="toggle-knob" />{notifBusy ? 'Requesting…' : notif ? 'On' : 'Off'}</button> : <p className="muted">Not supported in this browser.</p>}</div>
+  const notifBlocked = notifyBlocked()
+  const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <>
+    <button
+      type="button"
+      className={`toggle-pill ${notif ? 'on' : ''}${notifBlocked && !notif ? ' blocked' : ''}`}
+      onClick={() => void toggleNotif()}
+      disabled={notifBusy}
+      aria-pressed={notif}
+      aria-label={notifBlocked && !notif ? 'Desktop notifications blocked by browser' : `Desktop notifications ${notif ? 'on' : 'off'}`}
+    ><span className="toggle-knob" aria-hidden="true" />{notifBusy ? 'Requesting…' : notif ? 'On' : notifBlocked ? 'Blocked' : 'Off'}</button>
+    {notifHint && <p className="auth-error" role="alert">{notifHint}</p>}
+  </> : <p className="muted">Not supported in this browser.</p>}</div>
   const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><SatpamPanel token={token} /><PermissionsPanel token={token} /></>
 
   const content = activeSection === 'account'
