@@ -152,9 +152,11 @@ round/lane: collapsed by default (a cycling "thinking" shimmer while an agent
 works, a 2-line preview when done), click to expand one at a time. Brainstorm
 stacks cards vertically; Debate alternates them left/right per speaker so
 rounds read as a conversation. Leading runner banners and skills catalogs (e.g.
-Pi's `pi v… ## Skills` dump) are stripped from card bodies, previews, stored
-child outputs, and synthesis prompts so owners see the argument, not the path
-list — including when the real answer starts with bold/plain prose rather than
+Pi's `pi v…` plus a Skills path list) are stripped from **main chat bubbles**
+(display and newly stored answers), collab card bodies/previews, stored child
+outputs, and synthesis prompts so owners see the answer, not the path list —
+including compact `## Skills - /path` dumps, plain multiline `Skills\n/path`
+catalogs from Pi ACP, and answers that start with bold/plain prose rather than
 a `##` heading. The synthesis is NOT a card — it streams into the parent bubble like a
 normal reply and lands as the final assistant message (synthesis only; per-agent
 detail lives in the cards). Child runs still do not save ordinary assistant

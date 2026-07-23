@@ -5,25 +5,36 @@ import re
 from typing import Any
 
 # Some runners (notably Pi) print a version banner + full skills catalog before
-# the real answer. That noise poisons collab card previews and synthesis prompts.
+# the real answer. That noise poisons main chat, collab previews, and synthesis.
 # Real answers may start with ## Heading OR **bold** / plain prose (no second ##),
-# so the dump must end on skill path bullets and --- separators, not only on ##.
+# so the dump must end on skill path lines/bullets and --- separators, not only on ##.
+# Pi ACP has used both compact markdown (## Skills - /path) and a plain multiline
+# catalog (Skills\n/path\n/path). Match both.
+_SKILLS_ITEM = (
+    r"(?:"
+    r"[ \t]*-[ \t]+/\S+"  # markdown bullet paths
+    r"|[ \t]*\n[ \t]*/\S+"  # bare absolute path lines
+    r"|\s"  # whitespace between items only (stops at non-ws answer text)
+    r")"
+)
 _PI_PREAMBLE = re.compile(
     r"(?is)^\s*pi\s+v[\d.]+\b"
     r"(?:"
     r"\s*---"
-    r"|\s*##\s+skills\b(?:[ \t]*-[ \t]+/\S+|\s)+"
+    r"|\s*##\s+skills\b" + _SKILLS_ITEM + r"+"
+    r"|\s*skills\b" + _SKILLS_ITEM + r"+"
     r")*"
     r"\s*(?:---\s*)?"
 )
 _SKILLS_HEADING = re.compile(
-    r"(?is)^\s*##\s+skills\b(?:[ \t]*-[ \t]+/\S+|\s)*"
+    r"(?is)^\s*(?:##\s+)?skills\b" + _SKILLS_ITEM + r"*"
     r"(?:---\s*)?"
 )
 _UPDATE_NOTICE = re.compile(
     r"(?is)^\s*New version available:\s*\S+"
     r"(?:\s*\([^)]*\))?"
-    r"(?:\.\s*Run:\s*`[^`]+`)?"
+    # Backticked command (older Pi) or bare rest-of-line (current Pi ACP).
+    r"(?:\.\s*Run:\s*(?:`[^`]+`|[^\n]+))?"
     r"\s*"
 )
 

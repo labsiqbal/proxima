@@ -63,6 +63,19 @@ describe("stripRunnerPreamble", () => {
 		);
 	});
 
+	it("drops plain multiline Skills catalogs from main-chat Pi ACP dumps", () => {
+		const raw = [
+			"pi v0.80.10",
+			"Skills",
+			"/home/user/.pi/agent/skills/tdd/SKILL.md",
+			"/home/user/.agents/skills/qa/SKILL.md",
+			"",
+			"New version available: v0.81.1 (installed v0.80.10). Run: npm i -g @earendil-works/pi-coding-agent",
+			"pong",
+		].join("\n");
+		expect(stripRunnerPreamble(raw)).toBe("pong");
+	});
+
 	it("leaves ordinary answers untouched", () => {
 		const body = "## Position\n\nPlain text wins for tiny lists.";
 		expect(stripRunnerPreamble(body)).toBe(body);

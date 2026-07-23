@@ -30,6 +30,21 @@ def test_strip_runner_preamble_when_answer_starts_with_bold_not_heading():
     )
 
 
+def test_strip_runner_preamble_multiline_plain_skills_catalog():
+    """Live Pi ACP main-chat dumps use plain Skills + bare path lines, no ##."""
+    raw = (
+        "pi v0.80.10\n"
+        "Skills\n"
+        "/home/user/.pi/agent/skills/tdd/SKILL.md\n"
+        "/home/user/.agents/skills/qa/SKILL.md\n"
+        "\n"
+        "New version available: v0.81.1 (installed v0.80.10). "
+        "Run: npm i -g @earendil-works/pi-coding-agent\n"
+        "pong"
+    )
+    assert strip_runner_preamble(raw) == "pong"
+
+
 def test_strip_runner_preamble_leaves_clean_answers():
     body = "## Position\n\nPlain text wins for tiny lists."
     assert strip_runner_preamble(body) == body

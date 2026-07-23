@@ -220,7 +220,7 @@ const stripDesignScene = (s: string): string =>
 		.replace(/<design-scene[^>]*>[\s\S]*$/i, "")
 		.trimEnd();
 const cleanAssistant = (s: string): string =>
-	stripDesignScene(stripGoalStatus(s));
+	stripRunnerPreamble(stripDesignScene(stripGoalStatus(s)));
 
 function parseChoices(content: string): string[] {
 	const lines = content
@@ -611,20 +611,28 @@ export function collabCardAriaLabel(
 
 /**
  * Drop leading runner banners/skills dumps (Pi often prefixes the real answer
- * with `pi v… --- ## Skills - /path …`). Keeps collab previews scannable and
- * matches server-side strip_runner_preamble for already-stored polluted rows.
- * Real answers may start with a ## heading OR bold/plain prose (no second ##),
- * so the dump ends on skill path bullets and --- separators, not only on ##.
+ * with `pi v…` plus a Skills catalog). Used for main chat bubbles, collab
+ * previews, and matches server-side strip_runner_preamble for stored rows.
+ * Handles compact markdown (`## Skills - /path`) and plain multiline catalogs
+ * (`Skills\n/path\n/path`). Real answers may start with a ## heading OR
+ * bold/plain prose, so the dump ends on skill path lines and --- separators.
  */
 export function stripRunnerPreamble(text: string): string {
 	if (!text) return "";
 	let cleaned = text.trim();
-	const piPreamble =
-		/^\s*pi\s+v[\d.]+\b(?:\s*---|\s*##\s+skills\b(?:[ \t]*-[ \t]+\/\S+|\s)+)*\s*(?:---\s*)?/i;
-	const skillsHeading =
-		/^\s*##\s+skills\b(?:[ \t]*-[ \t]+\/\S+|\s)*(?:---\s*)?/i;
+	// Skill path item: markdown bullet, bare absolute path line, or whitespace.
+	const skillItem = "(?:[ \\t]*-[ \\t]+\\/\\S+|[ \\t]*\\n[ \\t]*\\/\\S+|\\s)";
+	const piPreamble = new RegExp(
+		`^\\s*pi\\s+v[\\d.]+\\b(?:\\s*---|\\s*##\\s+skills\\b${skillItem}+|\\s*skills\\b${skillItem}+)*\\s*(?:---\\s*)?`,
+		"i",
+	);
+	const skillsHeading = new RegExp(
+		`^\\s*(?:##\\s+)?skills\\b${skillItem}*(?:---\\s*)?`,
+		"i",
+	);
+	// Backticked Run: command (older Pi) or bare rest-of-line (current ACP).
 	const updateNotice =
-		/^\s*New version available:\s*\S+(?:\s*\([^)]*\))?(?:\.\s*Run:\s*`[^`]+`)?\s*/i;
+		/^\s*New version available:\s*\S+(?:\s*\([^)]*\))?(?:\.\s*Run:\s*(?:`[^`]+`|[^\n]+))?\s*/i;
 	for (let i = 0; i < 3; i += 1) {
 		const next = cleaned
 			.replace(piPreamble, "")

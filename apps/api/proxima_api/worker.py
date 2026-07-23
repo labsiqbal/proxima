@@ -237,7 +237,7 @@ class RunWorker:
             if str(cur["kind"]).startswith("collab_"):
                 self._fail_collaboration_run(run_id, session_id, project_id, reason)
                 return
-            salvaged = self._reconstruct_text(run_id)
+            salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
             if salvaged:
                 db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
             self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
@@ -1104,6 +1104,9 @@ class RunWorker:
                 return
             if self.drafts.handle_draft_run(run, answer, stop_reason, self.add_event):
                 return
+            # Strip before save + auto-title so main chat and sidebar titles keep
+            # the real answer, not Pi's version/skills banner.
+            answer = strip_runner_preamble(answer)
             output_links = self.outputs.output_links_for_project(project_id, run_start_ts)
             trow = self.outputs.save_assistant_message(
                 run_id,
@@ -1208,7 +1211,7 @@ class RunWorker:
                 if str(run.get("kind", "")).startswith("collab_"):
                     self._fail_collaboration_run(run_id, session_id, project_id, reason)
                     return
-                salvaged = self._reconstruct_text(run_id)
+                salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
                 if salvaged:
                     db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
                 # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,

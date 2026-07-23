@@ -9,6 +9,7 @@ from typing import Any
 
 from . import artifact_registry
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
+from .prompt_collaborations import strip_runner_preamble
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 
@@ -45,6 +46,8 @@ class RunOutputs:
         """Persist the final assistant message, track run artifacts on the session,
         and move linked tasks to review. Returns the session task/job row used by
         downstream auto-title logic."""
+        # Drop Pi version/skills banners so main chat stores the real answer only.
+        answer = strip_runner_preamble(answer)
         db = self.app.state.worker_db
         with self.app.state.db_lock:
             cur = db.execute(
