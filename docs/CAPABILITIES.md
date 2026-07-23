@@ -279,7 +279,11 @@ branch-less plans render as a plain list, branching plans offer the read-only
 dependency canvas as a toggle (the editor's own `GraphCanvas`, reused). Plan rows
 carry **Open plan** (the canvas, where review acts live) and **Save as Recipe**
 (promotes the plan's graph to a reusable template via the existing save mechanics).
-With the graph feature off, the screen shows classic tasks only, exactly as before.
+**Board** columns are Queued → Running → Review → Done → **Failed** so a failed plan
+stays visible without switching to List → Failed; list/board cards use spaced
+`aria-label`s (`title · Plan · status · progress · age`) so assistive tech does not
+smash the plan pill into the title. With the graph feature off, the screen shows
+classic tasks only, exactly as before.
 **Endpoints:** `GET /api/graph/jobs` (+ the linear list above), `POST /api/graph/jobs/{id}/save-template`.
 
 ### Repo jobs: isolated worktrees + review + local merge (Phase-1 slices 2+4 - LIVE, on by default)

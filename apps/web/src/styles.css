@@ -4837,7 +4837,8 @@ div.result-media {
 }
 .kanban {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	/* Five status columns (Queued…Failed); minmax keeps cards readable and lets narrow viewports scroll horizontally instead of wrapping the Failed column under Queued. */
+	grid-template-columns: repeat(5, minmax(150px, 1fr));
 	gap: 14px;
 	padding: 18px 20px;
 	overflow: auto;

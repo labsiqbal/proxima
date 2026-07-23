@@ -22,14 +22,54 @@ const relTime = (value?: string | null): string => {
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 const progress = (job: Job) => { const total = job.steps_state.length; const done = job.steps_state.filter(step => step.status === 'done').length; return total ? `${done}/${total}` : '—' }
-const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] | string }) => <span className={`job-pill ${status}`}>{' '}{status}</span>
-const BOARD: { key: JobStatus; label: string }[] = [
+const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] | string }) => <span className={`job-pill ${status}`} aria-hidden="true">{' '}{status}</span>
+/** Board columns keep the happy path left-to-right and park Failed at the end so owners still see failures without hunting List → Failed. */
+export const TASK_BOARD_COLUMNS: { key: JobStatus; label: string }[] = [
   { key: 'queued', label: 'Queued' },
   { key: 'running', label: 'Running' },
   { key: 'review', label: 'Review' },
   { key: 'done', label: 'Done' },
+  { key: 'failed', label: 'Failed' },
 ]
+const BOARD = TASK_BOARD_COLUMNS
 const STATUS_FILTERS: (JobStatus | 'all')[] = ['all', 'queued', 'running', 'review', 'done', 'failed', 'cancelled']
+
+/** Spaced accessible name for a Tasks board plan card (title · Plan · progress · age). */
+export function boardPlanCardAriaLabel(plan: Pick<GraphJob, 'title'>, progressLabel: string, age: string): string {
+  return [plan.title, 'Plan', `${progressLabel} jobs`, age].filter(Boolean).join(' · ')
+}
+
+/** Spaced accessible name for a Tasks board classic-task card. */
+export function boardTaskCardAriaLabel(
+  job: Pick<Job, 'title' | 'schedule_id' | 'workflow_id'>,
+  detail: string,
+  age: string,
+): string {
+  const kind = job.schedule_id != null ? 'Scheduled' : job.workflow_id ? 'Workflow' : 'Task'
+  return [job.title, kind, detail, age].filter(Boolean).join(' · ')
+}
+
+/** Spaced accessible name for a Tasks list plan row. */
+export function listPlanRowAriaLabel(
+  plan: Pick<GraphJob, 'title' | 'status' | 'worktree'>,
+  progressLabel: string,
+  age: string,
+): string {
+  const parts = [plan.title, 'Plan', plan.status]
+  if (plan.worktree) parts.push(worktreeStateLabel(plan.worktree.status))
+  parts.push(progressLabel, age)
+  return parts.filter(Boolean).join(' · ')
+}
+
+/** Spaced accessible name for a Tasks list classic-task row. */
+export function listTaskRowAriaLabel(
+  job: Pick<Job, 'title' | 'status' | 'schedule_id' | 'workflow_id'>,
+  progressLabel: string,
+  age: string,
+): string {
+  const kind = job.schedule_id != null ? 'Scheduled' : job.workflow_id ? 'Workflow' : 'Task'
+  return [job.title, kind, job.status, progressLabel, age].filter(Boolean).join(' · ')
+}
 
 // Tasks = plans + their jobs (T2). A classic one-step task and a sliced plan are
 // the same idea at different sizes, so they share one screen: plan rows expand
@@ -225,14 +265,22 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
           return <div className="kanban-col" key={column.key}>
             <div className="kanban-col-head"><span>{column.label}</span><span className="kanban-count">{columnPlans.length + columnItems.length}</span></div>
             <div className="kanban-cards">
-              {columnPlans.map((plan, index) => <button type="button" className="kanban-card stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={`plan-${plan.id}`} onClick={() => onOpenPlan(plan.id)}>
-                <strong>{plan.title}<span className="job-pill plan">plan</span></strong>
-                <small>{planProgress(plan)} jobs · {relTime(plan.created_at)}</small>
-              </button>)}
-              {columnItems.map((job, index) => <button type="button" className="kanban-card stagger-item" style={{ ['--i' as string]: columnPlans.length + index } as React.CSSProperties} key={job.id} onClick={() => onOpenTask(job.id)}>
-                <strong>{job.title}{job.schedule_id != null && <span className="job-pill scheduled">scheduled</span>}</strong>
-                <small>{job.workflow_id ? `${progress(job)} steps` : 'Task'} · {relTime(job.created_at)}</small>
-              </button>)}
+              {columnPlans.map((plan, index) => {
+                const age = relTime(plan.created_at)
+                const prog = planProgress(plan)
+                return <button type="button" className="kanban-card stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={`plan-${plan.id}`} aria-label={boardPlanCardAriaLabel(plan, prog, age)} onClick={() => onOpenPlan(plan.id)}>
+                  <strong aria-hidden="true">{plan.title}<span className="job-pill plan">{' '}plan</span></strong>
+                  <small aria-hidden="true">{prog} jobs · {age}</small>
+                </button>
+              })}
+              {columnItems.map((job, index) => {
+                const age = relTime(job.created_at)
+                const detail = job.workflow_id ? `${progress(job)} steps` : 'Task'
+                return <button type="button" className="kanban-card stagger-item" style={{ ['--i' as string]: columnPlans.length + index } as React.CSSProperties} key={job.id} aria-label={boardTaskCardAriaLabel(job, detail, age)} onClick={() => onOpenTask(job.id)}>
+                  <strong aria-hidden="true">{job.title}{job.schedule_id != null && <span className="job-pill scheduled">{' '}scheduled</span>}</strong>
+                  <small aria-hidden="true">{detail} · {age}</small>
+                </button>
+              })}
             </div>
           </div>
         })}</div>
@@ -248,20 +296,20 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                 <span className="jr-title">Task</span><span className="jr-wf">Type</span><span className="jr-status">Status</span><span className="jr-prog">Jobs</span><span className="jr-time">Created</span>
               </div>
               {rows.map((row, index) => row.kind === 'task'
-                ? <button className="job-row stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id} onClick={() => onOpenTask(row.job.id)}>
-                    <span className="jr-title">{row.job.title}{row.job.schedule_id != null && <span className="job-pill scheduled">scheduled</span>}</span>
-                    <span className="jr-wf muted">{row.job.workflow_id ? (row.job.schedule_id != null ? 'Scheduled' : 'Workflow') : 'Task'}</span>
-                    <span className="jr-status"><StatusPill status={row.job.status} /></span>
-                    <span className="jr-prog muted">{progress(row.job)}</span>
-                    <span className="jr-time muted">{relTime(row.job.created_at)}</span>
+                ? <button className="job-row stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id} aria-label={listTaskRowAriaLabel(row.job, progress(row.job), relTime(row.job.created_at))} onClick={() => onOpenTask(row.job.id)}>
+                    <span className="jr-title" aria-hidden="true">{row.job.title}{row.job.schedule_id != null && <span className="job-pill scheduled">{' '}scheduled</span>}</span>
+                    <span className="jr-wf muted" aria-hidden="true">{row.job.workflow_id ? (row.job.schedule_id != null ? 'Scheduled' : 'Workflow') : 'Task'}</span>
+                    <span className="jr-status" aria-hidden="true"><StatusPill status={row.job.status} /></span>
+                    <span className="jr-prog muted" aria-hidden="true">{progress(row.job)}</span>
+                    <span className="jr-time muted" aria-hidden="true">{relTime(row.job.created_at)}</span>
                   </button>
                 : <div className={`plan-row stagger-item${expanded.has(row.plan.id) ? ' open' : ''}`} style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id}>
-                    <button className="job-row plan-row-head" aria-expanded={expanded.has(row.plan.id)} onClick={() => toggleExpanded(row.plan.id)}>
-                      <span className="jr-title"><span className={`chevron${expanded.has(row.plan.id) ? ' open' : ''}`} aria-hidden="true">▸</span>{planCell(row.plan)}</span>
-                      <span className="jr-wf muted">Plan</span>
-                      <span className="jr-status"><StatusPill status={row.plan.status} /></span>
-                      <span className="jr-prog muted">{planProgress(row.plan)}</span>
-                      <span className="jr-time muted">{relTime(row.plan.created_at)}</span>
+                    <button className="job-row plan-row-head" aria-expanded={expanded.has(row.plan.id)} aria-label={listPlanRowAriaLabel(row.plan, planProgress(row.plan), relTime(row.plan.created_at))} onClick={() => toggleExpanded(row.plan.id)}>
+                      <span className="jr-title" aria-hidden="true"><span className={`chevron${expanded.has(row.plan.id) ? ' open' : ''}`} aria-hidden="true">▸</span>{planCell(row.plan)}</span>
+                      <span className="jr-wf muted" aria-hidden="true">Plan</span>
+                      <span className="jr-status" aria-hidden="true"><StatusPill status={row.plan.status} /></span>
+                      <span className="jr-prog muted" aria-hidden="true">{planProgress(row.plan)}</span>
+                      <span className="jr-time muted" aria-hidden="true">{relTime(row.plan.created_at)}</span>
                     </button>
                     {expanded.has(row.plan.id) && <div className="plan-detail">
                       <PlanJobs plan={row.plan} profiles={profiles} onOpenPlan={onOpenPlan} />
