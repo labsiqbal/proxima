@@ -65,6 +65,24 @@ def _as_int(value: Any) -> int:
         raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
 
 
+def required_skills_for_session(db: Any, session_id: int) -> tuple[str, ...]:
+    """Bundled skills that must stay active for every turn of this session.
+
+    Masterplan is multi-turn: the /masterplan turn is kind='masterplan' but its
+    clarification/review follow-ups arrive as ordinary kind='chat' runs. Keying on
+    the session having any masterplan run keeps the bundled skill active across
+    those follow-ups, so an opted-out profile's temporary symlink is not pruned
+    mid-methodology.
+    """
+    started_masterplan = bool(
+        db.execute(
+            "SELECT 1 FROM runs WHERE session_id = ? AND kind = ? LIMIT 1",
+            (session_id, MASTERPLAN_RUN_KIND),
+        ).fetchone()
+    )
+    return (MASTERPLAN_SKILL_ID,) if started_masterplan else ()
+
+
 def _json_array(value: Any) -> list[Any]:
     """Decode one SQLite JSON-array column at an explicit failure boundary."""
     try:
@@ -1009,11 +1027,7 @@ class RunWorker:
 
         try:
             await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
-            required_skills = (
-                (MASTERPLAN_SKILL_ID,)
-                if str(run.get("kind") or "") == MASTERPLAN_RUN_KIND
-                else ()
-            )
+            required_skills = required_skills_for_session(db, session_id)
             self.prompting.reapply_capabilities(
                 cfg,
                 spec,

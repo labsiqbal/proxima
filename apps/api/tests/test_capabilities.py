@@ -293,6 +293,28 @@ def test_required_command_skill_temporarily_overrides_profile_opt_out(tmp_path):
     assert persisted["capabilities"] == {"skills": [], "mcp": []}
 
 
+def test_required_skills_for_session_spans_masterplan_followup_turns(tmp_path):
+    # Masterplan is multi-turn: the first turn is kind='masterplan' but its
+    # clarification/review replies are ordinary kind='chat' runs. The bundled
+    # skill must stay required across the whole session so an opted-out profile's
+    # temporary symlink is not pruned mid-methodology.
+    from proxima_api.worker import required_skills_for_session
+
+    app = _app(tmp_path)
+    db = app.state.db
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.execute("INSERT INTO sessions(id, title, owner_user_id) VALUES (1, 'plain', 1), (2, 'planner', 1)")
+    db.execute(
+        "INSERT INTO runs(session_id, user_id, kind, prompt, status) VALUES "
+        "(1, 1, 'chat', 'hi', 'completed'),"
+        "(2, 1, 'masterplan', 'plan it', 'completed'),"
+        "(2, 1, 'chat', 'answer to clarification', 'queued')"
+    )
+
+    assert required_skills_for_session(db, 1) == ()
+    assert required_skills_for_session(db, 2) == ("bundled/masterplan",)
+
+
 def test_bundled_skill_never_clobbers_same_named_host_skill(tmp_path):
     # A host skill named like a bundled one keeps its flat id; the bundled copy
     # lives under bundled/ - both coexist, nothing is overwritten.
