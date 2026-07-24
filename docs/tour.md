@@ -2,11 +2,16 @@
 
 This is Proxima as it ships now: a single-user, self-hosted control plane for
 hands-on agent work and delegated agent teams. Every screenshot on this page was
-captured on 2026-07-24 by driving the **worktree UI** for branch
-`fm/proxima-alpha-ui-and-tour-refresh` (isolated `scripts/dev`-style API + Vite
-on loopback, not the shared `~/preview/proxima` checkout). The pass used a
-disposable owner DB, the starter project after onboarding **Skip**, and the
-post-A1/A2 shell (destinations-only left nav; Alpha aligned with Deck chrome).
+captured on 2026-07-24 in one uniform pass on branch
+`fm/proxima-screenshot-uniform-refresh` (HEAD of main after #37 Alpha UI parity
+and destinations-only nav). Capture used a disposable owner DB and isolated
+`scripts/dev`-style API + Vite on loopback at a fixed viewport of **1440×1000**,
+sidebar expanded, Light theme, starter project after onboarding **Skip**.
+
+All primary tour shots share the same Deck chrome: destinations-only left nav
+(Chat, Alpha, Tasks, Recipes, Projects, Archive, Design), shared main-pane
+ambience, and tool rails on the right. Older multi-era PNGs were deleted and
+replaced; none of the files below mix pre-parity Alpha skin with current Deck.
 
 Feature details live in [CAPABILITIES.md](CAPABILITIES.md). This page focuses on
 what an owner sees and how the surfaces connect.
@@ -15,13 +20,14 @@ what an owner sees and how the surfaces connect.
 
 | Surface | Result | Screenshot |
 | --- | --- | --- |
-| First-run password | pass (prior main capture; gate UI unchanged) | `first-run-password.png` |
-| Onboarding Link tab | pass (prior main capture; folder picker unchanged) | `onboarding-link-folder.png` |
-| Onboarding Create tab | skip this commit (Link tab retained; Create exercised live, not filed as a separate shot) | - |
+| First-run password | pass | `first-run-password.png` |
+| Onboarding Link tab | pass (folder names redacted where personal) | `onboarding-link-folder.png` |
+| Onboarding Create tab | pass | `onboarding-create-folder.png` |
 | Core tour (4 steps) | pass | `core-tour-*.png` |
 | Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
 | Chat send / approvals / restore | skip - no live agent turn in this pass | - |
-| Alpha empty + Grok backing | pass - post visual parity | `alpha-desk.png` |
+| Alpha empty + Grok backing | pass - Deck chrome parity | `alpha-desk.png` |
+| Alpha runner picker (Grok listed) | pass | `grok-runner-picker.png` |
 | Alpha populated / checkpoint restore | skip - no worker jobs in this pass | - |
 | Attention inbox (empty) | pass | `attention-inbox.png` |
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
@@ -35,9 +41,10 @@ what an owner sees and how the surfaces connect.
 | Search | pass | `search.png` |
 | Settings (appearance, Alpha, agents, diagnostics) | pass | `settings-*.png` |
 | Help & Tours / Core flow chapter | pass | `help-tours.png`, `help-core-flow.png` |
-| Agents profiles + runner picker | pass - Grok listed among ready runners | `agents-profiles.png`, `grok-runner-picker.png` |
+| Agents profiles | pass | `agents-profiles.png` |
 | Skills & MCP / bundled masterplan | pass | `skills-mcp.png`, `bundled-masterplan-skill.png` |
 | Wiki under Settings | pass | `wiki.png` |
+| Mobile shell | skip - tour does not claim mobile shots | - |
 
 ## 1. The workspace
 
@@ -70,10 +77,12 @@ network boundary, not a multi-tenant account system.
 ![Set the owner password](screenshots/first-run-password.png)
 
 The optional folder step can **Link** an existing workspace, **Create new folder**,
-or **Skip for now** to use the starter project. This pass used Skip after reviewing
-the Link tab.
+or **Skip for now** to use the starter project. This pass captured both Link and
+Create tabs, then used Skip for the rest of the tour.
 
 ![Choose a working folder (Link existing)](screenshots/onboarding-link-folder.png)
+
+![Create a new empty folder](screenshots/onboarding-create-folder.png)
 
 ## 3. Chat: hands-on work
 
@@ -100,7 +109,7 @@ empty Attention, empty checkpoints.
 
 ![Alpha desk with Grok backing, empty capacity and side rails](screenshots/alpha-desk.png)
 
-The profile runner picker shows readiness for every installed runner.
+The profile runner picker lists every installed runner, including Grok.
 
 ![Runner picker with installed runners](screenshots/grok-runner-picker.png)
 
@@ -207,19 +216,19 @@ Diagnostics keeps update checks, debug logs, and the owner audit trail.
 
 ## Live-pass notes
 
-- **Passed:** onboarding path (Skip), core tour replay, destinations-only nav,
-  empty Chat default, Alpha desk visual parity with Grok selected, Attention,
+- **Chrome standard:** 1440×1000, Light theme, expanded sidebar, destinations-only
+  left nav, post-#37 Deck shell on every primary shot. No mix of old solid Alpha
+  marketing empty state with current Alpha desk.
+- **Passed:** first-run password, onboarding Link + Create tabs, core tour (4
+  steps), empty Chat, Alpha desk with Grok + open runner picker, Attention,
   Tasks list/board/launcher, Recipes home/editor/schedules, Projects, Archive
   empty registry, Design home, tool rails, Search, Settings sections, Agents
-  profiles, Skills/MCP, Wiki, Help.
+  profiles, Skills/MCP + masterplan, Wiki, Help.
 - **Skipped (honest):** live Chat agent turns, approvals, turn restore,
-  masterplan intake, `@` mentions, Alpha worker dispatch and checkpoint restore,
-  populated Tasks review, ArtifactViewer v2 deep review, Design studio canvas
-  beyond home, script approval / validate sidecar. Those surfaces still ship;
-  this pass prioritized shell/nav + Alpha chrome consistency over replaying
-  multi-minute agent runs.
-- **Preview source:** worktree UI at branch tip via isolated loopback API
-  (`PROXIMA_DEV_ID=alpha-ui-tour`) + Vite; shared `preview-proxima` was **not**
-  rewritten (crewmate isolation rule).
-- **Nav note:** desktop primary nav no longer includes New chat; Chat header and
-  mobile topbar keep a compact blank-session control; `/new` remains.
+  masterplan intake UI in Chat, `@` mentions, Alpha worker dispatch and
+  checkpoint restore, populated Tasks review, ArtifactViewer v2 deep review,
+  Design studio canvas beyond home, mobile shell. Those surfaces still ship;
+  this pass prioritized shell/nav uniformity over multi-minute agent runs.
+- **Redaction:** personal host paths and usernames in folder pickers and agent
+  home lines were neutralized to `/home/owner/…` style placeholders before
+  capture where needed.
