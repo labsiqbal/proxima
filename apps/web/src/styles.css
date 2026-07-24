@@ -635,13 +635,15 @@ button:disabled {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-xl);
 	background: var(--ui-bg-editor);
-	box-shadow: var(--shadow-composer);
+	/* Flat shell: border only - no drop shadow / soft glow under the capsule. */
+	box-shadow: none;
 	padding: 14px 14px 12px;
 	transition: border-color var(--t-fast) var(--ease);
 }
-/* Focus lives on the whole card (the textarea is borderless). */
+/* Focus lives on the whole card (the textarea is borderless). Border only - no elevation. */
 .composer:focus-within {
 	border-color: color-mix(in srgb, var(--ui-accent) 38%, var(--ui-stroke-secondary));
+	box-shadow: none;
 }
 .composer .composer-footer {
 	margin-top: 8px;
