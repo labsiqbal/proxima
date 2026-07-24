@@ -4044,6 +4044,12 @@ button:disabled {
 	color: var(--ui-text-secondary);
 	padding: 7px 11px;
 	font-size: var(--text-sm);
+	/* Long tool titles must wrap in narrow Plan Chat; do not force thread scroll-x. */
+	max-width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 .tool-card .tool-dot {
 	width: 8px;
@@ -5133,26 +5139,37 @@ div.result-media {
 .wf-chat {
 	display: flex;
 	flex-direction: column;
+	min-width: 0;
 	min-height: 0;
 	flex: 0 0 26rem;
 	gap: var(--space-3);
 	border-right: 1px solid var(--ui-stroke-tertiary);
 	padding: var(--space-4);
+	/* Column must not grow past its panel: long prose + tool chips wrap, not scroll-x. */
+	overflow-x: hidden;
 }
 .wf-chat-idle { justify-content: center; align-items: flex-start; }
 .wf-chat-idle .primary-button { align-self: flex-start; }
-.wf-chat-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
-.wf-chat-thread { flex: 1; min-height: 0; overflow: auto; }
+.wf-chat-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+.wf-chat-thread {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	/* Vertical scroll only — horizontal overflow is a layout bug in this narrow panel. */
+	overflow-x: hidden;
+	overflow-y: auto;
+}
 .wf-chat-note {
 	font-size: var(--text-sm);
 	color: var(--ui-accent);
 	background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface));
 	border-radius: var(--radius-sm);
 	padding: var(--space-1) var(--space-2);
+	overflow-wrap: anywhere;
 }
 /* The chat's composer is inside a column, not floating in a chat — drop the shared
    Composer's centring geometry the same way the task card does. */
-.wf-chat > .composer { margin: 0; width: 100%; }
+.wf-chat > .composer { margin: 0; width: 100%; min-width: 0; max-width: 100%; }
 
 .wf-chat-running { font-size: var(--text-sm); }
 
@@ -5608,13 +5625,70 @@ div.result-media {
 .graph-chat-panel {
 	display: flex;
 	width: var(--graph-chat-width);
-	flex: none;
+	/* Resize range is 240–620px; never let flex content force wider than the handle. */
+	flex: 0 0 var(--graph-chat-width);
+	min-width: 0;
+	max-width: 100%;
 	min-height: 0;
+	overflow-x: hidden;
 	border-right: 1px solid var(--ui-stroke-secondary);
 }
 .graph-chat-panel > .wf-chat {
-	flex: 1;
+	flex: 1 1 auto;
+	width: 100%;
 	min-width: 0;
+	max-width: 100%;
+	/* Drop the shared 26rem flex-basis so a 240px panel does not spill. */
+	flex-basis: auto;
+}
+/* Constrain ChatThread + tool chips to the panel width (they default to main-chat maxes). */
+.graph-chat-panel .wf-chat-thread,
+.graph-chat-panel .thread,
+.graph-chat-panel .chat-log {
+	min-width: 0;
+	max-width: 100%;
+	width: 100%;
+	box-sizing: border-box;
+}
+.graph-chat-panel .thread {
+	/* Narrow rail: less side padding so prose wraps instead of forcing overflow. */
+	padding-left: var(--space-2);
+	padding-right: var(--space-2);
+	overflow-x: hidden;
+}
+.graph-chat-panel .chat-log {
+	margin-left: 0;
+	margin-right: 0;
+}
+.graph-chat-panel .chat-line,
+.graph-chat-panel .chat-line.user,
+.graph-chat-panel .chat-line.system,
+.graph-chat-panel .chat-line.assistant,
+.graph-chat-panel .chat-line.pending {
+	max-width: 100%;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+.graph-chat-panel .tool-cards {
+	max-width: 100%;
+	min-width: 0;
+	width: 100%;
+}
+.graph-chat-panel .tool-card {
+	display: flex;
+	max-width: 100%;
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+.graph-chat-panel .md,
+.graph-chat-panel .md pre,
+.graph-chat-panel .code-block {
+	max-width: 100%;
+	min-width: 0;
+	overflow-x: auto;
 }
 .ghost-button.active {
 	border-color: var(--ui-accent);

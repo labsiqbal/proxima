@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock, testChainFor, type GraphSnapshot } from './graphPrompt'
+import {
+  buildGraphPrompt,
+  buildNodeTestPrompt,
+  graphIsStructurallyRunnable,
+  parseGraphDraft,
+  stripGraphBlock,
+  testChainFor,
+  type GraphSnapshot,
+} from './graphPrompt'
 
 const snapshot: GraphSnapshot = {
   name: 'Repurpose',
@@ -99,6 +107,92 @@ describe('parseGraphDraft', () => {
     expect(parseGraphDraft(reply(JSON.stringify({ graph: { nodes: [], edges: [] } })))).toBeNull()
     expect(parseGraphDraft(reply('not json at all'))).toBeNull()
   })
+
+  it('recovers bare JSON and trailing commas when the agent forgets the wrapper', () => {
+    const bare = parseGraphDraft(
+      'Here is the plan:\n{"name":"Ship","graph":{"nodes":[{"id":"a","name":"A","instruction":"Do A",},{"id":"b","name":"B","instruction":"Do B",},],"edges":[{"from":"a","to":"b",},],}}\n',
+    )
+    expect(bare?.graph?.nodes.map(n => n.id)).toEqual(['a', 'b'])
+    expect(bare?.graph?.edges).toEqual([{ from: 'a', to: 'b' }])
+  })
+
+  it('accepts an unclosed workflow-graph tag when the JSON is complete', () => {
+    const patch = parseGraphDraft(
+      'Updated.\n<workflow-graph>\n{"graph":{"nodes":[{"id":"x","name":"X","instruction":"go"}],"edges":[]}}\n',
+    )
+    expect(patch?.graph?.nodes.map(n => n.id)).toEqual(['x'])
+  })
+})
+
+describe('authoring → runnable workflow (happy path)', () => {
+  // Proves the Plan Chat apply path yields a multi-node DAG the product can save/start:
+  // parseGraphDraft (what applyReply uses) + structural checks that mirror normalize_graph.
+  it('parses a multi-node agent reply into a structurally runnable graph', () => {
+    const agentReply = [
+      'Drew a parallel research → write → review path.',
+      '<workflow-graph>',
+      JSON.stringify({
+        name: 'Content pipeline',
+        description: 'Research then draft posts in parallel',
+        category: 'content',
+        inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }],
+        graph: {
+          nodes: [
+            { id: 'trigger', type: 'trigger', name: 'When I run it', instruction: '', output_kind: 'json' },
+            { id: 'research', type: 'agent', name: 'Research', instruction: 'Collect facts for {{brief}}', output_kind: 'text' },
+            { id: 'post-x', type: 'agent', name: 'Post X', instruction: 'Write the X post from research', output_kind: 'text' },
+            { id: 'post-li', type: 'agent', name: 'Post LI', instruction: 'Write the LinkedIn post from research', output_kind: 'text' },
+            { id: 'bundle', type: 'agent', name: 'Bundle', instruction: 'Combine both posts for review', review_required: true, output_kind: 'text' },
+          ],
+          edges: [
+            { from: 'trigger', to: 'research' },
+            { from: 'research', to: 'post-x' },
+            { from: 'research', to: 'post-li' },
+            { from: 'post-x', to: 'bundle' },
+            { from: 'post-li', to: 'bundle' },
+          ],
+        },
+      }),
+      '</workflow-graph>',
+    ].join('\n')
+
+    const patch = parseGraphDraft(agentReply)
+    expect(patch?.name).toBe('Content pipeline')
+    expect(patch?.graph?.nodes).toHaveLength(5)
+    expect(patch?.graph?.edges).toHaveLength(5)
+
+    const check = graphIsStructurallyRunnable(patch?.graph)
+    expect(check.reasons).toEqual([])
+    expect(check.ok).toBe(true)
+
+    // Linear path (no branches) is also runnable — same apply path.
+    const linear = parseGraphDraft(reply(JSON.stringify({
+      graph: {
+        nodes: [
+          { id: 'a', name: 'Outline', instruction: 'Outline the doc' },
+          { id: 'b', name: 'Draft', instruction: 'Write the draft' },
+        ],
+        edges: [{ from: 'a', to: 'b' }],
+      },
+    })))
+    expect(graphIsStructurallyRunnable(linear?.graph).ok).toBe(true)
+  })
+
+  it('rejects cycles and empty agent instructions as not runnable', () => {
+    expect(graphIsStructurallyRunnable({
+      nodes: [
+        { id: 'a', type: 'agent', name: 'A', instruction: 'go', output_kind: 'text' },
+        { id: 'b', type: 'agent', name: 'B', instruction: 'go', output_kind: 'text' },
+      ],
+      edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }],
+    }).ok).toBe(false)
+
+    expect(graphIsStructurallyRunnable({
+      nodes: [{ id: 'a', type: 'agent', name: 'A', instruction: '', output_kind: 'text' }],
+      edges: [],
+    }).ok).toBe(false)
+  })
+
 })
 
 describe('parseGraphDraft script nodes (T6)', () => {
