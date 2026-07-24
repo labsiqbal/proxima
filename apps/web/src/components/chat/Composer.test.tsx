@@ -283,3 +283,34 @@ describe("Composer slash commands", () => {
 		expect(textarea).toHaveValue("/help ");
 	});
 });
+
+describe("Composer review draft handoff", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.getCommandCatalog.mockResolvedValue({ groups: [] });
+		mocks.listReferenceFiles.mockResolvedValue({ files: [], truncated: false });
+		mocks.listArtifacts.mockResolvedValue({ artifacts: [] });
+	});
+
+	it("places artifact feedback into the normal chat composer exactly once", async () => {
+		const consumed = vi.fn();
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		render(
+			<Composer
+				token="token"
+				slug="alpha"
+				textareaLabel="Message"
+				promptModes={false}
+				draftSeed="Review feedback for [report](artifacts/report.md):"
+				draftSeedNonce={1}
+				onDraftSeedConsumed={consumed}
+				onSubmit={onSubmit}
+			/>,
+		);
+
+		expect(await screen.findByRole("textbox", { name: "Message" })).toHaveValue(
+			"Review feedback for [report](artifacts/report.md):",
+		);
+		expect(consumed).toHaveBeenCalledTimes(1);
+	});
+});

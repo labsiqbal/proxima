@@ -238,6 +238,32 @@ restart awaiting approval); decision-hold rides on `node_states`
 (`question`/`answer`/`contract_failures`, migration 25).
 Full column-level detail: [database.md](database.md).
 
+### Native artifact review flow
+
+`ArtifactViewer.tsx` remains the universal renderer boundary rather than routing
+ordinary deliverables through Design Studio. Its v2 workspace composes the existing
+image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-annotation
+layer and review panel. Unsaved review notes live browser-side per `(project, path)`;
+**Add feedback to chat** resolves the record's existing `session_id` (or the chat that
+opened the artifact), returns to that session, and seeds the ordinary `Composer` with
+path-linked feedback. The user can edit and send it through `POST /api/sessions/{id}/runs`
+like any other prompt. No external polling process or review URL is involved.
+
+Markdown Mermaid fences and standalone Mermaid files use a lazy renderer. Choosing
+**Edit as whiteboard** lazy-loads `@excalidraw/excalidraw` and
+`@excalidraw/mermaid-to-excalidraw`, converts supported diagram structures to editable
+shapes, and writes only on explicit save through the existing jailed project file API.
+Scenes live at deterministic `artifacts/whiteboards/*.excalidraw` paths and carry the
+source fingerprint. A mismatch offers keep-edits versus rebuild-from-source; saving
+adds the scene path to the chat review draft. Excalidraw and Mermaid stay out of the
+initial app bundle and load only when their artifact path is used.
+
+```text
+ArtifactViewer render -> point notes / general note -> Add feedback to chat
+        |                                           -> producing Proxima session
+        +-> Mermaid preview -> Excalidraw edit -> save project scene -> feedback path
+```
+
 ## Key flows
 
 ### 1. Chat turn (the core loop)

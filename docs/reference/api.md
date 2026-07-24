@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-153 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+154 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -11,7 +11,7 @@
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
 - [`routes/archive.py`](#routes-archive-py) — 3 endpoints
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
-- [`routes/chat.py`](#routes-chat-py) — 24 endpoints
+- [`routes/chat.py`](#routes-chat-py) — 25 endpoints
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 14 endpoints
@@ -72,6 +72,7 @@
 | GET | `/api/sessions` | `list_sessions` |  |
 | POST | `/api/sessions` | `create_session` |  |
 | DELETE | `/api/sessions/{session_id}` | `delete_session` |  |
+| GET | `/api/sessions/{session_id}` | `get_session` |  |
 | PATCH | `/api/sessions/{session_id}` | `update_session` |  |
 | GET | `/api/sessions/{session_id}/events` | `list_events` |  |
 | GET | `/api/sessions/{session_id}/events/stream` | `stream_events` |  |
@@ -262,4 +263,4 @@
 
 
 ---
-_Generated 2026-07-23 18:10 UTC._
+_Generated 2026-07-24 03:58 UTC._

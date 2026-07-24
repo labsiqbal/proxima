@@ -80,6 +80,7 @@ export function Composer({
 	mentionItems,
 	draftSeed,
 	draftSeedNonce,
+	onDraftSeedConsumed,
 	onSubmit,
 }: {
 	disabled?: boolean;
@@ -102,6 +103,7 @@ export function Composer({
 	mentionItems?: MentionItem[];
 	draftSeed?: string;
 	draftSeedNonce?: number;
+	onDraftSeedConsumed?: () => void;
 	onSubmit: (text: string, promptMode?: PromptMode) => Promise<void>;
 }) {
 	const [draft, setDraft] = React.useState("");
@@ -227,8 +229,9 @@ export function Composer({
 		if (draftSeedNonce && draftSeed != null) {
 			setDraft(draftSeed);
 			requestAnimationFrame(() => taRef.current?.focus());
+			onDraftSeedConsumed?.();
 		}
-	}, [draftSeed, draftSeedNonce]);
+	}, [draftSeed, draftSeedNonce, onDraftSeedConsumed]);
 
 	React.useEffect(() => {
 		if (!token) {

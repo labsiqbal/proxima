@@ -214,6 +214,19 @@ def register(app, deps):
         ).fetchone()
         return session_payload(dict(row))
 
+    @app.get("/api/sessions/{session_id}")
+    def get_session(session_id: int, user: dict[str, Any] = Depends(current_user)):
+        session = session_for_user(session_id, user)
+        _require_session_features(session)
+        row = db().execute(
+            """
+            SELECT s.*, p.slug AS project_slug, p.name AS project_name, pr.slug AS profile_slug, pr.name AS profile_name
+            FROM sessions s LEFT JOIN projects p ON p.id=s.project_id LEFT JOIN profiles pr ON pr.id=s.profile_id WHERE s.id=?
+            """,
+            (session_id,),
+        ).fetchone()
+        return session_payload(dict(row))
+
     @app.patch("/api/sessions/{session_id}")
     def update_session(session_id: int, payload: SessionUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
