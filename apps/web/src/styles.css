@@ -12600,13 +12600,24 @@ div.result-media {
 .capacity-live { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-success); box-shadow: 0 0 0 var(--space-1) color-mix(in srgb, var(--ui-success) 14%, transparent); }
 .alpha-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--alpha-side-width); gap: var(--space-4); align-items: start; }
 .alpha-view.alpha-side-collapsed .alpha-grid { grid-template-columns: minmax(0, 1fr) auto; }
-.alpha-conversation,
+/* Main conversation column: flat against the page - no outer card chrome. */
+.alpha-conversation {
+	display: flex;
+	flex-direction: column;
+	min-height: var(--alpha-thread-min-height);
+	overflow: hidden;
+	min-width: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+}
+/* Side rail sections keep card chrome so Work / Needs you / Checkpoints read as a rail. */
 .alpha-side-section {
+	overflow: hidden;
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-lg);
 	background: var(--ui-surface);
 }
-.alpha-conversation { display: flex; flex-direction: column; min-height: var(--alpha-thread-min-height); overflow: hidden; min-width: 0; }
 .alpha-empty {
 	display: grid;
 	place-items: center;
@@ -12664,7 +12675,6 @@ div.result-media {
 	line-height: 1.5;
 }
 .alpha-side { display: grid; gap: var(--space-4); min-width: 0; }
-.alpha-side-section { overflow: hidden; }
 .alpha-side-toggle {
 	/* Match top-bar tool-btn footprint inside Alpha header. */
 	flex: 0 0 auto;
