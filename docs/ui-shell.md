@@ -132,7 +132,7 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as job cards rather than raw JSON.
+Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
 
 ## Feature gates
 

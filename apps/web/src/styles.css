@@ -12634,18 +12634,17 @@ div.result-media {
 .alpha-message.user { justify-self: end; border-bottom-right-radius: var(--radius-sm); background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface)); }
 .alpha-message.assistant,
 .alpha-message.system { justify-self: start; border: 1px solid var(--ui-stroke-tertiary); border-bottom-left-radius: var(--radius-sm); background: var(--ui-surface-subtle); }
-/* Tool-result rows sit in the thread grid as bare cards (no outer message bubble). */
-.alpha-tool-results { display: grid; gap: var(--space-2); max-width: 100%; justify-self: stretch; min-width: 0; }
-.alpha-tool-results > div { border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-md); padding: var(--space-3); background: var(--ui-surface); }
-.alpha-tool-results > div.ok { border-color: color-mix(in srgb, var(--ui-success) 32%, var(--ui-stroke-secondary)); }
-.alpha-tool-results > div.failed { border-color: var(--ui-danger-border); background: var(--ui-danger-bg); color: var(--ui-danger-text); }
-.alpha-tool-results b { font-size: var(--text-sm); }
-.alpha-tool-results ul { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
-.alpha-tool-results li + li { border-top: 1px solid var(--ui-stroke-tertiary); }
+/* Tool-result rows: flat timeline text only - no border, fill, radius, or outer bubble. */
+.alpha-tool-results { display: grid; gap: var(--space-1); max-width: 100%; justify-self: stretch; min-width: 0; }
+.alpha-tool-results > div { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.alpha-tool-results > div.failed { color: var(--ui-danger-text); }
+.alpha-tool-results b { display: block; font-size: var(--text-sm); font-weight: 500; color: var(--ui-text-secondary); }
+.alpha-tool-results > div.failed b { color: inherit; }
+.alpha-tool-results ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 0; }
 .alpha-tool-results li button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; min-height: var(--alpha-control-height); border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-2); background: transparent; color: var(--ui-text-primary); text-align: left; cursor: pointer; }
 .alpha-tool-results li button:hover { background: var(--ui-row-hover-background); }
 .alpha-tool-results li small { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
-.alpha-tool-results p { margin: var(--space-2) 0 0; font-size: var(--text-xs); line-height: 1.5; }
+.alpha-tool-results p { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.5; color: inherit; }
 .alpha-working,
 .alpha-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); color: var(--ui-text-secondary); font-size: var(--text-sm); }
 /* Chat-parity composer dock: reuse .composer styles; no Alpha-only chrome. */

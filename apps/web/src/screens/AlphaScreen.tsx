@@ -76,7 +76,7 @@ function AlphaThread({ messages, loading, onOpenJob }: { messages: ChatMessage[]
   return <div className="alpha-thread" aria-live="polite">{messages.map((message, index) => {
     const content = message.role === 'assistant' ? cleanAlpha(message.content) : message.content
     if (!content) return null
-    // Pure tool-result system rows render as timeline cards only - no outer Proxima bubble.
+    // Pure tool-result system rows: flat timeline text only - no outer Proxima bubble or card chrome.
     const tools = message.role === 'system' ? parseToolResults(content) : null
     if (tools) return <AlphaToolResults key={message.id ?? index} tools={tools} onOpenJob={onOpenJob} />
     return <article className={`alpha-message ${message.role}`} key={message.id ?? index}>

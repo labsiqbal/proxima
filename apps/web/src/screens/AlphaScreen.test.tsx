@@ -127,7 +127,7 @@ describe('AlphaScreen', () => {
     expect(screen.getByRole('button', { name: 'Alpha is working' })).toBeDisabled()
   })
 
-  it('renders pure tool-result rows as bare cards without an outer Proxima bubble', async () => {
+  it('renders pure tool-result rows as flat timeline text without an outer Proxima bubble', async () => {
     const onOpenJob = vi.fn()
     const toolPayload = JSON.stringify([
       { ok: true, tool: 'capacity', result: {} },
@@ -136,6 +136,7 @@ describe('AlphaScreen', () => {
         result: { jobs: [{ id: 7, title: 'Ship notes', status: 'running', engine: 'linear' }] },
       },
       { ok: true, tool: 'dispatch_jobs', result: { jobs: [{ id: 8, title: 'Docs pass', status: 'queued' }] } },
+      { ok: false, tool: 'list_projects', error: { message: 'Projects unavailable right now.' } },
     ])
     vi.mocked(listMessages).mockResolvedValue({
       messages: [
@@ -152,16 +153,22 @@ describe('AlphaScreen', () => {
     expect(screen.getByText('Work queue checked')).toBeInTheDocument()
     expect(screen.getByText('Dispatched 1 job')).toBeInTheDocument()
     expect(screen.getByText('Dispatched the independent work.')).toBeInTheDocument()
+    expect(screen.getByText('Product action could not run')).toBeInTheDocument()
+    expect(screen.getByText('Projects unavailable right now.')).toBeInTheDocument()
 
-    // Tool cards live as timeline rows - not nested inside an .alpha-message.system bubble.
+    // Flat timeline rows - not nested inside an .alpha-message.system bubble, no card chrome classes required.
     const toolGroup = screen.getByRole('group', { name: 'Alpha tool results' })
     expect(toolGroup).toHaveClass('alpha-tool-results')
     expect(toolGroup.closest('.alpha-message')).toBeNull()
+    const toolRows = toolGroup.querySelectorAll(':scope > div')
+    expect(toolRows).toHaveLength(4)
+    expect(toolRows[0]).toHaveClass('ok')
+    expect(toolRows[3]).toHaveClass('failed')
     expect(container.querySelectorAll('.alpha-message.system')).toHaveLength(1)
     expect(screen.getByText('Proxima')).toBeInTheDocument()
     expect(screen.getByText('A plain system note stays a bubble.')).toBeInTheDocument()
 
-    // Job list links still work from the bare cards.
+    // Job list links still work as plain clickable rows under a dispatch/list tool row.
     await userEvent.setup().click(screen.getByRole('button', { name: /Ship notes/ }))
     expect(onOpenJob).toHaveBeenCalledWith(7, 'linear')
   })
