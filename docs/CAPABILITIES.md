@@ -212,6 +212,85 @@ live in the composer before a prompt is submitted.
 `POST /api/message-reviews/{review_id}/restore-original`,
 `POST /api/message-reviews/{review_id}/ask-original`.
 
+## 3b. Alpha orchestration, restore safety, and Attention
+
+**Why:** the owner can either work hands-on in Chat or delegate an outcome to a
+built-in orchestrator without manually composing every worker task.
+
+**Alpha identity and desk:** opening the first-class **Alpha** navigation destination
+creates one hidden `profiles.system_kind='alpha'` system identity and one
+`sessions.mode='alpha'` thread. The hidden profile never appears in Agents or ordinary
+Chat history; Settings/desk runner selection creates or reuses the matching system
+home while the UI counterpart stays named Alpha. The desk polls its thread, active /
+queued Alpha jobs, needs-you subset, job-scoped checkpoint timeline, and honest
+capacity (`running / 3`, free slots, queued). Loading, empty, error/retry, populated,
+and busy states are explicit on desktop and mobile.
+
+**In-process tools and dispatch:** Alpha's system instructions require structured
+`<proxima-tool>{name,arguments}</proxima-tool>` calls. `alpha_runtime.py` parses them
+after the ACP turn and invokes only server-owned handlers in the API process - never
+curl/HTTP to localhost and never prompt-granted tools. Reads cover projects, worker
+agents, jobs, plans, capacity, and Alpha settings; mutations cover multi-job dispatch,
+starting queued Alpha jobs, unattended/budget settings, and needs-you creation.
+The `start_plan` handler invokes the proven graph create/start closures directly in
+process (or snapshots a legacy linear workflow), then applies the same Alpha ownership,
+checkpoint, audit, and permission scope. Every success/failure returns a structured
+result to the thread and back into a bounded six-round Alpha continuation, so a product
+read can inform the next in-process call without an HTTP control loop. Dispatch creates
+ordinary durable jobs with `execution_policy='autonomous'`,
+`jobs.alpha_session_id`, an `alpha.job.create` audit row, and a checkpoint after any
+isolated worktree is cut but before a run is enqueued. The global worker default is
+three slots and its claim query separately refuses a fourth running Alpha child; extra
+runs remain queued and capacity counts each queued worker run, including parallel graph
+branches. Existing job capabilities are
+unchanged, including commit/push/PR through the owner's BYO `git`/`gh` environment.
+
+**Three permission layers:** P1 is the in-process Alpha product-tool allowlist. P2 is
+the worker job's Autonomous policy (plan review gates still exist). P3 is scoped ACP
+auto-approval: the worker auto-selects an allow option only when the run's session is
+`mode='alpha'` or its job has `alpha_session_id`; ordinary Chat continues to honor the
+install's separate Settings toggle. Auto approvals remain visible as
+`approval.auto` events. A non-Alpha job permission request becomes a durable
+`permission_job` Attention item and closes when its choice reaches the live ACP
+process, preventing the old hidden-session 300-second dead end.
+
+**Checkpoints and Chat restore:** `job_checkpoints` stores one job's row/node/run
+state plus git SHA/worktree refs - no full SQLite backup and no project zip. Unpinned
+retention is FIFO 30, restore previews its impact, requires confirmation, and refuses
+running/later same-project conflicts or a dirty job-owned worktree. A main-checkout SHA
+is evidence only and is never reset; only an existing job worktree is restorable.
+Normal project Chat uses
+ACP tool events to trigger a bounded before/after path journal. Assistant replies with
+changed files show **Restore N changed paths**; preview lists each path and warns about
+active Alpha work before confirmation. The journal cascades when its session closes.
+
+**Attention:** the shell badge calls one `/api/attention` shape spanning simple final
+job reviews, complex diff reviews, pending satpam restarts, durable tool permissions,
+and Alpha decision/budget items. Every row deep-links to its owning Task/plan/Alpha/
+Settings surface. Only rows marked `inline_ok` render actions: simple non-repo final
+review, hash-visible script trust, pending satpam restart, and live permission choices.
+Diff and open-text Alpha items navigate only. Errors persist inside the inbox until
+retried/dismissed.
+
+**Unattended:** the desk toggle is opt-in. `AlphaSupervisor` starts only already-queued
+Alpha jobs; it never dispatches work while off and never participates in stuck-run
+recovery. Saved turn (1-200) and wall-clock (5 minutes-24 hours) budgets apply on the
+next tick. The optional token value is stored/readable, but current ACP runner events
+do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion turns the
+mode off cleanly and creates an `alpha_budget` Attention row. Unattended jobs retain
+scoped ACP auto-approval and normal BYO push/PR capability; destructive product admin
+is not in its handler set. Satpam remains the sole steer/restart authority.
+
+**Tours:** after setup, the first main-UI visit opens a keyboard-trapped four-step core
+tour (Chat, Alpha, Tasks/Attention/safety), saved server-side and permanently
+skippable. Settings → Help & Tours can replay it and launch chapters for Recipes,
+Projects/tools, Archive, feature-aware Design, Agents, remote/safety, and Settings.
+
+**Endpoints:** `GET /api/alpha/desk`, `POST /api/alpha/messages`,
+`GET/PUT /api/settings/alpha`, `GET /api/attention`,
+`POST /api/attention/{id}/act`, job checkpoint list/preview/restore/pin routes, and
+`GET/POST /api/chat/messages/{id}/restore-turn`.
+
 ## 4. Goal loop (multi-step autonomy)
 
 **Why:** Give a goal; the agent keeps advancing across turns until done.
@@ -356,17 +435,11 @@ that node touches the repo** (ops jobs run at the project root), and the plan's 
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
 
-**Known gap - tool approvals during plan-node runs (verified live 2026-07-22):** a
-plan node's agent run uses the same permission machinery as chat, but its run thread
-is a hidden job session, and no surface in the plan/Tasks UI renders the approval
-card. An unanswered permission request times out after 300s and **cancels** (the
-deliberate default: "no answer" never becomes "yes"; `PROXIMA_ACP_TIMEOUT_ACTION`
-overrides), so with the default ask-each-time permission setting a plan job that
-needs, say, a file-edit approval blocks honestly with the agent's blocker report and
-can be rerun from the node inspector. Practical paths today: flip Settings → Agent
-permissions to auto-approve (control then shifts to the diff review, which fits the
-isolated-worktree model), or answer via `POST /api/runs/{id}/permission`. An in-UI
-card surface for plan-node approvals is an open Phase-1 follow-up.
+**Tool approvals during job/plan runs:** a non-Alpha job's hidden-session ACP
+permission request is materialized as a global `permission_job` Attention row with
+safe inline allow/deny actions and a Task deep-link; delivering either choice closes
+the row. Alpha-spawned jobs take the separate scoped P3 path and auto-approve ACP tool
+prompts, while diff/plan review gates remain owner-controlled product decisions.
 
 **Review surface (slice 4):** the captain-facing half, following T4's ratified detail
 language - the diff opens in an **expanding row** (a plan row's expanded body on the
@@ -844,7 +917,9 @@ with an explicit On/Ask label.
 
 **Why:** An activity trail of meaningful actions.
 **How:** Settings → Diagnostics → Audit log opens a filterable modal of recent
-entries (`GET /api/audit`). File/tree/app actions stay project-scoped with a
+entries (`GET /api/audit`). Alpha job creation, budget/toggle changes, and
+checkpoint/turn restores produce explicit `alpha.*` / `chat.turn.restore` entries;
+pure Alpha reads do not. File/tree/app actions stay project-scoped with a
 `path` metadata field; settings tests and saves (image generation, Higgsfield)
 use `target_type=settings` and store flat JSON metadata (provider, status, …) —
 never a double-encoded string under `path`. The modal pretty-prints metadata
@@ -906,9 +981,10 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered — Chat, Tasks, Recipes, Projects, Archive, gated Design — with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered: Chat, Alpha, Tasks, Recipes, Projects, Archive, gated Design, with New chat on top and project-scoped recent chats beneath. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session; the chat remains lazily created on first send.
-+ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher — a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
++ **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
++ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Recipes** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.

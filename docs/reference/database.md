@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 27 tables. Applied migration version: **26**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -56,6 +56,24 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 **Indexes:** `idx_artifact_records_job` — (job_id); `idx_artifact_records_identity` — (project_id, path); `idx_artifact_records_project` — (project_id, produced_at)
 
 
+### attention_items
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `kind` | TEXT | NO |  |  |
+| `title` | TEXT | NO |  |  |
+| `target_json` | TEXT | NO | `'{}'` |  |
+| `inline_ok` | INTEGER | NO | `0` |  |
+| `actions_json` | TEXT | NO | `'[]'` |  |
+| `status` | TEXT | NO | `'open'` |  |
+| `source_key` | TEXT | yes |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `resolved_at` | TEXT | yes |  |  |
+
+**Indexes:** `idx_attention_status` — (status, created_at)
+
+
 ### audit_log
 
 | Column | Type | Null | Default | Key / FK |
@@ -94,6 +112,20 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `idx_events_run_seq` — (run_id, seq); `idx_events_session` — (session_id, id)
+
+
+### job_checkpoints
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `payload_json` | TEXT | NO |  |  |
+| `git_refs_json` | TEXT | NO | `'[]'` |  |
+| `pinned` | INTEGER | NO | `0` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_job_checkpoints_job` — (job_id, created_at)
 
 
 ### job_worktrees
@@ -139,6 +171,7 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 | `schedule_id` | INTEGER | yes |  |  |
 | `target_area_id` | INTEGER | yes |  | → `project_areas.id` (ON DELETE SET NULL) |
 | `rejected_reason` | TEXT | yes |  |  |
+| `alpha_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
 | `created_by` | INTEGER | yes |  | → `users.id` |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -146,7 +179,7 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 | `finished_at` | TEXT | yes |  |  |
 | `archived_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_jobs_archived` — (archived_at); `idx_jobs_workflow` — (workflow_id); `idx_jobs_project_status` — (project_id, status, created_at)
+**Indexes:** `idx_jobs_alpha` — (alpha_session_id, status, created_at); `idx_jobs_archived` — (archived_at); `idx_jobs_workflow` — (workflow_id); `idx_jobs_project_status` — (project_id, status, created_at)
 
 
 ### message_reviews
@@ -231,6 +264,7 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 | `runner_id` | TEXT | NO | `'claude-code'` |  |
 | `default_model` | TEXT | yes |  |  |
 | `instructions` | TEXT | yes |  |  |
+| `system_kind` | TEXT | yes |  |  |
 | `is_default` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -426,6 +460,19 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 **Indexes:** `idx_sessions_project` — (project_id, updated_at); `idx_sessions_owner` — (owner_user_id, updated_at)
 
 
+### turn_file_journals
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `message_id` | INTEGER | NO |  | → `messages.id` (ON DELETE CASCADE) |
+| `session_id` | INTEGER | NO |  | → `sessions.id` (ON DELETE CASCADE) |
+| `entries_json` | TEXT | NO |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_turn_file_journals_session` — (session_id, id)
+
+
 ### users
 
 | Column | Type | Null | Default | Key / FK |
@@ -460,4 +507,4 @@ SQLite (WAL mode). 24 tables. Applied migration version: **25**. This is the exa
 
 
 ---
-_Generated 2026-07-24 03:58 UTC._
+_Generated 2026-07-24 05:52 UTC._

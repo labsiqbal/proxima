@@ -24,7 +24,8 @@ import {
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
-import type { Profile, Project, Runner, User } from '../types'
+import type { AppFeatures, Profile, Project, Runner, User } from '../types'
+import { getAlphaSettings, saveAlphaSettings, type AlphaSettings } from '../api/alpha'
 import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
@@ -205,14 +206,16 @@ export function formatAuditMeta(raw: string | null | undefined, max = 160): stri
   if (typeof value === 'string') return shortText(value, max)
   return shortText(JSON.stringify(value), max)
 }
-type SettingsSectionKey = 'account' | 'agents' | 'knowledge' | 'media' | 'remote' | 'diagnostics'
+type SettingsSectionKey = 'account' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
 
 const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
+  { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
   { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
   { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
   { key: 'media', label: 'Media & Integrations', hint: 'Image generation backend' },
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
+  { key: 'help', label: 'Help & Tours', hint: 'Replay the core tour and explore every surface' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
 ]
 
@@ -541,7 +544,80 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
+function AlphaSettingsPanel({ token }: { token: string }) {
+  const [settings, setSettings] = React.useState<AlphaSettings | null>(null)
+  const [turns, setTurns] = React.useState('20')
+  const [wallMinutes, setWallMinutes] = React.useState('240')
+  const [tokens, setTokens] = React.useState('')
+  const [busy, setBusy] = React.useState<'load' | 'save' | null>('load')
+  const [message, setMessage] = React.useState<{ ok: boolean; text: string } | null>(null)
+  React.useEffect(() => {
+    let alive = true
+    getAlphaSettings(token).then(value => {
+      if (!alive) return
+      setSettings(value); setTurns(String(value.budget_turns)); setWallMinutes(String(Math.round(value.budget_wall_seconds / 60))); setTokens(value.budget_tokens == null ? '' : String(value.budget_tokens))
+    }).catch(err => { if (alive) setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) }) }).finally(() => { if (alive) setBusy(null) })
+    return () => { alive = false }
+  }, [token])
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (busy) return
+    const turnValue = Number(turns), wallValue = Number(wallMinutes), tokenValue = tokens.trim() ? Number(tokens) : null
+    if (!Number.isInteger(turnValue) || turnValue < 1 || turnValue > 200) { setMessage({ ok: false, text: 'Turn limit must be a whole number from 1 to 200.' }); return }
+    if (!Number.isInteger(wallValue) || wallValue < 5 || wallValue > 1440) { setMessage({ ok: false, text: 'Wall-clock limit must be 5 to 1,440 minutes.' }); return }
+    if (tokenValue != null && (!Number.isInteger(tokenValue) || tokenValue < 1)) { setMessage({ ok: false, text: 'Token budget must be a positive whole number or left empty.' }); return }
+    setBusy('save'); setMessage(null)
+    try {
+      const value = await saveAlphaSettings(token, { budget_turns: turnValue, budget_wall_seconds: wallValue * 60, budget_tokens: tokenValue } as Partial<AlphaSettings>)
+      setSettings(value); setMessage({ ok: true, text: 'Alpha budgets saved. They apply on the next supervisor tick.' })
+    } catch (err) { setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) }) }
+    finally { setBusy(null) }
+  }
+  if (busy === 'load' && !settings) return <div className="panel settings-loading" role="status"><span className="ui-spinner" /> Loading Alpha settings…</div>
+  return <div className="panel"><div className="panel-head"><h3>Unattended budgets</h3><span>{settings?.unattended ? 'currently on' : 'currently off'}</span></div>
+    <p className="muted">Alpha can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
+    <form className="settings-rows alpha-settings-form" onSubmit={save}>
+      <label><span className="srow-label">Turn limit</span><input type="number" min="1" max="200" step="1" value={turns} onChange={event => setTurns(event.target.value)} disabled={!!busy} /></label>
+      <label><span className="srow-label">Wall-clock minutes</span><input type="number" min="5" max="1440" step="5" value={wallMinutes} onChange={event => setWallMinutes(event.target.value)} disabled={!!busy} /></label>
+      <label><span className="srow-label">Token budget (optional)</span><input type="number" min="1" step="1000" value={tokens} onChange={event => setTokens(event.target.value)} disabled={!!busy} placeholder="No token cap when unavailable" /></label>
+      {message && <p className={message.ok ? 'ok-text' : 'auth-error'} role={message.ok ? 'status' : 'alert'}>{message.text}</p>}
+      <button type="submit" className="primary-button" disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save budgets'}</button>
+    </form>
+  </div>
+}
+
+const HELP_CHAPTERS = [
+  { id: 'core', title: 'Core flow', summary: 'Chat, Alpha, Tasks, Attention, and restore safety.' },
+  { id: 'recipes', title: 'Recipes & plans', summary: 'Turn repeatable work into plans, graph nodes, schedules, and review gates.' },
+  { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Files, Terminal, and app Preview.' },
+  { id: 'archive', title: 'Archive', summary: 'Review durable deliverables, versions, lineage, and approval status.' },
+  { id: 'design', title: 'Design', summary: 'Create and review visual scenes when Design Studio is enabled.' },
+  { id: 'agents', title: 'Agents', summary: 'Bring your own runner, choose profiles, models, skills, and tools.' },
+  { id: 'remote', title: 'Remote & safety', summary: 'Owner password, loopback/Tailscale posture, audit history, checkpoints, and satpam.' },
+  { id: 'settings', title: 'Settings', summary: 'Appearance, budgets, media providers, diagnostics, and update controls.' },
+] as const
+
+function HelpToursPanel({ token, features }: { token: string; features: AppFeatures }) {
+  const [chapter, setChapter] = React.useState<(typeof HELP_CHAPTERS)[number] | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const replayCore = async () => {
+    setBusy(true)
+    try { await saveAlphaSettings(token, { tour_core_done: false } as Partial<AlphaSettings>) }
+    catch { /* Replay still opens now; completion can be persisted when the tour closes. */ }
+    finally { window.dispatchEvent(new CustomEvent('proxima:tour-core')); setBusy(false) }
+  }
+  return <div className="panel"><div className="panel-head"><h3>Product tours</h3><span>{HELP_CHAPTERS.length} chapters</span></div>
+    <p className="muted">Start with the short core tour, then open any chapter when you need the full product map.</p>
+    <button type="button" className="primary-button" disabled={busy} onClick={() => void replayCore()}>{busy ? 'Opening…' : 'Replay core tour'}</button>
+    <div className="help-chapters">{HELP_CHAPTERS.map(item => {
+      const unavailable = item.id === 'design' && !features.designStudio
+      return <button type="button" key={item.id} className={chapter?.id === item.id ? 'active' : ''} disabled={unavailable} onClick={() => setChapter(item)}><strong>{item.title}</strong><span>{unavailable ? 'Unavailable in this install' : item.summary}</span></button>
+    })}</div>
+    {chapter && <article className="help-chapter" aria-live="polite"><span className="eyebrow">Chapter</span><h3>{chapter.title}</h3><p>{chapter.summary}</p><p className="muted">Use the left navigation for primary destinations. Files, Terminal, and Preview stay in the tools rail so the current workspace remains visible. Review or permission decisions always return to their owning surface through Attention.</p></article>}
+  </div>
+}
+
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
@@ -625,6 +701,8 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
 
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
+    : activeSection === 'alpha'
+      ? <AlphaSettingsPanel token={token} />
     : activeSection === 'agents'
       ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'knowledge'
@@ -633,7 +711,9 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
         ? <ImageGenerationPanel token={token} />
         : activeSection === 'remote'
           ? <RemoteAccessGuide />
-          : <>{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
+          : activeSection === 'help'
+            ? <HelpToursPanel token={token} features={features} />
+            : <>{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
 
   return <section className="settings-view">
     <aside className="settings-menu" aria-label="Settings sections">

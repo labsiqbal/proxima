@@ -194,6 +194,8 @@ def register(app, deps):
 
     @app.post("/api/sessions", status_code=201)
     def create_session(payload: SessionCreateRequest, user: dict[str, Any] = Depends(current_user)):
+        if payload.mode == "alpha":
+            raise HTTPException(status_code=422, detail="Alpha sessions are created by the Alpha desk")
         _require_mode_feature(payload.mode)
         profile = profile_for_user(payload.profile_id, user)
         project_id = None
@@ -230,6 +232,8 @@ def register(app, deps):
     @app.patch("/api/sessions/{session_id}")
     def update_session(session_id: int, payload: SessionUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
+        if session["mode"] == "alpha":
+            raise HTTPException(status_code=409, detail="the Alpha session is managed by the Alpha desk")
         if session["owner_user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="only the session owner can change it")
         if payload.title is not None and payload.title.strip():
@@ -264,6 +268,8 @@ def register(app, deps):
     @app.delete("/api/sessions/{session_id}")
     def delete_session(session_id: int, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
+        if session["mode"] == "alpha":
+            raise HTTPException(status_code=409, detail="the Alpha session is managed by the Alpha desk")
         if session["owner_user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="only the session owner can delete it")
         if session["job_id"]:  # a job's thread — delete the job (keeps it from orphaning)
@@ -312,6 +318,14 @@ def register(app, deps):
             ).fetchall():
                 if d["d"] and d["d"] >= 1:
                     duration_by_run[d["id"]] = round(d["d"])
+        journal_by_message = {
+            item["message_id"]: item["path_count"]
+            for item in db().execute(
+                "SELECT j.message_id, json_array_length(j.entries_json) AS path_count "
+                "FROM turn_file_journals j WHERE j.session_id = ?",
+                (session_id,),
+            ).fetchall()
+        }
         out = []
         for row in rows:
             m = dict(row)
@@ -322,6 +336,11 @@ def register(app, deps):
             if links:
                 m["output_links"] = links
             if m.get("role") == "assistant" and m.get("run_id"):
+                if m.get("id") in journal_by_message:
+                    m["turn_restore"] = {
+                        "available": True,
+                        "paths_count": journal_by_message[m["id"]],
+                    }
                 act = activity_by_run.get(m["run_id"], [])
                 # The interactive question-form isn't a tool call, so surface it as
                 # a synthetic activity step so the panel reflects card creation too.

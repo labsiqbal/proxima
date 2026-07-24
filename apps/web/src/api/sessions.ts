@@ -10,6 +10,9 @@ export const renameSession = (token: string, sessionId: number, title: string) =
 // reverting to the account default.
 export const setSessionProfile = (token: string, sessionId: number, profileId: number) => api<ChatSession>(`/api/sessions/${sessionId}`, token, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) })
 export const deleteSession = (token: string, sessionId: number) => api<{ ok: boolean }>(`/api/sessions/${sessionId}`, token, { method: 'DELETE' })
+export type TurnRestorePreview = { message_id: number; paths: string[]; warning: string | null; active_alpha_jobs: { id: number; title: string }[] }
+export const previewTurnRestore = (token: string, messageId: number) => api<TurnRestorePreview>(`/api/chat/messages/${messageId}/restore-turn`, token)
+export const restoreTurn = (token: string, messageId: number, acceptActiveAlpha = false) => api<{ paths: string[]; restored: number; warning?: string | null }>(`/api/chat/messages/${messageId}/restore-turn`, token, { method: 'POST', body: JSON.stringify({ confirm: true, accept_active_alpha: acceptActiveAlpha }) })
 // Promote a chat into a reusable workflow draft. Enqueues a run (202); the
 // result arrives async as a `workflow.draft` event on the session's stream.
 export const promoteWorkflow = (token: string, sessionId: number, profileId?: number | null, engine: 'auto' | 'linear' | 'graph' = 'auto') => api<{ run_id: number; session_id: number; status: string }>(`/api/sessions/${sessionId}/promote-workflow`, token, { method: 'POST', body: JSON.stringify({ profile_id: profileId ?? null, engine }) })

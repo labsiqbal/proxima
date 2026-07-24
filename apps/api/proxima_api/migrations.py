@@ -687,6 +687,52 @@ def _add_satpam_supervision(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE node_states ADD COLUMN contract_failures INTEGER NOT NULL DEFAULT 0")
 
 
+def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
+    """Alpha system identity, job ownership, scoped checkpoints, turn journals,
+    and durable attention items. All additions are nullable/new-table changes."""
+    table_names = {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    if "profiles" in table_names:
+        profile_cols = {r[1] for r in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+        if "system_kind" not in profile_cols:
+            conn.execute("ALTER TABLE profiles ADD COLUMN system_kind TEXT")
+    if "jobs" in table_names:
+        job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "alpha_session_id" not in job_cols:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL"
+            )
+        job_cols.add("alpha_session_id")
+        if {"alpha_session_id", "status", "created_at"}.issubset(job_cols):
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS job_checkpoints ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, "
+            "payload_json TEXT NOT NULL, git_refs_json TEXT NOT NULL DEFAULT '[]', "
+            "pinned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_checkpoints_job ON job_checkpoints(job_id, created_at DESC)")
+    if {"messages", "sessions"}.issubset(table_names):
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS turn_file_journals ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE, "
+            "session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, "
+            "entries_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id)")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS attention_items ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL, "
+        "target_json TEXT NOT NULL DEFAULT '{}', inline_ok INTEGER NOT NULL DEFAULT 0, "
+        "actions_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open', "
+        "source_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC)")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -713,6 +759,7 @@ MIGRATIONS: list[Migration] = [
     (23, "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)", _add_artifact_registry),
     (24, "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)", _add_repo_remote_push),
     (25, "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)", _add_satpam_supervision),
+    (26, "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox", _add_alpha_foundation),
 ]
 
 

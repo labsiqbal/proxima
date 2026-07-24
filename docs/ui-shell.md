@@ -10,13 +10,34 @@ There is **one workspace**. The old Ops/Code split is gone — no workspace swit
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (the front door — talk it through), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
+The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
 
 ## Chat — the front door
 
 Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The sidebar always shows **New chat** plus the project-scoped recent chats (and design sessions when the Design feature is on). A new chat starts blank; the database session is created lazily on the first message. `/new` remains available.
 
 A recipe's iteration thread is not an ordinary chat: the nav attributes it to Recipes, and picking Chat while one is open switches to a plain conversation instead.
+
+A file-changing assistant turn carries a **Restore changed paths** control. It first
+opens a path impact preview and asks for confirmation; active Alpha work in the same
+project adds a warning. The journal belongs to that chat session and disappears with it.
+
+## Alpha
+
+Alpha is a first-class destination, not a Chat tab or Tasks filter. Its header identifies
+the built-in system orchestrator and lets the owner choose the backing runner; the desk
+itself keeps the counterpart label **Alpha** and does not expose a fake worker profile.
+A compact capacity strip always states running/free out of three, queued count, and the
+saved unattended budgets. The main column is the Alpha thread plus a guarded delegation
+composer; the side column holds active/queued/needs-you jobs and a job-scoped checkpoint
+timeline. Idle, loading, failure/retry, populated, and in-flight states all retain the
+same geometry. On narrow screens the side column stacks after the thread with no
+horizontal scroll.
+
+**Unattended** is a quick pressed toggle on the desk. Off means Alpha never starts work
+without an owner turn. On means the server may start already-queued Alpha jobs until the
+saved turn/wall budget stops cleanly; numeric limits live under Settings → Alpha and
+remain readable on the desk. Satpam, not Alpha, owns stuck-job steer/restart.
 
 ## Tasks
 
@@ -66,9 +87,16 @@ Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail o
 
 The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
-## Global account surfaces
+## Global attention and account surfaces
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint.
+The shell-level **Attention** badge persists across destinations and polls one unified
+shape. Every item is a real button that deep-links to the owning Alpha/Task/plan/Settings
+surface. Only server-marked `inline_ok` binary actions render beside the link; diff
+review and open-text decisions navigate instead. The popover has loading, empty,
+populated, and persistent retryable-error states, closes on Escape/outside click, and
+becomes a viewport-bounded sheet on narrow screens.
+
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns Alpha budgets and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, Attention, and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint.
 
 Projects remain shared application entities: one active project across the app. Archive records and Designs remain owned by their Project.
 
@@ -95,7 +123,7 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, or raw stack traces. The plain words are **agent** and **tools**. Technical detail — runner ids, managed homes, MCP servers, feature flags — belongs to Settings, the Agents screen, and the docs. New copy on primary surfaces must hold this line.
+Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as job cards rather than raw JSON.
 
 ## Feature gates
 
@@ -103,7 +131,7 @@ Routes, sidebar destinations, session eligibility, search, and deep links must a
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer context controls stack without changing task semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel), focus indicators use shared tokens, and reduced-motion preferences apply globally.
+The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Alpha controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel and Attention); the modal core tour traps focus until completed/skipped. Focus indicators use shared tokens, and reduced-motion preferences apply globally.
 
 ## Extension points
 

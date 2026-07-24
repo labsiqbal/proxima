@@ -27,6 +27,7 @@ The foundation everything leans on. Least allowed to change casually.
 | Profiles / Runners / Commands | active | `routes/profiles.py`, `runners.py`, `runner_specs.py`, `commands.py`, `capabilities.py` | `screens/ProfilesScreen.tsx`, `RunnersScreen.tsx` | `profiles` | runs pick profile→runner→home |
 | Capability bundle (T8: bundled skills + tool advertisement) | active | `capabilities.py` (`detect_bundled_skills`), `recommended_tools.py`, `routes/profiles.py` (`/api/tools/recommended`), `wiki_memory.py` (discipline pack + tools block), repo `bundled-skills/` | `SettingsScreen.tsx` (RecommendedToolsPanel), `ProfilesScreen.tsx` (bundled group in caps modal) | `profiles.capabilities` (opt-out) | run preamble; live-home = no-op |
 | Sessions & Messages | active | `routes/chat.py` (list/create/patch/delete) | `api/sessions.ts`, `ChatScreen.tsx` | `sessions`, `messages`, `agent_sessions` | runs, ACP, collab, reviews, goal |
+| Alpha system identity | active | `alpha_runtime.py`, `routes/alpha.py` | `AlphaScreen.tsx`, `api/alpha.ts` | `profiles.system_kind`, `sessions.mode` | hidden profile + Alpha-only thread |
 | Run Lifecycle (engine) | active | `worker.py` (RunWorker), `acp.py`, `run_prompting/outputs/summaries/advancers/drafts/state.py` | `hooks/useRunStream.ts` | `runs`, `events`, `messages` | EventHub, collab, reviews, goal, workflow |
 | **Event Log & Streaming** | **risk** | `event_hub.py`, `worker.add_event`, `routes/chat.py` streams | `useRunStream.ts`, `useEventStream.ts` | `events` | every streaming surface |
 | Reaper / Orphan Reclaim | active | `run_reaper.py`, `worker._fail_interrupted`, `provisioning.py` | — | `runs`, `jobs` | run lifecycle, scheduler |
@@ -59,7 +60,8 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 | **Cancel run** | **risk** | `routes/chat.py` (`cancel_run`) | `ChatScreen.tsx` (`stopRun`) | jobs/runs, collab, tasks |
 | Streaming deltas / smooth reveal | active | SSE/WS streams | `ChatThread.tsx` (StreamingBubble) | runs/worker |
 | Tool-call activity | active | `routes/chat.py` (`_run_activity`) | `ChatThread.tsx` (ActivityPanel) | runs/worker, jobs |
-| Approval / permission cards | active | `routes/chat.py` (`respond_permission`), `worker.resolve_permission` | `ChatThread.tsx` (ApprovalCard) | run lifecycle, ACP |
+| Approval / permission cards | active | `routes/chat.py` (`respond_permission`), `worker.resolve_permission` | `ChatThread.tsx` (ApprovalCard), global `AttentionInbox` for job sessions | run lifecycle, ACP, attention |
+| Turn file restore | active | `turn_restore.py`, `worker.py` (ACP tool-event journal), `routes/alpha.py` (preview/restore) | `ChatThread.tsx` (`TurnRestoreButton`) | normal project Chat, session-lifetime retention |
 | Quick-reply buttons | active | — (FE parse) | `ChatThread.tsx` (`parseChoices`) | core chat |
 | Result cards / output links | active | `routes/chat.py` (`_merge_session_artifact`) | `ChatThread.tsx` (ResultCards) | artifacts, studios |
 | Bridge → Design Studio | gated | `api/files` designFromImage | `ChatThread.tsx` | Design Studio |
@@ -80,7 +82,7 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 - *Goal loop* — advance-vs-cancel TOCTOU: advancer reads `goal_status='running'` then writes blind, can overwrite a concurrent cancel and spawn one extra turn.
 - *Validate sidecar* — schema `mode` allows `validate|brainstorm|debate|compare` but UI only sends `validate`; the other three are dead.
 - *Session list* — `list_sessions` self-heals orphan task threads (evidence the `task_id` invariant is expected to break); the `job_id IS NULL` filter means the jobs feature decides what shows in the main chat list.
-- `sessions.mode` values: `chat` (main chat, the only mode `list_sessions` returns) · `design` (Design Studio, gated) · `video` is **not** a real mode (schema forbids it; a defensive filter only). Task / workflow-iterate / job threads are distinguished by the `task_id` / `workflow_id` / `job_id` columns, not `mode` — all excluded from the main chat list.
+- `sessions.mode` values: `chat` (main chat, the only mode `list_sessions` returns) · `alpha` (built-in orchestrator desk, server-created and excluded) · `design` (Design Studio, gated) · `video` is **not** a real mode (schema forbids it; a defensive filter only). Task / workflow-iterate / job threads are distinguished by the `workflow_id` / `job_id` columns, not `mode` - all excluded from the main chat list.
 
 ---
 
@@ -91,6 +93,10 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
 | Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx`, `GraphScreen.tsx`, `graphLayout.ts` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
+| Alpha desk + in-process tools | active | `alpha_runtime.py`, `routes/alpha.py`, `worker.py` (scope + max 3), `alpha_supervisor.py` | `AlphaScreen.tsx`, `api/alpha.ts`, Sidebar | `jobs.alpha_session_id`, `app_settings`, `audit_log` | jobs/plans, existing runners, BYO git/gh |
+| Job-scoped checkpoints | active | `job_checkpoints.py`, `routes/alpha.py`, `routes/work.py` | `AlphaScreen.tsx` checkpoint timeline | `job_checkpoints` | Alpha jobs, git/worktrees; no DB/FS archive |
+| Global Attention inbox | active | `routes/alpha.py`, `worker.py` (permission materialization/close) | `AttentionInbox.tsx`, `AppShell.tsx` | `attention_items` + projected job/satpam rows | Tasks, Alpha, satpam, ACP permissions |
+| Alpha core/full tours | active | `routes/alpha.py` settings state | `CoreTour.tsx`, `SettingsScreen.tsx` Help chapters | `app_settings` | feature-aware shell education |
 | Repo-job worktrees + review/merge UI | active (flag `PROXIMA_FEATURE_REPO_WORKTREES` on by default; off = escape hatch) | `worktrees.py`, `routes/work.py` (start/diff/approve/reject/delete), `routes/graph.py` (plan start/approve), `worker.py` (cwd seam), migrations 19+20 | `components/tasks/ChangesReview.tsx` + `diff.ts` (review surface), `ActivityScreen.tsx` (plan expanding row), `TaskWorkspace.tsx` (full-width page), `GraphScreen.tsx` (approve label) | `job_worktrees`, `jobs.target_area_id`, `jobs.rejected_reason`, `project_areas` | work-container areas, run lifecycle, slice-5 continuation, slice-12 satpam (consumes review states) |
 | Timeout auto-continuation + turn quota setting | active | `worker.py` (`_continue_after_timeout` + timeout handler), `app_settings.py` (run-timeout helpers), `routes/files.py` (`/api/settings/runs`), `workflows.py` (continuation prompt, slicer sizing rule), migration 21 | `SettingsScreen.tsx` (Turn quota panel), `api/settings.ts` | `runs.continued_from_run_id` / `runs.continuation_count`, `app_settings`, `node_states` (run-id re-attach) | run lifecycle, repo-job worktrees (same-worktree resume), slice-12 satpam (reads continuation counts as a confused signal) |
 | Satpam supervision loop + decision-hold | active | `satpam.py` (fleet loop, detection + action ladders), `worker.py` (loop cadence, steer consumption, cap escalation), `graph_advancers.py` (DECISION_NEEDED park, contract-failure strikes, drain rule), `graph_executor.py` (marker instruction + owner-decision prompt), `worktrees.py` (`work_signature`, `recut_job_worktree`), `routes/work.py` (restart approve/dismiss), `routes/graph.py` (node answer), `routes/files.py` (`/api/settings/satpam`), migration 25 | `components/tasks/SatpamCard.tsx` (approval card + watchdog log), `TaskWorkspace.tsx`, `GraphScreen.tsx` (card + decision-answer), `ActivityScreen.tsx` (needs-answer chip), `SettingsScreen.tsx` (Watchdog panel) | `satpam_watch`, `satpam_interventions`, `node_states.question/answer/contract_failures` | run lifecycle, slice-5 continuation (turn boundaries + steer seam), repo-job worktrees (signatures + gated restart), review states |
@@ -105,7 +111,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Design Studio / Image gen | gated `PROXIMA_FEATURE_DESIGN_STUDIO` (on in dev, opt-in when installed) | `routes/design.py`, `image_providers.py`, `design_scenes.py`, `higgsfield.py` | `DesignStudio.tsx`, `components/design/*` | `app_settings` (+FS) | features gate, artifacts, wiki |
 | Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image providers |
 | Settings Store | active | `app_settings.py`, `routes/files.py`, `settings.py` | `SettingsScreen.tsx` | `app_settings` | collab, permission, providers |
-| Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `SettingsScreen` | `app_settings`, `events` | run lifecycle, ACP |
+| Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `AttentionInbox`, `SettingsScreen` | `app_settings`, `events`, `attention_items` | ordinary ask; scoped Alpha/child auto-approve |
 | Self-update | active (`update_check`) | `routes/update.py`, `updates.py`, `main.py` loop | `UpdateModal.tsx`, `useUpdateStatus` | — (marker file) | app version, health |
 | Readiness Health Dashboard | active | `auth_health.py`, `routes/chat.py` (dashboard) | `HomeScreen.tsx` (Connections) | `profiles`, `app_settings` | providers, runners |
 | Command palette / Search | active | `routes/chat.py` (search) | `SearchModal.tsx`, `api/search.ts` | `sessions`, `messages`, `projects` | visible Code sessions, projects |
@@ -140,11 +146,10 @@ The dashboard payload still returns more than Home renders (counts, recents,
 
 **Notes**
 
-- Tool-permission requests raised by a job's agent run are **not** surfaced in
-  `TaskWorkspace` — with auto-approve off, a Guarded task can sit "Running…" on a
-  hidden `approval.request` until the run times out. Approve them from the run's
-  chat surface or via `POST /api/runs/{id}/permission`; a task-side approval card
-  is an open gap.
+- Tool-permission requests raised by a non-Alpha job's hidden session surface in
+  the global Attention inbox with Task deep-links and safe inline choices. Alpha
+  sessions and Alpha children instead use scoped ACP auto-approval; product review
+  gates remain separate.
 - Tasks list auto-refreshes while any job is `queued`/`running`; the task
   workspace polls while running.
 

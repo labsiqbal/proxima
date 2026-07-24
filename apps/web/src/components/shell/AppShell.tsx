@@ -6,6 +6,9 @@ import { SearchModal } from './SearchModal'
 import { ToolDock } from './ToolDock'
 import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
+import { AttentionInbox } from './AttentionInbox'
+import { CoreTour } from './CoreTour'
+import type { AttentionItem } from '../../api/alpha'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -43,6 +46,7 @@ export function AppShell(props: {
   seen: Record<number, string>
   busySessions?: number[]
   onSelectView: (view: View) => void
+  onOpenAttentionTarget?: (target: AttentionItem['target']) => void
   onLogout: () => void
   profiles: Profile[]
   projects: Project[]
@@ -189,6 +193,7 @@ export function AppShell(props: {
           </>}
         </div>
       </header>
+      <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
       <MobileTopbar
         activeProject={props.activeProject}
         drawerOpen={drawerOpen}
@@ -205,6 +210,7 @@ export function AppShell(props: {
       <main className="main-pane">{props.children}</main>
       <ToolDock token={props.token} project={props.activeProject} onOpenSettings={() => props.onSelectView('settings')} />
       {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onSelectProject} onSelectView={props.onSelectView} />}
+      <CoreTour token={props.token} />
     </div>
   )
 }

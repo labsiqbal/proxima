@@ -13,19 +13,21 @@ describe('Sidebar single-workspace IA', () => {
   it('orders one flow-first nav and keeps tools and workspaces out of it', () => {
     const { rerender } = render(<Sidebar {...base} />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
-    expect(labels()).toEqual(['New chat', 'Chat', 'Tasks', 'Recipes', 'Projects', 'Archive'])
+    expect(labels()).toEqual(['New chat', 'Chat', 'Alpha', 'Tasks', 'Recipes', 'Projects', 'Archive'])
     // No workspace switch and no tool destinations: tools live on the right rail.
     expect(screen.queryByRole('button', { name: 'Ops' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Workflows' })).not.toBeInTheDocument()
     rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true }} />)
-    expect(labels()).toEqual(['New chat', 'Chat', 'Tasks', 'Recipes', 'Projects', 'Archive', 'Design'])
+    expect(labels()).toEqual(['New chat', 'Chat', 'Alpha', 'Tasks', 'Recipes', 'Projects', 'Archive', 'Design'])
   })
 
   it('navigates the flow and starts a new chat', async () => {
     const user = userEvent.setup()
     render(<Sidebar {...base} />)
+    await user.click(screen.getByRole('button', { name: 'Alpha' }))
+    expect(base.onSelectView).toHaveBeenCalledWith('alpha')
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
     expect(base.onSelectView).toHaveBeenCalledWith('activity')
     await user.click(screen.getByRole('button', { name: 'Recipes' }))

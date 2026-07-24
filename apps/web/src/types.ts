@@ -127,6 +127,7 @@ export type ChatMessage = {
 	output_links?: OutputLink[];
 	created_at?: string;
 	duration_s?: number;
+	turn_restore?: { available: boolean; paths_count: number };
 };
 // Autonomous goal loop state for a session.
 export type GoalState = {
@@ -426,6 +427,7 @@ export type Job = {
 export type View =
 	| "home"
 	| "chat"
+	| "alpha"
 	| "projects"
 	| "wiki"
 	| "artifacts"

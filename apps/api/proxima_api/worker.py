@@ -27,8 +27,10 @@ from .acp import format_rpc_error
 from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
+from . import alpha_runtime
 from . import features
 from . import state
+from . import turn_restore
 from .artifacts import scan_project_artifacts
 from .message_reviews import parse_review_output, review_payload
 from .prompt_collaborations import (
@@ -203,6 +205,19 @@ class RunWorker:
                        WHERE rr.session_id = r.session_id
                          AND rr.status = 'running'
                      ))
+                  )
+                  AND (
+                    NOT EXISTS (
+                      SELECT 1 FROM sessions als
+                      JOIN jobs alj ON alj.id = als.job_id
+                      WHERE als.id = r.session_id AND alj.alpha_session_id IS NOT NULL
+                    )
+                    OR (
+                      SELECT COUNT(*) FROM runs ar
+                      JOIN sessions ars ON ars.id = ar.session_id
+                      JOIN jobs arj ON arj.id = ars.job_id
+                      WHERE ar.status = 'running' AND arj.alpha_session_id IS NOT NULL
+                    ) < 3
                   )
                 ORDER BY r.id LIMIT 1
                 """
@@ -892,6 +907,9 @@ class RunWorker:
         chunks: list[str] = []
         hb_task: asyncio.Task | None = None
         synth_parent_id: int | None = None
+        turn_before: dict[str, dict[str, Any]] | None = None
+        turn_root: Path | None = None
+        tool_write_event_seen = False
         try:
             mode_row = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
             session_mode = (mode_row["mode"] if mode_row else None) or "chat"
@@ -964,6 +982,12 @@ class RunWorker:
                             raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
                         cwd = wt["worktree_path"]
             Path(cwd).mkdir(parents=True, exist_ok=True)
+            # Hands-on Chat keeps a bounded pre-turn file journal. Only changed
+            # paths are persisted after the assistant message exists; job/Alpha
+            # sessions use job-scoped checkpoints instead.
+            if session_mode == "chat" and project_id and not is_job and not is_build:
+                turn_root = Path(cwd)
+                turn_before = turn_restore.capture_snapshot(turn_root)
 
             # Collaboration synthesis streams into the PARENT run's bubble too, so
             # the Brainstorm/Debate result flows in like a normal reply instead of
@@ -980,6 +1004,7 @@ class RunWorker:
             return
 
         def on_update(u: dict[str, Any]) -> None:
+            nonlocal tool_write_event_seen
             kind = u.get("sessionUpdate")
             if kind == "agent_message_chunk":
                 text = (u.get("content") or {}).get("text", "")
@@ -996,6 +1021,10 @@ class RunWorker:
                     with self.app.state.db_lock:
                         self.add_event(run_id, session_id, project_id, "reasoning.delta", {"text": text})
             elif kind == "tool_call":
+                # The ACP tool event is the write-journal trigger. The bounded
+                # before-snapshot lets us recover exact bytes even when a runner's
+                # event only names the tool rather than every path it will touch.
+                tool_write_event_seen = True
                 with self.app.state.db_lock:
                     self.add_event(run_id, session_id, project_id, "tool.start", {"id": u.get("toolCallId"), "title": u.get("title") or u.get("kind") or "tool"})
             elif kind == "tool_call_update" and u.get("status") in ("completed", "failed"):
@@ -1008,7 +1037,7 @@ class RunWorker:
             title = tc.get("title") or params.get("title") or "Permission required"
             # Auto-approve (explicit opt-in): pick the allow option and resolve immediately,
             # logging an approval.auto event so the activity feed still shows what ran.
-            if self._auto_approve_on():
+            if self._auto_approve_on(run_id):
                 allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
                 allow = allow or (options[0] if options else None)
                 if allow and allow.get("optionId"):
@@ -1019,11 +1048,23 @@ class RunWorker:
             # Otherwise surface an interactive card; the user's pick comes back via
             # POST /api/runs/{id}/permission.
             with self.app.state.db_lock:
+                safe_options = [{"optionId": o.get("optionId"), "name": o.get("name"), "kind": o.get("kind")} for o in options]
                 self.add_event(run_id, session_id, project_id, "approval.request", {
                     "request_id": request_id,
                     "title": title,
-                    "options": [{"optionId": o.get("optionId"), "name": o.get("name"), "kind": o.get("kind")} for o in options],
+                    "options": safe_options,
                 })
+                job = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                if job and job["job_id"]:
+                    db.execute(
+                        "INSERT OR REPLACE INTO attention_items(kind, title, target_json, inline_ok, actions_json, status, source_key) "
+                        "VALUES ('permission_job', ?, ?, 1, '[\"approve\",\"reject\"]', 'open', ?)",
+                        (
+                            title,
+                            json.dumps({"view": "task", "job_id": job["job_id"], "run_id": run_id, "request_id": request_id, "options": safe_options}),
+                            f"permission:{run_id}:{request_id}",
+                        ),
+                    )
 
         try:
             await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
@@ -1143,6 +1184,26 @@ class RunWorker:
                 output_links,
                 self.add_event,
             )
+            if tool_write_event_seen and turn_before is not None and turn_root is not None:
+                try:
+                    message = db.execute(
+                        "SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+                        (run_id,),
+                    ).fetchone()
+                    if message:
+                        turn_restore.record_journal(
+                            db,
+                            message_id=_as_int(message["id"]),
+                            session_id=session_id,
+                            root=turn_root,
+                            before=turn_before,
+                        )
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
+            try:
+                alpha_runtime.handle_alpha_response(self.app, db, run, answer)
+            except Exception:
+                logging.getLogger("proxima.worker").exception("Alpha product tool handling failed (non-fatal)")
             # Auto-name the chat from a ≤3-word recap on the first exchange (chats
             # only). Done BEFORE run.completed so the sidebar shows the recap as soon
             # as the run leaves the active set. Best-effort; never fails the run.
@@ -1292,11 +1353,22 @@ class RunWorker:
             proc, sid = entry
             proc.cancel(sid)
 
-    def _auto_approve_on(self) -> bool:
-        """Global 'bypass agent permission prompts' toggle. Default OFF (unset ⇒ off).
-        Fail-safe: if the setting can't be read, DON'T auto-approve (surface the card)."""
+    def _auto_approve_on(self, run_id: int) -> bool:
+        """Auto-approve Alpha and Alpha-spawned runs, scoped by durable rows.
+
+        Ordinary runs continue to honor the owner's install-wide toggle. If the
+        lookup fails, fail safe and surface the permission card.
+        """
         try:
             with self.app.state.db_lock:
+                row = self.app.state.worker_db.execute(
+                    "SELECT s.mode, j.alpha_session_id FROM runs r "
+                    "JOIN sessions s ON s.id = r.session_id "
+                    "LEFT JOIN jobs j ON j.id = s.job_id WHERE r.id = ?",
+                    (run_id,),
+                ).fetchone()
+                if row and (row["mode"] == "alpha" or row["alpha_session_id"] is not None):
+                    return True
                 return app_settings.get_setting(self.app.state.worker_db, "auto_approve_permissions", "0") == "1"
         except Exception:
             return False
@@ -1306,4 +1378,12 @@ class RunWorker:
         if not entry:
             return False
         proc, _sid = entry
-        return bool(proc.resolve_permission(request_id, option_id))
+        resolved = bool(proc.resolve_permission(request_id, option_id))
+        if resolved:
+            with self.app.state.db_lock:
+                self.app.state.worker_db.execute(
+                    "UPDATE attention_items SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP "
+                    "WHERE source_key = ? AND status = 'open'",
+                    (f"permission:{run_id}:{request_id}",),
+                )
+        return resolved

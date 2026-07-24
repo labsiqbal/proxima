@@ -201,10 +201,16 @@ def build_route_deps(
                                   bundle_dir=cfg.get("bundled_skills_dir"))
 
     def ensure_default_profile(user: dict[str, Any]) -> dict[str, Any]:
-        row = db().execute("SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 ORDER BY id LIMIT 1", (user["id"],)).fetchone()
+        row = db().execute(
+            "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
+            "AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1", (user["id"],)
+        ).fetchone()
         if row:
             return dict(row)
-        row = db().execute("SELECT * FROM profiles WHERE user_id = ? ORDER BY id LIMIT 1", (user["id"],)).fetchone()
+        row = db().execute(
+            "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
+            (user["id"],),
+        ).fetchone()
         if row:
             db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],))
             return dict(row)
@@ -213,7 +219,10 @@ def build_route_deps(
     def profile_for_user(profile_id: int | None, user: dict[str, Any]) -> dict[str, Any]:
         if profile_id is None:
             return ensure_default_profile(user)
-        row = db().execute("SELECT * FROM profiles WHERE id = ? AND user_id = ?", (profile_id, user["id"])).fetchone()
+        row = db().execute(
+            "SELECT * FROM profiles WHERE id = ? AND user_id = ? AND COALESCE(system_kind, '') = ''",
+            (profile_id, user["id"]),
+        ).fetchone()
         if not row:
             raise http_exception(status_code=404, detail="profile not found")
         return dict(row)

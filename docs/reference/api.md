@@ -3,12 +3,13 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-154 endpoints across 14 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+166 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) — 3 endpoints
+- [`routes/alpha.py`](#routes-alpha-py) — 12 endpoints
 - [`routes/archive.py`](#routes-archive-py) — 3 endpoints
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 25 endpoints
@@ -31,6 +32,24 @@
 | GET | `/api/audit` | `list_audit` |  |
 | GET | `/api/debug/logs` | `debug_logs` |  |
 | POST | `/api/debug/reap-orphaned-jobs` | `reap_orphaned_jobs` |  |
+
+
+## routes/alpha.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/alpha/desk` | `get_alpha_desk` |  |
+| POST | `/api/alpha/messages` | `create_alpha_message` |  |
+| GET | `/api/attention` | `get_attention` |  |
+| POST | `/api/attention/{item_id:path}/act` | `act_attention` |  |
+| GET | `/api/chat/messages/{message_id}/restore-turn` | `preview_turn_restore` |  |
+| POST | `/api/chat/messages/{message_id}/restore-turn` | `restore_chat_turn` |  |
+| POST | `/api/jobs/{job_id}/checkpoint/restore` | `restore_job_checkpoint` |  |
+| PUT | `/api/jobs/{job_id}/checkpoint/{checkpoint_id}/pin` | `pin_job_checkpoint` |  |
+| GET | `/api/jobs/{job_id}/checkpoint/{checkpoint_id}/restore` | `preview_checkpoint_restore` |  |
+| GET | `/api/jobs/{job_id}/checkpoints` | `get_job_checkpoints` |  |
+| GET | `/api/settings/alpha` | `get_alpha_settings` |  |
+| PUT | `/api/settings/alpha` | `put_alpha_settings` |  |
 
 
 ## routes/archive.py
@@ -263,4 +282,4 @@
 
 
 ---
-_Generated 2026-07-24 03:58 UTC._
+_Generated 2026-07-24 05:52 UTC._

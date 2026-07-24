@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconNewChat, IconChat, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
+import { IconNewChat, IconChat, IconSparkle, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
@@ -11,6 +11,7 @@ import { ProximaMark } from '../brand/ProximaMark'
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
+  { id: 'alpha', label: 'Alpha', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Recipes', icon: IconWorkflows },
   { id: 'projects', label: 'Projects', icon: IconProjects },

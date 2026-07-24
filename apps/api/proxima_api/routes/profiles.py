@@ -37,7 +37,10 @@ def register(app, deps):
     @app.get("/api/profiles")
     def list_profiles(user: dict[str, Any] = Depends(current_user)):
         ensure_default_profile(user)
-        rows = db().execute("SELECT * FROM profiles WHERE user_id = ? ORDER BY is_default DESC, name", (user["id"],)).fetchall()
+        rows = db().execute(
+            "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' "
+            "ORDER BY is_default DESC, name", (user["id"],)
+        ).fetchall()
         return {"profiles": [profile_payload(dict(row)) for row in rows]}
 
     @app.post("/api/profiles", status_code=201)
@@ -55,6 +58,8 @@ def register(app, deps):
     @app.patch("/api/profiles/{profile_id}")
     def update_profile(profile_id: int, payload: ProfileUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         profile = profile_for_user(profile_id, user)
+        if profile.get("system_kind"):
+            raise HTTPException(status_code=404, detail="profile not found")
         if payload.is_default:
             db().execute("UPDATE profiles SET is_default = 0 WHERE user_id = ?", (user["id"],))
             db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (profile_id,))
@@ -113,7 +118,12 @@ def register(app, deps):
     @app.delete("/api/profiles/{profile_id}")
     def delete_profile(profile_id: int, user: dict[str, Any] = Depends(current_user)):
         profile = profile_for_user(profile_id, user)
-        count = db().execute("SELECT COUNT(*) AS c FROM profiles WHERE user_id = ?", (user["id"],)).fetchone()["c"]
+        if profile.get("system_kind"):
+            raise HTTPException(status_code=404, detail="profile not found")
+        count = db().execute(
+            "SELECT COUNT(*) AS c FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = ''",
+            (user["id"],),
+        ).fetchone()["c"]
         if count <= 1 or profile["is_default"]:
             raise HTTPException(status_code=400, detail="cannot delete last or default profile")
         db().execute("DELETE FROM profiles WHERE id = ?", (profile_id,))

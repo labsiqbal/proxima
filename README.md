@@ -18,10 +18,14 @@ no credentials**. The work it orchestrates is domain-neutral: content, ops,
 research, and code all flow through the same chats, plans, reviews, and
 archive records.
 
-One workspace, organized around the flow **Chat → Tasks → Recipes**:
+One workspace, organized around two paths into durable work: **Chat or Alpha → Tasks → Recipes**:
 
-- **Chat** is the front door - think it through with the agent, then *Slice into
-  plan*: the AI turns the conversation into a runnable plan of reviewable jobs.
+- **Chat** is the hands-on front door - think it through with one agent, then
+  *Slice into plan*: the AI turns the conversation into a runnable plan of
+  reviewable jobs. File-changing turns carry a previewable session-scoped restore.
+- **Alpha** is the delegation desk - give the built-in orchestrator an outcome and
+  it dispatches Autonomous worker jobs through the agents you already own, up to
+  three at once, with the rest queued honestly.
 - **Tasks** holds the resulting plans and one-off jobs with their review gates.
   A job that touches a repo runs in an isolated copy of the code and comes back
   as a diff you review and merge locally - nothing leaves your machine.
@@ -36,6 +40,16 @@ One workspace, organized around the flow **Chat → Tasks → Recipes**:
 - **Single-user cockpit** — set one owner password on first run, then use a
   persistent owner session. Run it for yourself, see your work organized, never
   lose context.
+- **Alpha orchestration desk** - a built-in system persona backed by the runner
+  you choose, with in-process Proxima tools, live worker capacity, active queue,
+  needs-you links, and job-scoped checkpoints. Alpha and its workers auto-approve
+  ACP tool prompts without changing the global permission setting. Optional
+  unattended mode starts only queued work and stops at saved turn and wall-clock
+  budgets; code jobs may still commit, push, or open PRs through your existing
+  `git`/`gh` setup. Satpam alone owns stuck-job recovery.
+- **Global Attention inbox** - review gates, tool permissions, satpam restart asks,
+  and Alpha decisions collect in one shell badge. Safe binary actions can run
+  inline; complex diffs and open questions always deep-link to their owning surface.
 - **Tasks with review gates** — describe an outcome, pick an agent and a
   **Guarded** or **Autonomous** policy; the task runs as a durable job and
   pauses for your review before it counts as done.

@@ -22,6 +22,7 @@ from .. import satpam
 from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
+from ..job_checkpoints import create_checkpoint
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -285,6 +286,13 @@ def register(app, deps):
                 worktrees.ensure_job_worktree(db(), app.state.config, job)
             except worktrees.WorktreeError as exc:
                 raise HTTPException(status_code=409, detail=f"cannot start repo job: {exc}") from exc
+        # Alpha jobs checkpoint the queued state after the isolated worktree is
+        # available, but before any worker run is enqueued. Avoid duplicates on
+        # an idempotent retry.
+        if job["alpha_session_id"] is not None and not db().execute(
+            "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
+        ).fetchone():
+            create_checkpoint(db(), job_id)
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
@@ -574,6 +582,11 @@ def register(app, deps):
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
         return _job_payload(_job_or_404(job_id, user))
+
+    # Global Attention applies review verdicts through these proven services so
+    # artifact approval and worktree cleanup cannot drift from the Tasks flow.
+    app.state.alpha_approve_job = approve_job
+    app.state.alpha_reject_job = reject_job
 
     @app.post("/api/jobs/{job_id}/satpam/{intervention_id}/approve")
     def approve_satpam_restart(job_id: int, intervention_id: int, user: dict[str, Any] = Depends(current_user)):
