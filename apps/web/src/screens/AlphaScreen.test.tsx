@@ -99,6 +99,18 @@ describe('AlphaScreen', () => {
     expect(dockBlock?.[0]).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-4\)/)
   })
 
+  it('keeps shared .composer shell flat (border only, no drop shadow)', () => {
+    const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+    // Chat and Alpha both use .composer; elevation must not reappear under the capsule.
+    const composerBlock = css.match(/^\.composer\s*\{[^}]+\}/m)
+    expect(composerBlock?.[0]).toMatch(/border:\s*1px solid/)
+    expect(composerBlock?.[0]).toMatch(/box-shadow:\s*none/)
+    expect(composerBlock?.[0]).not.toMatch(/box-shadow:\s*var\(--shadow-composer\)/)
+    const focusBlock = css.match(/\.composer:focus-within\s*\{[^}]+\}/)
+    expect(focusBlock?.[0]).toMatch(/box-shadow:\s*none/)
+    expect(focusBlock?.[0]).not.toMatch(/box-shadow:\s*var\(--shadow-composer\)/)
+  })
+
   it('fills an example and guards the async delegation submit through sendAlphaMessage', async () => {
     const user = userEvent.setup()
     render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
