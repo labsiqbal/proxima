@@ -43,8 +43,22 @@ describe('RunningTasks', () => {
     vi.mocked(activeRuns).mockResolvedValue({ session_ids: [] })
     vi.mocked(listJobs).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     render(<RunningTasks token="token" />)
-    expect(await screen.findByRole('button', { name: '0 running tasks' })).toBeInTheDocument()
+    const idle = await screen.findByRole('button', { name: '0 running tasks' })
+    expect(idle).toBeInTheDocument()
+    expect(idle).not.toHaveClass('has-work')
     expect(screen.queryByText('99+')).not.toBeInTheDocument()
+    // Never an alarm face: activity icon only, no "!"
+    expect(idle).not.toHaveTextContent('!')
+  })
+
+  it('uses green pulse chrome with a count badge - never danger or "!"', async () => {
+    render(<RunningTasks token="token" />)
+    const trigger = await screen.findByRole('button', { name: '1 running task' })
+    expect(trigger).toHaveClass('running-trigger')
+    expect(trigger).toHaveClass('has-work')
+    expect(trigger).not.toHaveClass('has-attention')
+    expect(trigger).not.toHaveTextContent('!')
+    expect(trigger.querySelector('b')).toHaveTextContent('1')
   })
 
   it('deep-links jobs and sessions from the popover', async () => {

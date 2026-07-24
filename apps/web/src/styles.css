@@ -12634,7 +12634,8 @@ div.result-media {
 .alpha-message.user { justify-self: end; border-bottom-right-radius: var(--radius-sm); background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface)); }
 .alpha-message.assistant,
 .alpha-message.system { justify-self: start; border: 1px solid var(--ui-stroke-tertiary); border-bottom-left-radius: var(--radius-sm); background: var(--ui-surface-subtle); }
-.alpha-tool-results { display: grid; gap: var(--space-2); }
+/* Tool-result rows sit in the thread grid as bare cards (no outer message bubble). */
+.alpha-tool-results { display: grid; gap: var(--space-2); max-width: 100%; justify-self: stretch; min-width: 0; }
 .alpha-tool-results > div { border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-md); padding: var(--space-3); background: var(--ui-surface); }
 .alpha-tool-results > div.ok { border-color: color-mix(in srgb, var(--ui-success) 32%, var(--ui-stroke-secondary)); }
 .alpha-tool-results > div.failed { border-color: var(--ui-danger-border); background: var(--ui-danger-bg); color: var(--ui-danger-text); }
@@ -12770,6 +12771,12 @@ div.result-media {
 .attention-trigger:hover,
 .attention-trigger.active { border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary)); background: var(--ui-row-hover-background); color: var(--ui-accent); }
 .attention-trigger b { position: absolute; inset-block-start: calc(var(--space-2) * -1); inset-inline-end: calc(var(--space-2) * -1); min-width: var(--space-5); border-radius: var(--radius-full); padding: var(--space-1); background: var(--ui-danger); color: var(--ui-on-accent); font-size: var(--text-2xs); line-height: 1; }
+/* Alarm chrome only when Attention has open items (trigger is hidden when empty). */
+.attention-trigger.has-attention { color: var(--ui-danger-text); border-color: color-mix(in srgb, var(--ui-danger) 35%, var(--ui-stroke-secondary)); }
+.attention-trigger.has-attention:hover,
+.attention-trigger.has-attention.active { color: var(--ui-danger-text); border-color: color-mix(in srgb, var(--ui-danger) 50%, var(--ui-stroke-secondary)); background: var(--ui-danger-bg); }
+/* Running work: activity pulse + green count only - never danger/red or "!". */
+.running-trigger { font-weight: 600; }
 .running-trigger.has-work { color: var(--ui-success); border-color: color-mix(in srgb, var(--ui-success) 35%, var(--ui-stroke-secondary)); }
 .running-trigger.has-work b { background: var(--ui-success); }
 .running-trigger.has-work:not(.active) {

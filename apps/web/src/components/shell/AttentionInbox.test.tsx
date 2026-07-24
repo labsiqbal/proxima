@@ -20,6 +20,23 @@ describe('AttentionInbox', () => {
     vi.mocked(actAttention).mockResolvedValue({ ok: true, id: 'job:4', action: 'approve' })
   })
 
+  it('hides the trigger when the inbox is empty so it does not look like an active alarm', async () => {
+    vi.mocked(getAttention).mockResolvedValue({ items: [], count: 0 })
+    const { container } = render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    await waitFor(() => expect(getAttention).toHaveBeenCalled())
+    expect(container.querySelector('.attention-inbox')).toBeNull()
+    expect(screen.queryByRole('button', { name: /attention item/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('!')).not.toBeInTheDocument()
+  })
+
+  it('shows a needs-you trigger with count when there are open items', async () => {
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    const trigger = await screen.findByRole('button', { name: '1 attention item' })
+    expect(trigger).toHaveClass('has-attention')
+    expect(trigger).toHaveTextContent('!')
+    expect(trigger.querySelector('b')).toHaveTextContent('1')
+  })
+
   it('deep-links every item and restricts inline controls to supplied actions', async () => {
     const user = userEvent.setup()
     const openTarget = vi.fn()
