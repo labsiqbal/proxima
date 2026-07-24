@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom/vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -52,7 +54,7 @@ describe('AlphaScreen', () => {
   })
 
   it('renders the honest empty, capacity, safety, and delegation states', async () => {
-    render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    const { container } = render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
     // Header matches Chat/code-header: eyebrow + strong, not a marketing h1.
     expect(await screen.findByText('Alpha')).toBeInTheDocument()
@@ -67,6 +69,24 @@ describe('AlphaScreen', () => {
     expect(screen.getByRole('textbox', { name: 'Delegate an outcome' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delegate' })).toBeInTheDocument()
+    // Empty hero lives in the flat conversation column - not a shared card with the side rail.
+    expect(container.querySelector('.alpha-conversation')).toBeTruthy()
+    expect(container.querySelector('.alpha-conversation .alpha-empty')).toBeTruthy()
+    expect(container.querySelectorAll('.alpha-side-section').length).toBeGreaterThan(0)
+  })
+
+  it('keeps Alpha conversation flat - no shared card chrome with side rail sections', () => {
+    const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+    // Regression: conversation must not share the bordered/radius/surface card rule with side sections.
+    expect(css).not.toMatch(/\.alpha-conversation\s*,\s*\n?\s*\.alpha-side-section\s*\{/)
+    const conversationBlock = css.match(/\.alpha-conversation\s*\{[^}]+\}/)
+    expect(conversationBlock?.[0]).toMatch(/border:\s*0/)
+    expect(conversationBlock?.[0]).toMatch(/border-radius:\s*0/)
+    expect(conversationBlock?.[0]).toMatch(/background:\s*transparent/)
+    const sideBlock = css.match(/\.alpha-side-section\s*\{[^}]+\}/)
+    expect(sideBlock?.[0]).toMatch(/border:\s*1px solid/)
+    expect(sideBlock?.[0]).toMatch(/border-radius:\s*var\(--radius-lg\)/)
+    expect(sideBlock?.[0]).toMatch(/background:\s*var\(--ui-surface\)/)
   })
 
   it('fills an example and guards the async delegation submit through sendAlphaMessage', async () => {
