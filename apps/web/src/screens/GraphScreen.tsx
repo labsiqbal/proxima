@@ -17,6 +17,7 @@ import {
   startGraphJob,
   updateGraphPlan,
 } from '../api/graph'
+import { activeRuns } from '../api/runs'
 import { Dropdown } from '../components/ui/Dropdown'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
@@ -58,6 +59,26 @@ function outputText(state?: GraphNodeState): string {
 }
 
 const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
+
+/** Per-job Plan Chat open preference — survives leave/reopen of Recipes editor. */
+export function graphChatOpenKey(jobId: number): string {
+  return `proxima.graph.chatOpen.${jobId}`
+}
+
+function readChatOpen(jobId: number): boolean | null {
+  try {
+    const raw = localStorage.getItem(graphChatOpenKey(jobId))
+    if (raw === '1') return true
+    if (raw === '0') return false
+  } catch { /* storage disabled */ }
+  return null
+}
+
+function writeChatOpen(jobId: number, open: boolean) {
+  try {
+    localStorage.setItem(graphChatOpenKey(jobId), open ? '1' : '0')
+  } catch { /* storage disabled */ }
+}
 
 /** A draggable panel width, persisted per panel — so the owner can widen whichever
  *  pane they are focused on (the node inspector, most of all) and keep it. */
@@ -188,6 +209,8 @@ export function GraphScreen({
   const [heroText, setHeroText] = React.useState('')
   // Hero hand-off: the description the chat should speak first once the editor opens.
   const [initialAuthorText, setInitialAuthorText] = React.useState<string | null>(null)
+  // Default closed; restored per job from localStorage (and auto-opened when that
+  // plan's authoring session still has an in-flight run).
   const [chatOpen, setChatOpen] = React.useState(false)
   const chatRef = React.useRef<WorkflowChatHandle>(null)
   // A test asked for while the chat panel is closed: the panel must mount before the
@@ -223,6 +246,9 @@ export function GraphScreen({
   const mounted = React.useRef(true)
   const loadSeq = React.useRef(0)
   const draftSeq = React.useRef(0)
+  // Plan Chat open preference is per job; only re-read storage when the job id changes
+  // (loadJob also runs on the live poll, which must not clobber a mid-session toggle).
+  const chatJobRef = React.useRef<number | null>(null)
 
   React.useEffect(() => {
     mounted.current = true
@@ -260,10 +286,28 @@ export function GraphScreen({
       // Open on the graph, not on a node nobody asked about. Keeps the live poll
       // from clearing a selection, but drops one whose node is gone.
       setSelectedId(current => current && next.graph.nodes.some(node => node.id === current) ? current : null)
+      if (chatJobRef.current !== next.id) {
+        chatJobRef.current = next.id
+        // Restore Plan Chat preference for this plan (not a global toggle).
+        setChatOpen(readChatOpen(next.id) ?? false)
+        // Active authoring run on this job's session → force the panel open so
+        // leave/reopen mid-generate does not look like a broken empty editor.
+        if (next.session_id && next.status === 'queued') {
+          void activeRuns(token).then(r => {
+            if (!mounted.current || seq !== loadSeq.current || chatJobRef.current !== next.id) return
+            if (r.session_ids.includes(next.session_id)) setChatOpen(true)
+          }).catch(() => { /* optional signal */ })
+        }
+      }
     } catch (cause) {
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
     }
   }, [token])
+
+  // Persist the panel toggle per job so Recipes → leave → same recipe keeps chat open.
+  React.useEffect(() => {
+    if (job?.id != null) writeChatOpen(job.id, chatOpen)
+  }, [job?.id, chatOpen])
 
   React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
   React.useEffect(() => {
@@ -323,6 +367,10 @@ export function GraphScreen({
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
+      chatJobRef.current = created.id
+      // Drafts arrive from the architect; open Plan Chat so the owner can refine.
+      setChatOpen(true)
+      writeChatOpen(created.id, true)
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       setNotice('Architect draft ready. Review or edit the frozen plan before starting.')
     }).catch(cause => {
@@ -580,7 +628,9 @@ export function GraphScreen({
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
+      chatJobRef.current = created.id
       setChatOpen(true)
+      writeChatOpen(created.id, true)
       setStage('editor')
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       if (description?.trim()) setInitialAuthorText(description.trim())
@@ -870,7 +920,11 @@ export function GraphScreen({
     <header className="graph-header">
       {job?.status === 'queued' && <button
         className={`ghost-button graph-chat-toggle${chatOpen ? ' active' : ''}`}
-        onClick={() => setChatOpen(open => !open)}
+        onClick={() => setChatOpen(open => {
+          const next = !open
+          if (job?.id != null) writeChatOpen(job.id, next)
+          return next
+        })}
         aria-pressed={chatOpen}
       >Chat</button>}
       {/* The shared Dropdown, in the bar — it used to be a raw <select> in the rail,
@@ -1000,6 +1054,7 @@ export function GraphScreen({
           mentionItems={mentionItems}
           initialMessage={initialAuthorText ?? undefined}
           onInitialConsumed={() => setInitialAuthorText(null)}
+          autoOpen
           idleHint="Describe the plan and the agent draws the graph; ask for changes and it redraws it. Branches run at once. This chat stays scoped to this plan."
           placeholder="Describe or change the plan…"
         />

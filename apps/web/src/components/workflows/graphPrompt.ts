@@ -158,21 +158,70 @@ function parseEdges(raw: unknown, nodes: GraphNodeDefinition[]): WorkflowGraph['
   return edges
 }
 
+/** Extract a balanced JSON object that mentions `"nodes"`, for agents that forget the
+ *  `<workflow-graph>` wrapper or fence. Brace-matched so nested objects stay intact. */
+function extractJsonWithNodes(text: string): string | null {
+  if (!/"nodes"\s*:/.test(text)) return null
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue
+    let depth = 0
+    let inString = false
+    let escape = false
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j]
+      if (inString) {
+        if (escape) escape = false
+        else if (ch === '\\') escape = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') { inString = true; continue }
+      if (ch === '{') depth += 1
+      else if (ch === '}') {
+        depth -= 1
+        if (depth === 0) {
+          const slice = text.slice(i, j + 1)
+          if (/"nodes"\s*:/.test(slice)) return slice
+          break
+        }
+      }
+    }
+  }
+  return null
+}
+
 // Pull the graph back out of the agent's reply. Tolerant of a fenced ```json block as a
 // fallback, mirroring parseRecipeDraft. Returns null when there is nothing to apply, so
 // an ordinary conversational turn never disturbs the canvas.
 export function parseGraphDraft(text: string): GraphPatch | null {
   if (!text) return null
   let body = ''
+  // Prefer a complete tag; if the model forgot the closer, still take the opening payload.
   const tag = text.match(/<workflow-graph[^>]*>([\s\S]*?)<\/workflow-graph>/i)
   if (tag) body = tag[1]
   else {
-    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
-    if (fence && /"nodes"\s*:/.test(fence[1])) body = fence[1]
+    const openOnly = text.match(/<workflow-graph[^>]*>([\s\S]*)/i)
+    if (openOnly && /"nodes"\s*:/.test(openOnly[1])) body = openOnly[1].replace(/<\/workflow-graph>\s*$/i, '')
+    else {
+      const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+      if (fence && /"nodes"\s*:/.test(fence[1])) body = fence[1]
+      else body = extractJsonWithNodes(text) || ''
+    }
   }
   if (!body.trim()) return null
+  // Models sometimes wrap the object in prose after the tag; take the first JSON object.
+  let jsonText = body.trim()
+  if (!jsonText.startsWith('{')) {
+    const extracted = extractJsonWithNodes(jsonText)
+    if (extracted) jsonText = extracted
+  }
   let decoded: any
-  try { decoded = JSON.parse(body.trim()) } catch { return null }
+  try { decoded = JSON.parse(jsonText) } catch {
+    // Trailing commas are a common model slip — strip them once and retry.
+    try {
+      decoded = JSON.parse(jsonText.replace(/,\s*([}\]])/g, '$1'))
+    } catch { return null }
+  }
   if (!decoded || typeof decoded !== 'object') return null
 
   const patch: GraphPatch = {}
@@ -197,6 +246,77 @@ export function parseGraphDraft(text: string): GraphPatch | null {
   if (nodes.length) patch.graph = { nodes, edges: parseEdges(source.edges, nodes) }
 
   return (patch.name || patch.description || patch.category || patch.inputs || patch.graph) ? patch : null
+}
+
+/** Structural checks that match what the server's normalize_graph requires for a plan
+ *  to be saved / started — used to prove authoring output is actually runnable, not only
+ *  parseable. Not a full server reimplementation (targets, scripts on disk, …). */
+export function graphIsStructurallyRunnable(graph: WorkflowGraph | null | undefined): {
+  ok: boolean
+  reasons: string[]
+} {
+  const reasons: string[] = []
+  if (!graph || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
+    return { ok: false, reasons: ['graph.nodes must be a non-empty array'] }
+  }
+  const ids = new Set<string>()
+  let triggers = 0
+  let agents = 0
+  for (const node of graph.nodes) {
+    if (!node.id || !String(node.id).trim()) {
+      reasons.push('node missing id')
+      continue
+    }
+    if (ids.has(node.id)) reasons.push(`duplicate node id: ${node.id}`)
+    ids.add(node.id)
+    if (node.type === 'trigger') {
+      triggers += 1
+    } else if (node.type === 'script') {
+      if (!node.command?.trim()) reasons.push(`script node '${node.id}' has no command`)
+    } else {
+      agents += 1
+      if (!node.instruction?.trim()) reasons.push(`agent node '${node.id}' has no instruction`)
+    }
+  }
+  if (triggers > 1) reasons.push('at most one trigger node is allowed')
+  if (agents === 0 && !graph.nodes.some(n => n.type === 'script')) {
+    reasons.push('graph needs at least one agent or script node to do work')
+  }
+  const edges = graph.edges ?? []
+  for (const edge of edges) {
+    if (!ids.has(edge.from) || !ids.has(edge.to)) {
+      reasons.push(`edge ${edge.from}→${edge.to} references a missing node`)
+    }
+    if (edge.from === edge.to) reasons.push(`self-edge on ${edge.from}`)
+  }
+  // Acyclicity (Kahn): matches the server's DAG requirement.
+  const indeg = new Map<string, number>()
+  for (const id of ids) indeg.set(id, 0)
+  for (const edge of edges) {
+    if (ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to) {
+      indeg.set(edge.to, (indeg.get(edge.to) || 0) + 1)
+    }
+  }
+  const queue = [...ids].filter(id => (indeg.get(id) || 0) === 0)
+  let seen = 0
+  const outs = new Map<string, string[]>()
+  for (const edge of edges) {
+    if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) continue
+    const list = outs.get(edge.from) || []
+    list.push(edge.to)
+    outs.set(edge.from, list)
+  }
+  while (queue.length) {
+    const id = queue.pop() as string
+    seen += 1
+    for (const to of outs.get(id) || []) {
+      const next = (indeg.get(to) || 0) - 1
+      indeg.set(to, next)
+      if (next === 0) queue.push(to)
+    }
+  }
+  if (seen !== ids.size) reasons.push('graph must be acyclic')
+  return { ok: reasons.length === 0, reasons }
 }
 
 // The ancestors a node's test must execute first, in dependency order — a node's

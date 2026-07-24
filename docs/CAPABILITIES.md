@@ -351,9 +351,15 @@ Tasks plan row.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
 edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
-run time and substituted into node text. An **authoring chat** beside the canvas emits
-`<workflow-graph>` blocks that are applied to the plan on screen, never the database.
-**Start chat** and a node's **Test in chat** share one open path onto the plan's
+run time and substituted into node text. An **authoring chat** (Plan Chat) beside the
+canvas emits `<workflow-graph>` blocks that are applied to the plan on screen, never
+the database. The panel **reflows** within its drag width (240–620px,
+`proxima.graph.chatWidth`) so long prose and tool chips wrap without a horizontal
+scrollbar; **open state is persisted per plan** (`proxima.graph.chatOpen.<jobId>`) and
+auto-opens when that plan's authoring session still has an active run. Reopening mid-
+or post-generate **restores** the live run (or applies a completed graph block once)
+via `useRunStream.restore` — leave Recipes and return without a false error or stale
+canvas. **Start chat** and a node's **Test in chat** share one open path onto the plan's
 session (concurrent clicks await the same load) so the panel cannot stick on
 Opening…; a missing session surfaces an error instead of a silent idle card.
 The **Sequential recipe editor is retired** — a linear recipe is a graph with no

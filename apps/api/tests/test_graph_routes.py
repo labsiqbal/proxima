@@ -664,3 +664,93 @@ def test_recipe_promotion_round_trip_keeps_job_targets(tmp_path):
     rerun_nodes = {n["id"]: n for n in rerun.json()["graph"]["nodes"]}
     assert rerun_nodes["fix"]["target"] == "."
     assert rerun_nodes["fix"]["touches_repo"] is True
+
+
+def test_authoring_chat_style_multi_node_graph_is_runnable(tmp_path):
+    """Plan Chat applyReply lands a multi-node DAG the API accepts as a draft,
+    template, and startable job — the product happy path for Recipes authoring."""
+    # Shape matches what apps/web parseGraphDraft + graphIsStructurallyRunnable accept
+    # for a parallel research → write → review graph produced by the authoring agent.
+    authored = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "name": "When I run it",
+                "instruction": "",
+                "output_kind": "json",
+            },
+            {
+                "id": "research",
+                "type": "agent",
+                "name": "Research",
+                "instruction": "Collect facts for the brief",
+                "output_kind": "text",
+            },
+            {
+                "id": "post-x",
+                "type": "agent",
+                "name": "Post X",
+                "instruction": "Write the X post from research",
+                "output_kind": "text",
+            },
+            {
+                "id": "post-li",
+                "type": "agent",
+                "name": "Post LI",
+                "instruction": "Write the LinkedIn post from research",
+                "output_kind": "text",
+            },
+            {
+                "id": "bundle",
+                "type": "agent",
+                "name": "Bundle",
+                "instruction": "Combine both posts for review",
+                "review_required": True,
+                "output_kind": "text",
+            },
+        ],
+        "edges": [
+            {"from": "trigger", "to": "research"},
+            {"from": "research", "to": "post-x"},
+            {"from": "research", "to": "post-li"},
+            {"from": "post-x", "to": "bundle"},
+            {"from": "post-li", "to": "bundle"},
+        ],
+    }
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+
+    created = client.post(
+        "/api/graph/jobs",
+        json={"title": "Authored from Plan Chat", "graph": authored},
+    )
+    assert created.status_code == 201, created.text
+    job = created.json()
+    assert job["status"] == "queued"
+    assert len(job["graph"]["nodes"]) == 5
+    assert len(job["graph"]["edges"]) == 5
+
+    # Persist agent metadata the way Save as template does after authoring.
+    saved = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={
+            "name": "Content pipeline",
+            "description": "From Plan Chat",
+            "category": "content",
+            "inputs": [{"id": "brief", "label": "Brief", "kind": "text", "required": True}],
+        },
+    )
+    assert saved.status_code == 201, saved.text
+    template = saved.json()
+    assert template["name"] == "Content pipeline"
+    assert len(template["graph"]["nodes"]) == 5
+
+    # Start the draft plan — proves the authored graph is executable structure.
+    started = client.post(f"/api/graph/jobs/{job['id']}/start")
+    assert started.status_code == 200, started.text
+    body = started.json()
+    assert body["status"] in ("running", "review", "done", "queued")
+    # Research is the first agent after the trigger and should be ready/running.
+    states = {n["node_id"]: n["status"] for n in body["node_states"]}
+    assert states.get("research") in ("ready", "running", "done", "pending", "review")
