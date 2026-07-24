@@ -111,6 +111,9 @@ export function ChatScreen(props: {
 	runRecipePrompt?: string;
 	runRecipeLabel?: string;
 	runRecipeInstantResult?: string;
+	draftSeed?: string;
+	draftSeedNonce?: number;
+	onDraftSeedConsumed?: () => void;
 }) {
 	const [messages, setMessages] = React.useState<ChatMessage[]>([]);
 	const [goal, setGoal] = React.useState<GoalState | null>(null);
@@ -784,6 +787,9 @@ export function ChatScreen(props: {
 					token={props.token}
 						slug={projSlug}
 						features={props.features}
+					draftSeed={props.draftSeed}
+					draftSeedNonce={props.draftSeedNonce}
+					onDraftSeedConsumed={props.onDraftSeedConsumed}
 					onSubmit={submit}
 				/>
 			</div>

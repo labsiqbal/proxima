@@ -4,7 +4,7 @@ import type { Artifact } from '../api/files'
 import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../api/archive'
 import { Dropdown } from '../components/ui/Dropdown'
 import { BackButton } from '../components/ui/BackButton'
-import { ArtifactViewer } from '../components/artifacts/ArtifactViewer'
+import { ArtifactViewer, type ArtifactReviewFeedback } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from '../components/artifacts/archive'
 
@@ -33,7 +33,7 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   project_slug: r.project_slug,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign }: {
+export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
   token: string
   projects: Project[]
   activeProject: Project | null
@@ -51,6 +51,8 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
   backLabel?: string
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
+  reviewSessionId?: number | null
+  onSendFeedback?: (feedback: ArtifactReviewFeedback) => void
 }) {
   const [project, setProject] = React.useState('')
   const [type, setType] = React.useState('')
@@ -61,7 +63,7 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
   const [total, setTotal] = React.useState(0)
   const [counts, setCounts] = React.useState<ArchiveCounts>({ by_type: {}, by_status: {} })
   const [expandedId, setExpandedId] = React.useState<number | null>(null)
-  const [viewer, setViewer] = React.useState<{ items: Artifact[]; slug: string } | null>(null)
+  const [viewer, setViewer] = React.useState<{ items: Artifact[]; slug: string; sessionId: number | null } | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState('')
   const loadSeq = React.useRef(0)
@@ -113,17 +115,17 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
       if (!mountedRef.current) return
       const hit = res.items[0]
       if (hit) onOpenRecord?.(hit.project_slug, hit.slug)
-      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug })
+      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug, sessionId: reviewSessionId })
     }).catch(() => {
-      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug })
+      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug, sessionId: reviewSessionId })
     })
-  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed])
+  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, reviewSessionId])
 
   React.useEffect(() => {
     if (!pendingFile) return
     onPendingConsumed?.()
-    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path }], slug: pendingFile.slug })
-  }, [pendingFile, onPendingConsumed])
+    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path }], slug: pendingFile.slug, sessionId: reviewSessionId })
+  }, [pendingFile, onPendingConsumed, reviewSessionId])
 
   const approve = async (record: ArchiveRecord) => {
     try {
@@ -143,8 +145,8 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
     }
   }
 
-  const openViewer = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'>) =>
-    setViewer({ items: [recordAsArtifact(r)], slug: r.project_slug })
+  const openViewer = (record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'> & { session_id?: number | null }) =>
+    setViewer({ items: [recordAsArtifact(record)], slug: record.project_slug, sessionId: record.session_id ?? reviewSessionId })
 
   // Design opens in its studio, an app runs on its full record page, everything
   // else opens in the universal viewer.
@@ -184,7 +186,7 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
         onRevealInFiles={revealInFiles}
         onChanged={refresh}
       />
-      {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} />}
+      {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} reviewSessionId={viewer.sessionId} onSendFeedback={onSendFeedback} />}
     </section>
   }
 
@@ -288,6 +290,6 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
         </span>
       </div>
     </div>
-    {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} />}
+    {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} reviewSessionId={viewer.sessionId} onSendFeedback={onSendFeedback} />}
   </section>
 }

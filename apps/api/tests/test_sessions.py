@@ -51,6 +51,24 @@ def test_session_and_messages_lifecycle(tmp_path):
     assert "output_links" not in messages[0]
 
 
+def test_session_detail_returns_an_empty_session_for_direct_review_handoffs(tmp_path):
+    client, headers = authed(tmp_path)
+    slug = client.get("/api/projects", headers=headers).json()["projects"][0]["slug"]
+    created = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "Artifact review", "project_slug": slug},
+    ).json()
+
+    # Empty sessions stay out of the sidebar, but an artifact lineage link can still
+    # resolve the exact session before placing review feedback in its composer.
+    assert client.get("/api/sessions", headers=headers).json()["sessions"] == []
+    detail = client.get(f"/api/sessions/{created['id']}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["id"] == created["id"]
+    assert detail.json()["project_slug"] == slug
+
+
 def test_me_rejects_stale_token_so_frontend_can_refresh(tmp_path):
     client, headers = authed(tmp_path)
 

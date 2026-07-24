@@ -751,6 +751,24 @@ Design gallery, loaded from `scene.json`). Apps and other types still point at O
 Chat result cards and the iterate Result view keep using the live scan
 (`GET /api/projects/{slug}/artifacts`, unchanged).
 
+**Native rich review (ArtifactViewer v2):** opening an ordinary artifact keeps the
+existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, but wraps
+them in one review workspace. The owner can pin numbered notes directly onto the
+rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
+notes are browser-local until that action; Proxima then opens the artifact's producing
+chat session and places an editable, path-linked review brief in the normal composer.
+Sending it uses the existing chat/run flow, so there is no Lavish poll, external URL,
+or second feedback service in the happy path.
+
+Mermaid fences in Markdown and standalone `.mmd` / `.mermaid` artifacts render as
+rich diagrams. **Edit as whiteboard** converts supported flowchart, sequence, class,
+ER, and state diagrams to native editable Excalidraw elements without leaving
+Proxima. The owner explicitly saves the scene under `artifacts/whiteboards/*.excalidraw`;
+that project-relative path is included in chat feedback so the same agent can inspect
+both the source artifact and the edited board. If Mermaid source changes after a saved
+board exists, the viewer asks whether to keep edits or rebuild from current source.
+This is ArtifactViewer functionality, not a Design Studio canvas path.
+
 **Endpoints:** `GET /api/archive`, `GET /api/archive/{slug}/{record_slug}`,
 `POST /api/archive/records/{record_id}/status`.
 

@@ -63,6 +63,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Terminal UI | **xterm.js** (`@xterm/xterm` + fit addon) | in-browser terminal |
 | Wiki graph | **react-force-graph-2d** | linked-note graph |
 | Workflow graph | Native **SVG** + pure topological layout | enabled by default; `PROXIMA_FEATURE_WORKFLOW_GRAPH` remains a recovery switch |
+| Artifact diagrams | **Mermaid 11** + **Excalidraw** (`@excalidraw/mermaid-to-excalidraw`) | ArtifactViewer v2 renders Mermaid and lazy-loads an editable whiteboard; saved scenes stay project files |
 | Search | **minisearch** | client-side global search |
 | Markdown | **react-markdown** + **remark-gfm** | chat + wiki rendering |
 | Export | **jspdf**, **jszip** | retained Studio PNG/PDF/zip implementation |

@@ -2,13 +2,14 @@ import React from 'react'
 import { resume, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
 import { listProjects, deleteProject } from './api/projects'
-import { listSessions, renameSession, deleteSession } from './api/sessions'
+import { listSessions, getSession, renameSession, deleteSession } from './api/sessions'
 import { activeRuns, createRun } from './api/runs'
 import { createJob, deleteJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
 import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
+import type { ArtifactReviewFeedback } from './components/artifacts/ArtifactViewer'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
@@ -113,6 +114,9 @@ export function App() {
   const [designCameFrom, setDesignCameFrom] = React.useState<View | null>(null)
   const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string } | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
+  const reviewDraftNonce = React.useRef(0)
+  const [reviewDraft, setReviewDraft] = React.useState<{ text: string; nonce: number } | null>(null)
+  const clearReviewDraft = React.useCallback(() => setReviewDraft(null), [])
   const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
   const [returnToTask, setReturnToTask] = React.useState<number | null>(null)
   const clearPendingNavigation = React.useCallback(() => {
@@ -237,6 +241,7 @@ export function App() {
   const sessionsSeq = React.useRef(0)
   const activeRunsSeq = React.useRef(0)
   const appActionSeq = React.useRef(0)
+  const reviewHandoffSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
 
   React.useEffect(() => {
@@ -247,6 +252,7 @@ export function App() {
       sessionsSeq.current += 1
       activeRunsSeq.current += 1
       appActionSeq.current += 1
+      reviewHandoffSeq.current += 1
     }
   }, [])
 
@@ -499,6 +505,36 @@ export function App() {
     setView('chat')
   }
 
+  async function continueArtifactReview(feedback: ArtifactReviewFeedback) {
+    const seq = ++reviewHandoffSeq.current
+    let target = (feedback.sessionId != null ? sessions.find(session => session.id === feedback.sessionId) : null)
+      || returnToChat
+      || activeSession
+    if (!target && feedback.sessionId != null) {
+      try {
+        target = await getSession(token, feedback.sessionId)
+      } catch {
+        // The owner-facing fallback below explains how to recover.
+      }
+    }
+    if (!mountedRef.current || seq !== reviewHandoffSeq.current) return
+    if (!target) {
+      setError('This artifact has no chat session to receive feedback. Open it from its producing chat and try again.')
+      return
+    }
+    clearTaskHash()
+    clearArchiveHash()
+    setArchiveRecord(null)
+    clearPendingNavigation()
+    setActiveSession(target)
+    const project = projects.find(candidate => candidate.slug === target.project_slug)
+    if (project) setActiveProject(project)
+    markSeen(target.id, target.updated_at)
+    reviewDraftNonce.current += 1
+    setReviewDraft({ text: feedback.text, nonce: reviewDraftNonce.current })
+    setView('chat')
+  }
+
   const handleAuthed = (s: { token: string; user: User }) => {
     // Keep the token in memory for this session's bearer header; the cookie carries
     // it across reloads. Nothing goes to localStorage.
@@ -570,7 +606,7 @@ export function App() {
         // chat (kind is authoritative — this is the last-line guard behind the session
         // list + Home routing already excluding design sessions).
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
+        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
         // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
         return activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
@@ -578,7 +614,7 @@ export function App() {
       })()}
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} /></React.Suspense>}
+      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>}
       {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} graphBackLabel={graphCameFrom === 'activity' ? 'Tasks' : 'Recipes'} onGraphBack={() => {
         if (graphCameFrom === 'activity') {
           setGraphCameFrom(null)
