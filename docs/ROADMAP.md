@@ -25,24 +25,31 @@ five pillars. If a feature doesn't strengthen one of these, it doesn't ship.
 
 ## Shipped (foundation)
 
-Single-user cockpit · full-power chat (live agent config) · **Home dashboard** ·
-multi-agent **brainstorm / debate** + **validate** sidecar · **workflows + jobs /
-activity with cron schedules** · gated **reviewable workflow graphs** · in-browser terminal · interactive approval/choice
-cards · projects + **link existing folders** · agent profiles as personas
-(per-profile instructions) · files + live preview · wiki + graph · dark/light +
-design tokens · daily integrity-checked DB backup.
+Single-user cockpit · full-power Chat with approvals and turn restore · **Alpha
+orchestration desk** with three worker slots, checkpoints, budgets, and optional
+unattended starts · global **Attention** inbox · multi-agent brainstorm / debate +
+validate sidecar · workflows, jobs, and cron schedules · reviewable workflow
+graphs · in-browser Terminal, Files, and Preview · projects and linked folders ·
+agent profiles with ready/not-ready runner status · Claude Code, Codex, Grok,
+Hermes, and Pi runners · wiki + graph · Design Studio · themes and PWA · daily
+integrity-checked DB backup.
 
-**Phase 1 — COMPLETE (slices 1-12):** single workspace around the flow (Chat →
-Tasks → Recipes, tools on a right rail) · project work containers (code areas +
-ops area) · run-first plans with per-job targets · repo jobs in isolated
-worktrees with in-app diff review + local merge · turn-timeout
-auto-continuation · deterministic script nodes with hash-bound trust · durable
-Archive registry (lineage, synced approval, permalinks) · bundled capability
-pack (masterplan skill + work-discipline preamble) · flow-centric positioning
-with the honest two-sentence security note · BYO repo-remote connector
-(per-area push-after-merge, default off) · satpam supervision loop (stalled/
-looping/confused detection, steer → gated restart-clean → escalate,
-decision-hold with independent branches continuing).
+**Phase 1 complete (slices 1-12):** single workspace around the flow (Chat or
+Alpha → Tasks → Recipes, tools on a right rail) · project work containers (code
+areas + ops area) · run-first plans with per-job targets · repo jobs in isolated
+worktrees with in-app diff review + local merge · turn-timeout auto-continuation ·
+deterministic script nodes with hash-bound trust · durable Archive registry
+(lineage, synced approval, permalinks) · bundled capability pack (masterplan skill
++ work-discipline preamble) · flow-centric positioning with the honest
+two-sentence security note · BYO repo-remote connector (per-area push-after-merge,
+default off) · satpam supervision loop (stalled/looping/confused detection, steer
+→ gated restart-clean → escalate, decision-hold with independent branches
+continuing).
+
+**Current product layer:** first-class `/masterplan` intake · official Grok Build
+CLI over native ACP · ArtifactViewer v2 with point annotations, rendered Mermaid,
+editable Excalidraw conversion, and feedback handoff to the producing Chat ·
+replayable core tour and feature-aware Help chapters.
 
 ---
 
@@ -51,10 +58,9 @@ decision-hold with independent branches continuing).
 - **MCP config editing UI** — detection plus per-profile enable/disable is shipped for
   Claude, Codex, Grok, and Hermes; add/edit/test server definitions still uses each runner's
   native config and remains a future convenience. *(BYO-agent)*
-- **Skills / slash-command palette** — browse and invoke the skills your runner
-  has, from chat. Surfaces capability you already own. *(BYO-agent)*
-- **Runner status panel** — which runners are installed/authed/ready, with a
-  re-auth nudge. Removes the #1 "why no output" confusion. *(BYO-agent)*
+- **Broader skills palette** - `/masterplan` is shipped as a first-class command;
+  add browse-and-invoke entries for the other skills each runner already owns.
+  *(BYO-agent)*
 - **Notifications that reach you** — PWA push (not just desktop) when an agent
   finishes or needs approval, so you can leave and get pinged. *(Cockpit)*
 - **In-app Tailscale onboarding** — guided "serve + scan QR" for phone access.
@@ -70,8 +76,6 @@ decision-hold with independent branches continuing).
 - **Agent pipelines / handoff** — shipped in Phase 1 as plans: a DAG of jobs
   with per-node agents, outputs feeding dependents, drawn on the canvas. What
   remains here: richer persona-to-persona handoff conventions. *(Orchestration)*
-- **Approval queue** — one place for every pending permission/question across all
-  running agents. *(Orchestration + Cockpit)*
 - **Local model runner** — Ollama / vLLM via 9router as a first-class runner, for
   truly no-cloud operation. *(Self-hosted, BYO-agent)*
 

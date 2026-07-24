@@ -18,6 +18,7 @@ from dataclasses import dataclass
 class SessionKind:
     mode: str                      # the sessions.mode value this kind is stored as
     shown_in_main_chat: bool       # does it appear in the main chat session list?
+    shown_in_global_search: bool   # can its title/messages appear in owner search?
     feature_flag: str | None = None  # PROXIMA_FEATURE_* gate, if any
 
 
@@ -38,6 +39,11 @@ def main_chat_modes() -> tuple[str, ...]:
     return tuple(k.mode for k in _REGISTRY.values() if k.shown_in_main_chat)
 
 
+def global_search_modes() -> tuple[str, ...]:
+    """The session modes whose user-facing content belongs in global search."""
+    return tuple(k.mode for k in _REGISTRY.values() if k.shown_in_global_search)
+
+
 def feature_flag_for(mode: str | None) -> str | None:
     """The PROXIMA_FEATURE_* gate a session of this mode requires, or None.
 
@@ -50,6 +56,11 @@ def feature_flag_for(mode: str | None) -> str | None:
 # --- built-in kinds ---------------------------------------------------------
 # 'chat' is the main-chat gate itself. 'design' is Design Studio's session type,
 # gated + excluded from the main list. New surfaces register alongside these.
-register(SessionKind("chat", shown_in_main_chat=True))
-register(SessionKind("alpha", shown_in_main_chat=False))
-register(SessionKind("design", shown_in_main_chat=False, feature_flag="design_studio"))
+register(SessionKind("chat", shown_in_main_chat=True, shown_in_global_search=True))
+register(SessionKind("alpha", shown_in_main_chat=False, shown_in_global_search=False))
+register(SessionKind(
+    "design",
+    shown_in_main_chat=False,
+    shown_in_global_search=True,
+    feature_flag="design_studio",
+))

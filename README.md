@@ -6,7 +6,27 @@ run them safely, and keep the good runs as repeatable recipes - code, content,
 and ops, all on **your own machine**. Bring your own agent CLI: **Claude Code,
 Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tailscale.
 
-![One workspace — Chat is the front door](docs/screenshots/deck-chat.png)
+![One workspace: Chat is the front door](docs/screenshots/deck-chat.png)
+
+## Current highlights
+
+- **Alpha orchestration desk:** delegate an outcome to a built-in orchestrator,
+  choose its backing runner, and monitor three worker slots, queued work,
+  Attention decisions, and job-scoped checkpoints.
+- **Native Grok runner:** use the official Grok Build CLI over its native ACP
+  endpoint, with the same ready/not-ready status shown for every installed runner.
+- **First-class `/masterplan`:** start the bundled masterplan methodology from
+  Chat's slash palette and continue its interactive intake in the same session.
+- **ArtifactViewer v2:** review ordinary artifacts in Proxima with point
+  annotations, rendered Mermaid, editable Excalidraw conversion, and an editable
+  feedback handoff to the producing Chat.
+
+![Alpha backed by Grok](docs/screenshots/alpha-desk.png)
+
+![Native artifact review](docs/screenshots/artifact-review-annotation.png)
+
+**Take the complete [visual tour](docs/tour.md)** for every primary surface and
+honest live-pass notes.
 
 ## What it is
 
@@ -62,7 +82,6 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   and then it pushes with your machine's own `git`: bring-your-own credentials,
   no tokens stored, no OAuth.
 
-  ![Repo job diff review](docs/screenshots/task-diff-review.png)
 - **Full-power chat** — streaming responses, tool-activity cards, slash
   commands, session continuity. Agent approval/permission prompts render as
   clickable cards; point the Claude Code runner at your live config and the
@@ -76,14 +95,13 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   slice a good chat into a plan with one click and run it - saving it as a
   Recipe (and putting it on cron) is an optional step after it proves out.
 
-  ![Plan run on the canvas](docs/screenshots/workflow-graph-run.png)
+  ![Editable plan canvas](docs/screenshots/workflow-blank-canvas.png)
 - **Script steps** - a plan node can be a deterministic script instead of an
   agent turn. Scripts live in the project's `scripts/` folder; the first run
   pauses on a one-time approval card showing the script's exact content and
   sha256, and those approved bytes are trusted until the file changes - so
   repeated non-AI work costs nothing and can't change under you silently.
 
-  ![Hash-bound script approval](docs/screenshots/script-approval.png)
 - **Long work survives** - agent turns get a configurable time budget, and a
   turn that times out mid-task auto-continues with its real context (up to 5
   genuine resumes) before stopping honestly and pausing the plan for you.
@@ -100,7 +118,6 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   **Validate** sidecar where a different runner pressure-tests a finished
   answer and can replace it.
 
-  ![Brainstorm lanes and synthesis](docs/screenshots/brainstorm.png)
 - **Design Studio** — the agent drafts **editable layered designs** (text stays
   real text) from a brief; refine them on a Konva canvas with a full inspector,
   selection-aware chat, per-project brand guide, and PNG/JPG/PDF/HTML export.
@@ -109,11 +126,15 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
 - **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,
   Higgsfield, or any OpenAI-compatible endpoint; results land in the Archive
   and can open in Design Studio.
-- **Archive** - every agent deliverable becomes a durable record with lineage
-  (chat → task → file), one approval status synced with task review, a version
-  chain, and a permanent link; records survive file moves and deletion.
-  Type-aware viewers, plus **Run & Preview** for dev servers behind a
+- **Archive + native artifact review** - every agent deliverable becomes a
+  durable record with lineage (chat → task → file), one approval status synced
+  with task review, a version chain, and a permanent link; records survive file
+  moves and deletion. ArtifactViewer v2 adds point annotations, rendered Mermaid,
+  editable Excalidraw conversion, and an editable feedback draft returned to the
+  producing Chat. **Run & Preview** remains available for dev servers behind a
   credential-stripping proxy.
+
+  ![Mermaid review in ArtifactViewer v2](docs/screenshots/artifact-review-mermaid.png)
 - **In-browser terminal** — a real PTY shell scoped to the project. Work in the
   shell from anywhere, no SSH.
 - **Use a folder on disk** — register a folder you already have as a project, or

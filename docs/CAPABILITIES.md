@@ -892,9 +892,13 @@ though the current Home renders only the review-attention data. Global **Search*
 (magnifier in the top bar / Ctrl+K) covers chats, messages, projects, and designs.
 Chat hits include `mode` + project so a Design Studio session (excluded from the
 main chat list) opens in Studio on click instead of silently closing the modal;
-ordinary chats still open in Chat and switch project when needed. The search field
-is labeled for assistive tech, and each result exposes a short spaced `aria-label`
-(title · project / role · snippet) so screen readers do not hear full markdown bodies.
+ordinary chats still open in Chat and switch project when needed. Search visibility
+is declared by the session-kind registry: user-facing Chat and Design content is
+searchable, while Alpha's hidden system thread is not. This keeps structured Alpha
+product-tool calls and tool-result payloads out of the owner-facing search surface.
+The search field is labeled for assistive tech, and each result exposes a short
+spaced `aria-label` (title · project / role · snippet) so screen readers do not hear
+full markdown bodies.
 **Endpoints:** `GET /api/dashboard`, `/api/runs/active`, `GET /api/search`.
 
 ## 18b. Account preferences (password, appearance, notifications)
