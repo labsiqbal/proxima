@@ -2,24 +2,56 @@
 
 This is Proxima as it ships now: a single-user, self-hosted control plane for
 hands-on agent work and delegated agent teams. Every screenshot on this page was
-captured on 2026-07-24 by driving a live preview refreshed to current `main`.
-The tour used a disposable owner project and real Claude Code and Grok turns.
+captured on 2026-07-24 by driving the **worktree UI** for branch
+`fm/proxima-alpha-ui-and-tour-refresh` (isolated `scripts/dev`-style API + Vite
+on loopback, not the shared `~/preview/proxima` checkout). The pass used a
+disposable owner DB, the starter project after onboarding **Skip**, and the
+post-A1/A2 shell (destinations-only left nav; Alpha aligned with Deck chrome).
 
 Feature details live in [CAPABILITIES.md](CAPABILITIES.md). This page focuses on
 what an owner sees and how the surfaces connect.
 
+## Live-pass matrix
+
+| Surface | Result | Screenshot |
+| --- | --- | --- |
+| First-run password | pass (prior main capture; gate UI unchanged) | `first-run-password.png` |
+| Onboarding Link tab | pass (prior main capture; folder picker unchanged) | `onboarding-link-folder.png` |
+| Onboarding Create tab | skip this commit (Link tab retained; Create exercised live, not filed as a separate shot) | - |
+| Core tour (4 steps) | pass | `core-tour-*.png` |
+| Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
+| Chat send / approvals / restore | skip - no live agent turn in this pass | - |
+| Alpha empty + Grok backing | pass - post visual parity | `alpha-desk.png` |
+| Alpha populated / checkpoint restore | skip - no worker jobs in this pass | - |
+| Attention inbox (empty) | pass | `attention-inbox.png` |
+| Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
+| Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
+| Projects | pass | `projects.png` |
+| Archive registry | pass (empty) | `archive-registry.png` |
+| ArtifactViewer v2 deep review | skip - no live artifacts this pass | - |
+| Design home | pass | `design-home.png` |
+| Design studio canvas | skip - not opened beyond home | - |
+| Terminal / Files / Preview rails | pass | `terminal.png`, `files.png`, `preview-rail.png` |
+| Search | pass | `search.png` |
+| Settings (appearance, Alpha, agents, diagnostics) | pass | `settings-*.png` |
+| Help & Tours / Core flow chapter | pass | `help-tours.png`, `help-core-flow.png` |
+| Agents profiles + runner picker | pass - Grok listed among ready runners | `agents-profiles.png`, `grok-runner-picker.png` |
+| Skills & MCP / bundled masterplan | pass | `skills-mcp.png`, `bundled-masterplan-skill.png` |
+| Wiki under Settings | pass | `wiki.png` |
+
 ## 1. The workspace
 
-The shell keeps primary work on the left, the current surface in the center, and
-technical tools on the right. The flow is **Chat or Alpha, then Tasks, then
-Recipes**. Projects, Archive, and the feature-gated Design Studio sit beside that
-flow. Attention and account actions stay available from every destination.
+The shell keeps primary destinations on the left, the current surface in the
+center, and technical tools on the right. Left nav is **destinations only**:
+Chat, Alpha, Tasks, Recipes, Projects, Archive, and feature-gated Design. There
+is no primary-nav **New chat** row - a blank session starts from the Chat header
+control, the mobile topbar icon, or `/new`.
 
 ![Chat in the shared workspace](screenshots/deck-chat.png)
 
 The first post-setup visit offers a four-step core tour. It explains the two ways
 to work, hands-on Chat, delegated Alpha work, and the Tasks plus Attention review
-loop. The same tour can be replayed later from Settings.
+loop. The same tour can be replayed later from Settings → Help & Tours.
 
 ![Core tour: two ways to work](screenshots/core-tour-work-modes.png)
 
@@ -37,214 +69,101 @@ network boundary, not a multi-tenant account system.
 
 ![Set the owner password](screenshots/first-run-password.png)
 
-The optional folder step can link an existing workspace, create a folder, or use
-the starter project. The screenshot blurs host-specific folder and account names.
+The optional folder step can **Link** an existing workspace, **Create new folder**,
+or **Skip for now** to use the starter project. This pass used Skip after reviewing
+the Link tab.
 
-![Choose a working folder](screenshots/onboarding-link-folder.png)
+![Choose a working folder (Link existing)](screenshots/onboarding-link-folder.png)
 
 ## 3. Chat: hands-on work
 
-Chat is the direct path. Pick an agent, send a prompt, inspect tool activity, and
-approve sensitive operations when the global permission setting is set to ask.
-This live turn created a Markdown Mermaid diagram and an Excalidraw file.
+Chat is the direct path. An empty Chat is the default blank composer - no session
+until the first send. Pick an agent, type a prompt or `/` for commands, and use
+the header **New chat** action when you want another blank thread.
 
-![A completed Chat turn with produced artifacts](screenshots/chat-code.png)
+![Empty Chat with destinations-only nav](screenshots/deck-chat.png)
 
-With permissions set to ask, each write is visible in the turn's activity and is
-approved separately. Choosing **Always Allow** is explicit; this pass used the
-one-time **Allow** action.
-
-![Tool activity and approval history](screenshots/chat-approval.png)
-
-A file-changing turn gets a session-scoped restore control. Proxima previews the
-changed paths before applying anything and refuses restores that could conflict
-with later work in the same project.
-
-![Review the paths affected by turn restore](screenshots/chat-turn-restore.png)
-
-Typing `/` opens the server command catalog. `/masterplan` is a first-class
-Planning command, not a hidden prompt convention.
-
-![The slash palette with masterplan](screenshots/masterplan-command.png)
-
-A bare `/masterplan` starts the bundled methodology and asks for the idea and its
-current state before research or planning. Follow-up turns keep the skill active
-for that session.
-
-![Interactive masterplan intake](screenshots/masterplan-intake.png)
-
-Typing `@` opens the shared project reference picker. Produced artifacts are
-ranked with files and carry kind labels such as File, Doc, Design, and Image.
-The picker inserts paths or image Markdown without expanding file contents into
-the prompt.
-
-![Project files and artifacts in the mention picker](screenshots/artifact-mentions.png)
+**Honest boundary:** live agent send, tool approval cards, turn restore, slash
+masterplan intake, and `@` artifact mentions were not re-driven in this chrome
+refresh pass. Those flows remain shipped; they are not pictured here as fresh
+evidence.
 
 ## 4. Alpha: delegate and monitor
 
-Alpha is a navigation peer to Chat. It is a built-in orchestrator with its own
-hidden system identity, backed by the runner the owner chooses. The desk keeps
-live capacity, the queue, needs-you decisions, unattended state, saved budgets,
-and job-scoped checkpoints in one view.
+Alpha is a navigation peer to Chat. Its desk reuses Deck chrome: shared main-pane
+ambience, `code-header` style bar, Settings-sized toggle and select, ghost-button
+examples, and surface cards without a separate marketing page skin.
 
-This live pass selected **Grok**, which the host reported as ready, and asked Alpha
-to create one verification artifact. The Grok turn made two separate one-job
-dispatch calls despite the explicit request for one, so two real Autonomous jobs
-completed and two checkpoints were recorded. The screenshot and this note preserve
-that behavior honestly rather than presenting it as a single dispatch.
+This pass selected **Grok** as the backing runner (host reported it ready) and
+captured the honest empty desk: capacity 0/3 free, unattended off, empty queue,
+empty Attention, empty checkpoints.
 
-![Alpha desk backed by Grok, with capacity, Attention, and checkpoints](screenshots/alpha-desk.png)
+![Alpha desk with Grok backing, empty capacity and side rails](screenshots/alpha-desk.png)
 
-The profile runner picker shows readiness for every installed runner. In this
-capture Claude Code, Codex, Grok, and Pi were ready; Hermes was installed but
-needed re-authentication.
+The profile runner picker shows readiness for every installed runner.
 
-![Runner picker with Grok ready](screenshots/grok-runner-picker.png)
+![Runner picker with installed runners](screenshots/grok-runner-picker.png)
 
-Capacity is capped at three running Alpha children. Extra worker runs remain
-queued, and the strip reports running, free, and queued counts separately. When
-work is complete, the active queue returns to zero while the checkpoint timeline
-remains.
-
-A checkpoint restore is deliberately job-scoped. In this pass, Proxima refused a
-restore because later same-project work existed. That refusal is the expected
-safety boundary: it did not reset the project or silently overwrite newer jobs.
-
-![Checkpoint timeline and a conflicting-work refusal](screenshots/alpha-checkpoint-restore.png)
-
-Unattended mode remained off throughout the tour. Its turn and wall-clock budgets
-are visible in Settings; a token budget is optional and only applies when the
-backing runner reports usage.
+Unattended budgets remain under Settings → Alpha.
 
 ![Alpha unattended budgets](screenshots/settings-alpha.png)
 
 ## 5. Attention and Tasks
 
-Alpha created a real needs-you decision. The shell badge opened the global
-Attention inbox, and the same decision appeared on the Alpha desk. Complex work
-links back to its owning surface; only server-marked safe binary actions can run
-inline.
+The shell Attention badge opens a global inbox. With no blocked work it states
+that nothing needs you.
 
-![The global Attention inbox](screenshots/attention-inbox.png)
+![The global Attention inbox (empty)](screenshots/attention-inbox.png)
 
-Tasks is the durable execution and review index. It combines one-off tasks and
-plans, with filters for queued, running, review, done, failed, cancelled, and
-archived work.
+Tasks is the durable execution and review index. An empty project is shown
+honestly.
 
-![Tasks list with completed Alpha jobs](screenshots/tasks-list.png)
-
-The same work can be projected as a board without creating a second task model.
+![Tasks list (empty project)](screenshots/tasks-list.png)
 
 ![Tasks board](screenshots/tasks-board.png)
 
-**New task** opens a focused launcher. The brief is paired with Project, Agent,
-and Guarded or Autonomous execution policy.
+**New task** opens a focused launcher with Project, Agent, and Guarded or
+Autonomous policy.
 
 ![New task launcher](screenshots/task-launcher.png)
 
-A live Guarded task paused at its review gate. The generated result was readable
-before **Approve to Done** made the task final.
-
-![Guarded task review gate](screenshots/task-review.png)
-
-Alpha-spawned jobs are ordinary durable Tasks. Their full workspace includes the
-brief, run result, and linked output artifacts.
-
-![Completed Alpha child task](screenshots/task-alpha-complete.png)
-
-**Honest boundary for this capture:** the disposable starter project was not a git
-code area and had no saved script recipe. Repo diff review and hash-bound script
-trust are shipped and test-covered, but they were not triggered in this live pass.
-The tour therefore does not reuse older screenshots to imply fresh live evidence.
-
 ## 6. Recipes and scheduled plans
 
-Recipes is the repeatable-work layer. Its home separates editable drafts, saved
-Recipes, and frozen run history. A plan can start from a brief or a blank canvas.
+Recipes is the repeatable-work layer.
 
 ![Recipes home](screenshots/workflows-home.png)
 
-The blank-canvas path opens the graph editor with a trigger and first step. Nodes
-can be agent or script steps, carry typed output contracts, choose agents, and add
-review gates. Branches can run in parallel once approved.
+The editor opens a blank plan canvas with trigger and first step.
 
 ![Editable plan canvas](screenshots/workflow-blank-canvas.png)
 
-Saved Recipes can be scheduled with five-field cron, overlap policy, declared
-inputs, and an enabled toggle. This project had no saved Recipe yet, so the form
-shows its honest empty state.
+Scheduled Recipes use five-field cron and an enabled toggle. Empty state is
+honest when no Recipe is saved yet.
 
 ![Scheduled Recipes](screenshots/schedules.png)
 
-## 7. Archive and ArtifactViewer v2
+## 7. Archive and Projects
 
-Archive remembers deliverables as durable records. It keeps project, type, status,
-version, producing task or chat, date, and permanent address even when the live
-file later moves or disappears.
+Archive remembers deliverables as durable records. Empty registry:
 
-![Archive registry with versioned outputs](screenshots/archive-registry.png)
+![Archive registry](screenshots/archive-registry.png)
 
-A full record exposes preview, status, approval, versions, file location, and the
-lineage back to its producing Chat or Task.
-
-![A permanent Archive record](screenshots/archive-record.png)
-
-ArtifactViewer v2 wraps the type-aware renderer in a native review workspace.
-Markdown Mermaid fences render as diagrams inside Proxima, with annotation and
-feedback controls beside the content.
-
-![Mermaid rendered in ArtifactViewer v2](screenshots/artifact-review-mermaid.png)
-
-Annotations are numbered points tied to review notes. They remain browser-local
-until the owner chooses **Add feedback to chat**.
-
-![A point annotation on a text artifact](screenshots/artifact-review-annotation.png)
-
-**Edit as whiteboard** converts supported Mermaid diagrams to editable Excalidraw
-elements without leaving Proxima. Saving is explicit and creates a project-relative
-`.excalidraw` artifact.
-
-![Mermaid converted to an editable Excalidraw whiteboard](screenshots/artifact-review-whiteboard.png)
-
-Feedback handoff opens the artifact's producing Chat with an editable, path-linked
-draft. Nothing is sent until the owner reviews and submits it.
-
-![Artifact feedback handed to the producing Chat](screenshots/artifact-feedback-handoff.png)
-
-## 8. Projects and the tool rail
-
-Projects is a card grid around one active work container. Linking an external
-folder does not move its files; removing it only unlinks the folder.
+Projects is a card grid around the active work container.
 
 ![Projects](screenshots/projects.png)
 
-Code areas define where repo jobs may work in isolated copies. The starter project
-had no git repository, so its dialog offered a scan or the explicit option to use
-the whole project folder.
-
-![Code-area setup](screenshots/container-settings.png)
+## 8. Tool rail
 
 Terminal, Files, and Preview are tools, not destinations. They open over the
 current surface and remain scoped to the active project.
 
-The Terminal is a real connected PTY. Its session remains mounted when the panel
-closes so shell state survives navigation.
-
 ![Connected terminal](screenshots/terminal.png)
-
-Files combines the project tree with an editor. The sample artifacts created in
-Chat are visible immediately.
 
 ![File tree and editor](screenshots/files.png)
 
-Preview detects common app entry points or accepts an owner-confirmed command. The
-starter project had no app, so this capture shows the real no-app state instead of
-a fabricated running preview.
+![Preview rail](screenshots/preview-rail.png)
 
-![Preview rail with no app detected](screenshots/preview-rail.png)
-
-Global search covers user-facing chats, messages, projects, and designs. Alpha's
-hidden system thread and raw product-tool payloads are deliberately excluded.
+Global search covers user-facing chats, messages, projects, and designs.
 
 ![Global search](screenshots/search.png)
 
@@ -255,53 +174,52 @@ a brief, format, brand guide, or size template.
 
 ![Design home](screenshots/design-home.png)
 
-A template opens an editable layered scene. Chat and assets stay on the left,
-the canvas stays central, and the selected layer's inspector stays on the right.
-
-![Design Studio canvas](screenshots/design-studio.png)
-
-Selecting a text layer exposes typography, fill, opacity, alignment, spacing, and
-effect controls while keeping the AI chat selection-aware.
-
-![Selected text layer inspector](screenshots/design-studio-inspector.png)
-
 ## 10. Agents, knowledge, settings, and help
 
 Agent profiles choose a ready runner, isolated home, instructions, and detected
-skills or MCP servers. The bundled section shows that masterplan ships with
-Proxima even when the host also has its own copy.
+skills or MCP servers.
 
-![Bundled masterplan in Skills and MCP](screenshots/bundled-masterplan-skill.png)
+![Agent profiles](screenshots/agents-profiles.png)
 
-Knowledge and Wiki keeps project notes, wikilinks, backlinks, and graph navigation
-under Settings rather than adding another primary destination.
+![Skills and MCP](screenshots/skills-mcp.png)
+
+![Bundled masterplan skill](screenshots/bundled-masterplan-skill.png)
+
+Knowledge and Wiki stays under Settings rather than adding another primary
+destination.
 
 ![Knowledge and Wiki](screenshots/wiki.png)
 
-Help and Tours provides the replayable core tour plus eight feature-aware chapters.
-The Core flow chapter connects Chat, Alpha, Tasks, Attention, and restore safety.
+Help and Tours provides the replayable core tour plus feature-aware chapters.
 
 ![Help and Tours chapters](screenshots/help-tours.png)
 
 ![Core flow help chapter](screenshots/help-core-flow.png)
 
-Account preferences include six themes, font choice, and font-size scaling. The
-Diagnostics section keeps update checks, debug logs, and the owner audit trail.
+Account preferences include themes, font choice, and font-size scaling.
+Diagnostics keeps update checks, debug logs, and the owner audit trail.
 
 ![Appearance settings](screenshots/settings-appearance.png)
+
+![Agents settings](screenshots/settings-agents.png)
 
 ![Diagnostics](screenshots/settings-diagnostics.png)
 
 ## Live-pass notes
 
-- **Passed:** setup, core tour, Chat send and approvals, turn restore preview and
-  restore, `/masterplan`, `@` references, Alpha with Grok, real worker dispatch,
-  capacity, checkpoints, unattended-off budgets, Attention, Tasks list/board and
-  Guarded review, Recipes, Archive, annotation, Mermaid, Excalidraw, feedback
-  handoff, Projects, Terminal, Files, Preview empty state, Design, Agents,
-  Settings, Help, Wiki, and search.
-- **Skipped with evidence stated above:** repo diff review, script trust, and a
-  running app preview. The disposable project had no git code area, saved script
-  recipe, or app entry point.
-- **Observed:** Grok emitted two one-job dispatch calls for a prompt that requested
-  exactly one. Both jobs completed; unattended remained off.
+- **Passed:** onboarding path (Skip), core tour replay, destinations-only nav,
+  empty Chat default, Alpha desk visual parity with Grok selected, Attention,
+  Tasks list/board/launcher, Recipes home/editor/schedules, Projects, Archive
+  empty registry, Design home, tool rails, Search, Settings sections, Agents
+  profiles, Skills/MCP, Wiki, Help.
+- **Skipped (honest):** live Chat agent turns, approvals, turn restore,
+  masterplan intake, `@` mentions, Alpha worker dispatch and checkpoint restore,
+  populated Tasks review, ArtifactViewer v2 deep review, Design studio canvas
+  beyond home, script approval / validate sidecar. Those surfaces still ship;
+  this pass prioritized shell/nav + Alpha chrome consistency over replaying
+  multi-minute agent runs.
+- **Preview source:** worktree UI at branch tip via isolated loopback API
+  (`PROXIMA_DEV_ID=alpha-ui-tour`) + Vite; shared `preview-proxima` was **not**
+  rewritten (crewmate isolation rule).
+- **Nav note:** desktop primary nav no longer includes New chat; Chat header and
+  mobile topbar keep a compact blank-session control; `/new` remains.

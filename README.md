@@ -21,9 +21,9 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
   annotations, rendered Mermaid, editable Excalidraw conversion, and an editable
   feedback handoff to the producing Chat.
 
-![Alpha backed by Grok](docs/screenshots/alpha-desk.png)
+![Alpha desk with Deck chrome parity](docs/screenshots/alpha-desk.png)
 
-![Native artifact review](docs/screenshots/artifact-review-annotation.png)
+![Core tour: two ways to work](docs/screenshots/core-tour-work-modes.png)
 
 **Take the complete [visual tour](docs/tour.md)** for every primary surface and
 honest live-pass notes.
@@ -74,7 +74,7 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   **Guarded** or **Autonomous** policy; the task runs as a durable job and
   pauses for your review before it counts as done.
 
-  ![Task review gate](docs/screenshots/task-review.png)
+  ![Tasks list](docs/screenshots/tasks-list.png)
 - **Repo jobs: diff review + local merge** - a job aimed at a code area runs in
   an isolated git worktree; you review its changes in place and approve to
   merge, or reject with a reason. The merge is local by default - Proxima never
@@ -87,7 +87,7 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   clickable cards; point the Claude Code runner at your live config and the
   agent inherits your real skills, plugins, rules, MCP servers, and memory.
 
-  ![Chat with a tool-approval card](docs/screenshots/chat-approval.png)
+  ![Empty Chat is the blank front door](docs/screenshots/deck-chat.png)
 - **Plans & Recipes** — describe a process and an agent draws the plan as a DAG
   on an n8n-style canvas; nodes carry typed output contracts (`text` / `json` /
   `artifact-ref`), per-node agents, and review gates. Correct one node's output
@@ -122,7 +122,7 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   real text) from a brief; refine them on a Konva canvas with a full inspector,
   selection-aware chat, per-project brand guide, and PNG/JPG/PDF/HTML export.
 
-  ![Design Studio](docs/screenshots/design-studio-inspector.png)
+  ![Design Studio home](docs/screenshots/design-home.png)
 - **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,
   Higgsfield, or any OpenAI-compatible endpoint; results land in the Archive
   and can open in Design Studio.
@@ -134,7 +134,7 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
   producing Chat. **Run & Preview** remains available for dev servers behind a
   credential-stripping proxy.
 
-  ![Mermaid review in ArtifactViewer v2](docs/screenshots/artifact-review-mermaid.png)
+  ![Archive registry](docs/screenshots/archive-registry.png)
 - **In-browser terminal** — a real PTY shell scoped to the project. Work in the
   shell from anywhere, no SSH.
 - **Use a folder on disk** — register a folder you already have as a project, or

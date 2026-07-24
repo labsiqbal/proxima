@@ -14,7 +14,7 @@ The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate an
 
 ## Chat — the front door
 
-Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The sidebar always shows **New chat** plus the project-scoped recent chats (and design sessions when the Design feature is on). A new chat starts blank; the database session is created lazily on the first message. `/new` remains available.
+Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The left nav lists destinations only (**Chat**, **Alpha**, **Tasks**, …); it does not carry a separate **New chat** row. A blank session is started from the **Chat** header control (compact icon on the mobile topbar), or via `/new`. The database session is created lazily on the first message; recent chats appear under the nav once a thread exists.
 
 A recipe's iteration thread is not an ordinary chat: the nav attributes it to Recipes, and picking Chat while one is open switches to a plain conversation instead.
 
