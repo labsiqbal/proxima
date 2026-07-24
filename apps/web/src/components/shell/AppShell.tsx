@@ -7,6 +7,7 @@ import { ToolDock } from './ToolDock'
 import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
+import { RunningTasks } from './RunningTasks'
 import { CoreTour } from './CoreTour'
 import type { AttentionItem } from '../../api/alpha'
 
@@ -47,6 +48,8 @@ export function AppShell(props: {
   busySessions?: number[]
   onSelectView: (view: View) => void
   onOpenAttentionTarget?: (target: AttentionItem['target']) => void
+  onOpenRunningJob?: (id: number, engine?: string) => void
+  onOpenRunningSession?: (sessionId: number) => void
   onLogout: () => void
   profiles: Profile[]
   projects: Project[]
@@ -193,7 +196,16 @@ export function AppShell(props: {
           </>}
         </div>
       </header>
-      <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
+      <div className="header-status-cluster">
+        <RunningTasks
+          token={props.token}
+          sessions={props.sessions}
+          onOpenJob={props.onOpenRunningJob}
+          onOpenSession={props.onOpenRunningSession}
+          onOpenTasks={() => props.onSelectView('activity')}
+        />
+        <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
+      </div>
       <MobileTopbar
         activeProject={props.activeProject}
         drawerOpen={drawerOpen}

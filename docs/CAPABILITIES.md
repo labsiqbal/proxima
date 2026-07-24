@@ -221,7 +221,10 @@ built-in orchestrator without manually composing every worker task.
 creates one hidden `profiles.system_kind='alpha'` system identity and one
 `sessions.mode='alpha'` thread. The hidden profile never appears in Agents or ordinary
 Chat history; Settings/desk runner selection creates or reuses the matching system
-home while the UI counterpart stays named Alpha. The desk polls its thread, active /
+home while the UI counterpart stays named Alpha. The desk reuses Chat's shared
+composer for delegation (attach + `@` project mentions; submit still hits
+`/api/alpha/messages`), and the work side panel is collapsible with a persisted
+preference. The desk polls its thread, active /
 queued Alpha jobs, needs-you subset, job-scoped checkpoint timeline, and honest
 capacity (`running / 3`, free slots, queued). Loading, empty, error/retry, populated,
 and busy states are explicit on desktop and mobile.
@@ -271,6 +274,10 @@ Settings surface. Only rows marked `inline_ok` render actions: simple non-repo f
 review, hash-visible script trust, pending satpam restart, and live permission choices.
 Diff and open-text Alpha items navigate only. Errors persist inside the inbox until
 retried/dismissed.
+
+**Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
+and running jobs, badges a count when work is in flight, and deep-links each row to
+the task workspace or chat (with a Tasks index shortcut).
 
 **Unattended:** the desk toggle is opt-in. `AlphaSupervisor` starts only already-queued
 Alpha jobs; it never dispatches work while off and never participates in stuck-run

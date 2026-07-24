@@ -28,11 +28,15 @@ Alpha is a first-class destination, not a Chat tab or Tasks filter. Its header i
 the built-in system orchestrator and lets the owner choose the backing runner; the desk
 itself keeps the counterpart label **Alpha** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
-saved unattended budgets. The main column is the Alpha thread plus a guarded delegation
-composer; the side column holds active/queued/needs-you jobs and a job-scoped checkpoint
-timeline. Idle, loading, failure/retry, populated, and in-flight states all retain the
-same geometry. On narrow screens the side column stacks after the thread with no
-horizontal scroll.
+saved unattended budgets. The main column is the Alpha thread plus the shared **Chat
+composer** stack (attach + `@` project file/artifact mentions) wired to Alpha's send
+API rather than a normal chat run; project context follows the shell active project
+(or an active Alpha job's project). The side column holds active/queued/needs-you jobs
+and a job-scoped checkpoint timeline and is **collapsible** (header toggle + reopen
+edge control; preference in `localStorage` as `proxima.alpha.sideCollapsed`; mobile
+defaults collapsed). Idle, loading, failure/retry, populated, and in-flight states all
+retain the same geometry. On narrow screens the side column stacks after the thread
+with no horizontal scroll.
 
 **Unattended** is a quick pressed toggle on the desk. Off means Alpha never starts work
 without an owner turn. On means the server may start already-queued Alpha jobs until the
@@ -87,7 +91,7 @@ Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail o
 
 The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
-## Global attention and account surfaces
+## Global attention, running work, and account surfaces
 
 The shell-level **Attention** badge persists across destinations and polls one unified
 shape. Every item is a real button that deep-links to the owning Alpha/Task/plan/Settings
@@ -96,7 +100,12 @@ review and open-text decisions navigate instead. The popover has loading, empty,
 populated, and persistent retryable-error states, closes on Escape/outside click, and
 becomes a viewport-bounded sheet on narrow screens.
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns Alpha budgets and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, Attention, and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+Next to Attention, a **Running** control polls `GET /api/runs/active` plus running jobs
+and shows a quiet badge when work is in flight. The popover lists de-duplicated tasks
+and chat sessions with deep-links (task workspace / chat / Tasks index), matching
+Attention's open/refresh/empty/error affordances.
+
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns Alpha budgets and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, Running + Attention (status cluster), and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
 Projects remain shared application entities: one active project across the app. Archive records and Designs remain owned by their Project.
 
