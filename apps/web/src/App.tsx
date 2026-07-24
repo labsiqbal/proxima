@@ -612,6 +612,8 @@ export function App() {
       busySessions={busySessions}
       onSelectView={goView}
       onOpenAttentionTarget={openAttentionTarget}
+      onOpenRunningJob={openJobByEngine}
+      onOpenRunningSession={openSessionById}
       profiles={profiles}
       projects={projects}
       sessions={sessions}
@@ -624,7 +626,7 @@ export function App() {
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
       {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} onOpenJob={openJobByEngine} /></React.Suspense>}
+      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={openJobByEngine} /></React.Suspense>}
       {view === 'chat' && (() => {
         // A design-kind session belongs to Design Studio; never render it as the main
         // chat (kind is authoritative — this is the last-line guard behind the session

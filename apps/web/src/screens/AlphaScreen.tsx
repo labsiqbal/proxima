@@ -1,14 +1,29 @@
 import React from 'react'
 import { getAlphaDesk, previewCheckpointRestore, restoreCheckpoint, saveAlphaSettings, sendAlphaMessage, setCheckpointPinned, type AlphaCheckpoint, type AlphaDesk } from '../api/alpha'
 import { listMessages } from '../api/sessions'
-import type { ChatMessage, Runner } from '../types'
+import type { ChatMessage, Project, Runner } from '../types'
 import { MessageContent } from '../components/chat/MessageContent'
+import { Composer } from '../components/chat/Composer'
 import { confirmDialog } from '../components/ui/Dialog'
+import { IconPanelLeft } from '../components/shell/icons'
 
 const POLL_MS = 2500
+const SIDE_COLLAPSED_KEY = 'proxima.alpha.sideCollapsed'
 const cleanAlpha = (text: string) => text.replace(/<proxima-tool>\s*\{[\s\S]*?\}\s*<\/proxima-tool>/g, '').trim()
 const statusLabel = (status: string) => status === 'review' ? 'Needs you' : status.charAt(0).toUpperCase() + status.slice(1)
 const formatBudget = (seconds: number) => seconds >= 3600 ? `${Math.round(seconds / 3600)}h` : `${Math.round(seconds / 60)}m`
+
+function readSideCollapsed(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  const stored = localStorage.getItem(SIDE_COLLAPSED_KEY)
+  if (stored === '1') return true
+  if (stored === '0') return false
+  // Mobile: default collapsed so conversation + composer get full width.
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 900px)').matches) return true
+  } catch { /* jsdom without matchMedia */ }
+  return false
+}
 
 function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
   const examples = [
@@ -126,14 +141,35 @@ function CheckpointTimeline({ token, checkpoints, onChanged }: { token: string; 
   </section>
 }
 
-export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runners: Runner[]; onOpenJob: (id: number, engine?: string) => void }) {
+/** Project slug for attach/@ mentions: shell active project, else first active Alpha job project. */
+export function resolveAlphaProjectSlug(
+  activeProject: Project | null | undefined,
+  jobs: { desk_status: string; project_slug?: string | null }[],
+): string | undefined {
+  if (activeProject?.slug) return activeProject.slug
+  const fromJob = jobs.find(job => job.project_slug && ['running', 'queued', 'review'].includes(job.desk_status))
+  return fromJob?.project_slug || undefined
+}
+
+export function AlphaScreen({
+  token,
+  runners,
+  onOpenJob,
+  activeProject = null,
+}: {
+  token: string
+  runners: Runner[]
+  onOpenJob: (id: number, engine?: string) => void
+  activeProject?: Project | null
+}) {
   const [desk, setDesk] = React.useState<AlphaDesk | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
-  const [draft, setDraft] = React.useState('')
+  const [draftSeed, setDraftSeed] = React.useState<string | undefined>(undefined)
+  const [draftSeedNonce, setDraftSeedNonce] = React.useState(0)
   const [loading, setLoading] = React.useState(true)
-  const [sending, setSending] = React.useState(false)
   const [settingBusy, setSettingBusy] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [sideCollapsed, setSideCollapsed] = React.useState(readSideCollapsed)
   const mounted = React.useRef(true)
 
   const load = React.useCallback(async (quiet = false) => {
@@ -155,14 +191,25 @@ export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runn
     return () => { mounted.current = false; window.clearInterval(id) }
   }, [load])
 
-  const send = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const content = draft.trim()
-    if (!content || sending) return
-    setSending(true); setError('')
-    try { await sendAlphaMessage(token, content); setDraft(''); await load(true) }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setSending(false) }
+  React.useEffect(() => {
+    try { localStorage.setItem(SIDE_COLLAPSED_KEY, sideCollapsed ? '1' : '0') } catch { /* storage disabled */ }
+  }, [sideCollapsed])
+
+  const toggleSide = () => setSideCollapsed(value => !value)
+  const seedExample = (value: string) => {
+    setDraftSeed(value)
+    setDraftSeedNonce(n => n + 1)
+  }
+  const sendDelegation = async (content: string) => {
+    setError('')
+    try {
+      await sendAlphaMessage(token, content)
+      await load(true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      throw err
+    }
   }
   const toggleUnattended = async () => {
     if (!desk || settingBusy) return
@@ -183,7 +230,8 @@ export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runn
   if (!desk) return <section className="alpha-view"><div className="alpha-load-error" role="alert"><strong>Alpha desk could not load</strong><p>{error || 'The server did not return desk data.'}</p><button type="button" className="primary-button" onClick={() => void load()}>Try again</button></div></section>
   const alphaBusy = desk.alpha_run?.status === 'queued' || desk.alpha_run?.status === 'running'
   const availableRunners = runners.filter(runner => runner.id === desk.backing_runner || runner.runnable || runner.installed)
-  return <section className="alpha-view">
+  const projectSlug = resolveAlphaProjectSlug(activeProject, desk.jobs)
+  return <section className={`alpha-view ${sideCollapsed ? 'alpha-side-collapsed' : ''}`}>
     <header className="code-header alpha-head">
       <div><p className="eyebrow">Orchestration</p><strong>Alpha</strong></div>
       <div className="alpha-controls code-context">
@@ -191,6 +239,16 @@ export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runn
           <select className="ui-select" value={desk.backing_runner} disabled={settingBusy} aria-label="Backing runner" onChange={event => void changeRunner(event.target.value)}>{availableRunners.map(runner => <option value={runner.id} key={runner.id}>{runner.displayName}</option>)}</select>
         </label>
         <button type="button" className={`toggle-pill ${desk.unattended ? 'on' : ''}`} aria-pressed={desk.unattended} disabled={settingBusy} onClick={() => void toggleUnattended()}><span className="toggle-knob" aria-hidden="true" />{settingBusy ? 'Saving…' : desk.unattended ? 'Unattended on' : 'Unattended off'}</button>
+        <button
+          type="button"
+          className={`tool-btn alpha-side-toggle ${sideCollapsed ? '' : 'active'}`}
+          onClick={toggleSide}
+          aria-pressed={!sideCollapsed}
+          aria-label={sideCollapsed ? 'Show work panel' : 'Hide work panel'}
+          title={sideCollapsed ? 'Show work panel' : 'Hide work panel'}
+        >
+          <IconPanelLeft size={16} />
+        </button>
       </div>
     </header>
     <div className="alpha-body">
@@ -200,15 +258,47 @@ export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runn
       {error && <div className="alpha-error error-bar" role="alert"><strong>Alpha needs a retry</strong><span>{error}</span><button type="button" className="ghost-button" onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
       <div className="alpha-grid">
         <div className="alpha-conversation">
-          {!messages.length && !alphaBusy ? <AlphaEmpty onExample={setDraft} /> : <AlphaThread messages={messages} loading={false} onOpenJob={onOpenJob} />}
+          {!messages.length && !alphaBusy ? <AlphaEmpty onExample={seedExample} /> : <AlphaThread messages={messages} loading={false} onOpenJob={onOpenJob} />}
           {alphaBusy && <div className="alpha-working" role="status"><span className="ui-spinner" /> Alpha is orchestrating…</div>}
-          <form className="alpha-composer" onSubmit={send}>
-            <label htmlFor="alpha-delegation">Delegate an outcome</label>
-            <textarea id="alpha-delegation" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Describe the outcome, constraints, and projects Alpha may use…" rows={3} disabled={sending || alphaBusy} />
-            <div className="alpha-composer-foot"><span>{desk.unattended ? 'Alpha may continue queued work within your saved budgets.' : 'Alpha acts only when you ask. Workers run Autonomous by default.'}</span><button type="submit" className="primary-button" disabled={!draft.trim() || sending || alphaBusy}>{sending ? 'Sending…' : alphaBusy ? 'Alpha is working' : 'Delegate'}</button></div>
-          </form>
+          <div className="alpha-composer-dock">
+            <Composer
+              token={token}
+              slug={projectSlug}
+              disabled={alphaBusy}
+              promptModes={false}
+              generateKinds={[]}
+              combinedActions={false}
+              placeholder="Describe the outcome, constraints, and projects Alpha may use…"
+              textareaLabel="Delegate an outcome"
+              submitLabel={alphaBusy ? 'Alpha is working' : 'Delegate'}
+              submittingLabel="Sending…"
+              draftSeed={draftSeed}
+              draftSeedNonce={draftSeedNonce}
+              onDraftSeedConsumed={() => setDraftSeed(undefined)}
+              onSubmit={sendDelegation}
+            />
+            <p className="alpha-composer-hint">{desk.unattended ? 'Alpha may continue queued work within your saved budgets.' : 'Alpha acts only when you ask. Workers run Autonomous by default.'}{!projectSlug ? ' Pick a project in the shell to attach files or @-mention paths.' : ''}</p>
+          </div>
         </div>
-        <aside className="alpha-side"><AlphaJobs desk={desk} onOpenJob={onOpenJob} /><AlphaNeedsAttention desk={desk} onOpenJob={onOpenJob} /><CheckpointTimeline token={token} checkpoints={desk.checkpoints} onChanged={() => load(true)} /></aside>
+        {!sideCollapsed && (
+          <aside className="alpha-side" aria-label="Alpha work panel">
+            <AlphaJobs desk={desk} onOpenJob={onOpenJob} />
+            <AlphaNeedsAttention desk={desk} onOpenJob={onOpenJob} />
+            <CheckpointTimeline token={token} checkpoints={desk.checkpoints} onChanged={() => load(true)} />
+          </aside>
+        )}
+        {sideCollapsed && (
+          <button
+            type="button"
+            className="alpha-side-reopen"
+            onClick={() => setSideCollapsed(false)}
+            aria-label="Expand work panel"
+            title="Expand work panel"
+          >
+            <span className="eyebrow">Work</span>
+            <span aria-hidden="true">‹</span>
+          </button>
+        )}
       </div>
     </div>
   </section>

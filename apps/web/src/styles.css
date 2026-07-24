@@ -12599,13 +12599,14 @@ div.result-media {
 .alpha-capacity span:last-child { margin-left: auto; color: var(--ui-text-tertiary); }
 .capacity-live { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-success); box-shadow: 0 0 0 var(--space-1) color-mix(in srgb, var(--ui-success) 14%, transparent); }
 .alpha-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--alpha-side-width); gap: var(--space-4); align-items: start; }
+.alpha-view.alpha-side-collapsed .alpha-grid { grid-template-columns: minmax(0, 1fr) auto; }
 .alpha-conversation,
 .alpha-side-section {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-lg);
 	background: var(--ui-surface);
 }
-.alpha-conversation { display: flex; flex-direction: column; min-height: var(--alpha-thread-min-height); overflow: hidden; }
+.alpha-conversation { display: flex; flex-direction: column; min-height: var(--alpha-thread-min-height); overflow: hidden; min-width: 0; }
 .alpha-empty {
 	display: grid;
 	place-items: center;
@@ -12646,25 +12647,54 @@ div.result-media {
 .alpha-tool-results p { margin: var(--space-2) 0 0; font-size: var(--text-xs); line-height: 1.5; }
 .alpha-working,
 .alpha-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); color: var(--ui-text-secondary); font-size: var(--text-sm); }
-.alpha-composer { display: grid; gap: var(--space-2); border-top: 1px solid var(--ui-stroke-secondary); padding: var(--space-3) var(--space-4); background: var(--ui-surface-subtle); }
-.alpha-composer > label { color: var(--ui-text-primary); font-size: var(--text-sm); font-weight: 600; }
-.alpha-composer textarea {
-	width: 100%;
-	resize: vertical;
-	border: 1px solid var(--ui-stroke-secondary);
-	border-radius: var(--radius-md);
-	padding: var(--space-3);
-	background: var(--ui-surface);
-	color: var(--ui-text-primary);
-	font: inherit;
-	font-size: var(--text-sm);
-	line-height: 1.55;
+/* Chat-parity composer dock: reuse .composer styles; no Alpha-only chrome. */
+.alpha-composer-dock {
+	border-top: 1px solid var(--ui-stroke-secondary);
+	padding: var(--space-3) var(--space-4);
+	background: var(--ui-surface-subtle);
 }
-.alpha-composer textarea:disabled { cursor: not-allowed; background: var(--ui-stroke-tertiary); color: var(--ui-text-tertiary); }
-.alpha-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.alpha-composer-foot > span { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
-.alpha-side { display: grid; gap: var(--space-4); }
+.alpha-composer-dock .composer {
+	width: 100%;
+	margin: 0;
+}
+.alpha-composer-hint {
+	margin: var(--space-2) 0 0;
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	line-height: 1.5;
+}
+.alpha-side { display: grid; gap: var(--space-4); min-width: 0; }
 .alpha-side-section { overflow: hidden; }
+.alpha-side-toggle {
+	/* Match top-bar tool-btn footprint inside Alpha header. */
+	flex: 0 0 auto;
+}
+.alpha-side-reopen {
+	display: grid;
+	align-content: start;
+	justify-items: center;
+	gap: var(--space-2);
+	min-height: var(--alpha-thread-min-height);
+	width: calc(var(--space-8) + var(--space-2));
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-lg);
+	padding: var(--space-3) var(--space-1);
+	background: var(--ui-surface);
+	color: var(--ui-text-secondary);
+	cursor: pointer;
+	transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.alpha-side-reopen:hover {
+	border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary));
+	background: var(--ui-row-hover-background);
+	color: var(--ui-accent);
+}
+.alpha-side-reopen .eyebrow {
+	writing-mode: vertical-rl;
+	transform: rotate(180deg);
+	margin: 0;
+	letter-spacing: 0.08em;
+}
 .alpha-section-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
 .alpha-section-head h2 { margin: 0; font-size: var(--text-sm); font-weight: 650; }
 .alpha-count {
@@ -12724,11 +12754,32 @@ div.result-media {
 .alpha-load-error { max-width: var(--tour-width); margin: var(--space-8) auto 0; padding: var(--space-5); }
 .alpha-load-error p { color: var(--ui-danger-text); }
 
-.attention-inbox { position: absolute; top: calc((var(--topbar-h) - var(--attention-trigger-size)) / 2); right: calc(var(--space-4) + var(--alpha-control-height)); z-index: 90; }
+/* Shell top-right cluster: Running + Attention, beside account menu. */
+.header-status-cluster {
+	position: absolute;
+	top: calc((var(--topbar-h) - var(--attention-trigger-size)) / 2);
+	right: calc(var(--space-4) + var(--alpha-control-height));
+	z-index: 90;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.attention-inbox,
+.running-tasks { position: relative; }
 .attention-trigger { position: relative; display: grid; place-items: center; width: var(--attention-trigger-size); height: var(--attention-trigger-size); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-md); background: var(--ui-surface); color: var(--ui-text-secondary); font-weight: 800; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
 .attention-trigger:hover,
 .attention-trigger.active { border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary)); background: var(--ui-row-hover-background); color: var(--ui-accent); }
 .attention-trigger b { position: absolute; inset-block-start: calc(var(--space-2) * -1); inset-inline-end: calc(var(--space-2) * -1); min-width: var(--space-5); border-radius: var(--radius-full); padding: var(--space-1); background: var(--ui-danger); color: var(--ui-on-accent); font-size: var(--text-2xs); line-height: 1; }
+.running-trigger.has-work { color: var(--ui-success); border-color: color-mix(in srgb, var(--ui-success) 35%, var(--ui-stroke-secondary)); }
+.running-trigger.has-work b { background: var(--ui-success); }
+.running-trigger.has-work:not(.active) {
+	animation: running-pulse var(--t-slow) var(--ease) infinite alternate;
+}
+@keyframes running-pulse {
+	from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ui-success) 0%, transparent); }
+	to { box-shadow: 0 0 0 var(--space-1) color-mix(in srgb, var(--ui-success) 22%, transparent); }
+}
+.running-popover-actions { display: flex; align-items: center; gap: var(--space-1); }
 .attention-popover { position: absolute; top: calc(var(--attention-trigger-size) + var(--space-2)); right: 0; width: min(var(--attention-width), calc(100vw - var(--space-4))); max-height: var(--attention-max-height); overflow: auto; border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-lg); background: var(--ui-surface); box-shadow: var(--shadow-composer); animation: attention-in var(--t) var(--ease); }
 @keyframes attention-in { from { opacity: 0; transform: translateY(calc(var(--space-2) * -1)); } }
 .attention-popover > header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--ui-stroke-tertiary); padding: var(--space-4); background: var(--ui-surface-translucent); backdrop-filter: blur(var(--space-2)); }
@@ -12789,11 +12840,28 @@ div.result-media {
 
 @media (max-width: 900px) {
 	.alpha-grid { grid-template-columns: minmax(0, 1fr); }
+	.alpha-view.alpha-side-collapsed .alpha-grid { grid-template-columns: minmax(0, 1fr); }
 	.alpha-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.alpha-side-reopen {
+		width: 100%;
+		min-height: var(--alpha-control-height);
+		grid-auto-flow: column;
+		align-content: center;
+		justify-content: center;
+		padding: var(--space-2) var(--space-3);
+	}
+	.alpha-side-reopen .eyebrow {
+		writing-mode: horizontal-tb;
+		transform: none;
+	}
 	.alpha-controls .ui-select { min-width: 0; max-width: none; }
 }
 @media (max-width: 767px) {
-	.attention-inbox { position: fixed; top: calc((var(--mobile-topbar-h) - var(--attention-trigger-size)) / 2); right: calc(var(--space-4) + var(--alpha-control-height)); }
+	.header-status-cluster {
+		position: fixed;
+		top: calc((var(--mobile-topbar-h) - var(--attention-trigger-size)) / 2);
+		right: calc(var(--space-4) + var(--alpha-control-height));
+	}
 	.alpha-body { padding: var(--space-3); }
 	.alpha-head.alpha-head { align-items: stretch; flex-direction: column; min-height: 0; height: auto; padding-block: var(--space-3); }
 	.alpha-controls { justify-content: stretch; width: 100%; }
@@ -12802,8 +12870,6 @@ div.result-media {
 	.alpha-capacity span:last-child { margin-left: 0; }
 	.alpha-side { grid-template-columns: minmax(0, 1fr); }
 	.alpha-message { max-width: 100%; }
-	.alpha-composer-foot { align-items: stretch; flex-direction: column; }
-	.alpha-composer .primary-button { width: 100%; }
 	.alpha-settings-form,
 	.help-chapters { grid-template-columns: minmax(0, 1fr); }
 }
@@ -12822,6 +12888,7 @@ div.result-media {
 	.ui-spinner { animation-duration: calc(var(--t-slow) * 3); }
 	.attention-popover,
 	.core-tour { animation: none; }
+	.running-trigger.has-work:not(.active) { animation: none; }
 	.text-button,
 	.alpha-view button { transition: none; }
 }
