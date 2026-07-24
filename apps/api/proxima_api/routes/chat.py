@@ -40,6 +40,7 @@ from .. import wiki_memory
 from .. import workflows as wf
 from ..prompt_collaborations import collaboration_card_payload
 from ..chat_collaboration import make_start_collaboration
+from ..commands import agent_turn_for_command
 from ..run_state import active_run_clause, stale_params
 from ..run_prompting import (
     append_vision_references,
@@ -346,6 +347,10 @@ def register(app, deps):
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
         profile = profile_for_user(payload.profile_id, user)
+        agent_turn = agent_turn_for_command(payload.message)
+        # A first-class method command owns its methodology. It runs as one agent
+        # turn even if a collaboration chip was left selected in the composer.
+        effective_prompt_mode = "chat" if agent_turn is not None else payload.prompt_mode
         if payload.instant_result is not None and not session.get("workflow_id"):
             raise HTTPException(status_code=400, detail="instant result is only available in workflow iteration sessions")
         if payload.instant_result is not None and payload.prompt_mode != "chat":
@@ -354,7 +359,7 @@ def register(app, deps):
         # show their mode, while normal chat can carry a separate display label.
         display_message = payload.display_message or payload.message
         db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)", (session_id, display_message, user["username"]))
-        if payload.prompt_mode != "chat":
+        if effective_prompt_mode != "chat":
             return _start_prompt_collaboration(session, payload, user, profile, display_message)
         # Media prompts (/image and /design) short-circuit to the selected
         # generation provider — the ACP agent never sees them (left to improvise, it
@@ -366,10 +371,17 @@ def register(app, deps):
             if media is not None:
                 return media
         # Resume a goal that paused waiting for the user: their reply re-enters goal
-        # mode (instructions appended so the loop continues from this turn).
-        prompt = payload.message
+        # mode (instructions appended so the loop continues from this turn). An
+        # explicit method command starts its own methodology instead.
+        prompt = agent_turn["message"] if agent_turn is not None else payload.message
+        run_kind = agent_turn["runKind"] if agent_turn is not None else effective_prompt_mode
         goal = db().execute("SELECT goal_text, goal_status FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
+        goal_superseded = False
+        if agent_turn is not None:
+            if goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
+                db().execute("UPDATE sessions SET goal_status = 'cancelled' WHERE id = ? AND goal_status = 'blocked'", (session_id,))
+                goal_superseded = True
+        elif goal and goal["goal_status"] == "blocked" and goal["goal_text"]:
             prompt = payload.message + GOAL_INSTRUCTIONS
             db().execute("UPDATE sessions SET goal_status = 'running' WHERE id = ?", (session_id,))
         if payload.instant_result is not None:
@@ -378,14 +390,16 @@ def register(app, deps):
                 INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind, started_at, heartbeat_at, finished_at)
                 VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], payload.prompt_mode),
+                (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], run_kind),
             )
             run_id = _as_int(cur.lastrowid)
             msg = db().execute(
                 "INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)",
                 (session_id, payload.instant_result.strip(), profile["name"], run_id),
             )
-            app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": payload.prompt_mode})
+            app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": effective_prompt_mode})
+            if goal_superseded:
+                app.state.worker.add_event(run_id, session_id, session["project_id"], "goal.update", {"status": "cancelled"})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "run.started", {})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "message.complete", {"message_id": msg.lastrowid, "text": payload.instant_result.strip(), "output_links": []})
             app.state.worker.add_event(run_id, session_id, session["project_id"], "run.completed", {"stop_reason": "instant"})
@@ -396,10 +410,12 @@ def register(app, deps):
             INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind)
             VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
             """,
-            (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], payload.prompt_mode),
+            (session_id, session["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, payload.model or profile["default_model"], profile["hermes_home"], run_kind),
         )
         run_id = _as_int(cur.lastrowid)
-        app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": payload.prompt_mode})
+        app.state.worker.add_event(run_id, session_id, session["project_id"], "run.queued", {"runner": profile["runner_id"], "label": display_message, "prompt_mode": effective_prompt_mode})
+        if goal_superseded:
+            app.state.worker.add_event(run_id, session_id, session["project_id"], "goal.update", {"status": "cancelled"})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
         return {"run_id": run_id, "session_id": session_id, "status": "queued"}
 

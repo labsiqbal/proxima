@@ -49,7 +49,8 @@ The primary gate. Everything reachable from a chat. This is the surface that kee
 | --- | --- | --- | --- | --- |
 | Composer / input + `@` project-file & artifact references | active | `routes/files.py` (`reference-files`, `artifacts`), `fsapi.py`; `routes/chat.py` media vision | `components/chat/Composer.tsx`, `MentionTextarea.tsx`, `useProjectMentionItems.ts` | core chat/runs, projects/files |
 | File attach / upload | active | `routes/files.py` (upload) | `Composer.tsx`, `api/files.ts` | files, artifacts |
-| Slash commands | active | `commands.py`, `/api/commands/catalog` | `Composer.tsx`, `ChatScreen.tsx` (`localCommandReply`) | sessions, projects, runners |
+| Slash commands | active | `commands.py`, `/api/commands/catalog` | `Composer.tsx`, `ChatScreen.tsx` (`localCommandReply` + agent-command pass-through) | sessions, projects, runners |
+| Masterplan command (`/masterplan`) | active | `commands.py` (agent-turn expansion), `routes/chat.py` (run routing), `run_prompting.py` + `worker.py` (required `bundled/masterplan` activation) | `Composer.tsx` (catalog palette), `ChatScreen.tsx` (agent-turn pass-through) | sessions, messages, runs, profile capability selection (read-only) |
 | Chat modes (Normal/Brainstorm/Debate) | active | `routes/chat.py` + `chat_collaboration.py` | `Composer.tsx` (`MODES`) | collaborations |
 | **Brainstorm entry** | **risk** | `routes/chat.py` (`_start_prompt_collaboration`), `prompt_collaborations.py` | `ChatThread.tsx` (CollaborationCards) | run lifecycle, profiles |
 | Debate entry | active | `routes/chat.py` (debate branch) | `ChatThread.tsx` | collaborations |

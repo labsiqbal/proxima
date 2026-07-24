@@ -254,6 +254,18 @@ sent as Markdown image-reference syntax: ordinary ACP agents can still open the 
 while `/image` and design flows resolve it again inside the session project jail and
 attach bounded image bytes as visual input.
 
+First-class method commands also enter through this run seam. In particular,
+`/masterplan <idea>` stays visible in the transcript as typed, while
+`commands.agent_turn_for_command` expands the queued prompt into an explicit
+`bundled/masterplan` methodology instruction and tags the run `kind='masterplan'`.
+Before ACP setup, the worker checks whether the session has had that run kind and
+includes the bundled skill in an otherwise explicit profile capability subset; saved
+profile choices are unchanged. This session-scoped requirement keeps the skill active
+for ordinary chat turns that answer the methodology's clarification and review gates.
+Starting this method command also cancels a blocked goal on the same session, so a later
+clarification reply cannot resume stale goal instructions. A bare command asks the agent
+to collect the idea first, and natural-language skill invocation remains available.
+
 ```text
 UI  @ picker (files + artifacts) ─────► relative path / explicit image reference
     POST /api/chat/send ─────────────► create session (if new) + user message

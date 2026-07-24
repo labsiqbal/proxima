@@ -42,6 +42,11 @@ import { notify } from "../lib/notify";
 
 const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
 
+/** Slash commands that intentionally continue through the ordinary agent-run path. */
+export function isAgentTurnSlashCommand(text: string): boolean {
+	return /^\/masterplan(?:\s|$)/i.test(text.trim());
+}
+
 /** Header label prefers the open session's project so a desynced shell pick cannot mislabel the chat. */
 export function chatHeaderProjectLabel(
 	activeSession: ChatSession | null | undefined,
@@ -67,7 +72,7 @@ function localCommandReply(
 ): string {
 	switch (name) {
 		case "/help":
-			return "Commands: /new (new chat), /status, /session, /project <name> (switch to another project's chat). Prefix // to send a literal slash message to the agent.";
+			return "Commands: /new (new chat), /status, /session, /project <name> (switch to another project's chat), /masterplan <idea> (build an execution-ready product plan). Prefix // to send a literal slash message to the agent.";
 		case "/status":
 			return `Project: ${props.activeProject?.name || "none"} · Agent: ${props.activeProfile?.name || "none"}`;
 		case "/session":
@@ -342,9 +347,10 @@ export function ChatScreen(props: {
 			const trimmed = text.trim();
 			// Media commands are real prompts — the backend routes them to the selected
 			// generation provider (create_run interception), so they must reach it.
-				const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
-					|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
-			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand) {
+			const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
+				|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
+			const agentCommand = isAgentTurnSlashCommand(trimmed);
+			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand && !agentCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
 				if (name === "/new" || name === "/reset") {
 					await props.onNewSession();

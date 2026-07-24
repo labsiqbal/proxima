@@ -27,9 +27,13 @@ agent profile out of the box (T8, Phase 1 slice 9).
 ## Content
 
 - `masterplan/` - turn a product idea into an execution-ready masterplan package.
-  Vendored from [labsiqbal/masterplan](https://github.com/labsiqbal/masterplan)
-  (MIT); see `masterplan/PROVENANCE.md` for the exact commit and refresh steps.
-  Do not edit the vendored content in place - change it upstream and re-vendor.
+  Chat exposes it directly as `/masterplan <idea>` (a bare command asks for the
+  idea first); natural-language invocation remains available. The slash command
+  only selects and starts this methodology - package output still follows the
+  skill itself. Vendored from
+  [labsiqbal/masterplan](https://github.com/labsiqbal/masterplan) (MIT); see
+  `masterplan/PROVENANCE.md` for the exact commit and refresh steps. Do not edit
+  the vendored content in place - change it upstream and re-vendor.
 
 ## Adding a bundled skill
 

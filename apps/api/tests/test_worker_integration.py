@@ -20,6 +20,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import runner_specs
@@ -94,7 +95,14 @@ def _wait_for_run(client: TestClient, headers: dict, run_id: int, timeout: float
     return status
 
 
-def test_live_worker_loop_drives_real_acp_subprocess(tmp_path):
+@pytest.mark.parametrize(
+    ("message", "expected_kind"),
+    [
+        ("go", "chat"),
+        ("/masterplan build a durable CLI", "masterplan"),
+    ],
+)
+def test_live_worker_loop_drives_real_acp_subprocess(tmp_path, message, expected_kind):
     script = tmp_path / "fake_acp.py"
     script.write_text(FAKE_ACP_SCRIPT)
     saved_env = os.environ.get("PROXIMA_DEFAULT_RUNNER")
@@ -114,11 +122,15 @@ def test_live_worker_loop_drives_real_acp_subprocess(tmp_path):
             headers = {"Authorization": f"Bearer {token}"}
             session = client.post("/api/sessions", headers=headers, json={"title": "integration"}).json()
             run = client.post(
-                f"/api/sessions/{session['id']}/runs", headers=headers, json={"message": "go"}
+                f"/api/sessions/{session['id']}/runs", headers=headers, json={"message": message}
             ).json()
 
             status = _wait_for_run(client, headers, run["run_id"])
             assert status == "completed", f"run did not complete via live worker: {status}"
+            saved_run = client.get(f"/api/runs/{run['run_id']}", headers=headers).json()
+            assert saved_run["kind"] == expected_kind
+            if expected_kind == "masterplan":
+                assert "bundled/masterplan" in saved_run["prompt"]
 
             events = client.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
             types = [e["type"] for e in events]

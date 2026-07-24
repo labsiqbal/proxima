@@ -24,6 +24,7 @@ from fastapi import FastAPI
 
 from .runner_specs import runner_spec
 from .acp import format_rpc_error
+from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
 from . import features
@@ -62,6 +63,24 @@ def _as_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
+
+
+def required_skills_for_session(db: Any, session_id: int) -> tuple[str, ...]:
+    """Bundled skills that must stay active for every turn of this session.
+
+    Masterplan is multi-turn: the /masterplan turn is kind='masterplan' but its
+    clarification/review follow-ups arrive as ordinary kind='chat' runs. Keying on
+    the session having any masterplan run keeps the bundled skill active across
+    those follow-ups, so an opted-out profile's temporary symlink is not pruned
+    mid-methodology.
+    """
+    started_masterplan = bool(
+        db.execute(
+            "SELECT 1 FROM runs WHERE session_id = ? AND kind = ? LIMIT 1",
+            (session_id, MASTERPLAN_RUN_KIND),
+        ).fetchone()
+    )
+    return (MASTERPLAN_SKILL_ID,) if started_masterplan else ()
 
 
 def _json_array(value: Any) -> list[Any]:
@@ -1008,7 +1027,14 @@ class RunWorker:
 
         try:
             await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
-            self.prompting.reapply_capabilities(cfg, spec, hermes_home, run.get("profile_id"))
+            required_skills = required_skills_for_session(db, session_id)
+            self.prompting.reapply_capabilities(
+                cfg,
+                spec,
+                hermes_home,
+                run.get("profile_id"),
+                required_skill_ids=required_skills,
+            )
             proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
                 run_id,
                 session_id,

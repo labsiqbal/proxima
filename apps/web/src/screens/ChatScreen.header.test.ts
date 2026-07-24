@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatHeaderProjectLabel } from "./ChatScreen";
+import { chatHeaderProjectLabel, isAgentTurnSlashCommand } from "./ChatScreen";
 import type { ChatSession, Project } from "../types";
 
 const projects: Project[] = [
@@ -30,6 +30,16 @@ const lincSession = {
 	project_name: "Linc",
 	profile_name: "Default",
 } as ChatSession;
+
+describe("isAgentTurnSlashCommand", () => {
+	it("routes masterplan with or without an idea to the agent", () => {
+		expect(isAgentTurnSlashCommand("/masterplan")).toBe(true);
+		expect(isAgentTurnSlashCommand("/masterplan build a CLI")).toBe(true);
+		expect(isAgentTurnSlashCommand("/masterplanner")).toBe(false);
+		expect(isAgentTurnSlashCommand("/masterplan-foo")).toBe(false);
+		expect(isAgentTurnSlashCommand("/status")).toBe(false);
+	});
+});
 
 describe("chatHeaderProjectLabel", () => {
 	it("prefers the open session project over a desynced shell pick", () => {

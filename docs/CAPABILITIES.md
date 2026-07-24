@@ -110,6 +110,27 @@ an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
 **Endpoints:** `POST /api/chat/send`, `/api/sessions/{id}/runs`, `/messages`,
 `/events/stream`, `WS /api/ws/sessions/{id}`, `/runs/{id}/cancel`, `/runs/{id}/permission`.
 
+### First-class masterplan planning (`/masterplan`)
+
+**Why:** the bundled masterplan methodology has a visible front door in Chat instead
+of requiring users to know that a natural-language skill exists.
+**How:** `/masterplan <idea>` is published in the server command catalog under
+Planning, so the shared composer slash palette lists it with the same accessible
+name spacing as other commands. The chat route preserves the typed command as the
+visible user message, but queues a real `kind='masterplan'` agent turn whose internal
+prompt explicitly requires `bundled/masterplan` and passes the freeform idea into
+Phase 1. A bare `/masterplan` still starts the turn and tells the skill to ask for the
+idea first. Immediately before execution the worker adds that bundled skill to an
+explicit profile skill subset without rewriting the profile's saved opt-out choices.
+Once a session has started a `kind='masterplan'` run, the worker keeps the skill active
+for that session's ordinary chat follow-up turns so clarification and review cannot
+prune it mid-methodology. Starting the command in a session with a blocked goal cancels
+that old goal, preventing the next clarification reply from accidentally resuming goal
+mode instead of continuing the masterplan. The skill remains the methodology and writes
+its normal Markdown / HTML package folder artifacts; this command does not open Design
+Studio. Ordinary natural-language masterplan requests continue to work through skill
+discovery.
+
 ### Project-file and artifact references (`@`)
 
 Every project-scoped prompt surface shares the same mention picker: Code chat, the Ops
