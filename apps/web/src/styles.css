@@ -12658,11 +12658,11 @@ div.result-media {
 .alpha-tool-results p { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.5; color: inherit; }
 .alpha-working,
 .alpha-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); color: var(--ui-text-secondary); font-size: var(--text-sm); }
-/* Chat-parity composer dock: reuse .composer styles; no Alpha-only chrome. */
+/* Chat-parity composer dock: reuse .composer styles; no Alpha-only tray chrome. */
 .alpha-composer-dock {
-	border-top: 1px solid var(--ui-stroke-secondary);
+	border-top: 0;
 	padding: var(--space-3) var(--space-4);
-	background: var(--ui-surface-subtle);
+	background: transparent;
 }
 .alpha-composer-dock .composer {
 	width: 100%;

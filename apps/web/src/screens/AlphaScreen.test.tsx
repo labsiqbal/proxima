@@ -89,6 +89,16 @@ describe('AlphaScreen', () => {
     expect(sideBlock?.[0]).toMatch(/background:\s*var\(--ui-surface\)/)
   })
 
+  it('keeps Alpha composer dock free of tray chrome (transparent, no top border strip)', () => {
+    const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+    const dockBlock = css.match(/\.alpha-composer-dock\s*\{[^}]+\}/)
+    expect(dockBlock?.[0]).toMatch(/background:\s*transparent/)
+    expect(dockBlock?.[0]).not.toMatch(/background:\s*var\(--ui-surface-subtle\)/)
+    expect(dockBlock?.[0]).toMatch(/border-top:\s*0/)
+    // Spacing for attach/send must remain.
+    expect(dockBlock?.[0]).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-4\)/)
+  })
+
   it('fills an example and guards the async delegation submit through sendAlphaMessage', async () => {
     const user = userEvent.setup()
     render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
