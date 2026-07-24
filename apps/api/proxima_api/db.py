@@ -299,7 +299,6 @@ CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_status ON jobs(project_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_workflow ON jobs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_archived ON jobs(archived_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id, status);
 -- Durable per-node state for graph jobs (ADR-0001 primitive #2). One row per
 -- (job, node): the node's own status, the run it dispatched, its resolved

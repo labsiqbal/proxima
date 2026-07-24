@@ -67,3 +67,38 @@ def test_search_includes_mode_and_project_for_chats_and_messages(tmp_path: Path)
     plain = next(h for h in body["chats"] if h["id"] == chat["id"])
     assert plain["mode"] == "chat"
     assert plain["project_slug"] == "demo"
+
+
+def test_search_excludes_alpha_system_threads_and_tool_payloads(tmp_path: Path):
+    c, headers = _client(tmp_path)
+    c.post(
+        "/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}
+    ).raise_for_status()
+    ordinary = c.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "Operator notes", "project_slug": "demo", "mode": "chat"},
+    ).json()
+    assert c.post(
+        f"/api/sessions/{ordinary['id']}/messages",
+        headers=headers,
+        json={"role": "user", "content": "Document dispatch_jobs for operators"},
+    ).status_code == 200
+
+    db = c.app.state.db
+    owner_id = db.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+    project_id = db.execute("SELECT id FROM projects WHERE slug = 'demo'").fetchone()["id"]
+    alpha_id = db.execute(
+        "INSERT INTO sessions(title, project_id, owner_user_id, mode) VALUES ('Alpha', ?, ?, 'alpha')",
+        (project_id, owner_id),
+    ).lastrowid
+    db.execute(
+        "INSERT INTO messages(session_id, role, content) VALUES (?, 'system', ?)",
+        (alpha_id, 'Alpha tool results: {"tool": "dispatch_jobs"}'),
+    )
+
+    body = c.get("/api/search?q=dispatch_jobs", headers=headers).json()
+
+    assert [hit["id"] for hit in body["chats"]] == []
+    assert [hit["session_id"] for hit in body["messages"]] == [ordinary["id"]]
+    assert all(hit["mode"] != "alpha" for hit in body["messages"])

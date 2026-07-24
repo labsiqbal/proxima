@@ -168,6 +168,8 @@ def register(app, deps):
             return {"projects": [], "chats": [], "messages": []}
         like = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         uid = user["id"]
+        search_modes = kinds.global_search_modes()
+        mode_placeholders = ",".join("?" for _ in search_modes)
         projects = [dict(r) for r in db().execute(
             "SELECT p.slug, p.name FROM projects p "
             "WHERE p.owner_user_id = ? AND (p.name LIKE ? ESCAPE '\\' OR p.slug LIKE ? ESCAPE '\\') ORDER BY p.name LIMIT 10",
@@ -179,8 +181,10 @@ def register(app, deps):
             "p.slug AS project_slug, p.name AS project_name "
             "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
             "WHERE s.owner_user_id = ? AND s.job_id IS NULL "
-            "AND s.workflow_id IS NULL AND s.title LIKE ? ESCAPE '\\' "
-            "ORDER BY s.updated_at DESC LIMIT 10", (uid, like)).fetchall()]
+            "AND s.workflow_id IS NULL "
+            f"AND IFNULL(s.mode, 'chat') IN ({mode_placeholders}) "
+            "AND s.title LIKE ? ESCAPE '\\' "
+            "ORDER BY s.updated_at DESC LIMIT 10", (uid, *search_modes, like)).fetchall()]
         msgs = [dict(r) for r in db().execute(
             "SELECT m.session_id, m.role, substr(m.content, 1, 160) AS snippet, "
             "s.title AS session_title, IFNULL(s.mode, 'chat') AS mode, "
@@ -189,7 +193,9 @@ def register(app, deps):
             "LEFT JOIN projects p ON p.id = s.project_id "
             "WHERE s.owner_user_id = ? "
             "AND s.job_id IS NULL AND s.workflow_id IS NULL "
-            "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15", (uid, like)).fetchall()]
+            f"AND IFNULL(s.mode, 'chat') IN ({mode_placeholders}) "
+            "AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 15",
+            (uid, *search_modes, like)).fetchall()]
         return {"projects": projects, "chats": chats, "messages": msgs}
 
     @app.post("/api/sessions", status_code=201)

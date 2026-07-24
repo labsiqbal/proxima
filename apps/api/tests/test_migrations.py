@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from proxima_api.db import connect
+from proxima_api.db import SCHEMA, connect, init_db
 from proxima_api.migrations import current_version, run_migrations
 
 
@@ -12,6 +12,24 @@ def _add_foo(conn):
 
 def _add_users_nickname(conn):
     conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT")
+
+
+def test_init_db_upgrades_pre_alpha_jobs_before_creating_alpha_index(tmp_path: Path):
+    conn = connect(tmp_path / "pre-alpha.db")
+    legacy_schema = SCHEMA.replace(
+        "  alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,\n", ""
+    ).replace(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at);\n",
+        "",
+    )
+    conn.executescript(legacy_schema)
+
+    init_db(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
+    assert "alpha_session_id" in columns
+    assert "idx_jobs_alpha" in indexes
 
 
 def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
