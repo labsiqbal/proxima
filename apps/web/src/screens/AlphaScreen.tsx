@@ -57,23 +57,31 @@ function parseToolResults(content: string): AlphaToolResult[] | null {
   if (!match) return null
   try { const value = JSON.parse(match[1]); return Array.isArray(value) ? value : null } catch { return null }
 }
+function AlphaToolResults({ tools, onOpenJob }: { tools: AlphaToolResult[]; onOpenJob: (id: number, engine?: string) => void }) {
+  return <div className="alpha-tool-results" role="group" aria-label="Alpha tool results">
+    {tools.map((tool, toolIndex) => {
+      const jobs = tool.result?.jobs || (tool.result?.job ? [tool.result.job] : [])
+      return <div className={tool.ok ? 'ok' : 'failed'} key={`${tool.tool}-${toolIndex}`}>
+        <b>{toolResultLabel(tool, jobs)}</b>
+        {jobs.length ? <ul>{jobs.map(job => <li key={job.id}><button type="button" onClick={() => onOpenJob(job.id, job.engine)}><span>{job.title || `Job #${job.id}`}</span><small>{statusLabel(job.status)}</small></button></li>)}</ul> : null}
+        {!tool.ok && <p>{tool.error?.message || 'Alpha received an unknown product error.'}</p>}
+      </div>
+    })}
+  </div>
+}
+
 function AlphaThread({ messages, loading, onOpenJob }: { messages: ChatMessage[]; loading: boolean; onOpenJob: (id: number, engine?: string) => void }) {
   if (loading) return <div className="alpha-thread-state" role="status"><span className="ui-spinner" /> Loading Alpha thread…</div>
   if (!messages.length) return null
   return <div className="alpha-thread" aria-live="polite">{messages.map((message, index) => {
     const content = message.role === 'assistant' ? cleanAlpha(message.content) : message.content
     if (!content) return null
+    // Pure tool-result system rows render as timeline cards only - no outer Proxima bubble.
     const tools = message.role === 'system' ? parseToolResults(content) : null
+    if (tools) return <AlphaToolResults key={message.id ?? index} tools={tools} onOpenJob={onOpenJob} />
     return <article className={`alpha-message ${message.role}`} key={message.id ?? index}>
       <strong>{message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Alpha' : 'Proxima'}</strong>
-      {tools ? <div className="alpha-tool-results">{tools.map((tool, toolIndex) => {
-        const jobs = tool.result?.jobs || (tool.result?.job ? [tool.result.job] : [])
-        return <div className={tool.ok ? 'ok' : 'failed'} key={`${tool.tool}-${toolIndex}`}>
-          <b>{toolResultLabel(tool, jobs)}</b>
-          {jobs.length ? <ul>{jobs.map(job => <li key={job.id}><button type="button" onClick={() => onOpenJob(job.id, job.engine)}><span>{job.title || `Job #${job.id}`}</span><small>{statusLabel(job.status)}</small></button></li>)}</ul> : null}
-          {!tool.ok && <p>{tool.error?.message || 'Alpha received an unknown product error.'}</p>}
-        </div>
-      })}</div> : <MessageContent content={content} />}
+      <MessageContent content={content} />
     </article>
   })}</div>
 }
