@@ -44,6 +44,22 @@ const mediaBriefIsThin = (brief: string) => {
   return detail.split(/\s+/).filter(Boolean).length < 3
 }
 
+export async function resolveArtifactReviewSession(args: {
+  sessions: ChatSession[]
+  sessionId: number | null
+  fallback: ChatSession | null
+  loadSession: (sessionId: number) => Promise<ChatSession>
+}): Promise<ChatSession | null> {
+  if (args.sessionId == null) return args.fallback
+  const listed = args.sessions.find(session => session.id === args.sessionId)
+  if (listed) return listed
+  try {
+    return await args.loadSession(args.sessionId)
+  } catch {
+    return null
+  }
+}
+
 export async function createAndStartOpsTask(token: string, request: OpsTaskRequest): Promise<number> {
   const text = request.brief.trim()
   if (!text || !request.projectSlug) throw new Error('Choose a project and enter a task brief.')
@@ -507,16 +523,12 @@ export function App() {
 
   async function continueArtifactReview(feedback: ArtifactReviewFeedback) {
     const seq = ++reviewHandoffSeq.current
-    let target = (feedback.sessionId != null ? sessions.find(session => session.id === feedback.sessionId) : null)
-      || returnToChat
-      || activeSession
-    if (!target && feedback.sessionId != null) {
-      try {
-        target = await getSession(token, feedback.sessionId)
-      } catch {
-        // The owner-facing fallback below explains how to recover.
-      }
-    }
+    const target = await resolveArtifactReviewSession({
+      sessions,
+      sessionId: feedback.sessionId,
+      fallback: returnToChat || activeSession,
+      loadSession: sessionId => getSession(token, sessionId),
+    })
     if (!mountedRef.current || seq !== reviewHandoffSeq.current) return
     if (!target) {
       setError('This artifact has no chat session to receive feedback. Open it from its producing chat and try again.')
