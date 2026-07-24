@@ -238,9 +238,11 @@ checkpoint, audit, and permission scope. Every success/failure returns a structu
 result to the thread and back into a bounded six-round Alpha continuation, so a product
 read can inform the next in-process call without an HTTP control loop. Dispatch creates
 ordinary durable jobs with `execution_policy='autonomous'`,
-`jobs.alpha_session_id`, an `alpha.job.create` audit row, and a checkpoint before
-start. The global worker default is three slots and its claim query separately refuses
-a fourth running Alpha child; extra runs remain queued. Existing job capabilities are
+`jobs.alpha_session_id`, an `alpha.job.create` audit row, and a checkpoint after any
+isolated worktree is cut but before a run is enqueued. The global worker default is
+three slots and its claim query separately refuses a fourth running Alpha child; extra
+runs remain queued and capacity counts each queued worker run, including parallel graph
+branches. Existing job capabilities are
 unchanged, including commit/push/PR through the owner's BYO `git`/`gh` environment.
 
 **Three permission layers:** P1 is the in-process Alpha product-tool allowlist. P2 is

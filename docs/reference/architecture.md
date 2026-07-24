@@ -290,8 +290,8 @@ owner message -> queued Alpha ACP run (scoped ACP auto-approve)
       -> alpha_runtime validates + executes the allowlisted handler in process
       -> trusted result card + queued Alpha continuation (bounded to 6 tool rounds)
       -> dispatch_jobs creates Autonomous jobs linked by jobs.alpha_session_id
-      -> job-scoped checkpoint BEFORE each start -> runs queue
-      -> RunWorker claims at most 3 Alpha runs; excess stays visibly queued
+      -> isolated worktree cut when needed -> job-scoped checkpoint -> runs queue
+      -> RunWorker claims at most 3 Alpha runs; every excess worker run stays visibly queued
       -> AlphaScreen polls desk/messages; global Attention deep-links owner decisions
 ```
 
@@ -528,9 +528,11 @@ review actions live) and **Save as Recipe** (the same save-template mechanics).
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
 
-Before an Alpha job starts, `job_checkpoints.create_checkpoint` records only that
-job's restorable columns, node states, existing run ids, and target repository SHA /
-worktree identifiers. The 31st unpinned row evicts the oldest unpinned row; pinned
+Before an Alpha worker run is enqueued, `job_checkpoints.create_checkpoint` records
+only that job's restorable columns, node states, existing run ids, and target repository
+SHA / worktree identifiers. A repo job cuts its isolated worktree first so the checkpoint
+can restore that worktree; the worker still has not started. The 31st unpinned row
+evicts the oldest unpinned row; pinned
 rows are excluded. Restore has a separate impact-preview route, requires explicit
 confirmation, refuses while a job in the project is running or a later project job
 could depend on the current refs, and preflights a restorable worktree for dirt and a

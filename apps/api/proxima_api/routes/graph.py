@@ -19,6 +19,7 @@ from ..graph import (
     repo_target_paths,
 )
 from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: ignore[reportMissingImports]
+from ..job_checkpoints import create_checkpoint
 from ..schemas import (
     GraphDefinitionUpdateRequest,
     GraphJobCreateRequest,
@@ -496,6 +497,10 @@ def register(app, deps):
                 status_code=409, detail=f"cannot start repo plan: {exc}"
             ) from exc
         job = graph_job_or_404(job_id, user)
+        # Alpha graph plans capture their latest queued node state after any
+        # isolated worktree exists and before ready nodes are dispatched.
+        if job["alpha_session_id"] is not None:
+            create_checkpoint(db(), job_id)
         claimed = db().execute(
             "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, "
             "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued' AND engine='graph'",
