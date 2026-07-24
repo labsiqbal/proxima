@@ -537,6 +537,11 @@ def register(app, deps):
             )
         return graph_job_payload(graph_job_or_404(job_id, user))
 
+    # Alpha invokes these proven route services in-process. They remain private
+    # Python callables, not loopback HTTP endpoints or prompt-granted authority.
+    app.state.alpha_create_graph_job = create_graph_job
+    app.state.alpha_start_graph_job = start_graph_job
+
     @app.patch("/api/graph/jobs/{job_id}/nodes/{node_id}/output")
     def edit_node_output(
         job_id: int,
@@ -912,6 +917,11 @@ def register(app, deps):
                 )
         app.state.worker.graph_executor.dispatch_ready(job_id)
         return graph_job_payload(graph_job_or_404(job_id, user))
+
+    # Global Attention reuses the exact hash-visible read/approve services in
+    # process rather than duplicating trust transitions or calling loopback HTTP.
+    app.state.alpha_read_node_script = read_node_script
+    app.state.alpha_approve_node_script = approve_node_script
 
     @app.post("/api/graph/jobs/{job_id}/approve")
     def approve_graph_job(

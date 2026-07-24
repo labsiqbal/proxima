@@ -51,4 +51,5 @@ def feature_flag_for(mode: str | None) -> str | None:
 # 'chat' is the main-chat gate itself. 'design' is Design Studio's session type,
 # gated + excluded from the main list. New surfaces register alongside these.
 register(SessionKind("chat", shown_in_main_chat=True))
+register(SessionKind("alpha", shown_in_main_chat=False))
 register(SessionKind("design", shown_in_main_chat=False, feature_flag="design_studio"))

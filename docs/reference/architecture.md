@@ -32,7 +32,9 @@ Owner ── Profile ── Runner ── Project / Workspace
   establishes a bearer-token/HttpOnly-cookie session. Network controls remain the
   primary boundary, with application authentication as defense in depth.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
-  model, and system instructions ("soul").
+  model, and system instructions ("soul"). Alpha uses a hidden `system_kind='alpha'`
+  profile so the owner can change its backing runner without creating a normal worker
+  persona; its thread is a `sessions.mode='alpha'` session excluded from Chat history.
 + **Runner** - the agent CLI a profile drives (Claude Code / Codex / Grok / Hermes / Pi),
   resolved by a _runner spec_.
 + **Project** - a scaffolded, linked, or newly-created-on-disk folder. Chat,
@@ -48,6 +50,8 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  routes/*.py   REST handlers (registered via register(app, deps))              │
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
+│  Alpha tools   in-process allowlist; dispatches jobs, never curls localhost     │
+│  AlphaSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
 │  AppManager    per-project dev-server processes  ── PreviewProxy (subdomains)  │
@@ -65,7 +69,9 @@ Owner ── Profile ── Runner ── Project / Workspace
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
-supervision loop over alive-but-unproductive jobs),
+supervision loop over alive-but-unproductive jobs), `alpha_runtime.py` (system
+identity + in-process tool allowlist), `alpha_supervisor.py` (budgeted unattended
+queue starter), `job_checkpoints.py`, `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
@@ -230,6 +236,15 @@ permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
 via `file_missing`. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
+Alpha adds only additive state (migration 26): `profiles.system_kind` hides the
+system identity from worker pickers; `jobs.alpha_session_id` scopes desk ownership,
+three-slot claiming, and ACP auto-approval; `job_checkpoints` stores job-row/node/run
+state plus git/worktree refs (never a DB backup or filesystem zip);
+`turn_file_journals` stores bounded before-content for paths changed by a Chat turn
+and cascades with the session; `attention_items` stores durable Alpha, budget, and
+permission needs-you items while review/satpam items are projected into the same API.
+Settings under `alpha.*` hold unattended state, turn/wall/optional-token budgets, and
+core-tour completion.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the
@@ -265,6 +280,40 @@ ArtifactViewer render -> point notes / general note -> Add feedback to chat
 ```
 
 ## Key flows
+
+### 1a. Alpha delegation and unattended queue
+
+```text
+Alpha nav -> GET /api/alpha/desk -> ensure hidden Alpha profile + mode='alpha' session
+owner message -> queued Alpha ACP run (scoped ACP auto-approve)
+      -> assistant emits <proxima-tool>{name,arguments}</proxima-tool>
+      -> alpha_runtime validates + executes the allowlisted handler in process
+      -> trusted result card + queued Alpha continuation (bounded to 6 tool rounds)
+      -> dispatch_jobs creates Autonomous jobs linked by jobs.alpha_session_id
+      -> job-scoped checkpoint BEFORE each start -> runs queue
+      -> RunWorker claims at most 3 Alpha runs; excess stays visibly queued
+      -> AlphaScreen polls desk/messages; global Attention deep-links owner decisions
+```
+
+There is no agent-to-localhost control plane. Tool calls are parsed from Alpha's
+orchestration response and executed by server-owned handlers with structured success
+or error messages written back to the Alpha thread and supplied to the next bounded
+Alpha continuation. Mutations create `audit_log` rows; pure reads do not. Alpha and
+every Alpha-spawned run are auto-approved by a durable
+scope check (`sessions.mode='alpha'` or `jobs.alpha_session_id IS NOT NULL`); the
+owner's global auto-approve setting for ordinary Chat remains unchanged, and product
+review gates remain separate.
+
+Interactive Alpha is quiet until asked. The desk can enable unattended mode; the
+`AlphaSupervisor` then starts already-queued Alpha jobs within turn and wall-clock
+budgets. The optional token value is stored and shown, but current ACP events expose no
+usage counter, so turn + wall-clock are the enforced Alpha budgets today. Budget
+exhaustion disables unattended mode and creates an `alpha_budget` attention item.
+Git commit/push/PR remains ordinary job work through the existing BYO environment.
+Destructive install administration is not in the unattended allowlist.
+
+Authority is singular: **Alpha dispatches and prioritizes; satpam alone detects,
+steers, or restarts stuck runs.** Alpha never calls satpam restart machinery.
 
 ### 1. Chat turn (the core loop)
 
@@ -310,7 +359,15 @@ UI  subscribes to GET /api/.../events/stream (SSE) and
     │  approvals: POST /api/runs/{id}/permission   cancel: /runs/{id}/cancel
     ▼
 run.completed → assistant message saved (linked via messages.run_id)
+    └─ if an ACP tool event occurred and bounded file comparison found changes:
+       turn_file_journals row -> preview paths -> confirmed restore-turn endpoint
 ```
+
+Normal project Chat snapshots bounded eligible files at the turn boundary and uses ACP
+tool events as the journal trigger. Only changed paths and their pre-turn bytes are
+persisted; dependency/build/cache/git/media paths and oversized files are skipped.
+The journal lives for the session, previews every impacted path, and warns before an
+owner restores while Alpha work is active in the same project.
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a per-turn quota cancels stragglers. The quota
@@ -470,6 +527,17 @@ review actions live) and **Save as Recipe** (the same save-template mechanics).
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
+
+Before an Alpha job starts, `job_checkpoints.create_checkpoint` records only that
+job's restorable columns, node states, existing run ids, and target repository SHA /
+worktree identifiers. The 31st unpinned row evicts the oldest unpinned row; pinned
+rows are excluded. Restore has a separate impact-preview route, requires explicit
+confirmation, refuses while a job in the project is running or a later project job
+could depend on the current refs, and preflights a restorable worktree for dirt and a
+valid commit before changing database state. It removes only post-checkpoint runs and
+restores the one job/node set transactionally. Main-checkout SHAs are reference-only;
+only an existing job-owned worktree can be hard-reset, so unrelated project work is
+never rewound. It never VACUUMs SQLite and never archives a project tree.
 
 ### 6b. Repo job: worktree → diff review → local merge (slices 2+4, live)
 

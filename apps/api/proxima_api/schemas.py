@@ -213,9 +213,9 @@ class SessionCreateRequest(BaseModel):
     profile_id: int | None = None
     runner_id: str = Field(default_factory=default_runner)
     visibility: str = Field(default="private", pattern="^(private|project)$")
-    # 'chat' (default) or 'design' — a design session is created by Design Studio so
-    # the UI can route it back there (never render its scene JSON in the main chat).
-    mode: str = Field(default="chat", pattern="^(chat|design)$")
+    # Alpha sessions are server-created through the dedicated Alpha surface, but
+    # the shared model recognizes the registered mode for internal callers/tests.
+    mode: str = Field(default="chat", pattern="^(chat|design|alpha)$")
 
 
 class SessionUpdateRequest(BaseModel):

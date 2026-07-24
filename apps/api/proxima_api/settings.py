@@ -21,7 +21,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "source_hermes_home": None,
     "hermes_bin": None,
     "run_worker_poll_interval_ms": 250,
-    "run_worker_concurrency": 2,
+    # Alpha's product contract exposes three parallel worker slots. The same
+    # worker remains the global executor; Alpha-specific claiming is capped at 3.
+    "run_worker_concurrency": 3,
     # Per-turn quota fallback. The owner-facing value is the `run_timeout_seconds`
     # app setting (Settings UI, stored in the DB); this config key is only the
     # default when that setting is unset. See app_settings.get_run_timeout_seconds.

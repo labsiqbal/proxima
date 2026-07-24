@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS profiles (
   runner_id TEXT NOT NULL DEFAULT '__DEFAULT_RUNNER__',
   default_model TEXT,
   instructions TEXT,
+  -- Built-in product identities (Alpha) are hidden from the normal worker
+  -- profile list. NULL remains an owner-created coding profile.
+  system_kind TEXT,
   is_default INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -237,6 +240,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- Why the owner rejected the job at review (slice 4). Set only by the reject
   -- action (status -> 'failed'); NULL for jobs that failed on their own.
   rejected_reason TEXT,
+  -- Non-NULL only when the built-in Alpha session dispatched this job.
+  -- It scopes permission auto-approval, desk ownership, and concurrency.
+  alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -293,6 +299,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_status ON jobs(project_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_workflow ON jobs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_archived ON jobs(archived_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id, status);
 -- Durable per-node state for graph jobs (ADR-0001 primitive #2). One row per
 -- (job, node): the node's own status, the run it dispatched, its resolved
@@ -414,6 +421,38 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- Alpha checkpoints are job-scoped JSON state + git/worktree refs. They are
+-- not SQLite backups and do not archive an entire project filesystem.
+CREATE TABLE IF NOT EXISTS job_checkpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  git_refs_json TEXT NOT NULL DEFAULT '[]',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_job_checkpoints_job ON job_checkpoints(job_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS turn_file_journals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  entries_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id);
+CREATE TABLE IF NOT EXISTS attention_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  target_json TEXT NOT NULL DEFAULT '{}',
+  inline_ok INTEGER NOT NULL DEFAULT 0,
+  actions_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'open',
+  source_key TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC);
 -- An ACP session belongs to the agent HOME that created it, so a shared thread
 -- needs one ACP session PER home (per collaborator), not a single shared id.
 CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -566,6 +605,9 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "jobs", "graph", "graph TEXT")
     _add_column(conn, "runs", "heartbeat_at", "heartbeat_at TEXT")
     _add_column(conn, "profiles", "runner_id", f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
+    _add_column(conn, "profiles", "system_kind", "system_kind TEXT")
+    _add_column(conn, "jobs", "alpha_session_id", "alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
     # Per-profile skill/MCP selection (JSON: {"skills":[ids],"mcp":[names]}).
     # NULL = inherit ALL detected for the runner (best default: host skills just work).
     _add_column(conn, "profiles", "capabilities", "capabilities TEXT")

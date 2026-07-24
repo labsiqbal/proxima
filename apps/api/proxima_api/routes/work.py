@@ -22,6 +22,7 @@ from .. import satpam
 from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
+from ..job_checkpoints import create_checkpoint
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -277,6 +278,12 @@ def register(app, deps):
         profile = profile_for_user(session["profile_id"] if session else None, user)
         inputs = _decode_json(job["input"]) if job["input"] else {}
         prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
+        # Alpha jobs always get a job-scoped checkpoint before any worker work.
+        # Avoid duplicates when a retried idempotent start already made one.
+        if job["alpha_session_id"] is not None and not db().execute(
+            "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
+        ).fetchone():
+            create_checkpoint(db(), job_id)
         # Repo job (slice 2, flag-gated): cut the isolated worktree BEFORE the
         # job claims running, so a refused cut (dirty repo, detached HEAD, no
         # commits) surfaces loudly and leaves the job queued for a clean retry.
@@ -574,6 +581,11 @@ def register(app, deps):
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
         return _job_payload(_job_or_404(job_id, user))
+
+    # Global Attention applies review verdicts through these proven services so
+    # artifact approval and worktree cleanup cannot drift from the Tasks flow.
+    app.state.alpha_approve_job = approve_job
+    app.state.alpha_reject_job = reject_job
 
     @app.post("/api/jobs/{job_id}/satpam/{intervention_id}/approve")
     def approve_satpam_restart(job_id: int, intervention_id: int, user: dict[str, Any] = Depends(current_user)):

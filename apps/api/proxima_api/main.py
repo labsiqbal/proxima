@@ -39,9 +39,11 @@ from .frontend_static import register_frontend
 from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
+from .alpha_supervisor import AlphaSupervisor
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
     admin as routes_admin,
+    alpha as routes_alpha,
     archive as routes_archive,
     auth as routes_auth,
     chat as routes_chat,
@@ -97,6 +99,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if cfg.get("start_worker", True):
         worker.start()
     scheduler_task: asyncio.Task | None = None
+    alpha_task: asyncio.Task | None = None
+    if cfg.get("start_worker", True):
+        async def _alpha_loop() -> None:
+            while True:
+                await asyncio.sleep(5)
+                try:
+                    app.state.alpha_supervisor.tick()
+                except Exception:
+                    logging.getLogger("proxima.alpha").exception("Alpha supervisor tick failed")
+        alpha_task = asyncio.create_task(_alpha_loop())
     if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
         async def _scheduler_loop() -> None:
             while True:
@@ -129,6 +141,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler_task.cancel()
         with suppress(asyncio.CancelledError):
             await scheduler_task
+    if alpha_task:
+        alpha_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await alpha_task
     if update_task:
         update_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -154,6 +170,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
     app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
+    app.state.alpha_supervisor = AlphaSupervisor(app)
     app.state.acp_manager = AcpManager()
     app.state.app_manager = AppManager()
     app.state.hub = EventHub()
@@ -211,6 +228,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     routes_work.register(app, _route_deps)
     routes_graph.register(app, _route_deps)
+    routes_alpha.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)

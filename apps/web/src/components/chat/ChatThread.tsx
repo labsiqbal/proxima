@@ -11,12 +11,14 @@ import { MessageContent } from "./MessageContent";
 import { QuestionForm } from "./QuestionForm";
 import { splitOnQuestionForms } from "./questionForm";
 import { respondPermission } from "../../api/runs";
+import { previewTurnRestore, restoreTurn } from "../../api/sessions";
 import { designFromImage, previewUrl } from "../../api/files";
 import { ApiError } from "../../api/client";
 import { IconSparkle, IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
 import { formatRunError } from "./runError";
 import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
+import { confirmDialog } from "../ui/Dialog";
 
 const ROLE_LABEL: Record<string, string> = {
 	user: "You",
@@ -48,6 +50,37 @@ const timeLabel = (d: Date): string =>
 	d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
 type ApprovalOption = { optionId: string; name?: string; kind?: string };
+
+function TurnRestoreButton({ token, message }: { token?: string; message: ChatMessage }) {
+	const [busy, setBusy] = React.useState(false);
+	const [restored, setRestored] = React.useState(false);
+	const [error, setError] = React.useState("");
+	if (!token || !message.id || !message.turn_restore?.available || restored) return null;
+	const run = async () => {
+		if (busy) return;
+		setBusy(true); setError("");
+		try {
+			const impact = await previewTurnRestore(token, message.id!);
+			const detail = `${impact.paths.length} path${impact.paths.length === 1 ? "" : "s"}:\n${impact.paths.join("\n")}${impact.warning ? `\n\nWarning: ${impact.warning}` : ""}`;
+			const ok = await confirmDialog({ title: "Restore files from before this turn?", message: detail, confirmLabel: "Review restore", danger: true });
+			if (!ok) return;
+			if (impact.active_alpha_jobs.length > 0) {
+				const acceptConflict = await confirmDialog({
+					title: "Alpha work is active in this project",
+					message: `Restoring now may overwrite work from: ${impact.active_alpha_jobs.map(job => job.title).join(", ")}`,
+					confirmLabel: "Restore anyway",
+					danger: true,
+				});
+				if (!acceptConflict) return;
+			}
+			await restoreTurn(token, message.id!, impact.active_alpha_jobs.length > 0);
+			setRestored(true);
+			window.dispatchEvent(new CustomEvent("proxima:files-changed"));
+		} catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+		finally { setBusy(false); }
+	};
+	return <div className="turn-restore"><button type="button" className="text-button" disabled={busy} onClick={() => void run()}>{busy ? "Restoring…" : `Restore ${message.turn_restore.paths_count} changed path${message.turn_restore.paths_count === 1 ? "" : "s"}`}</button>{error && <span role="alert">{error}</span>}</div>;
+}
 
 // Detect a multiple-choice block at/near the end of an agent message (a) b) c)
 // or 1. 2. 3.), since Claude over ACP asks in plain text rather than a tool.
@@ -1055,6 +1088,9 @@ export function ChatThread({
 									{fmtDur(message.duration_s)}
 								</div>
 							) : null}
+							{message.role === "assistant" && message.id && (
+								<TurnRestoreButton token={token} message={message} />
+							)}
 							{message.role === "assistant" && message.id && (
 								<MessageReviewSidecar
 									token={token}

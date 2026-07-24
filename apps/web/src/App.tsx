@@ -29,6 +29,7 @@ const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ 
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
+const AlphaScreen = React.lazy(() => import('./screens/AlphaScreen').then(m => ({ default: m.AlphaScreen })))
 const TaskWorkspace = React.lazy(() => import('./screens/TaskWorkspace').then(m => ({ default: m.TaskWorkspace })))
 const GraphScreen = React.lazy(() => import('./screens/GraphScreen').then(m => ({ default: m.GraphScreen })))
 const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(m => ({ default: m.ProfilesScreen })))
@@ -177,6 +178,15 @@ export function App() {
     }
     openTask(jobId)
   }, [clearTaskHash, clearPendingNavigation, openTask])
+  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string }) => {
+    if (target.job_id != null) {
+      openJobByEngine(target.job_id, target.engine)
+      return
+    }
+    if (target.view === 'alpha') { clearPendingNavigation(); setView('alpha'); return }
+    if (target.view === 'settings') { clearPendingNavigation(); setView('settings'); return }
+    if (target.view === 'activity') { clearPendingNavigation(); setView('activity') }
+  }, [clearPendingNavigation, openJobByEngine])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   const goView = (v: View) => {
     clearTaskHash()
@@ -589,6 +599,7 @@ export function App() {
       seen={seen}
       busySessions={busySessions}
       onSelectView={goView}
+      onOpenAttentionTarget={openAttentionTarget}
       profiles={profiles}
       projects={projects}
       sessions={sessions}
@@ -601,6 +612,7 @@ export function App() {
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
       {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
+      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} onOpenJob={openJobByEngine} /></React.Suspense>}
       {view === 'chat' && (() => {
         // A design-kind session belongs to Design Studio; never render it as the main
         // chat (kind is authoritative — this is the last-line guard behind the session
@@ -629,7 +641,7 @@ export function App() {
       {features.designStudio && view === 'design' &&<React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />
