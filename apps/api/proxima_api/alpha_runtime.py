@@ -161,10 +161,15 @@ def alpha_capacity(conn, alpha_session_id: int) -> dict[str, int]:
         (alpha_session_id,),
     ).fetchone()["c"]
     queued = conn.execute(
-        "SELECT COUNT(DISTINCT j.id) AS c FROM jobs j LEFT JOIN sessions s ON s.job_id = j.id "
-        "LEFT JOIN runs r ON r.session_id = s.id AND r.status = 'queued' "
-        "WHERE j.alpha_session_id = ? AND (j.status = 'queued' OR r.id IS NOT NULL)",
-        (alpha_session_id,),
+        "SELECT ("
+        "  SELECT COUNT(*) FROM runs r JOIN sessions s ON s.id = r.session_id "
+        "  JOIN jobs j ON j.id = s.job_id WHERE j.alpha_session_id = ? AND r.status = 'queued'"
+        ") + ("
+        "  SELECT COUNT(*) FROM jobs j WHERE j.alpha_session_id = ? AND j.status = 'queued' "
+        "  AND NOT EXISTS (SELECT 1 FROM sessions s JOIN runs r ON r.session_id = s.id "
+        "                  WHERE s.job_id = j.id AND r.status = 'queued')"
+        ") AS c",
+        (alpha_session_id, alpha_session_id),
     ).fetchone()["c"]
     running_int = _as_int(running)
     return {
@@ -355,13 +360,15 @@ def start_alpha_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, A
     steps = json.loads(job["steps_state"] or "[]")
     if not steps or not job.get("session_id"):
         raise AlphaToolError("job_not_startable", "Job has no runnable session or step")
-    # The checkpoint is job-scoped and exists before worktree creation or run enqueue.
-    create_checkpoint(conn, job_id)
     if features.enabled(app.state.config, features.REPO_WORKTREES):
         try:
             worktrees.ensure_job_worktree(conn, app.state.config, job)
         except worktrees.WorktreeError as exc:
             raise AlphaToolError("worktree_failed", f"Cannot start repo job: {exc}") from exc
+    # Capture the queued job after any isolated worktree exists, but before a
+    # run is enqueued. This makes a repo checkpoint genuinely restorable while
+    # the primary checkout remains reference-only.
+    create_checkpoint(conn, job_id)
     session = conn.execute("SELECT * FROM sessions WHERE id = ?", (job["session_id"],)).fetchone()
     profile = conn.execute("SELECT * FROM profiles WHERE id = ?", (session["profile_id"],)).fetchone() if session else None
     if not profile:

@@ -278,12 +278,6 @@ def register(app, deps):
         profile = profile_for_user(session["profile_id"] if session else None, user)
         inputs = _decode_json(job["input"]) if job["input"] else {}
         prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
-        # Alpha jobs always get a job-scoped checkpoint before any worker work.
-        # Avoid duplicates when a retried idempotent start already made one.
-        if job["alpha_session_id"] is not None and not db().execute(
-            "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
-        ).fetchone():
-            create_checkpoint(db(), job_id)
         # Repo job (slice 2, flag-gated): cut the isolated worktree BEFORE the
         # job claims running, so a refused cut (dirty repo, detached HEAD, no
         # commits) surfaces loudly and leaves the job queued for a clean retry.
@@ -292,6 +286,13 @@ def register(app, deps):
                 worktrees.ensure_job_worktree(db(), app.state.config, job)
             except worktrees.WorktreeError as exc:
                 raise HTTPException(status_code=409, detail=f"cannot start repo job: {exc}") from exc
+        # Alpha jobs checkpoint the queued state after the isolated worktree is
+        # available, but before any worker run is enqueued. Avoid duplicates on
+        # an idempotent retry.
+        if job["alpha_session_id"] is not None and not db().execute(
+            "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
+        ).fetchone():
+            create_checkpoint(db(), job_id)
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")

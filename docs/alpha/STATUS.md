@@ -17,13 +17,13 @@ Milestones are checked only against the evidence below.
   - Evidence: live Alpha turn used `dispatch_jobs`, returned job ids 1/2, and both real Claude-backed workers completed files; `test_disallowed_alpha_tool_returns_structured_error`.
 - [x] **M3 - Multi-dispatch + capacity**
   - Alpha max parallel is 3 at the worker claim seam; excess runs stay queued and the desk shows running/free/queued separately.
-  - Evidence: `test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three`; live E2E dispatched two workers concurrently and both completed.
+  - Evidence: `test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three`; `test_alpha_capacity_counts_each_queued_worker_run`; live E2E dispatched two workers concurrently and both completed.
 - [x] **M4 - Scoped permission behavior**
   - Alpha sessions and children auto-approve ACP prompts by durable scope. Ordinary jobs keep owner permission behavior and materialize hidden-session asks in Attention.
   - Evidence: live child runs emitted `approval.auto` for Write and Terminal tools; `test_permission_attention_closes_when_choice_is_delivered`; Alpha run/child scope assertions in `test_alpha.py`.
 - [x] **M5 - Job-scoped checkpoints**
   - Pre-start job/node/run JSON plus git/worktree refs only; FIFO 30 unpinned; impact preview, confirmation, dirty/conflicting-work refusal, pin and restore routes. Main-checkout SHAs are reference-only; only a job-owned worktree may be reset.
-  - Evidence: `test_checkpoint_fifo_keeps_thirty_unpinned`; `test_checkpoint_restore_never_resets_the_shared_project_checkout`; live desk showed two checkpoints and a restore impact dialog listing only job state and refs.
+  - Evidence: `test_checkpoint_fifo_keeps_thirty_unpinned`; `test_checkpoint_restore_never_resets_the_shared_project_checkout`; `test_alpha_repo_checkpoint_captures_and_restores_the_job_worktree`; live desk showed two checkpoints and a restore impact dialog listing only job state and refs.
 - [x] **M6 - Global Attention hybrid**
   - Shell badge unifies job review/diff, satpam restart, hash-visible script trust, job permission, and Alpha decision/budget items. Only `inline_ok` rows expose actions; every row deep-links.
   - Evidence: `AttentionInbox.test.tsx`; `test_script_trust_attention_shows_hash_and_uses_in_process_approval`; live browser showed an Alpha decision badge/popover and deep-link.

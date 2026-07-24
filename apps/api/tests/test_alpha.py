@@ -136,6 +136,42 @@ def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_t
     assert alpha_capacity(app.state.db, desk["session"]["id"])["running"] == 3
 
 
+def test_alpha_capacity_counts_each_queued_worker_run(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/alpha/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    job = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        {
+            "tasks": [{"title": "Parallel plan", "brief": "Run branches", "project_slug": project["slug"]}],
+        },
+    )["result"]["jobs"][0]
+    session_id = app.state.db.execute(
+        "SELECT session_id FROM jobs WHERE id = ?", (job["id"],)
+    ).fetchone()["session_id"]
+    first_run = app.state.db.execute(
+        "SELECT * FROM runs WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    for _ in range(2):
+        app.state.db.execute(
+            "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt) "
+            "VALUES (?, ?, ?, ?, ?, 'queued', 'branch')",
+            (
+                session_id,
+                first_run["project_id"],
+                first_run["user_id"],
+                first_run["profile_id"],
+                first_run["runner_id"],
+            ),
+        )
+
+    assert alpha_capacity(app.state.db, desk["session"]["id"])["queued"] == 3
+
+
 def test_alpha_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/alpha/desk").json()
@@ -203,6 +239,52 @@ def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: P
         ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, text=True, capture_output=True
     ).stdout.strip() == later_head
     assert (root / "state.txt").read_text() == "later\n"
+
+
+def test_alpha_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/alpha/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    root = Path(project["path"])
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "owner@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Owner"], check=True)
+    (root / "state.txt").write_text("before\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "before"], check=True)
+    areas = client.post(f"/api/projects/{project['slug']}/areas/detect").json()
+    area_id = areas["code_areas"][0]["id"]
+
+    job = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        {
+            "tasks": [{
+                "title": "Restorable repo work",
+                "brief": "Change the repo",
+                "project_slug": project["slug"],
+                "target_area_id": area_id,
+            }],
+        },
+    )["result"]["jobs"][0]
+    checkpoint = dict(app.state.db.execute(
+        "SELECT * FROM job_checkpoints WHERE job_id = ? ORDER BY id LIMIT 1", (job["id"],)
+    ).fetchone())
+    checkpoint["git_refs"] = json.loads(checkpoint["git_refs_json"])
+    assert checkpoint["git_refs"][0]["restore_strategy"] == "worktree_reset"
+    worktree = Path(checkpoint["git_refs"][0]["worktree_path"])
+    (worktree / "state.txt").write_text("after\n")
+    subprocess.run(["git", "-C", str(worktree), "add", "state.txt"], check=True)
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qm", "after"], check=True)
+    app.state.db.execute("UPDATE jobs SET status='done' WHERE id=?", (job["id"],))
+
+    restored = restore_checkpoint(app.state.db, checkpoint["id"], confirmed=True)
+
+    assert restored["git_restored"] == [str(worktree)]
+    assert (worktree / "state.txt").read_text() == "before\n"
 
 
 def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):

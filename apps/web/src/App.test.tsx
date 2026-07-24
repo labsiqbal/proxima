@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAndStartOpsTask } from "./App";
+import { createAndStartOpsTask, resolveArtifactReviewSession } from "./App";
+import type { ChatSession } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
 import { createRun } from "./api/runs";
 
@@ -19,6 +20,43 @@ const request = {
 	profileId: 7,
 	executionPolicy: "guarded" as const,
 };
+
+const chatSession = (id: number, title: string): ChatSession => ({
+	id,
+	title,
+	runner_id: "claude-code",
+	project_slug: "alpha",
+	visibility: "private",
+});
+
+describe("Artifact review session handoff", () => {
+	it("loads the exact producing session when it is omitted from the sidebar", async () => {
+		const producer = chatSession(7, "Hidden producer");
+		const unrelated = chatSession(9, "Unrelated active chat");
+		const loadSession = vi.fn().mockResolvedValue(producer);
+
+		await expect(resolveArtifactReviewSession({
+			sessions: [unrelated],
+			sessionId: producer.id,
+			fallback: unrelated,
+			loadSession,
+		})).resolves.toBe(producer);
+		expect(loadSession).toHaveBeenCalledWith(producer.id);
+	});
+
+	it("uses the opening chat only when the artifact has no producing session", async () => {
+		const openingChat = chatSession(9, "Opening chat");
+		const loadSession = vi.fn();
+
+		await expect(resolveArtifactReviewSession({
+			sessions: [],
+			sessionId: null,
+			fallback: openingChat,
+			loadSession,
+		})).resolves.toBe(openingChat);
+		expect(loadSession).not.toHaveBeenCalled();
+	});
+});
 
 describe("Ops task API flow", () => {
 	beforeEach(() => vi.clearAllMocks());
