@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconNewChat, IconChat, IconSparkle, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
+import { IconChat, IconSparkle, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
@@ -23,7 +23,7 @@ const enabled = (item: Destination, features: AppFeatures) =>
 
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View
-  features: AppFeatures; onClose: () => void; onNewChat: () => void; onLogout: () => void
+  features: AppFeatures; onClose: () => void; onLogout: () => void
   onRenameSession: (id: number, title: string) => void; onDeleteSession: (id: number) => void
   onSelectProject: (project: Project) => void; onSelectSession: (session: ChatSession) => void
   onOpenDesign: (session: ChatSession) => void; onSelectView: (view: View) => void
@@ -54,9 +54,8 @@ export function Sidebar(props: {
 
     <nav className="shell-navigation" aria-label="Navigation">
       <section className="nav-group primary-nav">
-        {/* An action, not a destination — never carries the active state (the
-            Chat item below shows where you are). */}
-        <button className="nav-item" onClick={() => { props.onNewChat(); props.onClose() }}><span className="nav-icon"><IconNewChat /></span><strong>New chat</strong></button>
+        {/* Destinations only — blank session is started from Chat header (or mobile
+            topbar / `/new`), not a twin primary-nav row above Chat. */}
         {primary.filter(item => enabled(item, props.features)).map(destination)}
       </section>
     </nav>

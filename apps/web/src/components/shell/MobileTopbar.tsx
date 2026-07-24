@@ -31,6 +31,8 @@ export function MobileTopbar({
     <div className="mobile-context"><strong>{activeProject?.name || 'Proxima'}</strong></div>
     <div className="mobile-actions">
       <button className="icon-button" onClick={onSearch} aria-label="Search" title="Search"><IconSearch size={18} /></button>
+      {/* Compact blank-session control: desktop nav has no New chat row; Chat
+          header still has one, but this stays reachable from any mobile view. */}
       <button className="icon-button" onClick={onNewChat} aria-label="New chat"><IconNewChat size={18} /></button>
     </div>
   </header>

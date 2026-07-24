@@ -17,10 +17,9 @@ function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
     'Review active work and tell me what needs my attention.',
   ]
   return <div className="alpha-empty">
-    <span className="alpha-orb" aria-hidden="true">A</span>
-    <h2>Delegate an outcome</h2>
+    <strong>Delegate an outcome</strong>
     <p>Alpha breaks work into durable jobs, dispatches up to three workers, and brings decisions back here. Hands-on work still belongs in Chat.</p>
-    <div className="alpha-examples" aria-label="Example delegations">{examples.map(example => <button type="button" key={example} onClick={() => onExample(example)}>{example}</button>)}</div>
+    <div className="alpha-examples" aria-label="Example delegations">{examples.map(example => <button type="button" className="ghost-button" key={example} onClick={() => onExample(example)}>{example}</button>)}</div>
   </div>
 }
 
@@ -185,28 +184,32 @@ export function AlphaScreen({ token, runners, onOpenJob }: { token: string; runn
   const alphaBusy = desk.alpha_run?.status === 'queued' || desk.alpha_run?.status === 'running'
   const availableRunners = runners.filter(runner => runner.id === desk.backing_runner || runner.runnable || runner.installed)
   return <section className="alpha-view">
-    <header className="alpha-head">
-      <div><span className="eyebrow">Orchestration</span><h1>Alpha</h1><p>Delegate, monitor, and step in only when needed.</p></div>
-      <div className="alpha-controls">
-        <label><span>Backing runner</span><select value={desk.backing_runner} disabled={settingBusy} onChange={event => void changeRunner(event.target.value)}>{availableRunners.map(runner => <option value={runner.id} key={runner.id}>{runner.displayName}</option>)}</select></label>
+    <header className="code-header alpha-head">
+      <div><p className="eyebrow">Orchestration</p><strong>Alpha</strong></div>
+      <div className="alpha-controls code-context">
+        <label className="alpha-runner-label"><span className="sr-only">Backing runner</span>
+          <select className="ui-select" value={desk.backing_runner} disabled={settingBusy} aria-label="Backing runner" onChange={event => void changeRunner(event.target.value)}>{availableRunners.map(runner => <option value={runner.id} key={runner.id}>{runner.displayName}</option>)}</select>
+        </label>
         <button type="button" className={`toggle-pill ${desk.unattended ? 'on' : ''}`} aria-pressed={desk.unattended} disabled={settingBusy} onClick={() => void toggleUnattended()}><span className="toggle-knob" aria-hidden="true" />{settingBusy ? 'Saving…' : desk.unattended ? 'Unattended on' : 'Unattended off'}</button>
       </div>
     </header>
-    <div className="alpha-capacity" aria-label={`${desk.capacity.running} running, ${desk.capacity.free} free, ${desk.capacity.queued} queued`}>
-      <span><i className="capacity-live" />{desk.capacity.running} running / {desk.capacity.free} free</span><span>{desk.capacity.queued} queued</span><span>{desk.budgets.budget_turns} turns · {formatBudget(desk.budgets.budget_wall_seconds)} wall clock{desk.budgets.budget_tokens ? ` · ${desk.budgets.budget_tokens.toLocaleString()} tokens when reported` : ''}</span>
-    </div>
-    {error && <div className="alpha-error" role="alert"><strong>Alpha needs a retry</strong><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
-    <div className="alpha-grid">
-      <div className="alpha-conversation">
-        {!messages.length && !alphaBusy ? <AlphaEmpty onExample={setDraft} /> : <AlphaThread messages={messages} loading={false} onOpenJob={onOpenJob} />}
-        {alphaBusy && <div className="alpha-working" role="status"><span className="ui-spinner" /> Alpha is orchestrating…</div>}
-        <form className="alpha-composer" onSubmit={send}>
-          <label htmlFor="alpha-delegation">Delegate an outcome</label>
-          <textarea id="alpha-delegation" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Describe the outcome, constraints, and projects Alpha may use…" rows={3} disabled={sending || alphaBusy} />
-          <div><span>{desk.unattended ? 'Alpha may continue queued work within your saved budgets.' : 'Alpha acts only when you ask. Workers run Autonomous by default.'}</span><button type="submit" className="primary-button" disabled={!draft.trim() || sending || alphaBusy}>{sending ? 'Sending…' : alphaBusy ? 'Alpha is working' : 'Delegate'}</button></div>
-        </form>
+    <div className="alpha-body">
+      <div className="alpha-capacity" aria-label={`${desk.capacity.running} running, ${desk.capacity.free} free, ${desk.capacity.queued} queued`}>
+        <span><i className="capacity-live" />{desk.capacity.running} running / {desk.capacity.free} free</span><span>{desk.capacity.queued} queued</span><span>{desk.budgets.budget_turns} turns · {formatBudget(desk.budgets.budget_wall_seconds)} wall clock{desk.budgets.budget_tokens ? ` · ${desk.budgets.budget_tokens.toLocaleString()} tokens when reported` : ''}</span>
       </div>
-      <aside className="alpha-side"><AlphaJobs desk={desk} onOpenJob={onOpenJob} /><AlphaNeedsAttention desk={desk} onOpenJob={onOpenJob} /><CheckpointTimeline token={token} checkpoints={desk.checkpoints} onChanged={() => load(true)} /></aside>
+      {error && <div className="alpha-error error-bar" role="alert"><strong>Alpha needs a retry</strong><span>{error}</span><button type="button" className="ghost-button" onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
+      <div className="alpha-grid">
+        <div className="alpha-conversation">
+          {!messages.length && !alphaBusy ? <AlphaEmpty onExample={setDraft} /> : <AlphaThread messages={messages} loading={false} onOpenJob={onOpenJob} />}
+          {alphaBusy && <div className="alpha-working" role="status"><span className="ui-spinner" /> Alpha is orchestrating…</div>}
+          <form className="alpha-composer" onSubmit={send}>
+            <label htmlFor="alpha-delegation">Delegate an outcome</label>
+            <textarea id="alpha-delegation" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Describe the outcome, constraints, and projects Alpha may use…" rows={3} disabled={sending || alphaBusy} />
+            <div className="alpha-composer-foot"><span>{desk.unattended ? 'Alpha may continue queued work within your saved budgets.' : 'Alpha acts only when you ask. Workers run Autonomous by default.'}</span><button type="submit" className="primary-button" disabled={!draft.trim() || sending || alphaBusy}>{sending ? 'Sending…' : alphaBusy ? 'Alpha is working' : 'Delegate'}</button></div>
+          </form>
+        </div>
+        <aside className="alpha-side"><AlphaJobs desk={desk} onOpenJob={onOpenJob} /><AlphaNeedsAttention desk={desk} onOpenJob={onOpenJob} /><CheckpointTimeline token={token} checkpoints={desk.checkpoints} onChanged={() => load(true)} /></aside>
+      </div>
     </div>
   </section>
 }

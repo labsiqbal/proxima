@@ -76,7 +76,7 @@ The launcher (behind the Tasks screen's `+ New task`) is task-first, not a decor
 
 ## Single-workspace shell ("Deck")
 
-Proxima uses one compact workspace: subdued flow-ordered navigation on the left (Chat, Tasks, Recipes, Projects, Artifacts, feature-gated Design), a centered working surface, and a right icon rail holding the technical tools (Terminal, Files, Preview) as on-demand overlay panels. There is no Ops/Code switch; Chat is the front door and the default landing view. A New chat control in the chat header is the explicit action that clears the current session.
+Proxima uses one compact workspace: subdued flow-ordered navigation on the left (Chat, Alpha, Tasks, Recipes, Projects, Artifacts, feature-gated Design), a centered working surface, and a right icon rail holding the technical tools (Terminal, Files, Preview) as on-demand overlay panels. There is no Ops/Code switch; Chat is the front door and the default landing view. Destinations only in the left nav - blank session is started from the Chat header **New chat** control (mobile topbar icon / `/new`), not a second primary-nav row.
 
 Recipes owns the plan canvas (Editor) and Scheduled modes; the old Sequential recipe editor is retired — a linear recipe is a graph without branches, authored on the same canvas. Tasks is the permanent execution/review index and each task opens a dedicated workspace. Agents and Settings stay in the account/profile menu; Wiki is under Settings → Knowledge & Wiki. Artifacts are project-owned outputs; Design is a separate, gated canvas destination.
 

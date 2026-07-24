@@ -34,18 +34,21 @@ describe('AlphaScreen', () => {
   it('renders the honest empty, capacity, safety, and delegation states', async () => {
     render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
-    expect(await screen.findByRole('heading', { name: 'Alpha' })).toBeInTheDocument()
+    // Header matches Chat/code-header: eyebrow + strong, not a marketing h1.
+    expect(await screen.findByText('Alpha')).toBeInTheDocument()
+    expect(screen.getByText('Orchestration')).toBeInTheDocument()
     expect(screen.getByText('0 running / 3 free')).toBeInTheDocument()
     expect(screen.getByText('No delegated work')).toBeInTheDocument()
     expect(screen.getByText('Nothing is blocked')).toBeInTheDocument()
     expect(screen.getByText('No checkpoints yet')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Unattended off' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('combobox', { name: 'Backing runner' })).toBeInTheDocument()
   })
 
   it('fills an example and guards the async delegation submit', async () => {
     const user = userEvent.setup()
     render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
-    await screen.findByRole('heading', { name: 'Alpha' })
+    await screen.findByText('Alpha')
 
     await user.click(screen.getByRole('button', { name: 'Audit this project and delegate independent fixes.' }))
     await user.click(screen.getByRole('button', { name: 'Delegate' }))
