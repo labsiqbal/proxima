@@ -68,7 +68,7 @@ PROVIDERS: dict[str, ImageProvider] = {
         requires_key=False,
         kind="oauth",
         default_base_url="https://api.x.ai/v1",
-        note="Uses Hermes xAI OAuth tokens (`hermes auth add xai-oauth`) — no API key stored in Proxima.",
+        note="Uses your `grok login` token from the Grok runner auth store - no API key stored in Proxima.",
         # referenceImages stays False until _gen_http actually sends more than the
         # single edit image — advertising it made consumers silently drop references.
         capabilities={"textToImage": True, "imageEdit": True, "referenceImages": False},
@@ -140,30 +140,38 @@ def codex_ready(binary: str | None = None, path_env: str | None = None) -> dict[
     return {"ready": False, "detail": f"codex login status unclear (rc={r.returncode}): {out.strip()[:120]}"}
 
 
-# ── Hermes OAuth-backed providers ──────────────────────────────────────────
+# ── Grok runner OAuth (xAI / SuperGrok) ────────────────────────────────────
 
-_HERMES_AUTH_PATH = Path.home() / ".hermes" / "auth.json"
+def _grok_auth_path() -> Path:
+    """Resolve the Grok runner auth store (matches runner home).
+
+    Honors ``GROK_HOME`` when set (profile sandboxes and headless installs);
+    otherwise uses ``~/.grok/auth.json``.
+    """
+    home = os.environ.get("GROK_HOME")
+    if home:
+        return Path(home).expanduser() / "auth.json"
+    return Path.home() / ".grok" / "auth.json"
 
 
-def _read_hermes_oauth_token(provider: str) -> str | None:
+def _read_grok_xai_token() -> str | None:
+    """Return a non-expired xAI JWT from the Grok runner auth store.
+
+    Grok ``auth.json`` maps issuer keys like ``https://auth.x.ai::<uuid>`` to
+    entries whose ``key`` field is the access JWT (from ``grok login``).
+    """
     try:
-        data = json.loads(_HERMES_AUTH_PATH.read_text())
+        data = json.loads(_grok_auth_path().read_text())
     except Exception:
         return None
-    candidates: list[Any] = []
-    if isinstance(data, dict):
-        providers = data.get("providers") if isinstance(data.get("providers"), dict) else {}
-        state = providers.get(provider) if isinstance(providers, dict) else None
-        if isinstance(state, dict) and isinstance(state.get("tokens"), dict):
-            candidates.append(state["tokens"].get("access_token"))
-        pool_root = data.get("credential_pool") if isinstance(data.get("credential_pool"), dict) else {}
-        pool = pool_root.get(provider) if isinstance(pool_root, dict) else None
-        if isinstance(pool, list):
-            for entry in pool:
-                if isinstance(entry, dict):
-                    tokens = entry.get("tokens") if isinstance(entry.get("tokens"), dict) else entry
-                    candidates.append(tokens.get("access_token") if isinstance(tokens, dict) else None)
-    for token in candidates:
+    if not isinstance(data, dict):
+        return None
+    for map_key, entry in data.items():
+        if not isinstance(map_key, str) or not map_key.startswith("https://auth.x.ai"):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        token = entry.get("key")
         if not isinstance(token, str) or not token.strip():
             continue
         exp = _jwt_payload(token).get("exp")
@@ -173,12 +181,16 @@ def _read_hermes_oauth_token(provider: str) -> str | None:
     return None
 
 
+_XAI_OAUTH_LOGIN_HINT = "Run `grok login` (or `grok login --device-auth` on a headless host)."
+
+
 def xai_oauth_ready() -> dict[str, Any]:
-    if not _HERMES_AUTH_PATH.exists():
-        return {"ready": False, "detail": "Hermes auth store not found. Run `hermes auth add xai-oauth`."}
-    if _read_hermes_oauth_token("xai-oauth"):
-        return {"ready": True, "detail": "xAI OAuth is available from Hermes auth."}
-    return {"ready": False, "detail": "xAI OAuth token not found or expired. Run `hermes auth add xai-oauth`."}
+    path = _grok_auth_path()
+    if not path.exists():
+        return {"ready": False, "detail": f"Grok auth store not found. {_XAI_OAUTH_LOGIN_HINT}"}
+    if _read_grok_xai_token():
+        return {"ready": True, "detail": "xAI OAuth is available from Grok login."}
+    return {"ready": False, "detail": f"xAI OAuth token not found or expired. {_XAI_OAUTH_LOGIN_HINT}"}
 
 
 # ── generate ───────────────────────────────────────────────────────────────
@@ -224,7 +236,7 @@ def generate(
     if provider.kind == "codex":
         return _gen_codex(prompt=prompt, size=size, image_bytes=image_bytes, image_mime=image_mime, extra_images=extra_images, timeout=timeout)
     if provider.kind == "oauth" and provider.id == "xai-oauth":
-        token = _read_hermes_oauth_token("xai-oauth")
+        token = _read_grok_xai_token()
         if not token:
             raise ImageProviderError(xai_oauth_ready()["detail"])
         return _gen_http(
