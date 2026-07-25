@@ -1994,10 +1994,11 @@ button:disabled {
 	flex-direction: column;
 	align-items: center;
 }
-.chat-empty {
+/* Compact progressive-disclosure empty (Chat, Alpha, Design home, …) */
+.compact-empty {
 	text-align: center;
 	color: var(--ui-text-tertiary);
-	/* Sparse empty: less vertical bulk so the composer stays the focal CTA */
+	/* Sparse empty: less vertical bulk so the primary CTA stays focal */
 	padding: var(--space-8) var(--space-4) var(--space-6);
 	display: grid;
 	justify-items: center;
@@ -2005,32 +2006,38 @@ button:disabled {
 	max-width: 28rem;
 	margin-inline: auto;
 }
-.chat-empty-mark {
+.compact-empty-mark {
 	font-size: var(--text-2xl);
 	color: var(--ui-accent);
 	line-height: 1;
 }
-.chat-empty h3 {
+.compact-empty-title {
 	margin: var(--space-1) 0 0;
 	color: var(--ui-text-secondary);
 	font-size: var(--text-md);
 	font-weight: 650;
 }
-.chat-empty-lead {
+.compact-empty h1.compact-empty-title {
+	color: var(--ui-text);
+	font-size: clamp(1.6rem, 3vw, 2.2rem);
+	letter-spacing: -0.02em;
+	font-weight: 650;
+}
+.compact-empty-lead {
 	margin: 0;
 	max-width: 22rem;
 	color: var(--ui-text-secondary);
 	font-size: var(--text-sm);
 	line-height: 1.55;
 }
-.chat-empty-hints {
+.compact-empty-hints {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: center;
 	gap: var(--space-1) var(--space-2);
 	margin-top: var(--space-1);
 }
-.chat-empty-hint {
+.compact-empty-hint {
 	display: inline-flex;
 	align-items: center;
 	cursor: help;
@@ -2047,59 +2054,59 @@ button:disabled {
 		border-color var(--t) var(--ease),
 		color var(--t) var(--ease);
 }
-.chat-empty-hint:hover,
-.chat-empty-hint:focus-visible {
+.compact-empty-hint:hover,
+.compact-empty-hint:focus-visible {
 	background: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface));
 	border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-stroke-secondary));
 	color: var(--ui-text);
 }
-.chat-empty-hint code {
+.compact-empty-hint code {
 	background: transparent;
 	padding: 0;
 	font-size: inherit;
 	color: var(--ui-accent);
 	font-weight: 650;
 }
-.chat-empty-help-btn {
+.compact-empty-help-btn {
 	margin-top: var(--space-1);
 	color: var(--ui-text-secondary);
 }
-.chat-empty-help-btn:hover,
-.chat-empty-help-btn:focus-visible {
+.compact-empty-help-btn:hover,
+.compact-empty-help-btn:focus-visible {
 	color: var(--ui-accent);
 }
-.chat-empty-help {
+.compact-empty-help {
 	max-width: 26rem;
 	text-align: left;
 }
-.chat-empty-help-head {
+.compact-empty-help-head {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
 	gap: var(--space-3);
 }
-.chat-empty-help-head h3 {
+.compact-empty-help-head h3 {
 	margin: 0;
 }
-.chat-empty-help-close {
+.compact-empty-help-close {
 	flex: 0 0 auto;
 	margin: calc(var(--space-1) * -1) calc(var(--space-1) * -1) 0 0;
 }
-.chat-empty-help-lead {
+.compact-empty-help-lead {
 	margin: 0;
 }
-.chat-empty-help .teaching-empty-caps,
-.chat-empty-help .teaching-empty-steps {
+.compact-empty-help .teaching-empty-caps,
+.compact-empty-help .teaching-empty-steps {
 	width: 100%;
 	justify-self: stretch;
 }
-.chat-empty-help .teaching-empty-caps {
+.compact-empty-help .teaching-empty-caps {
 	margin-top: 0;
 }
-.chat-empty-help .teaching-empty-steps {
+.compact-empty-help .teaching-empty-steps {
 	margin-top: var(--space-2);
 }
-.chat-empty code {
+.compact-empty code {
 	background: var(--ui-row-hover-background);
 	padding: 1px 6px;
 	border-radius: var(--radius-sm);
@@ -8606,13 +8613,15 @@ div.result-media {
 	margin: 0 auto var(--space-5);
 	max-width: 56ch;
 }
-.ds-start-inner .ds-teach-list {
-	justify-self: center;
-	margin-inline: auto;
-	text-align: left;
+/* Design home teaching header sits above brief/Generate (primary CTA) */
+.ds-start-inner .ds-start-teach {
+	max-width: none;
+	width: 100%;
+	padding: 0 0 var(--space-3);
+	margin-bottom: var(--space-1);
 }
-.ds-start-inner .ds-teach-steps {
-	margin-bottom: var(--space-3);
+.ds-start-inner .ds-start-teach .compact-empty-lead {
+	max-width: 36rem;
 }
 .ds-prompt {
 	border: 1px solid var(--ui-stroke-secondary);
@@ -13069,17 +13078,20 @@ div.result-media {
 	border-radius: var(--radius-lg);
 	background: var(--ui-surface);
 }
-.alpha-empty {
-	display: grid;
+.alpha-empty.compact-empty {
 	place-items: center;
 	align-content: center;
 	flex: 1;
-	gap: var(--space-2);
+	max-width: 36rem;
 	padding: var(--space-8) var(--space-5);
-	text-align: center;
 }
-.alpha-empty strong { font-size: var(--text-lg); font-weight: 650; }
-.alpha-empty p { max-width: var(--tour-width); margin: 0; color: var(--ui-text-secondary); font-size: var(--text-sm); line-height: 1.6; }
+.alpha-empty .compact-empty-title {
+	font-size: var(--text-lg);
+	color: var(--ui-text);
+}
+.alpha-empty .compact-empty-lead {
+	max-width: var(--tour-width);
+}
 .alpha-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); margin-top: var(--space-3); }
 .alpha-examples .ghost-button {
 	/* Multi-line example chips: keep shared ghost chrome, allow wrap. */

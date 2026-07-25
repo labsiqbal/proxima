@@ -107,9 +107,13 @@ anything, while Proxima never ships or manages binaries.
 session. The worker is bounded-concurrent (`run_worker_concurrency`) so one slow run
 never blocks other chats. Tool permissions ask the owner by default; auto-approve is
 an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
-An empty thread (`ChatEmpty`) stays sparse by default - title, one lead line, short
-tooltip hints, and a **How it works** dialog for the fuller tutorial - so the composer
-remains the primary CTA rather than a wall of teaching copy.
+An empty thread (`ChatEmpty` via shared `CompactTeachingEmpty`) stays sparse by
+default - title, one lead line, short tooltip hints, and a **How it works** dialog
+for the fuller tutorial - so the composer remains the primary CTA rather than a wall
+of teaching copy. Alpha's empty desk and Design Studio's start home use the same
+progressive-disclosure pattern (no capability list or numbered steps on the default
+surface; Design home does not print the project display name - the shell switcher is
+enough).
 **Endpoints:** `POST /api/chat/send`, `/api/sessions/{id}/runs`, `/messages`,
 `/events/stream`, `WS /api/ws/sessions/{id}`, `/runs/{id}/cancel`, `/runs/{id}/permission`.
 
@@ -230,7 +234,9 @@ composer for delegation (attach + `@` project mentions; submit still hits
 preference. The desk polls its thread, active /
 queued Alpha jobs, needs-you subset, job-scoped checkpoint timeline, and honest
 capacity (`running / 3`, free slots, queued). Loading, empty, error/retry, populated,
-and busy states are explicit on desktop and mobile.
+and busy states are explicit on desktop and mobile. The empty desk is sparse by
+default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
+so the Delegate composer stays the primary CTA.
 
 **In-process tools and dispatch:** Alpha's system instructions require structured
 `<proxima-tool>{name,arguments}</proxima-tool>` calls. `alpha_runtime.py` parses them
@@ -780,10 +786,12 @@ composer would sit stuck on the "Simmering…" thinking indicator.
 
 **Design Studio (active, server-gated):** an AI-assisted canvas where the agent
 drafts **editable layered scenes** (text stays real text) and the human refines them
-directly. The Design home takes a brief (Graphic / Slide deck / Mobile app / Website)
-or a size template (Instagram post/story/carousel, X post, poster, …) and opens a
-linked **design session**: the agent replies with a `<design-scene>` block the Konva
-canvas applies live. The studio offers select/move/resize with a full inspector
+directly. The Design home is sparse by default (title, one lead, tooltip chips,
+**How it works** for the fuller path) so the brief/Generate control stays primary;
+it does not dump the project display name (shell switcher). The home takes a brief
+(Graphic / Slide deck / Mobile app / Website) or a size template (Instagram
+post/story/carousel, X post, poster, …) and opens a linked **design session**: the
+agent replies with a `<design-scene>` block the Konva canvas applies live. The studio offers select/move/resize with a full inspector
 (text, fonts, fills/gradients, artboard presets), Layers/Assets panels, a
 selection-aware chat, undo/redo + version history, multi-image reference inputs, an
 eyedropper, a per-project brand guide (`design.md`, generatable from reference

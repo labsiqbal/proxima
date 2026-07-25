@@ -88,7 +88,8 @@ Create tabs, then used Skip for the rest of the tour.
 
 Chat is the direct path. An empty Chat is sparse by default (title + short lead,
 tooltip hints, **How it works** for the fuller path) - no session until the first
-send. Pick an agent, type a prompt or `/` for commands, and use the header
+send. Alpha empty and Design home use the same progressive-disclosure pattern.
+Pick an agent, type a prompt or `/` for commands, and use the header
 **New chat** action when you want another blank thread.
 
 ![Empty Chat with destinations-only nav](screenshots/deck-chat.png)
@@ -179,8 +180,10 @@ Global search covers user-facing chats, messages, projects, and designs.
 
 ## 9. Design Studio
 
-Design is present only when its server-owned feature flag is on. The home accepts
-a brief, format, brand guide, or size template.
+Design is present only when its server-owned feature flag is on. The home is
+sparse by default (title, short lead, tooltip chips, **How it works**) and
+accepts a brief, format, brand guide, or size template without printing the
+project display name (shell switcher).
 
 ![Design home](screenshots/design-home.png)
 
