@@ -20,6 +20,10 @@ import { formatRunError } from "./runError";
 import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
 import { confirmDialog } from "../ui/Dialog";
 import { ChatEmpty } from "./ChatEmpty";
+import {
+	applyThreadScrollFollow,
+	isThreadPinnedNearBottom,
+} from "./threadScroll";
 
 const ROLE_LABEL: Record<string, string> = {
 	user: "You",
@@ -967,21 +971,30 @@ export function ChatThread({
 		(waiting || stalled);
 
 	const scrollRef = React.useRef<HTMLDivElement>(null);
+	// Default pinned so an overflowing session open lands on latest once.
+	// Short threads that fit the viewport never force a bottom jump (see
+	// applyThreadScrollFollow) — content stays top-anchored under the header.
 	const pinnedRef = React.useRef(true);
 	const [atBottom, setAtBottom] = React.useState(true);
 
 	const onScroll = () => {
 		const el = scrollRef.current;
 		if (!el) return;
-		const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+		const pinned = isThreadPinnedNearBottom(
+			el.scrollHeight,
+			el.scrollTop,
+			el.clientHeight,
+		);
 		pinnedRef.current = pinned;
 		setAtBottom(pinned);
 	};
 
-	// Follow new content only when the user is already near the bottom.
+	// Follow new content only when pinned AND the thread actually overflows.
+	// Short conversations stay at the top (no messenger-style bottom glue).
 	React.useLayoutEffect(() => {
-		if (pinnedRef.current && scrollRef.current)
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		const el = scrollRef.current;
+		if (!el) return;
+		applyThreadScrollFollow(el, pinnedRef.current);
 	}, [messages, streaming, waiting, tools.length, collaborationGroups]);
 
 	const scrollToBottom = () => {
