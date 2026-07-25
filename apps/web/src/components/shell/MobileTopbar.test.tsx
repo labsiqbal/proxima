@@ -5,20 +5,24 @@ import { describe, expect, it, vi } from 'vitest'
 import { MobileTopbar } from './MobileTopbar'
 
 describe('MobileTopbar', () => {
-  it('exposes Menu, Search, and New chat actions', async () => {
+  it('exposes Menu, Search, New chat, and a project switcher', async () => {
     const user = userEvent.setup()
     const onMenu = vi.fn()
     const onSearch = vi.fn()
     const onNewChat = vi.fn()
+    const onSelectProject = vi.fn()
+    const project = { id: 1, name: 'gnhf-e2e-projects', slug: 'gnhf-e2e-projects' } as never
     render(
       <MobileTopbar
-        activeProject={{ id: 1, name: 'gnhf-e2e-projects', slug: 'gnhf-e2e-projects' } as never}
+        activeProject={project}
+        projects={[project]}
+        onSelectProject={onSelectProject}
         onMenu={onMenu}
         onSearch={onSearch}
         onNewChat={onNewChat}
       />,
     )
-    expect(screen.getByText('gnhf-e2e-projects')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Active project: gnhf-e2e-projects' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Menu' }))
     await user.click(screen.getByRole('button', { name: 'Search' }))
     await user.click(screen.getByRole('button', { name: 'New chat' }))

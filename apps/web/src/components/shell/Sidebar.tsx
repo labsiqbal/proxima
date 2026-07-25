@@ -1,20 +1,20 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconSparkle, IconTasks, IconProjects, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
+import { IconChat, IconSparkle, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
-// (Tasks), keep what worked (Workflows), then the places work lives (Projects,
-// Archive). Terminal/Files/Preview are tools on the right rail, not
-// destinations, and Agents/Settings stay in the account menu.
+// (Tasks), keep what worked (Workflows), then Archive. Project *switch* lives
+// in the shell top bar; project *manage* lives under Settings. Terminal/Files/
+// Preview are tools on the right rail, not destinations; Agents/Settings stay
+// in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
   { id: 'alpha', label: 'Alpha', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
-  { id: 'projects', label: 'Projects', icon: IconProjects },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]

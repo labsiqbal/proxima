@@ -1,9 +1,12 @@
 import type { Ref } from 'react'
 import type { Project } from '../../types'
 import { IconMenu, IconNewChat, IconSearch } from './icons'
+import { ProjectSwitcher } from './ProjectSwitcher'
 
 export function MobileTopbar({
   activeProject,
+  projects = [],
+  onSelectProject,
   drawerOpen = false,
   onMenu,
   onSearch,
@@ -11,6 +14,8 @@ export function MobileTopbar({
   menuButtonRef,
 }: {
   activeProject: Project | null
+  projects?: Project[]
+  onSelectProject?: (project: Project) => void
   drawerOpen?: boolean
   onMenu: () => void
   onSearch: () => void
@@ -28,7 +33,18 @@ export function MobileTopbar({
     >
       <IconMenu size={18} />
     </button>
-    <div className="mobile-context"><strong>{activeProject?.name || 'Proxima'}</strong></div>
+    <div className="mobile-context">
+      {onSelectProject ? (
+        <ProjectSwitcher
+          projects={projects}
+          activeProject={activeProject}
+          onSelectProject={onSelectProject}
+          compact
+        />
+      ) : (
+        <strong>{activeProject?.name || 'Proxima'}</strong>
+      )}
+    </div>
     <div className="mobile-actions">
       <button className="icon-button" onClick={onSearch} aria-label="Search" title="Search"><IconSearch size={18} /></button>
       {/* Compact blank-session control: desktop nav has no New chat row; Chat

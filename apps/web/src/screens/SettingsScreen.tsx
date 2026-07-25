@@ -29,6 +29,7 @@ import { getAlphaSettings, saveAlphaSettings, type AlphaSettings } from '../api/
 import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
+import { ProjectsScreen } from './ProjectsScreen'
 
 function CollaborationSettingsPanel({ token }: { token: string }) {
   const [brainstormAgents, setBrainstormAgents] = React.useState<2 | 3>(3)
@@ -206,10 +207,11 @@ export function formatAuditMeta(raw: string | null | undefined, max = 160): stri
   if (typeof value === 'string') return shortText(value, max)
   return shortText(JSON.stringify(value), max)
 }
-type SettingsSectionKey = 'account' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
+export type SettingsSectionKey = 'account' | 'projects' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
 
 const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
+  { key: 'projects', label: 'Projects', hint: 'Link, create, rename, remove, and container settings' },
   { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
   { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
   { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
@@ -617,8 +619,9 @@ function HelpToursPanel({ token, features }: { token: string; features: AppFeatu
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void }) {
-  const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>('account')
+export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
+  const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>(initialSection)
+  React.useEffect(() => { setActiveSection(initialSection) }, [initialSection])
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
   const [font, setFont] = React.useState<FontKey>(getFont())
   const [fontSize, setFontSize] = React.useState<number>(getFontSize())
@@ -701,6 +704,8 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
 
   const content = activeSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
+    : activeSection === 'projects'
+      ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} onRefresh={onRefresh} /></div>
     : activeSection === 'alpha'
       ? <AlphaSettingsPanel token={token} />
     : activeSection === 'agents'
@@ -733,10 +738,12 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       </div>
     </aside>
     <div className="settings-content" aria-live="polite">
-      <div className="settings-content-head">
-        <h2>{activeMeta.label}</h2>
-        <p className="muted">{activeMeta.hint}</p>
-      </div>
+      {activeSection !== 'projects' && (
+        <div className="settings-content-head">
+          <h2>{activeMeta.label}</h2>
+          <p className="muted">{activeMeta.hint}</p>
+        </div>
+      )}
       {content}
     </div>
   </section>

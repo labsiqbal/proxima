@@ -660,9 +660,10 @@ than silently no-op'ing.
 (`POST /api/projects`), (2) **link an existing folder** on disk, or (3) **create a new
 empty folder** under a browsable parent and register it - both (2) and (3) go through
 `POST /api/projects/link` (jailed to configured link roots; (3) sets `mkdir: true`).
-Chat/terminal/files all operate on the project path. The screen is a card grid (one card
-per project: select, Rename, remove), with add flows behind one **Add project** modal -
-a project holds a name and a slug, which does not earn a detail panel. The shared
+Chat/terminal/files all operate on the project path. The global active project is set from
+the shell header switcher. Management UI is a card grid under **Settings → Projects**
+(one card per project: select, Rename, remove), with add flows behind one **Add project**
+modal - a project holds a name and a slug, which does not earn a detail panel. The shared
 `FolderLinker` component covers link + create-on-disk (mode toggle). Removal
 distinguishes what the API actually does: a linked/created-on-disk folder is unlinked
 and its real files stay; a Proxima-scaffolded project is deleted from disk. On
@@ -999,7 +1000,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Projects, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search); project manage is Settings → Projects. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
