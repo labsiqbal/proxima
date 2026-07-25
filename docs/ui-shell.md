@@ -71,6 +71,11 @@ and the canvas authors those too. The linear *engine* remains for pre-existing j
 sessions (`IterateStage` is still reachable from an old session carrying `workflow_id`),
 but no new linear workflow can be authored.
 
+The library separates active workflows from an **Archived** view. Archive stops
+schedules but preserves the workflow's project ownership and frozen past runs. Restore
+returns that same workflow to the active library. Permanent deletion is available from
+the archived view so it cannot be confused with the reversible action.
+
 Schedule inputs mirror each workflow's declared definitions, validate required values, and serialize values by declared input ID. Project is derived from the saved workflow (locked / display-only on the schedule form). Workflows without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
 
 Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
@@ -119,7 +124,8 @@ loop **Chat → Tasks → Workflows → Archive**, with Alpha as the delegate si
 **Workflow how-it-runs:** library cards show Manual and/or Scheduled badges derived from
 real schedule rows (optional short cron text). Schedule forms lock project to the workflow
 owner — no free rebinding. Open deliverables from Chat/Tasks/Archive use the same
-in-app **ArtifactViewer** for supported types.
+in-app **ArtifactViewer** for supported types. Unsupported binary or directory-like
+paths show a download fallback immediately rather than remaining in a loading state.
 
 ## Global attention, running work, and account surfaces
 

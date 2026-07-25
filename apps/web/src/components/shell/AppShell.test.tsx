@@ -5,6 +5,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { AppShell } from './AppShell'
 
 vi.mock('./ToolDock', () => ({ ToolDock: () => <div data-testid="tool-dock" /> }))
+vi.mock('./AttentionInbox', () => ({ AttentionInbox: () => null }))
+vi.mock('./RunningTasks', () => ({ RunningTasks: () => null }))
 vi.mock('./SearchModal', () => ({
   SearchModal: (props: { onClose: () => void }) => (
     <div role="dialog" aria-label="Search">

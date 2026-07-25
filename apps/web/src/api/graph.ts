@@ -19,9 +19,12 @@ export const listGraphJobs = (token: string, projectSlug?: string | null) => {
   return api<{ items: GraphJob[] }>(`/api/graph/jobs${query}`, token)
 }
 
-export const listGraphTemplates = (token: string, projectSlug?: string | null) => {
-  const query = projectSlug ? `?project_slug=${encodeURIComponent(projectSlug)}` : ''
-  return api<{ items: GraphTemplate[] }>(`/api/graph/templates${query}`, token)
+export const listGraphTemplates = (token: string, projectSlug?: string | null, includeArchived = false) => {
+  const query = new URLSearchParams()
+  if (projectSlug) query.set('project_slug', projectSlug)
+  if (includeArchived) query.set('include_archived', 'true')
+  const suffix = query.size ? `?${query}` : ''
+  return api<{ items: GraphTemplate[] }>(`/api/graph/templates${suffix}`, token)
 }
 
 export const getGraphJob = (token: string, jobId: number) =>

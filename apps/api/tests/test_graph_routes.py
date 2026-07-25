@@ -398,6 +398,26 @@ def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
     resumed = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
     assert resumed.json()["status"] == "active"
 
+    archived = client.patch(f"/api/workflows/{template['id']}", json={"status": "archived"})
+    assert archived.json()["status"] == "archived"
+    assert all(
+        item["id"] != template["id"]
+        for item in client.get("/api/graph/templates").json()["items"]
+    )
+    archived_items = client.get(
+        "/api/graph/templates", params={"include_archived": True}
+    ).json()["items"]
+    assert [item["status"] for item in archived_items if item["id"] == template["id"]] == [
+        "archived"
+    ]
+
+    restored = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
+    assert restored.json()["status"] == "active"
+    assert any(
+        item["id"] == template["id"]
+        for item in client.get("/api/graph/templates").json()["items"]
+    )
+
 
 def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
     """Found live: a cyclic graph in PATCH /graph crashed with an unhandled

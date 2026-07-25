@@ -24,7 +24,7 @@ import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
-import { IconLock, IconTrash } from '../components/shell/icons'
+import { IconArtifacts, IconLock, IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { ScriptApprovalCard } from '../components/workflows/ScriptApprovalCard'
@@ -180,6 +180,7 @@ export function GraphScreen({
   const [draftsOpen, setDraftsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.drafts') !== '0')
   const [templatesOpen, setTemplatesOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.templates') !== '0')
   const [runsOpen, setRunsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.runs') !== '0')
+  const [showArchived, setShowArchived] = React.useState(false)
   React.useEffect(() => { localStorage.setItem('proxima.graph.col.drafts', draftsOpen ? '1' : '0') }, [draftsOpen])
   React.useEffect(() => { localStorage.setItem('proxima.graph.col.templates', templatesOpen ? '1' : '0') }, [templatesOpen])
   React.useEffect(() => { localStorage.setItem('proxima.graph.col.runs', runsOpen ? '1' : '0') }, [runsOpen])
@@ -244,7 +245,7 @@ export function GraphScreen({
     try {
       const [jobResponse, templateResponse, scheduleRows] = await Promise.all([
         listGraphJobs(token, activeProject?.slug),
-        listGraphTemplates(token, activeProject?.slug),
+        listGraphTemplates(token, activeProject?.slug, true),
         listSchedules(token).catch(() => [] as Schedule[]),
       ])
       if (mounted.current && seq === loadSeq.current) {
@@ -548,11 +549,48 @@ export function GraphScreen({
     }
   }
 
+  async function archiveTemplate(template: GraphTemplate) {
+    const ok = await confirmDialog({
+      title: 'Archive this workflow?',
+      message: `“${template.name}” will leave the active library and its schedules will stop. Its project ownership and past runs stay intact, and you can restore it later.`,
+      confirmLabel: 'Archive workflow',
+    })
+    if (!ok || busy) return
+    setBusy('template-status')
+    setError('')
+    try {
+      const next = await setGraphTemplateStatus(token, template.id, 'archived')
+      if (!mounted.current) return
+      setTemplates(current => current.map(row => row.id === template.id ? { ...row, status: next.status } : row))
+      setNotice(`Archived “${template.name}”.`)
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  async function restoreTemplate(template: GraphTemplate) {
+    if (busy) return
+    setBusy('template-status')
+    setError('')
+    try {
+      const next = await setGraphTemplateStatus(token, template.id, 'active')
+      if (!mounted.current) return
+      setTemplates(current => current.map(row => row.id === template.id ? { ...row, status: next.status } : row))
+      setNotice(`Restored “${template.name}” to Workflows.`)
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
   async function deleteTemplate(template: GraphTemplate) {
     const ok = await confirmDialog({
-      title: 'Delete this template?',
+      title: 'Delete this workflow permanently?',
       message: `“${template.name}” will be permanently deleted, along with any schedules that run it. Past runs keep their frozen copy of the graph.`,
-      confirmLabel: 'Delete template',
+      confirmLabel: 'Delete workflow',
       danger: true,
     })
     if (!ok || busy) return
@@ -784,12 +822,24 @@ export function GraphScreen({
   }, [token, job?.id, job?.status, job?.worktree?.status, allDone])
 
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
+  const archivedTemplates = templates.filter(item => item.status === 'archived')
+  const activeTemplates = templates.filter(item => item.status !== 'archived')
+  const visibleTemplates = showArchived ? archivedTemplates : activeTemplates
 
   if (stage === 'home') {
     return <section className="graph-screen graph-home">
       <header className="graph-header">
         <h1>Workflows</h1>
         <div className="graph-header-actions">
+          <button
+            className={`ghost-button${showArchived ? ' active' : ''}`}
+            aria-label={showArchived ? 'View active workflows' : 'View archived workflows'}
+            aria-pressed={showArchived}
+            onClick={() => setShowArchived(value => !value)}
+          >
+            <IconArtifacts size={14} />
+            {showArchived ? 'Active workflows' : `Archived (${archivedTemplates.length})`}
+          </button>
           <button className="ghost-button" onClick={() => void refreshList()}>Refresh</button>
         </div>
       </header>
@@ -857,36 +907,48 @@ export function GraphScreen({
                 drafts.length === 0
                   ? <p className="muted graph-none">Nothing in progress.</p>
                   : drafts.map(planCard))}
-              {column('templates', 'Workflows', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
-                templates.length === 0
-                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save as Workflow</em>.</p>
-                  : templates.map(template => {
+              {column(
+                'templates',
+                showArchived ? 'Archived' : 'Workflows',
+                visibleTemplates.length,
+                showArchived ? 'restore · delete permanently' : 'run · schedule · pause · archive',
+                templatesOpen,
+                () => setTemplatesOpen(v => !v),
+                visibleTemplates.length === 0
+                  ? <p className="muted graph-none">{showArchived ? 'No archived workflows.' : <>None yet. Open a plan and press <em>Save as Workflow</em>.</>}</p>
+                  : visibleTemplates.map(template => {
                       const isScheduled = scheduledWorkflowIds.has(template.id)
                       const runBadges = howItRunsBadges({
                         scheduled: isScheduled,
                         cronLabels: scheduleCronByWorkflow.get(template.id),
                       })
                       return <div key={template.id} className="graph-card">
-                      <button className="graph-card-main" disabled={!!busy} onClick={() => {
+                      <button className="graph-card-main" disabled={!!busy || showArchived} onClick={() => {
                         if (template.inputs?.length) setRunningTemplate(template)
                         else void createFromTemplate(template)
                       }}>
                         <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
                         <span className="graph-card-meta">
                           <strong>{template.name}</strong>
-                          <small className="muted">{template.description?.trim() || (template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it')}</small>
-                          <span className="graph-run-kinds" aria-label="How it runs">
-                            {runBadges.map(b => (
-                              <span key={b.kind} className={`graph-run-kind${b.kind === 'scheduled' ? ' is-scheduled' : ''}`}>{b.label}</span>
-                            ))}
-                          </span>
+                          <small className="muted">{template.description?.trim() || (showArchived ? 'Archived — schedules stopped' : template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it')}</small>
+                          {!showArchived && <span className="graph-run-kinds" aria-label="How it runs">
+                              {runBadges.map(b => (
+                                <span key={b.kind} className={`graph-run-kind${b.kind === 'scheduled' ? ' is-scheduled' : ''}`}>{b.label}</span>
+                              ))}
+                            </span>}
                         </span>
                       </button>
                       <div className="graph-card-actions">
-                        <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
-                        <button className="row-action danger" title="Delete workflow" aria-label={`Delete workflow ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
+                        {showArchived ? <>
+                          <button className="row-action" title="Restore workflow" aria-label={`Restore ${template.name}`} disabled={!!busy} onClick={() => void restoreTemplate(template)}>↩</button>
+                          <button className="row-action danger" title="Delete permanently" aria-label={`Delete workflow ${template.name} permanently`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
+                        </> : <>
+                          <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
+                          <button className="row-action" title="Archive workflow" aria-label={`Archive ${template.name}`} disabled={!!busy} onClick={() => void archiveTemplate(template)}><IconArtifacts size={13} /></button>
+                        </>}
                       </div>
-                    </div>}))}
+                    </div>}),
+              )}
               {column('runs', 'Runs', runs.length, attention.length > 0 ? `${attention.length} need${attention.length === 1 ? 's' : ''} attention` : 'history — frozen', runsOpen, () => setRunsOpen(v => !v),
                 <>
                   {runs.length === 0 && <p className="muted graph-none">No runs yet.</p>}

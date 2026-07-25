@@ -67,6 +67,25 @@ describe("ChatThread top-anchor layout", () => {
 		expect(log!.querySelector(".chat-empty")).toBeTruthy();
 	});
 
+	it("keeps optimistic message keys separate from persisted database ids", () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		render(
+			<ChatThread
+				messages={[
+					...fewMessages,
+					{ role: "user", content: "optimistic third message" },
+				]}
+				events={[]}
+			/>,
+		);
+
+		expect(consoleError).not.toHaveBeenCalledWith(
+			expect.stringContaining("Encountered two children with the same key"),
+			expect.anything(),
+		);
+		consoleError.mockRestore();
+	});
+
 	it("CSS packs .thread from the top and does not pin .chat-log to the end", () => {
 		// Guard the contract in the stylesheet (jsdom does not apply the full
 		// app stylesheet to getComputedStyle for these rules reliably).
@@ -85,7 +104,9 @@ describe("ChatThread top-anchor layout", () => {
 	});
 
 	it("CSS makes .thread a real scrollport in the flex chain", () => {
-		// main-pane / chat-stage bound height; thread is the overflow-y:auto scrollport.
+		// Keep-alive adds .surface-pane between main-pane and chat-stage. Every
+		// link in that flex chain must be bounded or the populated thread's
+		// intrinsic height pushes the composer below the viewport.
 		const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 		/** Match a rule whose selector is exactly `sel` (not a longer compound). */
 		const exactRule = (sel: string) => {
@@ -96,11 +117,17 @@ describe("ChatThread top-anchor layout", () => {
 			return m ? strip(m[1]) : "";
 		};
 		const mainPane = exactRule(".main-pane");
+		const surfacePane = exactRule(".surface-pane");
 		const chatStage = exactRule(".chat-stage");
 		const thread = exactRule(".thread");
 
 		expect(mainPane).toMatch(/min-height:\s*0/);
 		expect(mainPane).toMatch(/overflow:\s*hidden/);
+		expect(surfacePane).toMatch(/display:\s*flex/);
+		expect(surfacePane).toMatch(/flex-direction:\s*column/);
+		expect(surfacePane).toMatch(/flex:\s*1/);
+		expect(surfacePane).toMatch(/min-height:\s*0/);
+		expect(surfacePane).toMatch(/overflow:\s*hidden/);
 		expect(chatStage).toMatch(/min-height:\s*0/);
 		expect(chatStage).toMatch(/overflow:\s*hidden/);
 		expect(thread).toMatch(/min-height:\s*0/);

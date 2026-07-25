@@ -1023,7 +1023,9 @@ export function ChatThread({
 						? collaborationGroups.get(message.run_id)
 						: undefined;
 				return (
-					<React.Fragment key={message.id ?? index}>
+					<React.Fragment
+						key={message.id != null ? `persisted-${message.id}` : `optimistic-${index}`}
+					>
 						{showDay && (
 							<div className="chat-day-sep">
 								<span>{dayLabel(ts!)}</span>
