@@ -1,7 +1,40 @@
+import type { CSSProperties } from 'react'
 import type { FileEntry } from '../../types'
 
 /** Shared project component library filename under artifacts/design/. */
 export const DESIGN_COMPONENTS_FILE = '_components.json'
+
+/** localStorage keys for Design Studio desktop panel widths (Graph uses proxima.graph.*). */
+export const DESIGN_LEFT_WIDTH_KEY = 'proxima.design.leftWidth'
+export const DESIGN_INSPECTOR_WIDTH_KEY = 'proxima.design.inspectorWidth'
+
+/** Default / clamp range for Design left rail and inspector (keeps canvas usable). */
+export const DESIGN_PANEL_WIDTH = { fallback: 280, min: 240, max: 520 } as const
+
+/** CSS vars for desktop Design panels; mobile sheets ignore fixed widths. */
+export function designStudioPanelStyle(
+  isMobile: boolean,
+  leftWidth: number,
+  inspectorWidth: number,
+): CSSProperties | undefined {
+  if (isMobile) return undefined
+  return {
+    ['--ds-left-width' as string]: `${leftWidth}px`,
+    ['--ds-inspector-width' as string]: `${inspectorWidth}px`,
+  }
+}
+
+/** When desktop resize handles should mount (hidden if collapsed or on mobile). */
+export function designStudioResizeHandles(
+  isMobile: boolean,
+  leftCollapsed: boolean,
+  rightCollapsed: boolean,
+): { left: boolean; right: boolean } {
+  return {
+    left: !isMobile && !leftCollapsed,
+    right: !isMobile && !rightCollapsed,
+  }
+}
 
 /** True when the design root listing already has a components library file. */
 export function hasDesignComponentsFile(entries: Pick<FileEntry, 'type' | 'name'>[] | undefined | null): boolean {

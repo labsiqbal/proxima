@@ -795,8 +795,13 @@ agent replies with a `<design-scene>` block the Konva canvas applies live. The s
 (text, fonts, fills/gradients, artboard presets), Layers/Assets panels, a
 selection-aware chat, undo/redo + version history, multi-image reference inputs, an
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
-URLs/images), and Export (PNG/JPG/PDF/HTML). Scenes persist at
-`artifacts/design/<id>/scene.json` and appear as design records in the Archive.
+URLs/images), and Export (PNG/JPG/PDF/HTML). On desktop the left rail (Chat /
+Assets / Layers) and the right inspector are drag-resizable (same `useDragWidth`
+pattern as Workflows Plan Chat / node inspector); widths persist in
+`localStorage` (`proxima.design.leftWidth`, `proxima.design.inspectorWidth`) and
+handles hide when a panel is collapsed. Mobile keeps bottom sheets only. Scenes
+persist at `artifacts/design/<id>/scene.json` and appear as design records in the
+Archive.
 The optional project component library (`artifacts/design/_components.json`) is
 loaded only when the design root listing already contains that file, so a fresh
 project does not probe a missing path. Zoom/Fit and Layers-panel rows expose

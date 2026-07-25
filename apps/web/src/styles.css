@@ -6359,8 +6359,9 @@ div.result-media {
 .graph-skill-unknown {
 	color: var(--ui-text-tertiary);
 }
-/* Draggable divider between graph panels. Wider hit area than its visible line. */
-.graph-resize-handle {
+/* Draggable divider between flex panels (Graph, Design Studio). Wider hit than its line. */
+.graph-resize-handle,
+.panel-resize-handle {
 	flex: none;
 	width: 6px;
 	margin-inline: -2px;
@@ -6370,7 +6371,9 @@ div.result-media {
 	transition: border-color var(--t) var(--ease);
 }
 .graph-resize-handle:hover,
-.graph-resize-handle:active {
+.graph-resize-handle:active,
+.panel-resize-handle:hover,
+.panel-resize-handle:active {
 	border-inline-start-color: var(--ui-accent);
 }
 /* Wide enough for the inputs table, which is a row of five columns. */
@@ -8280,8 +8283,9 @@ div.result-media {
 	border-radius: 2px;
 }
 .ds-inspector {
-	width: 280px;
-	flex: 0 0 280px;
+	width: var(--ds-inspector-width, 280px);
+	flex: 0 0 var(--ds-inspector-width, 280px);
+	min-width: 0;
 	border-left: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-surface-translucent);
 	padding: var(--space-4);
@@ -8981,10 +8985,11 @@ div.result-media {
 	display: none;
 }
 
-/* Design Studio — left panel (Chat / Assets / Layers) */
+/* Design Studio — left panel (Chat / Assets / Layers); width from --ds-left-width */
 .ds-left {
-	width: 280px;
-	flex: 0 0 280px;
+	width: var(--ds-left-width, 280px);
+	flex: 0 0 var(--ds-left-width, 280px);
+	min-width: 0;
 	border-right: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-surface-translucent);
 	display: flex;

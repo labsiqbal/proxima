@@ -34,6 +34,7 @@ import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
 import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
+import { useDragWidth } from '../hooks/useDragWidth'
 import { usePolling } from '../hooks/usePolling'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import type {
@@ -61,8 +62,6 @@ function outputText(state?: GraphNodeState): string {
   return typeof state.output === 'string' ? state.output : JSON.stringify(state.output, null, 2)
 }
 
-const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
-
 /** Per-job Plan Chat open preference — survives leave/reopen of Workflows editor. */
 export function graphChatOpenKey(jobId: number): string {
   return `proxima.graph.chatOpen.${jobId}`
@@ -81,44 +80,6 @@ function writeChatOpen(jobId: number, open: boolean) {
   try {
     localStorage.setItem(graphChatOpenKey(jobId), open ? '1' : '0')
   } catch { /* storage disabled */ }
-}
-
-/** A draggable panel width, persisted per panel — so the owner can widen whichever
- *  pane they are focused on (the node inspector, most of all) and keep it. */
-function useDragWidth(key: string, fallback: number, min: number, max: number): [number, (event: React.PointerEvent) => void] {
-  const [width, setWidth] = React.useState(() => {
-    const raw = typeof localStorage !== 'undefined' ? Number(localStorage.getItem(key)) : NaN
-    return Number.isFinite(raw) && raw > 0 ? clampWidth(raw, min, max) : fallback
-  })
-  React.useEffect(() => { localStorage.setItem(key, String(width)) }, [key, width])
-  const start = React.useCallback((event: React.PointerEvent) => {
-    event.preventDefault()
-    const pointerId = event.pointerId
-    const startX = event.clientX
-    // Handles sit on the panel's right edge except the inspector's, which sits on its
-    // left — the handle says which way growth goes.
-    const direction = (event.currentTarget as HTMLElement).dataset.grow === 'left' ? -1 : 1
-    let base = 0
-    setWidth(current => { base = current; return current })
-    const onMove = (move: PointerEvent) => {
-      if (move.pointerId !== pointerId) return
-      setWidth(clampWidth(base + direction * (move.clientX - startX), min, max))
-    }
-    const onUp = (up: PointerEvent) => {
-      if (up.pointerId !== pointerId) return
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-    }
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'col-resize'
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-  }, [min, max])
-  return [width, start]
 }
 
 /** True when `from` can already be reached from `to`, i.e. the edge would cycle. */
