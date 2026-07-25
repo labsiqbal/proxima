@@ -1,5 +1,5 @@
 {
-  "//": "Recommended host CLIs (T8 decision 3): Proxima probes PATH for these at run setup and advertises the present ones in the agent preamble. Never vendored or installed by Proxima - bring your own binaries. Edit this file to change the toolbelt; no code change needed.",
+  "//": "Recommended host CLIs (T8 decision 3): Proxima probes PATH for these at run setup and advertises the present ones in the agent preamble. Never vendored or installed by Proxima - bring your own binaries. Edit this file to change the toolbelt; no code change needed. Optional alts: additional binary names that count as present for the same tool.",
   "tools": [
     {
       "bin": "markitdown",
@@ -15,6 +15,12 @@
       "bin": "gh",
       "use": "GitHub operations (repos, pull requests, issues) from the shell",
       "install": "https://cli.github.com"
+    },
+    {
+      "bin": "headroom",
+      "alts": ["headroom-ai"],
+      "use": "optional host-side token/context headroom savings (best practice; Proxima works without it)",
+      "install": "pip install headroom-ai  # or install the headroom / headroom-ai binary on PATH"
     }
   ]
 }

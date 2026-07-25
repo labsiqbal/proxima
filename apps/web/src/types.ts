@@ -18,7 +18,13 @@ export type Profile = {
 export type CapabilitySelection = { skills?: string[]; mcp?: string[] };
 export type DetectedSkill = { id: string; name: string; description?: string; source?: string; group?: string };
 export type DetectedMcp = { name: string; kind: string; detail?: string };
-export type RunnerCapabilities = { runner_id: string; skills: DetectedSkill[]; mcp: DetectedMcp[] };
+export type RunnerCapabilities = {
+	runner_id: string;
+	skills: DetectedSkill[];
+	mcp: DetectedMcp[];
+	warnings?: string[];
+	roots?: string[];
+};
 export type Project = {
 	slug: string;
 	name: string;

@@ -61,16 +61,25 @@ home, default model, and system instructions ("soul").
 **How:** `profiles` table (one owner, many profiles). `claude_live_home` mode points
 claude-code at the real `~/.claude` so it inherits your skills/plugins/rules/memory.
 **Skills & MCP (auto-detect per runtime):** each profile shows the skills + MCP servers
-its runner actually has on this host — detected from the runner's own config dir
-(`capabilities.py`, driven off `RunnerSpec.source_dir` so it's portable, no hardcoded
-paths). The user checks which to enable per profile (`profiles.capabilities` JSON; NULL =
-inherit all). Enabled skills are symlinked into the profile home and its MCP config is
-filtered to the selection for Claude (`.claude.json`), Codex/Grok (`config.toml`),
-and Hermes (`config.yaml`). Selection is re-applied idempotently before each run so newly
-installed host skills appear automatically. Pi still uses its runner-global home;
-`claude_live_home` profiles likewise use the host config directly.
+its runner actually has on this host. Detection is a **multi-root OS-aware scan**
+(`capabilities.py`): the runner's own config dir (`RunnerSpec.source_dir` + skill
+subpath), extra roots from an OS×runner path table, shared registries such as
+`~/.agents/skills` (and Windows `%USERPROFILE%` / `%APPDATA%` equivalents), plus
+owner-configured **custom skill roots** (global Proxima setting under Settings →
+Agents, not per-profile). Results are unioned and deduped by skill id (first root
+wins). Invalid custom paths are skipped with a warning - never crash. Detection is
+**cached**; automatic refresh on cold start, opening Skills & MCP, or profile/runner
+change; manual **Rescan** button and `POST /api/runners/{id}/capabilities/rescan`
+(or `?rescan=1`) bust the cache. The user checks which to enable per profile
+(`profiles.capabilities` JSON; NULL = inherit all). Enabled skills are symlinked into
+the profile home and its MCP config is filtered to the selection for Claude
+(`.claude.json`), Codex/Grok (`config.toml`), and Hermes (`config.yaml`). Selection
+is re-applied idempotently before each run. Pi still uses its runner-global home;
+`claude_live_home` profiles likewise use the host config directly. **MCP stays
+enable/disable only** - never promoted to slash commands.
 **Endpoints:** `GET/POST /api/profiles`, `PATCH/DELETE /api/profiles/{id}`,
-`GET /api/runners/{id}/capabilities`, `GET /api/tools/recommended`.
+`GET /api/runners/{id}/capabilities`, `POST /api/runners/{id}/capabilities/rescan`,
+`GET/PUT /api/settings/skill-roots`, `GET /api/tools/recommended`.
 
 ### Baked-in capability bundle (Phase-1 slice 9, T8 - LIVE)
 
@@ -94,11 +103,30 @@ anything, while Proxima never ships or manages binaries.
   real `~/.claude` rules). Config: `bundled_skills_dir` /
   `PROXIMA_BUNDLED_SKILLS_DIR` (default `<repo>/bundled-skills`).
 - **Tools detect-and-advertise (never vendored):** `bundled-skills/recommended-tools.json`
-  lists recommended host CLIs (markitdown, lavish-axi, gh - data, not code).
-  `recommended_tools.py` probes PATH at run setup; PRESENT tools get a one-liner in
-  the run preamble ("`markitdown` - available for …"). Missing tools surface only
-  as a quiet hint in Settings → Agents ("Recommended tools" panel) and never block
-  a run.
+  lists recommended host CLIs (markitdown, lavish-axi, gh, optional **headroom** /
+  **headroom-ai** - data, not code). `recommended_tools.py` probes PATH at run
+  setup (primary `bin` or optional `alts`); PRESENT tools get a one-liner in the
+  run preamble. Missing tools surface only as a quiet hint in Settings → Agents
+  ("Recommended tools" panel) and never block a run. Headroom is optional best
+  practice for host-side token savings - Proxima works without it; if a headroom
+  MCP server is installed on the host it appears under profile MCP enable/disable
+  like any other MCP (no wrap-by-default spawn).
+
+### Skill slash commands (`/` palette)
+
+**Why:** enabled skills deserve the same visible front door as `/masterplan`, without
+turning MCP into slash commands.
+**How:** for the active profile, each **enabled** skill becomes a Proxima command
+in the slash catalog (group **Skills**). Naming uses the skill leaf
+(`/grill-with-docs`); reserved built-in Proxima commands always win name collisions
+(skill becomes `/group-leaf`). `/masterplan` stays first-class for the bundled
+skill. Optional freeform args work like masterplan (`/skill freeform…`). Invoking
+a skill slash queues an `agent_turn` whose prompt requires that skill id; the
+worker force-activates the skill for the run when needed. Composer loads the
+catalog with `profile_id` so switching profile/runner refreshes the list from the
+detection cache.
+**Endpoints:** `GET /api/commands/catalog?profile_id=…`, `POST /api/commands/execute`
+(with optional `profile_id`).
 
 ## 3. Chat (the core loop)
 
@@ -896,7 +924,9 @@ on the right rail; once opened it stays mounted so shells survive closing the pa
 ## 17. Command palette (quick commands)
 
 **Why:** A catalog of quick slash-style commands runnable from chat.
-**How:** `commands.py` — `command_catalog()` lists them; `execute_command()` runs one.
+**How:** `commands.py` — `command_catalog()` lists built-ins plus **enabled skills**
+for the active profile as skill agent turns; `execute_command()` runs one. MCP is
+not listed. Detection cache backs skill entries; rescan refreshes after installs.
 **Endpoints:** `GET /api/commands/catalog`, `POST /api/commands/execute`.
 
 > Note: an earlier *advisory command-policy classifier* (`POST /api/policy/command/check`)

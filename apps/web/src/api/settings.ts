@@ -100,7 +100,24 @@ export const testImageGenSettings = (token: string, body: ImageGenSettingsUpdate
 
 // Capability bundle (T8): recommended host tools, PATH-probed server-side.
 // Advisory only - Proxima never installs binaries.
-export type RecommendedTool = { bin: string; use: string; install: string; present: boolean }
+export type RecommendedTool = {
+  bin: string
+  use: string
+  install: string
+  present: boolean
+  alts?: string[]
+  detectedBin?: string
+}
 
 export const getRecommendedTools = (token: string) =>
   api<{ tools: RecommendedTool[] }>('/api/tools/recommended', token)
+
+/** Global custom skill directories included in multi-root skill scan (not per-profile). */
+export const getSkillRoots = (token: string) =>
+  api<{ roots: string[] }>('/api/settings/skill-roots', token)
+
+export const saveSkillRoots = (token: string, roots: string[]) =>
+  api<{ roots: string[] }>('/api/settings/skill-roots', token, {
+    method: 'PUT',
+    body: JSON.stringify({ roots }),
+  })

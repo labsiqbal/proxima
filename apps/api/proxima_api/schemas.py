@@ -188,6 +188,7 @@ class CommandRequest(BaseModel):
     command: str = Field(min_length=1)
     project_slug: str | None = None
     runner_id: str | None = None
+    profile_id: int | None = None
 
 
 class ProfileCreateRequest(BaseModel):

@@ -190,7 +190,11 @@ project display name (shell switcher).
 ## 10. Agents, knowledge, settings, and help
 
 Agent profiles choose a ready runner, isolated home, instructions, and detected
-skills or MCP servers.
+skills or MCP servers. Skills are multi-root scanned (runner home, shared
+registries, optional custom roots under Settings → Agents); enabled skills also
+appear as `/skill-name` entries in the Chat slash palette. MCP remains
+enable/disable only. Optional host tools such as `headroom` show under
+Recommended tools when present on PATH.
 
 ![Agent profiles](screenshots/agents-profiles.png)
 

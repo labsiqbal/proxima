@@ -39,6 +39,13 @@ describe("isAgentTurnSlashCommand", () => {
 		expect(isAgentTurnSlashCommand("/masterplan-foo")).toBe(false);
 		expect(isAgentTurnSlashCommand("/status")).toBe(false);
 	});
+
+	it("routes enabled skill slash names from the catalog", () => {
+		expect(isAgentTurnSlashCommand("/grill-with-docs", ["/grill-with-docs"])).toBe(true);
+		expect(isAgentTurnSlashCommand("/grill-with-docs freeform", ["/grill-with-docs"])).toBe(true);
+		expect(isAgentTurnSlashCommand("/grill-with-docs", [])).toBe(false);
+		expect(isAgentTurnSlashCommand("/help", ["/grill-with-docs"])).toBe(false);
+	});
 });
 
 describe("chatHeaderProjectLabel", () => {

@@ -22,9 +22,10 @@ log = logging.getLogger("proxima.recommended_tools")
 RECOMMENDED_TOOLS_FILENAME = "recommended-tools.json"
 
 
-def load_recommended_tools(bundle_dir: str | Path | None) -> list[dict[str, str]]:
-    """The bundle's tool advisory list: `[{bin, use, install}]`. Entries without
-    a `bin` are dropped; extra keys are ignored."""
+def load_recommended_tools(bundle_dir: str | Path | None) -> list[dict[str, Any]]:
+    """The bundle's tool advisory list: `[{bin, use, install, alts?}]`. Entries
+    without a `bin` are dropped; extra keys are ignored. `alts` are alternate
+    binary names that also count as present (e.g. headroom / headroom-ai)."""
     if not bundle_dir:
         return []
     path = Path(bundle_dir) / RECOMMENDED_TOOLS_FILENAME
@@ -36,22 +37,41 @@ def load_recommended_tools(bundle_dir: str | Path | None) -> list[dict[str, str]
         log.warning("unreadable recommended-tools file: %s", path)
         return []
     tools = data.get("tools") if isinstance(data, dict) else None
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for t in tools if isinstance(tools, list) else []:
         if not isinstance(t, dict) or not str(t.get("bin") or "").strip():
             continue
-        out.append({
+        alts_raw = t.get("alts") if isinstance(t.get("alts"), list) else []
+        alts = [str(a).strip() for a in alts_raw if str(a).strip()]
+        entry: dict[str, Any] = {
             "bin": str(t["bin"]).strip(),
             "use": str(t.get("use") or "").strip(),
             "install": str(t.get("install") or "").strip(),
-        })
+        }
+        if alts:
+            entry["alts"] = alts
+        out.append(entry)
     return out
 
 
 def probe_recommended_tools(bundle_dir: str | Path | None) -> list[dict[str, Any]]:
-    """The advisory list with a `present` flag per tool (PATH probe, cheap)."""
-    return [{**t, "present": shutil.which(t["bin"]) is not None}
-            for t in load_recommended_tools(bundle_dir)]
+    """The advisory list with a `present` flag per tool (PATH probe, cheap).
+
+    A tool is present if its primary `bin` or any `alts` name is on PATH. When an
+    alternate is what matched, `detectedBin` reports that name.
+    """
+    probed: list[dict[str, Any]] = []
+    for t in load_recommended_tools(bundle_dir):
+        names = [t["bin"], *list(t.get("alts") or [])]
+        detected = next((n for n in names if shutil.which(n)), None)
+        row = {k: v for k, v in t.items() if k != "alts"}
+        row["present"] = detected is not None
+        if detected and detected != t["bin"]:
+            row["detectedBin"] = detected
+        if t.get("alts"):
+            row["alts"] = t["alts"]
+        probed.append(row)
+    return probed
 
 
 def present_tools(bundle_dir: str | Path | None) -> list[dict[str, Any]]:

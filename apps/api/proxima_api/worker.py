@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 from contextlib import suppress
@@ -67,6 +68,9 @@ def _as_int(value: Any) -> int:
         raise ValueError(f"expected integer-compatible value, got {value!r}") from exc
 
 
+_REQUIRED_SKILL_RE = re.compile(r"Required skill:\s*`([^`]+)`")
+
+
 def required_skills_for_session(db: Any, session_id: int) -> tuple[str, ...]:
     """Bundled skills that must stay active for every turn of this session.
 
@@ -83,6 +87,24 @@ def required_skills_for_session(db: Any, session_id: int) -> tuple[str, ...]:
         ).fetchone()
     )
     return (MASTERPLAN_SKILL_ID,) if started_masterplan else ()
+
+
+def required_skills_for_run(db: Any, session_id: int, run: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Session-sticky skills plus any Required skill declared on this run's prompt.
+
+    Skill slash commands (and /masterplan) embed Required skill: `id` so an
+    opted-out profile still activates the methodology for that agent turn.
+    """
+    skills = list(required_skills_for_session(db, session_id))
+    prompt = ""
+    if isinstance(run, dict):
+        prompt = str(run.get("prompt") or "")
+    match = _REQUIRED_SKILL_RE.search(prompt)
+    if match:
+        sid = match.group(1).strip()
+        if sid and sid not in skills:
+            skills.append(sid)
+    return tuple(skills)
 
 
 def _json_array(value: Any) -> list[Any]:
@@ -1068,7 +1090,7 @@ class RunWorker:
 
         try:
             await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
-            required_skills = required_skills_for_session(db, session_id)
+            required_skills = required_skills_for_run(db, session_id, run if isinstance(run, dict) else None)
             self.prompting.reapply_capabilities(
                 cfg,
                 spec,

@@ -273,3 +273,43 @@ def set_collaboration_settings(conn, brainstorm_agents: int, debate_rounds: int)
 def get_image_gen_config(conn) -> dict[str, Any]:
     """The saved image-gen provider config, or None if unset."""
     return get_json(conn, IMAGE_GEN_KEY)
+
+
+# ── custom skill roots (global; multi-root skill scan) ─────────────────────
+
+CUSTOM_SKILL_ROOTS_KEY = "custom_skill_roots"
+# Hard cap so a paste flood cannot bloat detection. Paths themselves are free-form.
+CUSTOM_SKILL_ROOTS_MAX = 32
+
+
+def get_custom_skill_roots(conn) -> list[str]:
+    """Owner-configured absolute skill directories (global, not per-profile)."""
+    raw = get_json(conn, CUSTOM_SKILL_ROOTS_KEY, default=[])
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= CUSTOM_SKILL_ROOTS_MAX:
+            break
+    return out
+
+
+def set_custom_skill_roots(conn, roots: list[str] | None) -> list[str]:
+    """Replace the custom skill root list. Empty entries dropped; max capped."""
+    if roots is None:
+        roots = []
+    if not isinstance(roots, list):
+        raise ValueError("roots must be a list of path strings")
+    cleaned: list[str] = []
+    for item in roots:
+        text = str(item or "").strip()
+        if not text or text in cleaned:
+            continue
+        cleaned.append(text)
+        if len(cleaned) >= CUSTOM_SKILL_ROOTS_MAX:
+            break
+    set_json(conn, CUSTOM_SKILL_ROOTS_KEY, cleaned)
+    return cleaned

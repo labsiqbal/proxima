@@ -43,8 +43,15 @@ import { notify } from "../lib/notify";
 const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
 
 /** Slash commands that intentionally continue through the ordinary agent-run path. */
-export function isAgentTurnSlashCommand(text: string): boolean {
-	return /^\/masterplan(?:\s|$)/i.test(text.trim());
+export function isAgentTurnSlashCommand(
+	text: string,
+	skillSlashNames: string[] = [],
+): boolean {
+	const trimmed = text.trim();
+	if (/^\/masterplan(?:\s|$)/i.test(trimmed)) return true;
+	const name = trimmed.split(/\s+/)[0]?.toLowerCase() || "";
+	if (!name.startsWith("/")) return false;
+	return skillSlashNames.some((n) => n.toLowerCase() === name);
 }
 
 /** Header label prefers the open session's project so a desynced shell pick cannot mislabel the chat. */
@@ -117,6 +124,15 @@ export function ChatScreen(props: {
 }) {
 	const [messages, setMessages] = React.useState<ChatMessage[]>([]);
 	const [goal, setGoal] = React.useState<GoalState | null>(null);
+	const [skillSlashNames, setSkillSlashNames] = React.useState<string[]>([]);
+	const onCatalog = React.useCallback(
+		(commands: Array<{ name: string; skillId?: string | null }>) => {
+			setSkillSlashNames(
+				commands.filter((c) => c.skillId).map((c) => c.name.toLowerCase()),
+			);
+		},
+		[],
+	);
 	const [localSession, setLocalSession] = React.useState<ChatSession | null>(
 		null,
 	);
@@ -352,7 +368,7 @@ export function ChatScreen(props: {
 			// generation provider (create_run interception), so they must reach it.
 			const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
 				|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
-			const agentCommand = isAgentTurnSlashCommand(trimmed);
+			const agentCommand = isAgentTurnSlashCommand(trimmed, skillSlashNames);
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand && !agentCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
 				if (name === "/new" || name === "/reset") {
@@ -786,10 +802,12 @@ export function ChatScreen(props: {
 					disabled={!props.activeProfile}
 					token={props.token}
 						slug={projSlug}
+						profileId={props.activeProfile?.id ?? null}
 						features={props.features}
 					draftSeed={props.draftSeed}
 					draftSeedNonce={props.draftSeedNonce}
 					onDraftSeedConsumed={props.onDraftSeedConsumed}
+					onCatalog={onCatalog}
 					onSubmit={submit}
 				/>
 			</div>

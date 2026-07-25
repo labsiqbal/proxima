@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-166 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+169 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -16,7 +16,7 @@
 - [`routes/design.py`](#routes-design-py) — 4 endpoints
 - [`routes/files.py`](#routes-files-py) — 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 14 endpoints
-- [`routes/profiles.py`](#routes-profiles-py) — 9 endpoints
+- [`routes/profiles.py`](#routes-profiles-py) — 12 endpoints
 - [`routes/projects.py`](#routes-projects-py) — 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
 - [`routes/update.py`](#routes-update-py) — 3 endpoints
@@ -187,6 +187,9 @@
 | PATCH | `/api/profiles/{profile_id}` | `update_profile` |  |
 | GET | `/api/runners/detect` | `runners_detect` |  |
 | GET | `/api/runners/{runner_id}/capabilities` | `runner_capabilities` | Skills + MCP servers detected on the host for this runner (portable — |
+| POST | `/api/runners/{runner_id}/capabilities/rescan` | `runner_capabilities_rescan` | Manual rescan: clear the skill/MCP detection cache and re-walk roots. |
+| GET | `/api/settings/skill-roots` | `get_skill_roots` | Global custom skill directories included in every runner's multi-root scan. |
+| PUT | `/api/settings/skill-roots` | `put_skill_roots` | Replace custom skill roots. Invalid paths are kept in the list but |
 | GET | `/api/tools/recommended` | `tools_recommended` | The capability bundle's recommended-tools list with a PATH-probe result |
 
 
@@ -282,4 +285,4 @@
 
 
 ---
-_Generated 2026-07-24 07:03 UTC._
+_Generated 2026-07-25 12:45 UTC._

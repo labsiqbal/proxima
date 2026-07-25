@@ -20,9 +20,18 @@ class _Spec:
         self.source_dir = src
 
 
+def _isolate_host_tables(monkeypatch):
+    """Unit tests use synthetic host dirs; do not merge real ~/.agents/skills."""
+    empty = {family: () for family in ("linux", "macos", "windows")}
+    monkeypatch.setattr(cap, "SHARED_SKILL_ROOTS", empty)
+    monkeypatch.setattr(cap, "RUNNER_EXTRA_SKILL_ROOTS", {})
+    cap.clear_skill_scan_cache()
+
+
 # ── detection (unit, against a synthetic host dir) ───────────────────────────
 
-def test_detect_flat_and_grouped_skills(tmp_path):
+def test_detect_flat_and_grouped_skills(tmp_path, monkeypatch):
+    _isolate_host_tables(monkeypatch)
     src = tmp_path / "runnerhome"
     (src / "skills" / "alpha").mkdir(parents=True)
     (src / "skills" / "alpha" / "SKILL.md").write_text("---\nname: alpha\ndescription: A flat skill\n---\nbody")
@@ -35,7 +44,8 @@ def test_detect_flat_and_grouped_skills(tmp_path):
     assert nested["description"].startswith("Block scalar")  # block-scalar handled
 
 
-def test_detect_mcp_from_claude_json(tmp_path):
+def test_detect_mcp_from_claude_json(tmp_path, monkeypatch):
+    _isolate_host_tables(monkeypatch)
     src = tmp_path / ".claude"
     src.mkdir()
     (src.parent / ".claude.json").write_text(json.dumps({"mcpServers": {"zread": {"type": "http", "url": "https://x/mcp"}}}))
@@ -43,12 +53,15 @@ def test_detect_mcp_from_claude_json(tmp_path):
     assert d["mcp"] == [{"name": "zread", "kind": "http", "detail": "https://x/mcp"}]
 
 
-def test_detect_missing_dir_is_empty():
+def test_detect_missing_dir_is_empty(monkeypatch):
+    _isolate_host_tables(monkeypatch)
     d = cap.detect_for_runner(_Spec("claude-code", "/nonexistent/path"))
-    assert d == {"skills": [], "mcp": []}
+    assert d["skills"] == []
+    assert d["mcp"] == []
 
 
-def test_per_runner_skill_subpath_and_hidden_filter(tmp_path):
+def test_per_runner_skill_subpath_and_hidden_filter(tmp_path, monkeypatch):
+    _isolate_host_tables(monkeypatch)
     # pi reads skills from <home>/agent/skills, not <home>/skills; codex from <home>/skills.
     pi = tmp_path / "pi"
     (pi / "agent" / "skills" / "masterplan").mkdir(parents=True)
@@ -66,7 +79,62 @@ def test_per_runner_skill_subpath_and_hidden_filter(tmp_path):
     assert [s["id"] for s in cap.detect_for_runner(_Spec("codex", str(cx)))["skills"]] == ["grill-me"]
 
 
-def test_detect_and_apply_grok_native_skills_and_mcp(tmp_path):
+def test_expand_skill_root_os_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "winuser"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    assert cap.expand_skill_root("~/.agents/skills") == tmp_path / "home" / ".agents" / "skills"
+    assert cap.expand_skill_root(r"%USERPROFILE%\.claude\skills") == tmp_path / "winuser" / ".claude" / "skills"
+    assert cap.expand_skill_root(r"%APPDATA%\agents\skills") == tmp_path / "appdata" / "agents" / "skills"
+    assert cap.expand_skill_root("   ") is None
+
+
+def test_skill_roots_table_and_custom_roots(tmp_path, monkeypatch):
+    host = tmp_path / ".claude"
+    host.mkdir()
+    shared = tmp_path / "shared-skills"
+    (shared / "from-shared").mkdir(parents=True)
+    (shared / "from-shared" / "SKILL.md").write_text("---\nname: from-shared\n---\n")
+    custom = tmp_path / "custom-skills"
+    (custom / "from-custom").mkdir(parents=True)
+    (custom / "from-custom" / "SKILL.md").write_text("---\nname: from-custom\n---\n")
+    missing = tmp_path / "nope-skills"
+    monkeypatch.setattr(
+        cap,
+        "SHARED_SKILL_ROOTS",
+        {"linux": (str(shared),), "macos": (str(shared),), "windows": (str(shared),)},
+    )
+    monkeypatch.setattr(cap, "RUNNER_EXTRA_SKILL_ROOTS", {})
+    roots, warnings = cap.skill_roots_for_runner(
+        "claude-code",
+        host=host,
+        custom_roots=[str(custom), str(missing), ""],
+        system="linux",
+    )
+    assert host / "skills" in roots
+    assert shared in roots
+    assert custom in roots
+    assert any("not a directory" in w for w in warnings)
+
+    (host / "skills" / "primary").mkdir(parents=True)
+    (host / "skills" / "primary" / "SKILL.md").write_text("---\nname: primary\n---\n")
+    # Same leaf id in custom loses to primary (first wins).
+    (custom / "primary").mkdir(parents=True)
+    (custom / "primary" / "SKILL.md").write_text("---\nname: custom-primary\n---\n")
+    cap.clear_skill_scan_cache()
+    d = cap.detect_for_runner(
+        _Spec("claude-code", str(host)),
+        custom_roots=[str(custom)],
+        force_rescan=True,
+        system="linux",
+    )
+    ids = {s["id"]: s for s in d["skills"]}
+    assert "primary" in ids and "from-shared" in ids and "from-custom" in ids
+    assert ids["primary"]["name"] == "primary"  # primary root wins over custom
+
+
+def test_detect_and_apply_grok_native_skills_and_mcp(tmp_path, monkeypatch):
+    _isolate_host_tables(monkeypatch)
     source = tmp_path / ".grok"
     (source / "skills" / "review").mkdir(parents=True)
     (source / "skills" / "review" / "SKILL.md").write_text("---\nname: review\n---\n")
@@ -217,7 +285,8 @@ def test_detect_bundled_skills_missing_or_none_dir_is_empty(tmp_path):
     assert cap.detect_bundled_skills(tmp_path / "nope") == []
 
 
-def test_detect_for_runner_merges_bundle_as_second_source(tmp_path):
+def test_detect_for_runner_merges_bundle_as_second_source(tmp_path, monkeypatch):
+    _isolate_host_tables(monkeypatch)
     src = tmp_path / ".claude"
     (src / "skills" / "mine").mkdir(parents=True)
     (src / "skills" / "mine" / "SKILL.md").write_text("---\nname: mine\n---\n")
@@ -225,7 +294,7 @@ def test_detect_for_runner_merges_bundle_as_second_source(tmp_path):
     d = cap.detect_for_runner(_Spec("claude-code", str(src)), bundle_dir=bundle)
     assert {s["id"] for s in d["skills"]} == {"mine", "bundled/masterplan"}
     # without a bundle dir the behavior is exactly the old one
-    d2 = cap.detect_for_runner(_Spec("claude-code", str(src)))
+    d2 = cap.detect_for_runner(_Spec("claude-code", str(src)), force_rescan=True)
     assert {s["id"] for s in d2["skills"]} == {"mine"}
 
 
