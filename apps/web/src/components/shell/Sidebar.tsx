@@ -5,7 +5,7 @@ import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
-// (Tasks), keep what worked (Recipes), then the places work lives (Projects,
+// (Tasks), keep what worked (Workflows), then the places work lives (Projects,
 // Archive). Terminal/Files/Preview are tools on the right rail, not
 // destinations, and Agents/Settings stay in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
@@ -13,7 +13,7 @@ const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
   { id: 'alpha', label: 'Alpha', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
-  { id: 'workflows', label: 'Recipes', icon: IconWorkflows },
+  { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'projects', label: 'Projects', icon: IconProjects },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
@@ -33,13 +33,13 @@ export function Sidebar(props: {
   const [acctOpen, setAcctOpen] = useState(false)
   const go = (view: View) => { props.onSelectView(view); props.onClose() }
   const isActive = (item: Destination) => {
-    // A workflow-iteration chat belongs to Recipes, not Chat; the New task
+    // A workflow-iteration chat belongs to Workflows, not Chat; the New task
     // launcher ('home') and an open task both belong to the Tasks flow.
-    const inRecipeChat = props.currentView === 'chat' && !!props.activeSession?.workflow_id
+    const inWorkflowChat = props.currentView === 'chat' && !!props.activeSession?.workflow_id
     switch (item.id) {
-      case 'chat': return props.currentView === 'chat' && !inRecipeChat
+      case 'chat': return props.currentView === 'chat' && !inWorkflowChat
       case 'activity': return props.currentView === 'activity' || props.currentView === 'task' || props.currentView === 'home'
-      case 'workflows': return props.currentView === 'workflows' || props.currentView === 'graph' || inRecipeChat
+      case 'workflows': return props.currentView === 'workflows' || props.currentView === 'graph' || inWorkflowChat
       default: return props.currentView === item.id
     }
   }

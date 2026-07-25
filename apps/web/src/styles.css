@@ -5717,6 +5717,45 @@ div.result-media {
 	font-size: var(--text-xs);
 	margin: 0 0 var(--space-4);
 }
+/* Locked project chip in the graph editor header (1 workflow = 1 project). */
+.graph-project-lock {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 0 var(--space-2);
+	min-height: 1.75rem;
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-bg-elevated);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	white-space: nowrap;
+}
+.graph-run-kinds {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+	margin-top: 2px;
+}
+.graph-run-kind {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 var(--space-1);
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-bg-elevated);
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	line-height: 1.4;
+}
+.graph-run-kind.is-scheduled {
+	color: var(--ui-text-secondary);
+	border-color: var(--ui-stroke);
+}
+.schedule-project-lock {
+	margin: 0 0 var(--space-2);
+	font-size: var(--text-xs);
+}
 .graph-start-inner h1 {
 	font-size: var(--text-xl);
 	letter-spacing: -0.02em;
@@ -6386,7 +6425,7 @@ div.result-media {
 
 /* Satpam supervision (slice 12, T10): the watchdog's owner-facing surfaces —
    the pending repo-restart approval card, the per-task intervention log
-   (TaskWorkspace + Recipes canvas), and the decision-answer card. */
+   (TaskWorkspace + Workflows canvas), and the decision-answer card. */
 .satpam-card {
 	display: flex;
 	flex-direction: column;

@@ -153,7 +153,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
   features: AppFeatures
   profiles: Profile[]
   onOpenTask: (jobId: number) => void
-  /** Opens a plan where it can be acted on — the Recipes canvas. */
+  /** Opens a plan where it can be acted on — the Workflows canvas. */
   onOpenPlan: (jobId: number) => void
   /** Opens the New task launcher — this screen is its home in the nav. */
   onNewTask?: () => void
@@ -218,7 +218,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
       const template = await saveGraphTemplate(token, savingPlan.id, meta)
       if (!mountedRef.current) return
       setSavingPlan(null)
-      setNotice(`Saved “${template.name}” as a Recipe — run or schedule it from Recipes.`)
+      setNotice(`Saved “${template.name}” as a Workflow — run or schedule it from Workflows.`)
     } catch (cause) {
       if (mountedRef.current) setError(String(cause))
     } finally {
@@ -337,7 +337,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                       </div>}
                       <div className="plan-actions">
                         <button className="ghost-button" onClick={() => onOpenPlan(row.plan.id)}>Open plan</button>
-                        <button className="ghost-button" onClick={() => setSavingPlan(row.plan)}>Save as Recipe</button>
+                        <button className="ghost-button" onClick={() => setSavingPlan(row.plan)}>Save as Workflow</button>
                       </div>
                     </div>}
                   </div>)}

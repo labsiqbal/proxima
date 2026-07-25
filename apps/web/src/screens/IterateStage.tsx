@@ -171,7 +171,7 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     const exact = step.instruction.match(/^\s*Reply with exactly:\s*(.+?)\s*$/i)?.[1]?.trim()
     const textOnly = exact && /do not (create|modify|write|edit) files?/i.test(step.rules || '')
     setTab('result')
-    onRunRecipe?.(`Dry-test only recipe step ${i + 1}: ${step.name || `Step ${i + 1}`}.
+    onRunRecipe?.(`Dry-test only workflow step ${i + 1}: ${step.name || `Step ${i + 1}`}.
 Do this step now, using prior chat outputs only if relevant.
 Instruction: ${step.instruction || '-'}
 Expected output: ${step.expected_output || '-'}
@@ -321,13 +321,13 @@ Finish with a short result summary and artifact/file links if created.`, label, 
   return <section className="iterate-stage">
     <header className="stage-head">
       <div className="stage-tabs">
-        <button className={tab === 'recipe' ? 'on' : ''} onClick={() => setTab('recipe')}>Recipe<span className="stage-tab-n">{steps.length}</span></button>
+        <button className={tab === 'recipe' ? 'on' : ''} onClick={() => setTab('recipe')}>Workflow<span className="stage-tab-n">{steps.length}</span></button>
         <button className={tab === 'result' ? 'on' : ''} onClick={() => setTab('result')}>Result{resultCount > 0 && <span className="stage-tab-n">{resultCount}</span>}</button>
       </div>
       <div className="stage-head-actions">
         {running && <span className="stage-run-state"><span className="stage-run-dot" />Running</span>}
-        {tab === 'recipe' && <button className="ghost-button stage-save" onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : dirty ? '● Save recipe' : 'Saved'}</button>}
-        <button className="primary-button stage-run" onClick={() => void runRecipe()} disabled={!steps.length || saving || running} title="Run the current recipe end-to-end (dry-test) — the result is what it produces">▸ Run recipe</button>
+        {tab === 'recipe' && <button className="ghost-button stage-save" onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : dirty ? '● Save workflow' : 'Saved'}</button>}
+        <button className="primary-button stage-run" onClick={() => void runRecipe()} disabled={!steps.length || saving || running} title="Run the current workflow end-to-end (dry-test) — the result is what it produces">▸ Run workflow</button>
       </div>
     </header>
 
@@ -345,7 +345,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
           <button className="stage-addstep" onClick={addStep}>+ Add step</button>
         </div>
         <div className="stage-stepedit">
-          {!cur ? <p className="stage-empty">No steps yet — add one to start building the recipe.</p> : <>
+          {!cur ? <p className="stage-empty">No steps yet — add one to start building the workflow.</p> : <>
             <div className="stage-field-row">
               <input className="stage-stepname" value={cur.name} placeholder={`Step ${sel + 1} name`} onChange={e => patch(sel, { name: e.target.value })} />
               <div className="stage-step-actions">
@@ -370,8 +370,8 @@ Finish with a short result summary and artifact/file links if created.`, label, 
         {error && <p className="error-text">{error}</p>}
         {resultCount === 0
           ? <div className="stage-empty">
-              <p>No results yet.<br />Run the recipe to see what it produces.</p>
-              <button className="primary-button" onClick={() => void runRecipe()} disabled={!steps.length || saving || running}>▸ Run recipe</button>
+              <p>No results yet.<br />Run the workflow to see what it produces.</p>
+              <button className="primary-button" onClick={() => void runRecipe()} disabled={!steps.length || saving || running}>▸ Run workflow</button>
             </div>
           : <>
             {runCards.length > 0 && <div className="result-group">

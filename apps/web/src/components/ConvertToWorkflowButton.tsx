@@ -6,7 +6,7 @@ import { IconWorkflows } from "./shell/icons";
 
 // A per-session action: slice this chat into a runnable plan. Kicks off a
 // run (202) and waits for the async `workflow.draft` event on the session stream,
-// then hands the draft up so the app can open it in the Recipes editor (unsaved).
+// then hands the draft up so the app can open it in the Workflows editor (unsaved).
 export function ConvertToWorkflowButton({
 	token,
 	sessionId,

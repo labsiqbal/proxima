@@ -290,7 +290,7 @@ is not in its handler set. Satpam remains the sole steer/restart authority.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped four-step core
 tour (Chat, Alpha, Tasks/Attention/safety), saved server-side and permanently
-skippable. Settings → Help & Tours can replay it and launch chapters for Recipes,
+skippable. Settings → Help & Tours can replay it and launch chapters for Workflows,
 Projects/tools, Archive, feature-aware Design, Agents, remote/safety, and Settings.
 
 **Endpoints:** `GET /api/alpha/desk`, `POST /api/alpha/messages`,
@@ -341,13 +341,14 @@ The feature flag remains an owner recovery switch; the legacy ordered-step path 
 retained only for existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
-## 7. Recipes (plans worth repeating) + schedules
+## 7. Workflows (plans worth repeating) + schedules
 
 **Why:** Codify a repeatable multi-step process the agent can execute — with branches,
-per-node agents and review gates, not just a straight line. A saved template (Recipe)
-is the **optional promotion of a plan** (run-first, recipe-later): plans run without
-one, and "Save as Recipe" works before or after the run, from the canvas or from a
-Tasks plan row.
+per-node agents and review gates, not just a straight line. A saved template (Workflow)
+is the **optional promotion of a plan** (run-first, workflow-later): plans run without
+one, and "Save as Workflow" works before or after the run, from the canvas or from a
+Tasks plan row. **One workflow = one project** — open plans/templates use the owned
+`project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
 edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
@@ -358,7 +359,7 @@ the database. The panel **reflows** within its drag width (240–620px,
 scrollbar; **open state is persisted per plan** (`proxima.graph.chatOpen.<jobId>`) and
 auto-opens when that plan's authoring session still has an active run. Reopening mid-
 or post-generate **restores** the live run (or applies a completed graph block once)
-via `useRunStream.restore` — leave Recipes and return without a false error or stale
+via `useRunStream.restore` — leave Workflows and return without a false error or stale
 canvas. **Start chat** and a node's **Test in chat** share one open path onto the plan's
 session (concurrent clicks await the same load) so the panel cannot stick on
 Opening…; a missing session surfaces an error instead of a silent idle card.
@@ -396,7 +397,7 @@ status); an unanswered target question shows as a `where?` chip and the plan can
 start until it is answered. **List and graph are two projections of one plan**:
 branch-less plans render as a plain list, branching plans offer the read-only
 dependency canvas as a toggle (the editor's own `GraphCanvas`, reused). Plan rows
-carry **Open plan** (the canvas, where review acts live) and **Save as Recipe**
+carry **Open plan** (the canvas, where review acts live) and **Save as Workflow**
 (promotes the plan's graph to a reusable template via the existing save mechanics).
 **Board** columns are Queued → Running → Review → Done → **Failed** so a failed plan
 stays visible without switching to List → Failed; list/board cards use spaced
@@ -998,11 +999,11 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Recipes, Projects, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Projects, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
-+ The single **Recipes** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
++ The single **Workflows** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 

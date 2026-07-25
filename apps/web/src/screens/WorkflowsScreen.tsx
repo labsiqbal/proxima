@@ -4,11 +4,11 @@ import { ScheduleManager } from '../components/workflows/ScheduleManager'
 import { BackButton } from '../components/ui/BackButton'
 import type { GraphTemplate } from '../types'
 
-// Recipes owns two modes: the graph editor, and the schedules that run its saved
+// Workflows owns two modes: the graph editor, and the schedules that run its saved
 // templates. The Sequential recipe editor that used to live here is retired — a linear
-// recipe is just a graph with no branches, and the canvas authors those too. The linear
+// workflow is just a graph with no branches, and the canvas authors those too. The linear
 // ENGINE remains for pre-existing jobs and sessions; what is gone is its authoring UI.
-export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob, graphEditorActive, onGraphBack, graphBackLabel = 'Recipes' }: {
+export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, token, onOpenJob, graphEditorActive, onGraphBack, graphBackLabel = 'Workflows' }: {
   mode?: 'graph' | 'scheduled'
   onModeChange?: (mode: 'graph' | 'scheduled') => void
   /** The feature-gated graph canvas. Absent when the graph engine is disabled. */
@@ -18,7 +18,7 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   /** True while the graph editor has a workflow open — the tab row then shows Back. */
   graphEditorActive?: boolean
   onGraphBack?: () => void
-  /** Where Back returns: Tasks when a plan was opened from the Tasks list, else Recipes. */
+  /** Where Back returns: Tasks when a plan was opened from the Tasks list, else Workflows. */
   graphBackLabel?: string
 }) {
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
@@ -44,7 +44,7 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
 
   const modeNav = <div className="workflow-mode-row">
     {mode === 'graph' && graphEditorActive && onGraphBack && <BackButton label={graphBackLabel} onClick={onGraphBack} />}
-    <div className="workflow-mode-nav seg" role="tablist" aria-label="Recipe view">
+    <div className="workflow-mode-nav seg" role="tablist" aria-label="Workflow view">
     <button className={mode === 'graph' ? 'active' : ''} role="tab" aria-selected={mode === 'graph'} onClick={() => onModeChange?.('graph')}>Editor</button>
     <button className={mode === 'scheduled' ? 'active' : ''} role="tab" aria-selected={mode === 'scheduled'} onClick={() => onModeChange?.('scheduled')}>Scheduled</button>
     </div>
@@ -61,8 +61,8 @@ export function WorkflowsScreen({ mode = 'graph', onModeChange, graphContent, to
   return <section className="workflow-advanced-view">
     {modeNav}
     {graphContent ?? <div className="placeholder-view"><div className="assistant-bubble compact">
-      <h1>Recipes</h1>
-      <p className="muted">The recipe editor is switched off on this server. The setup docs cover turning it back on.</p>
+      <h1>Workflows</h1>
+      <p className="muted">The workflow editor is switched off on this server. The setup docs cover turning it back on.</p>
     </div></div>}
   </section>
 }
