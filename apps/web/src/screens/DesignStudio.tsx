@@ -488,7 +488,17 @@ function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBran
   return <div className="ds-start"><div className="ds-start-inner center">
     <p className="muted ds-project-tag">Designing in <strong>{projectName}</strong> · saved to this project</p>
     <h1>What do you want to make?</h1>
-    <p className="muted ds-sub">Describe it and the AI drafts editable layers — or start from a template. Nothing's locked; you can change size, aspect ratio and everything else on the canvas.</p>
+    <p className="muted ds-sub teaching-empty-lead">Design Studio drafts editable visual scenes for this project. Describe a brief and the AI lays out layers — or start from a template. Leave mid-edit and return: the canvas scene stays mounted for this session.</p>
+    <ul className="teaching-empty-caps ds-teach-list" aria-label="What you can do here">
+      <li>Generate graphics, decks, and social frames from a brief</li>
+      <li>Edit layers on the canvas; open an existing design from Your designs</li>
+      <li>Export deliverables that also land in Archive when registered</li>
+    </ul>
+    <ol className="teaching-empty-steps ds-teach-list ds-teach-steps" aria-label="Getting started">
+      <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Write a brief below (or pick a template)</span></li>
+      <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Press Generate - canvas opens with project locked in chrome</span></li>
+      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Chrome Back returns to where you entered Design</span></li>
+    </ol>
     <div className="ds-prompt" onKeyDown={event => {
       if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter') generate()
     }}>

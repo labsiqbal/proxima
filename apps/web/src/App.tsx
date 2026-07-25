@@ -28,6 +28,7 @@ import {
   popDeep,
   projectSwitcherLocked,
   pushDeep,
+  shouldKeepAlive,
   viewOriginLabel,
   type NavStackEntry,
 } from './lib/navStack'
@@ -134,6 +135,12 @@ export function App() {
   const [onboarding, setOnboarding] = React.useState(false)
   // One workspace: Chat is the front door, so it is also the landing view.
   const [view, setView] = React.useState<View>('chat')
+  // Multitask keep-alive: once a primary surface is visited, stay mounted (hidden when inactive).
+  const [aliveViews, setAliveViews] = React.useState<Set<View>>(() => new Set(['chat']))
+  React.useEffect(() => {
+    if (!shouldKeepAlive(view)) return
+    setAliveViews(prev => (prev.has(view) ? prev : new Set(prev).add(view)))
+  }, [view])
   // Settings section deep-link (e.g. Projects manage from account menu / home recovery).
   const [settingsSection, setSettingsSection] = React.useState<SettingsSectionKey>('account')
   const [workflowMode, setWorkflowMode] = React.useState<'graph' | 'scheduled'>('graph')
@@ -779,7 +786,16 @@ export function App() {
   if (!token || !user) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>{error || 'Connecting…'}</p></div>
   if (onboarding) return <React.Suspense fallback={<div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Loading…</p></div>}><WorkspaceOnboarding token={token} onDone={linked => void handleOnboardingDone(linked)} /></React.Suspense>
 
+  const pane = (id: View, active: boolean, body: React.ReactNode) => (
+    <div className="surface-pane" hidden={!active} aria-hidden={!active} data-surface={id}>{body}</div>
+  )
+  const keep = (id: View) => aliveViews.has(id) || view === id
   const chatActive = view === 'chat'
+  const alphaActive = view === 'alpha'
+  const activityActive = view === 'activity'
+  const workflowsActive = view === 'workflows'
+  const artifactsActive = view === 'artifacts'
+  const designActive = view === 'design'
 
   return (
     <AppShell
@@ -827,7 +843,7 @@ export function App() {
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
       {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'alpha')} /></React.Suspense>}
+      {keep('alpha') && pane('alpha', alphaActive, <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'alpha')} /></React.Suspense>)}
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
@@ -835,15 +851,25 @@ export function App() {
         const body = activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'chat', originLabel: 'Chat' })); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
           : chat
-        return <div className="surface-pane" hidden={!chatActive} aria-hidden={!chatActive}>{body}</div>
+        return pane('chat', chatActive, body)
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: archiveRecord ? 'artifacts' : view, originLabel: viewOriginLabel(archiveRecord ? 'artifacts' : view) })); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>}
-      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>}
-      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => openJobByEngine(jobId, 'graph', 'activity')} onNewTask={() => goView('home')} /></React.Suspense>}
+      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: archiveRecord ? 'artifacts' : view, originLabel: viewOriginLabel(archiveRecord ? 'artifacts' : view) })); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>)}
+      {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>)}
+      {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => openJobByEngine(jobId, 'graph', 'activity')} onNewTask={() => goView('home')} /></React.Suspense>)}
       {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' })); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
-      {features.designStudio && view === 'design' && <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>}
+      {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
+      {!features.designStudio && designActive && (
+        <section className="placeholder-view teaching-empty" data-testid="teaching-empty">
+          <h3 className="teaching-empty-title">Design Studio is off</h3>
+          <p className="teaching-empty-lead">This install does not enable Design Studio. Visual scenes and the canvas are unavailable until the feature is turned on for this Proxima.</p>
+          <ul className="teaching-empty-caps" aria-label="What you can do here">
+            <li>Use Chat for hands-on work and file deliverables</li>
+            <li>Use Archive to review docs, images, and other outputs</li>
+          </ul>
+        </section>
+      )}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}

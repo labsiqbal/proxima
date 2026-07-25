@@ -314,3 +314,35 @@ describe("Composer review draft handoff", () => {
 		expect(consumed).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("Composer submit CTA grammar", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.getCommandCatalog.mockResolvedValue({ groups: [] });
+		mocks.listReferenceFiles.mockResolvedValue({ files: [], truncated: false });
+		mocks.listArtifacts.mockResolvedValue({ artifacts: [] });
+	});
+
+	it("defaults to Send for Chat-like surfaces", () => {
+		render(
+			<Composer token="token" slug="alpha" textareaLabel="Message" promptModes={false} onSubmit={vi.fn()} />,
+		);
+		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+	});
+
+	it("accepts Delegate for Alpha without changing shell grammar", () => {
+		render(
+			<Composer
+				token="token"
+				slug="alpha"
+				textareaLabel="Delegate an outcome"
+				promptModes={false}
+				submitLabel="Delegate"
+				onSubmit={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Delegate" })).toBeInTheDocument();
+		expect(screen.getByRole("textbox", { name: "Delegate an outcome" })).toBeInTheDocument();
+		expect(document.querySelector(".composer")).toBeTruthy();
+	});
+});

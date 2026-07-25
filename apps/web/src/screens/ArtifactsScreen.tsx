@@ -273,9 +273,27 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
       </div>
       <div className="archive-scroll">
         {records.map(row)}
-        {records.length === 0 && <div className="archive-empty">
-          <h4>{loading ? 'Loading records…' : 'No records match these filters'}</h4>
-          {!loading && <p className="muted">Registry records are durable: even if a file moves or is deleted, its record - lineage, approvals, versions - stays right here.</p>}
+        {records.length === 0 && <div className="archive-empty teaching-empty" data-testid="teaching-empty">
+          {loading ? (
+            <h3 className="teaching-empty-title">Loading records…</h3>
+          ) : (
+            <>
+              <h3 className="teaching-empty-title">No records match these filters</h3>
+              <p className="teaching-empty-lead">
+                Archive is the durable registry of deliverables from Chat, Tasks, and Workflows — not a temporary folder listing.
+              </p>
+              <ul className="teaching-empty-caps" aria-label="What you can do here">
+                <li>Browse docs, images, video, designs, and other outputs</li>
+                <li>Open supported files in the same ArtifactViewer used from Chat</li>
+                <li>Follow lineage back to the session or task that produced them</li>
+              </ul>
+              <ol className="teaching-empty-steps" aria-label="Getting started">
+                <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Produce work in Chat or a Task run</span></li>
+                <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Return here to find deliverables by project, type, or status</span></li>
+                <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Open a row for preview, or the full record for approvals</span></li>
+              </ol>
+            </>
+          )}
         </div>}
       </div>
       <div className="archive-foot">

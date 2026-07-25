@@ -31,9 +31,19 @@ function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
     'Split the release into implementation, docs, and verification jobs.',
     'Review active work and tell me what needs my attention.',
   ]
-  return <div className="alpha-empty">
-    <strong>Delegate an outcome</strong>
-    <p>Alpha breaks work into durable jobs, dispatches up to three workers, and brings decisions back here. Hands-on work still belongs in Chat.</p>
+  return <div className="alpha-empty teaching-empty" data-testid="teaching-empty">
+    <h3 className="teaching-empty-title">Delegate an outcome</h3>
+    <p className="teaching-empty-lead">Alpha is the side path when you want outcomes dispatched, not a hands-on Chat thread. It breaks work into durable jobs, runs up to three workers, and returns decisions here.</p>
+    <ul className="teaching-empty-caps" aria-label="What you can do here">
+      <li>Describe an outcome and press <strong>Delegate</strong></li>
+      <li>Watch the active queue and Needs-you list on the side rail</li>
+      <li>Open jobs into Tasks for review; use Chat for hands-on turns</li>
+    </ul>
+    <ol className="teaching-empty-steps" aria-label="Getting started">
+      <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Pick or confirm the shell project if files matter</span></li>
+      <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Write the outcome, constraints, and projects Alpha may use</span></li>
+      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Press <strong>Delegate</strong> — leave anytime; return to the same desk</span></li>
+    </ol>
     <div className="alpha-examples" aria-label="Example delegations">{examples.map(example => <button type="button" className="ghost-button" key={example} onClick={() => onExample(example)}>{example}</button>)}</div>
   </div>
 }

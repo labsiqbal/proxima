@@ -201,3 +201,13 @@ describe('ArtifactsScreen (Archive registry)', () => {
     expect(screen.queryByText(/use Open to view it/)).not.toBeInTheDocument()
   })
 })
+
+  it('opens ArtifactViewer for unregistered chat output paths', async () => {
+    vi.mocked(listArchive).mockResolvedValue(listResponse([]))
+    const onConsumed = vi.fn()
+    render(<ArtifactsScreen {...base} onPendingArtifactConsumed={onConsumed}
+      pendingArtifact={{ type: 'doc', title: 'notes.md', path: 'out/notes.md', project_slug: 'wingoh' }} />)
+    await waitFor(() => expect(onConsumed).toHaveBeenCalled())
+    expect(await screen.findByTestId('viewer')).toBeInTheDocument()
+  })
+
