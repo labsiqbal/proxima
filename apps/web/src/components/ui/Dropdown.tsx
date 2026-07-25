@@ -5,7 +5,7 @@ export type DropdownOption = { value: string; label: string; badge?: string; sty
 
 // App-wide styled dropdown (matches the Wiki picker). Replaces native <select>
 // so the open menu is consistently themed, not the OS default.
-export function Dropdown({ value, options, onChange, placeholder, className, disabled, minWidth, dropUp, icon }: {
+export function Dropdown({ value, options, onChange, placeholder, className, disabled, minWidth, dropUp, icon, title, ariaLabel }: {
   value: string
   options: DropdownOption[]
   onChange: (value: string) => void
@@ -18,6 +18,10 @@ export function Dropdown({ value, options, onChange, placeholder, className, dis
   // the project picker's folder does. Sits in the button, not beside it, to keep the
   // whole control one click target.
   icon?: React.ReactNode
+  /** Native tooltip on the trigger (e.g. lock reason while disabled). */
+  title?: string
+  /** Override the computed accessible name when the default option label is not enough. */
+  ariaLabel?: string
 }) {
   const [open, setOpen] = React.useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
@@ -33,11 +37,10 @@ export function Dropdown({ value, options, onChange, placeholder, className, dis
   }, [open])
 
   const current = options.find(o => o.value === value)
-  const triggerLabel = current
-    ? dropdownOptionAriaLabel(current)
-    : (placeholder || 'Select…')
+  const triggerLabel = ariaLabel
+    || (current ? dropdownOptionAriaLabel(current) : (placeholder || 'Select…'))
   return <div className={`dd ${className || ''}`} ref={ref}>
-    <button type="button" className="dd-btn" disabled={disabled} onClick={() => setOpen(o => !o)} style={minWidth ? { minWidth } : undefined} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} aria-label={triggerLabel}>
+    <button type="button" className="dd-btn" disabled={disabled} onClick={() => setOpen(o => !o)} style={minWidth ? { minWidth } : undefined} title={title} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} aria-label={triggerLabel}>
       {icon && <span className="dd-icon">{icon}</span>}
       <span className="dd-label">{current ? current.label : (placeholder || 'Select…')}</span>
       {current?.badge && <span className="dd-badge">{current.badge}</span>}
