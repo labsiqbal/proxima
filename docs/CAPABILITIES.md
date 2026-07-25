@@ -144,7 +144,14 @@ an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
 An empty thread (`ChatEmpty` via shared `CompactTeachingEmpty`) stays sparse by
 default - title, one lead line, short tooltip hints, and a **How it works** dialog
 for the fuller tutorial - so the composer remains the primary CTA rather than a wall
-of teaching copy. Alpha's empty desk and Design Studio's start home use the same
+of teaching copy. With messages, the log is **top-anchored** under the header
+(`.thread` `justify-content: flex-start`; no messenger-style pin-to-composer).
+The flex chain (`main-pane` → `chat-stage` → `thread`) bounds height with
+`min-height: 0` and keeps **`.thread` as the only vertical scrollport**
+(`overflow-y: auto`) so long chats scroll with wheel/trackpad. Short threads
+that fit the viewport do not force a bottom jump; overflowing sessions open on
+latest and follow the bottom while the owner stays near it
+(`threadScroll` / `ChatThread`). Alpha's empty desk and Design Studio's start home use the same
 progressive-disclosure pattern (no capability list or numbered steps on the default
 surface; Design home does not print the project display name - the shell switcher is
 enough).

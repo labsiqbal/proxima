@@ -808,6 +808,7 @@ export function ChatScreen(props: {
 			)}
 			{goalBanner}
 			<ChatThread
+				key={activeSession?.id ?? "new"}
 				messages={messages}
 				events={events}
 				pendingRunId={busyRun}

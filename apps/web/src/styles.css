@@ -495,6 +495,8 @@ button:disabled {
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
+	/* Bound height to the shell grid cell so descendants can own scroll. */
+	overflow: hidden;
 	/* Subtle accent ambience on every window (same glow the Design start screen used). */
 	background: radial-gradient(
 		130% 80% at 50% -15%,
@@ -528,15 +530,23 @@ button:disabled {
 }
 
 .chat-stage {
-	flex: 1;
+	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	/* Clip here so .thread is the only vertical scrollport in Chat. */
+	overflow: hidden;
 }
 .thread {
-	flex: 1;
-	overflow: auto;
-	/* Generous bottom padding: streaming pins the scroll to the bottom, so the
+	/* Real scrollport: take remaining height, shrink below content, scroll. */
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	/* Pack from the top under the header — never messenger-style pin-to-composer. */
+	justify-content: flex-start;
+	/* Generous bottom padding: streaming follows the bottom when overflowing, so the
 	   last line must breathe above the composer instead of sitting against it. */
 	padding: 30px 24px 56px;
 }
@@ -564,8 +574,12 @@ button:disabled {
 .chat-log {
 	display: grid;
 	gap: 10px;
+	/* Top margin only — never margin-top: auto (messenger pin-to-composer). */
 	margin: 18px auto 0;
 	width: min(100%, 860px);
+	/* Height follows content; do not stretch/fill .thread or end-align. */
+	flex: 0 0 auto;
+	/* no min-height: 100% — short threads stay top-anchored under the header */
 }
 /* Responses sit flat on the chat surface — no card. The card look is reserved
    for what needs it: the user's sent bubble, error notices, and the
@@ -2017,6 +2031,10 @@ button:disabled {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
+	/* Explicit top pack: short threads sit under the header, not vertically centered. */
+	justify-content: flex-start;
+	/* Reinforced: flex item default min-height:auto blocks overflow scroll. */
+	min-height: 0;
 }
 /* Compact progressive-disclosure empty (Chat, Alpha, Design home, …) */
 .compact-empty {
