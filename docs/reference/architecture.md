@@ -187,8 +187,9 @@ worktree machinery). See flow 6b.
 Chat and coding-agent runs stay on ACP (`RunWorker` → `AcpManager` → runner CLI).
 Active image generation is deliberately separate and chosen from Settings:
 
-+ **Image generation:** Codex/ChatGPT OAuth, xAI OAuth via Hermes `auth.json`,
-  Higgsfield zero-credit CLI, or an OpenAI-compatible endpoint.
++ **Image generation:** Codex/ChatGPT OAuth, xAI OAuth via the Grok runner
+  (`grok login` → `~/.grok/auth.json` or `$GROK_HOME/auth.json`), Higgsfield
+  zero-credit CLI, or an OpenAI-compatible endpoint.
 
 The settings APIs store only provider/model/policy plus optional endpoint keys for
 OpenAI-compatible image endpoints; OAuth providers read existing local auth stores and
