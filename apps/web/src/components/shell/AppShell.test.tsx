@@ -101,6 +101,32 @@ describe('AppShell mobile drawer + search', () => {
     expect(within(topBar).getByRole('button', { name: 'Search' })).toBeInTheDocument()
   })
 
+  it('routes header project picks to onSelectProject (shell filter), not onOpenProject', async () => {
+    const user = userEvent.setup()
+    const onSelectProject = vi.fn()
+    const onOpenProject = vi.fn()
+    const projects = [
+      { slug: 'demo', name: 'Demo', path: '/tmp/demo', owner: 'o', role: 'owner', visibility: 'private' as const },
+      { slug: 'other', name: 'Other', path: '/tmp/other', owner: 'o', role: 'owner', visibility: 'private' as const },
+    ]
+    render(
+      <AppShell
+        {...base}
+        projects={projects}
+        activeProject={projects[0]}
+        onSelectProject={onSelectProject}
+        onOpenProject={onOpenProject}
+      >
+        <div>main</div>
+      </AppShell>,
+    )
+    const topBar = document.querySelector('.top-bar') as HTMLElement
+    await user.click(within(topBar).getByRole('button', { name: 'Active project: Demo' }))
+    await user.click(screen.getByRole('option', { name: /Other/ }))
+    expect(onSelectProject).toHaveBeenCalledWith(projects[1])
+    expect(onOpenProject).not.toHaveBeenCalled()
+  })
+
   it('opens Projects manage from the account menu', async () => {
     const user = userEvent.setup()
     render(<AppShell {...base}><div>main</div></AppShell>)
