@@ -134,4 +134,48 @@ describe('AppShell mobile drawer + search', () => {
     await user.click(screen.getByRole('button', { name: /Projects/ }))
     expect(base.onSelectView).toHaveBeenCalledWith('projects')
   })
+
+  it('always shows chrome Back, disabled without deep stack', () => {
+    render(<AppShell {...base} chromeBackEnabled={false}><div>main</div></AppShell>)
+    const topBar = document.querySelector('.top-bar') as HTMLElement
+    const back = within(topBar).getByRole('button', { name: 'Back' })
+    expect(back).toBeDisabled()
+  })
+
+  it('enables chrome Back with origin label and fires onChromeBack', async () => {
+    const user = userEvent.setup()
+    const onChromeBack = vi.fn()
+    render(
+      <AppShell
+        {...base}
+        chromeBackEnabled
+        chromeBackLabel="Back to Tasks"
+        onChromeBack={onChromeBack}
+      >
+        <div>main</div>
+      </AppShell>,
+    )
+    const topBar = document.querySelector('.top-bar') as HTMLElement
+    const back = within(topBar).getByRole('button', { name: 'Back to Tasks' })
+    expect(back).toBeEnabled()
+    await user.click(back)
+    expect(onChromeBack).toHaveBeenCalled()
+  })
+
+  it('locks the project switcher when projectLocked', () => {
+    render(
+      <AppShell
+        {...base}
+        projectLocked
+        projectLockedReason="Project is locked while this view is open"
+        projects={[{ id: 1, name: 'Demo', slug: 'demo', path: '/tmp/demo', visibility: 'private' } as never]}
+      >
+        <div>main</div>
+      </AppShell>,
+    )
+    const topBar = document.querySelector('.top-bar') as HTMLElement
+    const switcher = within(topBar).getByRole('button', { name: /Active project: Demo \(locked\)/ })
+    expect(switcher).toBeDisabled()
+    expect(switcher).toHaveAttribute('title', 'Project is locked while this view is open')
+  })
 })
