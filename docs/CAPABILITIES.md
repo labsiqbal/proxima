@@ -419,9 +419,12 @@ reachable from an old session carrying `workflow_id`, but no new linear workflow
 authored.
 The library has separate active and archived views. Archiving stops schedules and
 removes the workflow from the active library without changing its owned project or
-past runs. Restoring returns the same workflow to active status; permanent deletion is
-available only from the archived view. `GET /api/graph/templates` hides archived rows
-by default and accepts `include_archived=true` for lifecycle management.
+past runs, and records the pre-archive status in `workflows.pre_archive_status`.
+Restoring reinstates that saved status, so a workflow archived while paused (`draft`)
+returns paused and its schedules stay stopped, while an active one returns active
+(legacy rows with no saved status restore to active). Permanent deletion is available
+only from the archived view. `GET /api/graph/templates` hides archived rows by default
+and accepts `include_archived=true` for lifecycle management.
 **Schedules** target saved graph templates: a due tick (or **Run now**) spawns the same
 `engine='graph'` job a manual create + start produces — including repo isolation
 (`target_area_id` + worktree cut via the shared `bind_graph_job_repo_worktree` path).

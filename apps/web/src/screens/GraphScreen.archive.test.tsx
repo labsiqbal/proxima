@@ -116,4 +116,36 @@ describe('GraphScreen workflow archive', () => {
     fireEvent.click(screen.getByRole('button', { name: /View active workflows/i }))
     expect(await screen.findByText('Old publisher')).toBeInTheDocument()
   })
+
+  it('restores a workflow to the paused status the API reinstates, not forced active', async () => {
+    // The archived row came from a paused (draft) template, so the API restores it
+    // to 'draft'. The active list must show it paused (Resume, not Pause).
+    vi.mocked(setGraphTemplateStatus).mockImplementation(async (_token, id, status) => ({
+      ...(id === active.id ? active : archived),
+      status: id === archived.id && status === 'active' ? 'draft' : status,
+    }) as never)
+
+    render(
+      <GraphScreen
+        token="t"
+        projects={[project]}
+        activeProject={project}
+        onActiveProject={vi.fn()}
+        profiles={[]}
+        profileId={null}
+        features={{ designStudio: false, workflowGraph: true }}
+        activeProfile={null}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: /View archived workflows/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore Old publisher' }))
+    await waitFor(() => {
+      expect(setGraphTemplateStatus).toHaveBeenCalledWith('t', archived.id, 'active')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /View active workflows/i }))
+    expect(await screen.findByRole('button', { name: 'Resume Old publisher' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pause Old publisher' })).not.toBeInTheDocument()
+  })
 })

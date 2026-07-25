@@ -520,8 +520,11 @@ classic workflow lists and execution remain strictly linear.
 The graph template library loads active and archived rows with
 `GET /api/graph/templates?include_archived=true`, then projects them into separate
 views. Archive and restore use the existing status mutation, so the row keeps the same
-`project_id`, graph, and run lineage. Archived rows do not schedule or appear in the
-default list API; permanent deletion is exposed only from the archived view.
+`project_id`, graph, and run lineage. Archiving snapshots the prior status into
+`workflows.pre_archive_status`; restore reinstates and clears it, so a paused (`draft`)
+workflow returns paused (legacy rows with no snapshot restore to active). Archived rows
+do not schedule or appear in the default list API; permanent deletion is exposed only
+from the archived view.
 
 The **Tasks screen** (`ActivityScreen.tsx`) is the index of plans + their jobs (T2):
 graph plans appear alongside classic linear tasks, and a plan row expands into its
