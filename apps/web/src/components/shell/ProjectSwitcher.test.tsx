@@ -44,4 +44,23 @@ describe('ProjectSwitcher', () => {
     )
     expect(screen.getByRole('button', { name: 'Active project: No projects' })).toBeDisabled()
   })
+
+  it('locks (disabled) on deep surfaces without opening the menu', async () => {
+    const user = userEvent.setup()
+    const onSelectProject = vi.fn()
+    render(
+      <ProjectSwitcher
+        projects={projects}
+        activeProject={projects[0]}
+        onSelectProject={onSelectProject}
+        locked
+        lockedReason="Project is locked while this view is open"
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: 'Active project: Demo (locked)' })
+    expect(trigger).toBeDisabled()
+    await user.click(trigger)
+    expect(onSelectProject).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  })
 })

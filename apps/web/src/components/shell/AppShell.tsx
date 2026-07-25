@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
 import { ToolDock } from './ToolDock'
-import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout } from './icons'
+import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout, IconChevronLeft } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
@@ -62,6 +62,16 @@ export function AppShell(props: {
   user: User
   updateVersion?: string | null
   onUpdateClick?: () => void
+  /**
+   * Chrome Back: always rendered. Disabled when the deep stack is empty;
+   * when enabled, returns to the origin surface (not a hard-coded parent).
+   */
+  chromeBackEnabled?: boolean
+  chromeBackLabel?: string
+  onChromeBack?: () => void
+  /** Deep surfaces lock the header/mobile project switcher. */
+  projectLocked?: boolean
+  projectLockedReason?: string
 }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -188,12 +198,25 @@ export function AppShell(props: {
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
+        {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
+        <button
+          type="button"
+          className="tool-btn chrome-back-btn"
+          disabled={!props.chromeBackEnabled}
+          onClick={() => props.onChromeBack?.()}
+          aria-label={props.chromeBackEnabled ? (props.chromeBackLabel || 'Back') : 'Back'}
+          title={props.chromeBackEnabled ? (props.chromeBackLabel || 'Back') : 'Back'}
+        >
+          <IconChevronLeft size={17} />
+        </button>
         <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         {/* Global active project sits immediately right of Search (desktop). */}
         <ProjectSwitcher
           projects={props.projects}
           activeProject={props.activeProject}
           onSelectProject={props.onSelectProject}
+          locked={!!props.projectLocked}
+          lockedReason={props.projectLockedReason}
         />
         <span className="top-bar-spacer" />
         <div className="user-menu-wrap">
@@ -226,6 +249,11 @@ export function AppShell(props: {
         activeProject={props.activeProject}
         projects={props.projects}
         onSelectProject={props.onSelectProject}
+        projectLocked={!!props.projectLocked}
+        projectLockedReason={props.projectLockedReason}
+        chromeBackEnabled={!!props.chromeBackEnabled}
+        chromeBackLabel={props.chromeBackLabel}
+        onChromeBack={props.onChromeBack}
         drawerOpen={drawerOpen}
         onMenu={() => setDrawerOpen(true)}
         onSearch={openSearch}

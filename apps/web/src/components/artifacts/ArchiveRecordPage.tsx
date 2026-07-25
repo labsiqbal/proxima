@@ -7,11 +7,12 @@ import { fmtDate, fmtSize, permalinkOf, RecordPreview, StatusPill, STATUS_LABELS
 // per record with breadcrumb back, prev/next, large preview, metadata, the
 // lineage chain as navigable links, version history, and actions. No right
 // panel, no popup - this IS the page.
-export function ArchiveRecordPage({ token, project, slug, onBack, onOpenRecord, onOpenSession, onOpenTask, onOpenViewer, onOpenDesign, onRevealInFiles, onChanged }: {
+export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSession, onOpenTask, onOpenViewer, onOpenDesign, onRevealInFiles, onChanged }: {
   token: string
   project: string
   slug: string
-  onBack: () => void
+  /** @deprecated Chrome Back owns return-to-origin; kept optional for call-site compat. */
+  onBack?: () => void
   onOpenRecord: (project: string, slug: string) => void
   onOpenSession?: (sessionId: number) => void
   onOpenTask?: (jobId: number, engine?: string) => void
@@ -60,15 +61,16 @@ export function ArchiveRecordPage({ token, project, slug, onBack, onOpenRecord, 
     }
   }
 
-  if (error) return <div className="archive-record-page"><div className="archive-record-topbar"><button className="ghost-button" onClick={onBack}>‹ Archive</button></div><div className="error-bar">Could not load this record: {error}</div></div>
-  if (!record) return <div className="archive-record-page"><div className="archive-record-topbar"><button className="ghost-button" onClick={onBack}>‹ Archive</button></div><p className="muted archive-record-loading">Loading record…</p></div>
+  // Chrome Back owns return-to-origin; breadcrumb is wayfinding only (not a second Back).
+  if (error) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Archive</span></div><div className="error-bar">Could not load this record: {error}</div></div>
+  if (!record) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Archive</span></div><p className="muted archive-record-loading">Loading record…</p></div>
 
   const meta = typeMeta(record.type)
   const canApprove = record.status === 'draft' || record.status === 'review'
   return <div className="archive-record-page">
     <div className="archive-record-topbar">
       <nav className="archive-crumbs" aria-label="Breadcrumb">
-        <button className="archive-crumb-link" onClick={onBack}>Archive</button>
+        <span className="archive-crumb-here muted">Archive</span>
         <span className="archive-crumb-sep" aria-hidden="true">›</span>
         <span className="archive-crumb-here" title={record.name}>{record.name}</span>
       </nav>

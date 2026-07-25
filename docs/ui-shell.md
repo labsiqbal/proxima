@@ -91,6 +91,25 @@ Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail o
 
 The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
+## Chrome Back, project lock, and multitask keep-alive
+
+The shell header (and mobile topbar) always show a **chrome Back** control (Chrome-like):
+visible even when disabled. It is **disabled** with an empty deep stack, and **enabled**
+when the owner is inside a deep surface. Enabled Back returns to the **origin** surface
+where that deep view was entered — not only a hard-coded canonical parent. Deep frames
+include task detail, workflow graph editor, archive full record, design canvas, and
+settings stack when applicable. In-page Back buttons on those surfaces are removed so
+chrome owns the action.
+
+**Deep = project lock:** while a deep surface is open, the header/mobile **Project**
+switcher is disabled (locked). On top-level surfaces the switcher stays enabled and
+changing project **stays on the current view** (refilters content; does not force Chat).
+
+**Multitask foundation:** primary surfaces must not destroy in-flight UI on leave. Chat
+is kept mounted (hidden when inactive) so composer draft text and an in-flight run
+re-attach when the owner returns in the same browser session. Server work continues
+regardless; the client contract is keep-alive / re-attach, not remount-from-zero.
+
 ## Global attention, running work, and account surfaces
 
 The shell-level **Attention** badge persists across destinations and polls one unified

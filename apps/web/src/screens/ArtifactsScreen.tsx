@@ -3,7 +3,6 @@ import type { OutputLink, Project } from '../types'
 import type { Artifact } from '../api/files'
 import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../api/archive'
 import { Dropdown } from '../components/ui/Dropdown'
-import { BackButton } from '../components/ui/BackButton'
 import { ArtifactViewer, type ArtifactReviewFeedback } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from '../components/artifacts/archive'
@@ -33,7 +32,7 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   project_slug: r.project_slug,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, onBack, backLabel = 'Back', designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
   token: string
   projects: Project[]
   activeProject: Project | null
@@ -47,8 +46,6 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
   onCloseRecord?: () => void
   onOpenTask?: (jobId: number, engine?: string) => void
   onOpenSession?: (sessionId: number) => void
-  onBack?: () => void
-  backLabel?: string
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
   reviewSessionId?: number | null
@@ -238,7 +235,6 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
   return <section className="artifacts-view">
     {loadError && <div className="error-bar">Could not load the archive: {loadError}</div>}
     <div className="archive-head">
-      {onBack && <BackButton label={backLabel} onClick={onBack} />}
       <div className="archive-head-titles">
         <h2>Archive</h2>
         <p className="muted">Every deliverable of record, with lineage and approval - across all projects.</p>

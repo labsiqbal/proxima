@@ -23,6 +23,8 @@ describe('MobileTopbar', () => {
       />,
     )
     expect(screen.getByRole('button', { name: 'Active project: gnhf-e2e-projects' })).toBeInTheDocument()
+    // Chrome Back is always present; disabled without a deep stack.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Menu' }))
     await user.click(screen.getByRole('button', { name: 'Search' }))
     await user.click(screen.getByRole('button', { name: 'New chat' }))

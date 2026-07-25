@@ -22,6 +22,15 @@ import { useUpdateStatus } from './hooks/useUpdateStatus'
 import { usePolling } from './hooks/usePolling'
 import { UpdateModal, UpdateOverlay } from './components/shell/UpdateModal'
 import { ProximaMark } from './components/brand/ProximaMark'
+import {
+  canGoBack,
+  chromeBackLabel,
+  popDeep,
+  projectSwitcherLocked,
+  pushDeep,
+  viewOriginLabel,
+  type NavStackEntry,
+} from './lib/navStack'
 const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m => ({ default: m.IterateStage })))
 const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m => ({ default: m.DesignStudio })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
@@ -133,13 +142,12 @@ export function App() {
   const [activeTaskId, setActiveTaskId] = React.useState<number | null>(null)
   const [pendingGraphDraft, setPendingGraphDraft] = React.useState<GraphWorkflowDraft | null>(null)
   const [pendingGraphJob, setPendingGraphJob] = React.useState<number | null>(null)
-  // The graph editor's stage, lifted so the Workflows tab row can show Back beside
-  // the tabs while a workflow is open.
+  // The graph editor's stage, lifted so chrome Back / project lock can react.
   const [graphStage, setGraphStage] = React.useState<'home' | 'editor'>('home')
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
-  // When a plan is opened from Tasks, Back should return there — not the Workflows
-  // home the canvas lives under. Null means the editor was reached from Workflows.
-  const [graphCameFrom, setGraphCameFrom] = React.useState<'activity' | null>(null)
+  // Design Studio stage (canvas open = deep / project-locked).
+  const [designStage, setDesignStage] = React.useState<'start' | 'studio' | 'gallery'>('start')
+  const [designExitNonce, setDesignExitNonce] = React.useState(0)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
   // Bumped by the iterate stage's "Run recipe" button → ChatScreen sends the dry-run.
@@ -147,16 +155,14 @@ export function App() {
   const [runRecipePrompt, setRunRecipePrompt] = React.useState<string | undefined>(undefined)
   const [runRecipeLabel, setRunRecipeLabel] = React.useState<string | undefined>(undefined)
   const [runRecipeInstantResult, setRunRecipeInstantResult] = React.useState<string | undefined>(undefined)
-  // Where Design Studio was deep-opened FROM (panggung / activity), so its back
-  // returns there instead of the studio's start screen. Cleared on any sidebar nav.
-  const [designCameFrom, setDesignCameFrom] = React.useState<View | null>(null)
   const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string } | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const reviewDraftNonce = React.useRef(0)
   const [reviewDraft, setReviewDraft] = React.useState<{ text: string; nonce: number } | null>(null)
   const clearReviewDraft = React.useCallback(() => setReviewDraft(null), [])
   const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
-  const [returnToTask, setReturnToTask] = React.useState<number | null>(null)
+  // Deep navigation stack: chrome Back returns to origin surface (not a fixed parent).
+  const [navStack, setNavStack] = React.useState<NavStackEntry[]>([])
   const clearPendingNavigation = React.useCallback(() => {
     setPendingGraphDraft(null)
     setPendingGraphJob(null)
@@ -165,9 +171,9 @@ export function App() {
     setPendingFile(null)
     setPendingArtifact(null)
     setReturnToChat(null)
-    setReturnToTask(null)
-    setDesignCameFrom(null)
-    setGraphCameFrom(null)
+  }, [])
+  const clearDeepStack = React.useCallback(() => {
+    setNavStack([])
   }, [])
   const clearTaskHash = React.useCallback(() => {
     if (window.location.hash.startsWith('#task/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
@@ -185,51 +191,130 @@ export function App() {
       // Record-to-record moves (prev/next, versions) replace instead of piling
       // up history entries; one Back always returns to where Archive was opened.
       window.history.replaceState({ ...window.history.state, proximaView: 'artifacts' }, '', hash)
+      setNavStack(stack => pushDeep(stack, {
+        kind: 'archive-record',
+        originView: 'artifacts',
+        originLabel: 'Archive',
+        meta: { project, slug },
+      }))
     } else {
-      window.history.replaceState({ ...window.history.state, proximaView: view }, '', window.location.href)
+      const originView = view === 'task' ? 'task' : view
+      window.history.replaceState({ ...window.history.state, proximaView: originView }, '', window.location.href)
       window.history.pushState({ ...window.history.state, proximaView: 'artifacts' }, '', hash)
+      setNavStack(stack => pushDeep(stack, {
+        kind: 'archive-record',
+        originView,
+        originLabel: viewOriginLabel(originView),
+        meta: { project, slug },
+      }))
     }
     setView('artifacts')
   }, [view])
-  const closeArchiveRecord = React.useCallback(() => { clearArchiveHash(); setArchiveRecord(null); setView('artifacts') }, [clearArchiveHash])
-  const openTask = React.useCallback((jobId: number) => {
-    clearPendingNavigation()
+  const closeArchiveRecord = React.useCallback(() => {
+    clearArchiveHash()
+    setArchiveRecord(null)
+    setNavStack(stack => {
+      const { stack: next, popped } = popDeep(stack)
+      if (popped?.kind === 'archive-record') {
+        setView(popped.originView === 'task' && activeTaskId != null ? 'task' : (popped.originView === 'task' ? 'activity' : popped.originView))
+      } else {
+        setView('artifacts')
+      }
+      return next
+    })
+  }, [clearArchiveHash, activeTaskId])
+  const openTask = React.useCallback((jobId: number, origin?: View) => {
+    const originView = origin ?? (view === 'task' ? 'activity' : view)
+    setNavStack(stack => pushDeep(stack, {
+      kind: 'task',
+      originView: originView === 'task' ? 'activity' : originView,
+      originLabel: viewOriginLabel(originView === 'task' ? 'activity' : originView),
+      meta: { jobId },
+    }))
     setActiveTaskId(jobId)
     window.history.replaceState({ ...window.history.state, proximaView: view }, '', window.location.href)
     window.history.pushState({ ...window.history.state, proximaView: 'task' }, '', `#task/${jobId}`)
     setView('task')
-  }, [clearPendingNavigation, view])
-  const closeTask = React.useCallback(() => { clearTaskHash(); setView('activity') }, [clearTaskHash])
+  }, [view])
+  const closeTask = React.useCallback(() => {
+    clearTaskHash()
+    setNavStack(stack => {
+      const { stack: next, popped } = popDeep(stack)
+      const dest = popped?.kind === 'task' ? popped.originView : 'activity'
+      setView(dest === 'task' ? 'activity' : dest)
+      setActiveTaskId(null)
+      return next
+    })
+  }, [clearTaskHash])
   // A review lands where it can be acted on: a graph job's review gates live on the
   // canvas, so sending it to the linear TaskWorkspace would show a task that view has
   // no way to approve — a dangling "needs review" the owner cannot resolve.
-  const openJobByEngine = React.useCallback((jobId: number, engine?: string, origin?: 'activity') => {
+  const openJobByEngine = React.useCallback((jobId: number, engine?: string, origin?: View) => {
     if (engine === 'graph') {
       clearTaskHash()
-      clearPendingNavigation()
       setPendingGraphJob(jobId)
       setWorkflowMode('graph')
-      setGraphCameFrom(origin === 'activity' ? 'activity' : null)
+      const originView = origin ?? (view === 'workflows' ? 'workflows' : view)
+      setNavStack(stack => pushDeep(stack, {
+        kind: 'workflow-editor',
+        originView: originView === 'workflows' || originView === 'graph' ? 'workflows' : originView,
+        originLabel: viewOriginLabel(originView === 'workflows' || originView === 'graph' ? 'workflows' : originView),
+        meta: { jobId },
+      }))
       setView('workflows')
       return
     }
-    openTask(jobId)
-  }, [clearTaskHash, clearPendingNavigation, openTask])
+    openTask(jobId, origin)
+  }, [clearTaskHash, openTask, view])
   const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string }) => {
     if (target.job_id != null) {
-      openJobByEngine(target.job_id, target.engine)
+      openJobByEngine(target.job_id, target.engine, 'activity')
       return
     }
-    if (target.view === 'alpha') { clearPendingNavigation(); setView('alpha'); return }
-    if (target.view === 'settings') { clearPendingNavigation(); setView('settings'); return }
-    if (target.view === 'activity') { clearPendingNavigation(); setView('activity') }
-  }, [clearPendingNavigation, openJobByEngine])
+    if (target.view === 'alpha') { clearPendingNavigation(); clearDeepStack(); setView('alpha'); return }
+    if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
+    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
+  }, [clearPendingNavigation, clearDeepStack, openJobByEngine])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
+  // When GraphScreen reports stage=editor from an in-surface open (library → plan),
+  // ensure chrome Back + project lock know about the deep frame.
+  const handleGraphStageChange = React.useCallback((stage: 'home' | 'editor') => {
+    setGraphStage(stage)
+    if (stage === 'editor') {
+      setNavStack(stack => {
+        if (stack.some(e => e.kind === 'workflow-editor')) return stack
+        return pushDeep(stack, {
+          kind: 'workflow-editor',
+          originView: 'workflows',
+          originLabel: 'Workflows',
+        })
+      })
+    } else {
+      setNavStack(stack => stack.filter(e => e.kind !== 'workflow-editor'))
+    }
+  }, [])
+  const handleDesignStageChange = React.useCallback((stage: 'start' | 'studio' | 'gallery') => {
+    setDesignStage(stage)
+    if (stage === 'studio') {
+      setNavStack(stack => {
+        if (stack.some(e => e.kind === 'design-canvas')) return stack
+        return pushDeep(stack, {
+          kind: 'design-canvas',
+          originView: 'design',
+          originLabel: 'Design',
+        })
+      })
+    } else {
+      setNavStack(stack => stack.filter(e => e.kind !== 'design-canvas'))
+    }
+  }, [])
   const goView = (v: View) => {
     clearTaskHash()
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
+    clearDeepStack()
+    setActiveTaskId(null)
     // Project manage is Settings → Projects (no primary-nav destination).
     if (v === 'projects') {
       setSettingsSection('projects')
@@ -240,10 +325,8 @@ export function App() {
     if (v === 'workflows') {
       setWorkflowMode('graph')
       // Sidebar Workflows means the Workflows home. Re-clicking while a plan is open
-      // (including one reached from Tasks) used to no-op on the canvas — bump the
-      // same back signal the in-editor Back control uses so the list returns.
+      // bumps the back signal so the list returns.
       if (view === 'workflows' && graphStage === 'editor') {
-        setGraphCameFrom(null)
         setGraphBackNonce(n => n + 1)
       }
     }
@@ -254,6 +337,53 @@ export function App() {
     }
     setView(viewEnabled(v) ? v : 'chat')
   }
+  /** Chrome Back: pop deep stack and restore origin surface. */
+  const handleChromeBack = React.useCallback(() => {
+    setNavStack(stack => {
+      if (stack.length === 0) return stack
+      const { stack: next, popped } = popDeep(stack)
+      if (!popped) return next
+      if (popped.kind === 'task') {
+        clearTaskHash()
+        setActiveTaskId(null)
+        setView(popped.originView === 'task' ? 'activity' : popped.originView)
+      } else if (popped.kind === 'workflow-editor') {
+        setGraphBackNonce(n => n + 1)
+        if (popped.originView !== 'workflows' && popped.originView !== 'graph') {
+          setView(popped.originView)
+        }
+      } else if (popped.kind === 'archive-record') {
+        clearArchiveHash()
+        setArchiveRecord(null)
+        if (popped.originView === 'task' && activeTaskId != null) {
+          setView('task')
+        } else if (popped.originView === 'task') {
+          setView('activity')
+        } else {
+          setView(popped.originView)
+        }
+      } else if (popped.kind === 'design-canvas') {
+        // Leaving canvas: if Design was deep-opened from another surface, restore it.
+        if (popped.originView !== 'design') {
+          setPendingDesign(null)
+          setPendingDesignId(null)
+          if (popped.originView === 'task' && activeTaskId != null) {
+            window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`)
+          }
+          setView(popped.originView)
+        } else {
+          // Internal Design home: flush + leave studio stage via exitNonce.
+          setPendingDesign(null)
+          setPendingDesignId(null)
+          setDesignExitNonce(n => n + 1)
+          setView('design')
+        }
+      } else if (popped.kind === 'settings-stack') {
+        setView(popped.originView)
+      }
+      return next
+    })
+  }, [activeTaskId, clearArchiveHash, clearTaskHash])
   // Unread/activity dots: a session is "unread" when its updated_at is newer
   // than the last time you opened it. Persisted so it survives reloads.
   const [seen, setSeen] = React.useState<Record<number, string>>(() => { try { return JSON.parse(localStorage.getItem('proxima.seen') || '{}') } catch { return {} } })
@@ -274,15 +404,35 @@ export function App() {
     if (booting || !user) return
     const syncHashRoute = (event?: Event) => {
       const match = window.location.hash.match(/^#task\/(\d+)$/)
-      if (match) { setActiveTaskId(Number(match[1])); setView('task'); return }
+      if (match) {
+        const jobId = Number(match[1])
+        setActiveTaskId(jobId)
+        setNavStack(stack => stack.some(e => e.kind === 'task') ? stack : pushDeep(stack, {
+          kind: 'task',
+          originView: 'activity',
+          originLabel: 'Tasks',
+          meta: { jobId },
+        }))
+        setView('task')
+        return
+      }
       const archiveMatch = window.location.hash.match(/^#archive\/([^/]+)\/([^/]+)$/)
       if (archiveMatch) {
-        setArchiveRecord({ project: decodeURIComponent(archiveMatch[1]), slug: decodeURIComponent(archiveMatch[2]) })
+        const project = decodeURIComponent(archiveMatch[1])
+        const slug = decodeURIComponent(archiveMatch[2])
+        setArchiveRecord({ project, slug })
+        setNavStack(stack => stack.some(e => e.kind === 'archive-record') ? stack : pushDeep(stack, {
+          kind: 'archive-record',
+          originView: 'artifacts',
+          originLabel: 'Archive',
+          meta: { project, slug },
+        }))
         setView('artifacts')
         return
       }
       const priorView = event instanceof PopStateEvent && typeof event.state?.proximaView === 'string' ? event.state.proximaView as View : null
       setArchiveRecord(null)
+      setNavStack(stack => stack.filter(e => e.kind !== 'task' && e.kind !== 'archive-record'))
       setView(current => current === 'task' ? priorView || 'activity' : current)
     }
     syncHashRoute()
@@ -523,7 +673,11 @@ export function App() {
     if (link.type === 'design' && features.designStudio) {
       setPendingDesign(null)
       setPendingDesignId(link.id || link.path.split('/').filter(Boolean).slice(-1)[0] || null)
-      setDesignCameFrom('chat')
+      setNavStack(stack => pushDeep(stack, {
+        kind: 'design-canvas',
+        originView: 'chat',
+        originLabel: 'Chat',
+      }))
       setView('design')
       return
     }
@@ -541,23 +695,11 @@ export function App() {
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
+    clearDeepStack()
     setActiveSession(session)
     const sp = projects.find(p => p.slug === session.project_slug)
     if (sp) setActiveProject(sp)
     markSeen(session.id, session.updated_at)
-    setView('chat')
-  }
-
-  function backToOriginChat() {
-    const origin = returnToChat
-    setReturnToChat(null)
-    setDesignCameFrom(null)
-    if (origin) {
-      setActiveSession(origin)
-      const p = projects.find(x => x.slug === origin.project_slug)
-      if (p) setActiveProject(p)
-      markSeen(origin.id, origin.updated_at)
-    }
     setView('chat')
   }
 
@@ -578,6 +720,7 @@ export function App() {
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
+    clearDeepStack()
     setActiveSession(target)
     const project = projects.find(candidate => candidate.slug === target.project_slug)
     if (project) setActiveProject(project)
@@ -586,6 +729,18 @@ export function App() {
     setReviewDraft({ text: feedback.text, nonce: reviewDraftNonce.current })
     setView('chat')
   }
+
+  const designCanvasOpen = designStage === 'studio'
+  const deepFlags = {
+    view,
+    graphStage,
+    archiveRecord,
+    designCanvasOpen,
+    settingsStack: false,
+  }
+  const projectLocked = projectSwitcherLocked(deepFlags)
+  const chromeBackEnabled = canGoBack(navStack)
+  const chromeBackTitle = chromeBackLabel(navStack)
 
   const handleAuthed = (s: { token: string; user: User }) => {
     // Keep the token in memory for this session's bearer header; the cookie carries
@@ -624,6 +779,8 @@ export function App() {
   if (!token || !user) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>{error || 'Connecting…'}</p></div>
   if (onboarding) return <React.Suspense fallback={<div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Loading…</p></div>}><WorkspaceOnboarding token={token} onDone={linked => void handleOnboardingDone(linked)} /></React.Suspense>
 
+  const chatActive = view === 'chat'
+
   return (
     <AppShell
       activeProfile={activeProfile}
@@ -637,8 +794,16 @@ export function App() {
       onDeleteSession={id => void handleDeleteSession(id)}
       onSelectProject={setActiveProjectOnly}
       onOpenProject={selectProject}
-      onSelectSession={session => { clearPendingNavigation(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
-      onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setPendingDesign({ id: session.id, title: session.title }); setView('design') }}
+      onSelectSession={session => { clearPendingNavigation(); clearDeepStack(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
+      onOpenDesign={session => {
+        if (!features.designStudio) return
+        const sp = projects.find(p => p.slug === session.project_slug)
+        if (sp) setActiveProject(sp)
+        markSeen(session.id, session.updated_at)
+        setPendingDesign({ id: session.id, title: session.title })
+        setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: view, originLabel: viewOriginLabel(view) }))
+        setView('design')
+      }}
       seen={seen}
       busySessions={busySessions}
       onSelectView={goView}
@@ -652,37 +817,33 @@ export function App() {
       user={user}
       updateVersion={updates.status?.update_available ? updates.status.latest?.version ?? null : null}
       onUpdateClick={updates.openModal}
+      chromeBackEnabled={chromeBackEnabled}
+      chromeBackLabel={chromeBackTitle}
+      onChromeBack={handleChromeBack}
+      projectLocked={projectLocked}
+      projectLockedReason="Project is locked while this view is open"
     >
       {error && <div className="error-bar">{error}</div>}
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
       {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={openJobByEngine} /></React.Suspense>}
-      {view === 'chat' && (() => {
-        // A design-kind session belongs to Design Studio; never render it as the main
-        // chat (kind is authoritative — this is the last-line guard behind the session
-        // list + Home routing already excluding design sessions).
+      {view === 'alpha' && <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'alpha')} /></React.Suspense>}
+      {(() => {
+        // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
         const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
-        // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
-        return activeSession?.workflow_id
-          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
+        const body = activeSession?.workflow_id
+          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'chat', originLabel: 'Chat' })); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
           : chat
+        return <div className="surface-pane" hidden={!chatActive} aria-hidden={!chatActive}>{body}</div>
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>}
-      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} graphBackLabel={graphCameFrom === 'activity' ? 'Tasks' : 'Workflows'} onGraphBack={() => {
-        if (graphCameFrom === 'activity') {
-          setGraphCameFrom(null)
-          setView('activity')
-          return
-        }
-        setGraphBackNonce(n => n + 1)
-      }} /></React.Suspense>}
-      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={openTask} onOpenPlan={jobId => openJobByEngine(jobId, 'graph', 'activity')} onNewTask={() => goView('home')} /></React.Suspense>}
-      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setDesignCameFrom('task'); setView('design') } : undefined} onOpenFile={(slug, path) => { clearTaskHash(); setReturnToTask(activeTaskId); setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
-      {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} /></React.Suspense>}
-      {features.designStudio && view === 'design' &&<React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onExit={designCameFrom === 'chat' && returnToChat ? backToOriginChat : designCameFrom ? () => { const v = designCameFrom; setDesignCameFrom(null); if (v === 'task' && activeTaskId != null) window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`); setView(v) } : undefined} /></React.Suspense>}
+      {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: archiveRecord ? 'artifacts' : view, originLabel: viewOriginLabel(archiveRecord ? 'artifacts' : view) })); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>}
+      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>}
+      {view === 'activity' && <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={activeProject} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => openJobByEngine(jobId, 'graph', 'activity')} onNewTask={() => goView('home')} /></React.Suspense>}
+      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><TaskWorkspace token={token} jobId={activeTaskId} onBack={closeTask} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' })); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
+      {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
+      {features.designStudio && view === 'design' && <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}

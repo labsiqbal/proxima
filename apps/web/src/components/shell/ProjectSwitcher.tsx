@@ -9,6 +9,8 @@ export function ProjectSwitcher({
   onSelectProject,
   className,
   compact = false,
+  locked = false,
+  lockedReason = 'Project is locked while this view is open',
 }: {
   projects: Project[]
   activeProject: Project | null
@@ -16,6 +18,9 @@ export function ProjectSwitcher({
   className?: string
   /** Slightly denser trigger for the mobile topbar. */
   compact?: boolean
+  /** Deep surfaces lock the switcher (task, graph editor, archive record, design canvas, …). */
+  locked?: boolean
+  lockedReason?: string
 }) {
   const [open, setOpen] = React.useState(false)
   const root = React.useRef<HTMLDivElement>(null)
@@ -37,11 +42,17 @@ export function ProjectSwitcher({
     }
   }, [open])
 
+  // Close the menu if the surface becomes deep-locked while open.
+  React.useEffect(() => {
+    if (locked) setOpen(false)
+  }, [locked])
+
   const label = activeProject?.name || (projects.length ? 'Select project' : 'No projects')
-  const disabled = projects.length === 0
+  const disabled = projects.length === 0 || locked
+  const title = locked ? lockedReason : label
 
   return (
-    <div className={`project-switcher ${compact ? 'compact' : ''} ${className || ''}`} ref={root}>
+    <div className={`project-switcher ${compact ? 'compact' : ''} ${locked ? 'is-locked' : ''} ${className || ''}`} ref={root}>
       <button
         type="button"
         className={`project-switcher-btn ${open ? 'active' : ''}`}
@@ -50,8 +61,8 @@ export function ProjectSwitcher({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
-        aria-label={`Active project: ${label}`}
-        title={label}
+        aria-label={locked ? `Active project: ${label} (locked)` : `Active project: ${label}`}
+        title={title}
       >
         <span className="project-switcher-name">{label}</span>
         <span className="project-switcher-caret" aria-hidden="true">

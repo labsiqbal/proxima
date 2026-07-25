@@ -159,9 +159,10 @@ describe('ArtifactsScreen (Archive registry)', () => {
     // Lineage steps navigate to the producing task.
     await userEvent.click(screen.getByText('Draft Q3 article'))
     expect(onOpenTask).toHaveBeenCalledWith(9, 'linear')
-    // Breadcrumb goes back to the list.
-    await userEvent.click(screen.getByRole('button', { name: 'Archive' }))
-    expect(onCloseRecord).toHaveBeenCalled()
+    // Chrome Back owns return-to-origin; breadcrumb is wayfinding only (not a second Back).
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
+    expect(document.querySelector('.archive-crumbs')).toHaveTextContent('Archive')
+    expect(onCloseRecord).not.toHaveBeenCalled()
   })
 
   it('resolves a chat result card to its registry record', async () => {

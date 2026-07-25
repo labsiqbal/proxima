@@ -556,7 +556,7 @@ const chatFromMessages = (msgs: { role: string; content: string }[]): { role: 'u
   .filter(m => (m.role === 'user' || m.role === 'assistant') && !!m.content && !m.content.startsWith('Agent produced no output'))
   .map(m => ({ role: m.role as 'user' | 'assistant', content: m.role === 'assistant' ? (stripDesignScene(m.content) || 'Updated the design.') : m.content }))
 
-export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void }) {
+export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery') => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
   const isMobile = useIsMobile()
   const mentionItems = useProjectMentionItems(token, project?.slug)
   const [mSheet, setMSheet] = React.useState<'panel' | 'inspector' | 'add' | null>(null)
@@ -567,6 +567,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [middlePan, setMiddlePan] = React.useState(false)
   const [multiMode, setMultiMode] = React.useState(false) // touch multi-select: tapping layer rows toggles selection
   const [stage, setStage] = React.useState<'start' | 'studio' | 'gallery'>('start')
+  React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
   const [brandGuideOpen, setBrandGuideOpen] = React.useState(false)
   const [scene, setScene] = React.useState<Scene | null>(null)
   const [saved, setSaved] = React.useState<'idle' | 'saving' | 'saved'>('idle')
@@ -676,6 +677,16 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   // Newest not-yet-written auto-save body + the flusher that persists it on exit.
   const pendingSaveRef = React.useRef<{ path: string; body: string } | null>(null)
   const flushSaveRef = React.useRef<() => void>(() => {})
+  // Chrome Back bumps exitNonce: flush and leave the canvas (internal start/gallery,
+  // or onExit when Design was deep-opened from another surface).
+  const lastExitNonce = React.useRef(exitNonce ?? 0)
+  React.useEffect(() => {
+    if (exitNonce == null || exitNonce === lastExitNonce.current) return
+    lastExitNonce.current = exitNonce
+    flushSaveRef.current()
+    if (onExit) onExit()
+    else setStage(studioFrom.current)
+  }, [exitNonce, onExit])
   // Scene id whose gen: layers still need resolving. The load paths run while the
   // component is still on the start/gallery early-returns — where the resolver
   // assignment below them has never executed — so they set this marker and the
@@ -2031,9 +2042,9 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const removeArtboard = () => { if (scene.artboards.length <= 1) return; snapshot(); const i = focusAb; setScene(s => s && ({ ...s, artboards: s.artboards.filter((_, k) => k !== i) })); setFocusAb(Math.max(0, i - 1)); setSelectedId(null); fittedFor.current = '' }
 
+  // Chrome Back owns return-to-origin while the canvas is open (deep surface).
   return <section className={`design-studio ${isMobile ? 'is-mobile' : ''} ${panMode ? 'is-panning' : ''}`}>
     <div className="ds-toolbar">
-      <BackButton label="Back" onClick={() => { flushSaveRef.current(); (onExit || (() => setStage(studioFrom.current)))() }} />
       <strong className="ds-title">{scene.title}</strong>
       <span className="muted ds-project-tag">· {cleanProjectName(project.name)}</span>
       <span className="ds-saved">{saved === 'saving' ? 'Saving…' : saved === 'saved' ? 'Saved' : ''}</span>

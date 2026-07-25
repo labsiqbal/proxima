@@ -6,7 +6,7 @@ import { SatpamCard } from '../components/tasks/SatpamCard'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
 import { IconTrash } from '../components/shell/icons'
-import { BackButton } from '../components/ui/BackButton'
+
 import type { Artifact } from '../api/files'
 import { stripQuestionForms } from '../components/chat/questionForm'
 import { usePolling } from '../hooks/usePolling'
@@ -103,16 +103,16 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
     }
   }
 
-  if (!job) return <div className="job-detail"><div className="task-detail-head"><BackButton label="Tasks" onClick={onBack} /></div>{error ? <div className="error-bar">{error}</div> : <p className="muted task-workspace-state">Loading…</p>}</div>
+  // Chrome Back in the shell owns return-to-origin; no in-page Back control here.
+  if (!job) return <div className="job-detail"><div className="task-detail-head"><span className="muted">Task</span></div>{error ? <div className="error-bar">{error}</div> : <p className="muted task-workspace-state">Loading…</p>}</div>
 
   const steps = job.steps_state
-  if (!steps.length) return <div className="job-detail"><div className="task-detail-head"><BackButton label="Tasks" onClick={onBack} /><strong className="task-title">{job.title}</strong><StatusPill status={job.status} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
+  if (!steps.length) return <div className="job-detail"><div className="task-detail-head"><strong className="task-title">{job.title}</strong><StatusPill status={job.status} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
   const cur = steps[Math.min(sel, steps.length - 1)]
   const onReviewStep = isMidGate && sel === job.current_step_idx
 
   return <div className="job-detail">
     <div className="task-detail-head">
-      <BackButton label="Tasks" onClick={onBack} />
       <strong className="task-title" title={job.title}>{job.title}</strong>
       <StatusPill status={job.status} />
       <button className="row-action danger jfd-delete" title="Delete task" aria-label="Delete task" onClick={() => void remove()} disabled={!!busyAction}><IconTrash size={15} /></button>

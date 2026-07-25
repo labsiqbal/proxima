@@ -1,12 +1,17 @@
 import type { Ref } from 'react'
 import type { Project } from '../../types'
-import { IconMenu, IconNewChat, IconSearch } from './icons'
+import { IconChevronLeft, IconMenu, IconNewChat, IconSearch } from './icons'
 import { ProjectSwitcher } from './ProjectSwitcher'
 
 export function MobileTopbar({
   activeProject,
   projects = [],
   onSelectProject,
+  projectLocked = false,
+  projectLockedReason,
+  chromeBackEnabled = false,
+  chromeBackLabel = 'Back',
+  onChromeBack,
   drawerOpen = false,
   onMenu,
   onSearch,
@@ -16,6 +21,11 @@ export function MobileTopbar({
   activeProject: Project | null
   projects?: Project[]
   onSelectProject?: (project: Project) => void
+  projectLocked?: boolean
+  projectLockedReason?: string
+  chromeBackEnabled?: boolean
+  chromeBackLabel?: string
+  onChromeBack?: () => void
   drawerOpen?: boolean
   onMenu: () => void
   onSearch: () => void
@@ -33,12 +43,24 @@ export function MobileTopbar({
     >
       <IconMenu size={18} />
     </button>
+    <button
+      type="button"
+      className="icon-button chrome-back-btn"
+      disabled={!chromeBackEnabled}
+      onClick={() => onChromeBack?.()}
+      aria-label={chromeBackEnabled ? chromeBackLabel : 'Back'}
+      title={chromeBackEnabled ? chromeBackLabel : 'Back'}
+    >
+      <IconChevronLeft size={18} />
+    </button>
     <div className="mobile-context">
       {onSelectProject ? (
         <ProjectSwitcher
           projects={projects}
           activeProject={activeProject}
           onSelectProject={onSelectProject}
+          locked={projectLocked}
+          lockedReason={projectLockedReason}
           compact
         />
       ) : (

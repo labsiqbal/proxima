@@ -3092,13 +3092,26 @@ button:disabled {
 		color 0.12s,
 		background 0.12s;
 }
-.tool-btn:hover {
+.tool-btn:hover:not(:disabled) {
 	color: var(--ui-text-primary);
 	background: var(--ui-row-hover-background);
+}
+.tool-btn:disabled,
+.icon-button:disabled {
+	opacity: 0.35;
+	cursor: default;
 }
 .tool-btn.active {
 	color: var(--ui-accent);
 	background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+}
+/* Chrome Back: always present for layout stability; muted when no deep stack. */
+.chrome-back-btn:disabled {
+	opacity: 0.3;
+}
+/* Multitask keep-alive panes: stay mounted, leave the layout when inactive. */
+.surface-pane[hidden] {
+	display: none !important;
 }
 @media (max-width: 767px) {
 	.top-bar {
