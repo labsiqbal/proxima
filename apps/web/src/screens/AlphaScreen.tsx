@@ -5,6 +5,7 @@ import type { ChatMessage, Project, Runner } from '../types'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
 import { confirmDialog } from '../components/ui/Dialog'
+import { CompactTeachingEmpty } from '../components/ui/CompactTeachingEmpty'
 import { IconPanelLeft } from '../components/shell/icons'
 
 const POLL_MS = 2500
@@ -12,6 +13,23 @@ const SIDE_COLLAPSED_KEY = 'proxima.alpha.sideCollapsed'
 const cleanAlpha = (text: string) => text.replace(/<proxima-tool>\s*\{[\s\S]*?\}\s*<\/proxima-tool>/g, '').trim()
 const statusLabel = (status: string) => status === 'review' ? 'Needs you' : status.charAt(0).toUpperCase() + status.slice(1)
 const formatBudget = (seconds: number) => seconds >= 3600 ? `${Math.round(seconds / 3600)}h` : `${Math.round(seconds / 60)}m`
+
+const ALPHA_LEAD = 'Dispatch durable jobs from an outcome. The Delegate composer below starts the desk.'
+const ALPHA_HINTS = [
+  { label: 'queue', hint: 'Active and queued jobs land on the side rail' },
+  { label: 'needs you', hint: 'Reviews and Alpha questions collect under Needs you' },
+  { label: 'Tasks', hint: 'Open a job into Tasks for hands-on review' },
+]
+const ALPHA_CAPS = [
+  'Describe an outcome and press Delegate',
+  'Watch the active queue and Needs-you list on the side rail',
+  'Open jobs into Tasks for review; use Chat for hands-on turns',
+]
+const ALPHA_STEPS: React.ReactNode[] = [
+  <>Pick or confirm the shell project if files matter</>,
+  <>Write the outcome, constraints, and projects Alpha may use</>,
+  <>Press <strong>Delegate</strong> — leave anytime; return to the same desk</>,
+]
 
 function readSideCollapsed(): boolean {
   if (typeof localStorage === 'undefined') return false
@@ -25,27 +43,35 @@ function readSideCollapsed(): boolean {
   return false
 }
 
-function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
+/** Exported for unit tests of the compact empty surface. */
+export function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
   const examples = [
     'Audit this project and delegate independent fixes.',
     'Split the release into implementation, docs, and verification jobs.',
     'Review active work and tell me what needs my attention.',
   ]
-  return <div className="alpha-empty teaching-empty" data-testid="teaching-empty">
-    <h3 className="teaching-empty-title">Delegate an outcome</h3>
-    <p className="teaching-empty-lead">Alpha is the side path when you want outcomes dispatched, not a hands-on Chat thread. It breaks work into durable jobs, runs up to three workers, and returns decisions here.</p>
-    <ul className="teaching-empty-caps" aria-label="What you can do here">
-      <li>Describe an outcome and press <strong>Delegate</strong></li>
-      <li>Watch the active queue and Needs-you list on the side rail</li>
-      <li>Open jobs into Tasks for review; use Chat for hands-on turns</li>
-    </ul>
-    <ol className="teaching-empty-steps" aria-label="Getting started">
-      <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Pick or confirm the shell project if files matter</span></li>
-      <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Write the outcome, constraints, and projects Alpha may use</span></li>
-      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Press <strong>Delegate</strong> — leave anytime; return to the same desk</span></li>
-    </ol>
-    <div className="alpha-examples" aria-label="Example delegations">{examples.map(example => <button type="button" className="ghost-button" key={example} onClick={() => onExample(example)}>{example}</button>)}</div>
-  </div>
+  return (
+    <CompactTeachingEmpty
+      className="alpha-empty"
+      testId="alpha-empty"
+      title="Delegate an outcome"
+      lead={ALPHA_LEAD}
+      hints={ALPHA_HINTS}
+      helpTitle="How Alpha works"
+      helpLead="Alpha is the side path when you want outcomes dispatched, not a hands-on Chat thread. It breaks work into durable jobs, runs up to three workers, and returns decisions here."
+      capabilities={ALPHA_CAPS}
+      steps={ALPHA_STEPS}
+      helpBtnTitle="Outcomes, durable jobs, capacity, Needs you, and the Delegate → queue → Tasks path"
+    >
+      <div className="alpha-examples" aria-label="Example delegations">
+        {examples.map(example => (
+          <button type="button" className="ghost-button" key={example} onClick={() => onExample(example)}>
+            {example}
+          </button>
+        ))}
+      </div>
+    </CompactTeachingEmpty>
+  )
 }
 
 type AlphaJobResult = { id: number; title?: string; status: string; engine?: string }

@@ -7,6 +7,7 @@ import { createRun } from '../api/runs'
 import { useRunStream } from '../hooks/useRunStream'
 import { confirmDialog } from '../components/ui/Dialog'
 import { BackButton } from '../components/ui/BackButton'
+import { CompactTeachingEmpty } from '../components/ui/CompactTeachingEmpty'
 import { SURFACES, surfaceTemplates, sceneFromTemplate, type Surface, type Template } from '../components/design/templates'
 import { projectFs } from '../api/fsAdapter'
 import { fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
@@ -480,25 +481,49 @@ function BrandGuideModal({ token, slug, onClose, onOpenFile }: { token: string; 
   </div>
 }
 
-function StartScreen({ onCreate, onShowGallery, designCount, projectName, onBrandGuide, mentionItems }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; projectName: string; onBrandGuide?: () => void; mentionItems: MentionItem[] }) {
+const DS_START_LEAD = 'Describe a brief below - or pick a template - to open an editable canvas.'
+const DS_START_HINTS = [
+  { label: 'brief', hint: 'Describe mood, layout, and copy; Generate opens the canvas' },
+  { label: 'layers', hint: 'Edit text and shapes on the canvas after generation' },
+  { label: 'export', hint: 'Export deliverables that can land in Archive' },
+]
+const DS_START_CAPS = [
+  'Generate graphics, decks, and social frames from a brief',
+  'Edit layers on the canvas; open an existing design from Your designs',
+  'Export deliverables that also land in Archive when registered',
+]
+const DS_START_STEPS: React.ReactNode[] = [
+  <>Write a brief below (or pick a template)</>,
+  <>Press Generate - canvas opens with project locked in chrome</>,
+  <>Chrome Back returns to where you entered Design</>,
+]
+
+/** Sparse teaching header for Design home. Exported for unit tests. */
+export function DesignStartTeaching() {
+  return (
+    <CompactTeachingEmpty
+      className="ds-start-teach"
+      testId="design-start-empty"
+      titleAs="h1"
+      title="What do you want to make?"
+      lead={DS_START_LEAD}
+      hints={DS_START_HINTS}
+      helpTitle="How Design Studio works"
+      helpLead="Design Studio drafts editable visual scenes for this project. Describe a brief and the AI lays out layers - or start from a template. Leave mid-edit and return: the canvas scene stays mounted for this session. Scenes save to the active project (shell switcher)."
+      capabilities={DS_START_CAPS}
+      steps={DS_START_STEPS}
+      helpBtnTitle="Brief, templates, layers, export, brand guide, and the Generate → canvas path"
+    />
+  )
+}
+
+function StartScreen({ onCreate, onShowGallery, designCount, onBrandGuide, mentionItems }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; onBrandGuide?: () => void; mentionItems: MentionItem[] }) {
   const [surface, setSurface] = React.useState<Surface>('graphic')
   const [brief, setBrief] = React.useState('')
   const tpls = surfaceTemplates(surface)
   const generate = () => { const t = tpls[0]; if (t) onCreate(t, brief) }
   return <div className="ds-start"><div className="ds-start-inner center">
-    <p className="muted ds-project-tag">Designing in <strong>{projectName}</strong> · saved to this project</p>
-    <h1>What do you want to make?</h1>
-    <p className="muted ds-sub teaching-empty-lead">Design Studio drafts editable visual scenes for this project. Describe a brief and the AI lays out layers — or start from a template. Leave mid-edit and return: the canvas scene stays mounted for this session.</p>
-    <ul className="teaching-empty-caps ds-teach-list" aria-label="What you can do here">
-      <li>Generate graphics, decks, and social frames from a brief</li>
-      <li>Edit layers on the canvas; open an existing design from Your designs</li>
-      <li>Export deliverables that also land in Archive when registered</li>
-    </ul>
-    <ol className="teaching-empty-steps ds-teach-list ds-teach-steps" aria-label="Getting started">
-      <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Write a brief below (or pick a template)</span></li>
-      <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Press Generate - canvas opens with project locked in chrome</span></li>
-      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Chrome Back returns to where you entered Design</span></li>
-    </ol>
+    <DesignStartTeaching />
     <div className="ds-prompt" onKeyDown={event => {
       if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter') generate()
     }}>
@@ -1292,7 +1317,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   if (!project) return <section className="design-studio"><div className="ds-start"><div className="ds-start-inner center"><h1>Pick a project first</h1><p className="muted ds-sub">Design Studio saves your work into the active project's <code>artifacts/design</code>. Choose a project from the sidebar.</p></div></div></section>
   if (stage === 'gallery') return <section className="design-studio"><GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} /></section>
-  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen mentionItems={mentionItems} designCount={designs.length} projectName={cleanProjectName(project.name)} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
+  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen mentionItems={mentionItems} designCount={designs.length} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
     {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
 
