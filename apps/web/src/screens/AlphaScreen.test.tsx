@@ -116,7 +116,7 @@ describe('AlphaScreen', () => {
     render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     await screen.findByText('Alpha')
 
-    await user.click(screen.getByRole('button', { name: 'Audit this project and delegate independent fixes.' }))
+    await user.click(screen.getByRole('button', { name: 'Audit & fix' }))
     await waitFor(() =>
       expect(screen.getByRole('textbox', { name: 'Delegate an outcome' })).toHaveValue(
         'Audit this project and delegate independent fixes.',

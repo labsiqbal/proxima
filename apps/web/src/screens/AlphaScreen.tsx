@@ -45,10 +45,20 @@ function readSideCollapsed(): boolean {
 
 /** Exported for unit tests of the compact empty surface. */
 export function AlphaEmpty({ onExample }: { onExample: (value: string) => void }) {
+  // Short chip labels keep a horizontal row; full sentence seeds the composer (title + click).
   const examples = [
-    'Audit this project and delegate independent fixes.',
-    'Split the release into implementation, docs, and verification jobs.',
-    'Review active work and tell me what needs my attention.',
+    {
+      label: 'Audit & fix',
+      prompt: 'Audit this project and delegate independent fixes.',
+    },
+    {
+      label: 'Split the release',
+      prompt: 'Split the release into implementation, docs, and verification jobs.',
+    },
+    {
+      label: 'What needs attention',
+      prompt: 'Review active work and tell me what needs my attention.',
+    },
   ]
   return (
     <CompactTeachingEmpty
@@ -65,8 +75,14 @@ export function AlphaEmpty({ onExample }: { onExample: (value: string) => void }
     >
       <div className="alpha-examples" aria-label="Example delegations">
         {examples.map(example => (
-          <button type="button" className="ghost-button" key={example} onClick={() => onExample(example)}>
-            {example}
+          <button
+            type="button"
+            className="alpha-example-chip"
+            key={example.prompt}
+            title={example.prompt}
+            onClick={() => onExample(example.prompt)}
+          >
+            {example.label}
           </button>
         ))}
       </div>

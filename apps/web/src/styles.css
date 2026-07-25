@@ -13097,15 +13097,47 @@ div.result-media {
 .alpha-empty .compact-empty-lead {
 	max-width: var(--tour-width);
 }
-.alpha-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); margin-top: var(--space-3); }
-.alpha-examples .ghost-button {
-	/* Multi-line example chips: keep shared ghost chrome, allow wrap. */
-	max-width: 22rem;
+/* Example prompts: horizontal chip row (wrap ok), not full-width stacked cards. */
+.alpha-examples {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	margin-top: var(--space-3);
+	width: 100%;
+}
+.alpha-example-chip {
+	flex: 0 1 auto;
+	width: max-content;
+	max-width: min(16rem, 100%);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-1);
+	margin: 0;
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid color-mix(in srgb, var(--ui-accent) 18%, var(--ui-stroke-secondary));
+	border-radius: var(--radius-full, 999px);
+	background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-surface));
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	font-weight: 500;
+	line-height: 1.35;
+	text-align: center;
 	white-space: normal;
-	text-align: left;
-	line-height: 1.4;
-	height: auto;
-	min-height: var(--alpha-control-height);
+	cursor: pointer;
+	outline: none;
+	transition:
+		background var(--t) var(--ease),
+		border-color var(--t) var(--ease),
+		color var(--t) var(--ease);
+}
+.alpha-example-chip:hover,
+.alpha-example-chip:focus-visible {
+	background: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface));
+	border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-stroke-secondary));
+	color: var(--ui-text);
 }
 .alpha-thread { display: grid; gap: var(--space-3); flex: 1; min-height: var(--alpha-thread-min-height); max-height: calc(100vh - var(--topbar-h) - var(--alpha-side-width)); overflow: auto; padding: var(--space-5); }
 .alpha-message { max-width: 88%; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); }
@@ -13392,8 +13424,9 @@ div.result-media {
 }
 @media (max-width: 560px) {
 	.alpha-controls { align-items: stretch; flex-direction: column; }
-	.alpha-examples { display: grid; width: 100%; }
-	.alpha-examples .ghost-button { max-width: none; }
+	/* Keep chip-row wrap on narrow viewports — do not force full-width grid stack. */
+	.alpha-examples { justify-content: center; }
+	.alpha-example-chip { max-width: min(14rem, 100%); }
 	.alpha-empty { padding: var(--space-5) var(--space-3); }
 	.alpha-error { align-items: flex-start; flex-wrap: wrap; }
 	.attention-popover { position: fixed; top: var(--mobile-topbar-h); right: var(--space-2); left: var(--space-2); width: auto; max-height: calc(100vh - var(--mobile-topbar-h) - var(--space-4)); }
