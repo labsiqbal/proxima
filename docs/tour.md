@@ -1,8 +1,9 @@
 # Visual tour
 
 This is Proxima as it ships now: a single-user, self-hosted control plane for
-hands-on agent work and delegated agent teams. Every screenshot on this page was
-captured on 2026-07-24 in one uniform pass on branch
+hands-on agent work and delegated agent teams. It is under **active development**
+(expect roughness; see [installation](installation.md#what-to-expect)). Every
+screenshot on this page was captured on 2026-07-24 in one uniform pass on branch
 `fm/proxima-screenshot-uniform-refresh` (HEAD of main after #37 Alpha UI parity
 and destinations-only nav). Capture used a disposable owner DB and isolated
 `scripts/dev`-style API + Vite on loopback at a fixed viewport of **1440×1000**,

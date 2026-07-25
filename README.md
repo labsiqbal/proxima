@@ -28,6 +28,11 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
 **Take the complete [visual tour](docs/tour.md)** for every primary surface and
 honest live-pass notes.
 
+> **Active development** - expect bugs, incomplete polish, and occasional broken
+> UI after updates. Report issues; do not treat this as finished SaaS polish.
+> Chat history and other owner data live outside the git checkout and are **not**
+> wiped by a normal update (see [installation](docs/installation.md#updating)).
+
 ## What it is
 
 A workspace you self-host as a background service and open in a browser (or

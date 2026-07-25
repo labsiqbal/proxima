@@ -4,6 +4,18 @@ Proxima is currently a **single-user cockpit**. It auto-creates one owner; first
 sets that owner's password, later visits log in or resume the HttpOnly session. There
 are no invites, memberships, roles, or team-user flows.
 
+## What to expect
+
+Proxima is under **active development**. Expect bugs, incomplete polish, and
+occasional broken UI after updates. That is normal for this stage - report issues
+rather than treating the product as finished SaaS polish.
+
+Updates refresh **application code** only. Sessions, chat history, projects, and
+other owner data live in the **data directory** (SQLite and workspace files), not
+in the git checkout. A normal `proxima update` / one-click update does **not** wipe
+chat or history. Details: [Updating](#updating) (code vs data, when history can
+look "gone", recovery).
+
 ## Requirements
 
 - Linux or macOS host (Windows packaging exists, but the PTY backend is not yet portable)
@@ -102,17 +114,24 @@ scheduled separately; see [backup.md](backup.md).
 
 ## Runtime Paths
 
-Default user-local paths:
+Default user-local paths (Linux and macOS unless you override them):
 
 ```text
 ~/.config/proxima/proxima.env
+~/.local/share/proxima/          # data dir (or $PROXIMA_DATA_DIR / $XDG_DATA_HOME/proxima)
 ~/.local/share/proxima/proxima.db
 ~/.local/share/proxima/workspace
 ~/.local/share/proxima/hermes-profiles/<owner>/<profile>
 ~/.local/share/proxima/backups
 ```
 
-Runtime data stays outside the repository.
+Runtime data stays outside the repository. The git checkout holds only app code.
+
+**macOS:** the installer still uses LaunchAgents and writes logs to
+`~/Library/Logs/proxima.log`, but the default **data directory** is the same XDG-style
+path above (`~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) unless
+you override it. Chat history is in that data dir's SQLite DB, not under
+`~/Library`.
 
 ## Configuration
 
@@ -189,13 +208,51 @@ pill; it opens the release notes with a one-click **Update now** button
 service, and the UI reloads on the new version. Build failures happen before restart;
 a failed post-restart health check is reported for manual inspection because automatic
 checkout/DB rollback is intentionally not attempted. The log lives at
-`~/.local/share/proxima/update.log`.
+`$DATA_DIR/update.log` (default `~/.local/share/proxima/update.log`).
 
 CLI equivalent (also the Windows path):
 
 ```bash
 proxima update
 ```
+
+### Code checkout vs data directory
+
+One-click update and `proxima update` only update the **code checkout**. They do
+not delete or replace the data directory.
+
+| Location | Contents | Touched by update? |
+| --- | --- | --- |
+| **Git checkout** (install source) | App code | **Yes** - `git pull --ff-only` + rebuild |
+| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | **No** - update must not delete this |
+
+Chat history lives in **SQLite under the data dir** (`PROXIMA_DB_PATH`, default
+`$DATA_DIR/proxima.db`), not in the git tree. A correct update leaves it in place.
+
+If the checkout has **local changes**, update **refuses** and prints `git status`.
+That is not data loss: the old version keeps running until the working tree is clean
+(or you update by another deliberate path).
+
+### When history can look "gone"
+
+History is not wiped by a successful update. It can appear missing if you:
+
+1. **Reinstalled** and pointed at a **new empty data dir**, or wiped
+   `~/.local/share/proxima` (or the path you configured).
+2. Changed `PROXIMA_DB_PATH` / `PROXIMA_DATA_DIR` / `proxima.env` so the app opens a
+   **different database**.
+3. Restored a machine from backup **without** the data directory.
+4. Used a **dev/preview** data path (e.g. `proxima-preview` or a staging root such as
+   `proxima-staging`) and switched to production (or the reverse).
+5. Deleted the DB or ran a destructive reset.
+
+### Recovery
+
+- Check backups under `$DATA_DIR/backups` (default
+  `~/.local/share/proxima/backups`). See [backup.md](backup.md).
+- Confirm env paths in `~/.config/proxima/proxima.env` (and on macOS the LaunchAgent
+  environment) still match the old data dir.
+- Verify the file: `sqlite3 "$PROXIMA_DB_PATH" "PRAGMA integrity_check;"` (expect `ok`).
 
 **Privacy:** the check is a single unauthenticated HTTPS request to
 `api.github.com` every 6 hours; it sends nothing beyond the request itself.
