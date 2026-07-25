@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   DESIGN_COMPONENTS_FILE,
+  DESIGN_INSPECTOR_WIDTH_KEY,
+  DESIGN_LEFT_WIDTH_KEY,
+  DESIGN_PANEL_WIDTH,
+  designStudioPanelStyle,
+  designStudioResizeHandles,
   hasDesignComponentsFile,
   layerRowAriaLabel,
   parseProjectComponentsJson,
@@ -36,6 +41,32 @@ describe('parseProjectComponentsJson', () => {
     expect(parseProjectComponentsJson('not-json')).toEqual([])
     expect(parseProjectComponentsJson('{}')).toEqual([])
     expect(parseProjectComponentsJson(JSON.stringify({ components: 'nope' }))).toEqual([])
+  })
+})
+
+describe('designStudioPanelStyle', () => {
+  it('sets CSS width vars on desktop and skips on mobile', () => {
+    expect(designStudioPanelStyle(true, 320, 300)).toBeUndefined()
+    expect(designStudioPanelStyle(false, 320, 300)).toEqual({
+      '--ds-left-width': '320px',
+      '--ds-inspector-width': '300px',
+    })
+  })
+})
+
+describe('designStudioResizeHandles', () => {
+  it('hides handles when collapsed or on mobile', () => {
+    expect(designStudioResizeHandles(false, false, false)).toEqual({ left: true, right: true })
+    expect(designStudioResizeHandles(false, true, false)).toEqual({ left: false, right: true })
+    expect(designStudioResizeHandles(false, false, true)).toEqual({ left: true, right: false })
+    expect(designStudioResizeHandles(true, false, false)).toEqual({ left: false, right: false })
+  })
+
+  it('uses stable storage keys and clamp range', () => {
+    expect(DESIGN_LEFT_WIDTH_KEY).toBe('proxima.design.leftWidth')
+    expect(DESIGN_INSPECTOR_WIDTH_KEY).toBe('proxima.design.inspectorWidth')
+    expect(DESIGN_PANEL_WIDTH.min).toBeLessThan(DESIGN_PANEL_WIDTH.fallback)
+    expect(DESIGN_PANEL_WIDTH.max).toBeGreaterThan(DESIGN_PANEL_WIDTH.fallback)
   })
 })
 

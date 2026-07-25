@@ -4,6 +4,7 @@ import type Konva from 'konva'
 import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, canBeImageFrame, isImageFrame, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type ShapeLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
 import { createRun } from '../api/runs'
+import { useDragWidth } from '../hooks/useDragWidth'
 import { useRunStream } from '../hooks/useRunStream'
 import { confirmDialog } from '../components/ui/Dialog'
 import { BackButton } from '../components/ui/BackButton'
@@ -20,7 +21,17 @@ import { getImageGenSettings } from '../api/settings'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
 import { ColorInput } from '../components/design/ColorInput'
-import { DESIGN_COMPONENTS_FILE, hasDesignComponentsFile, layerRowAriaLabel, parseProjectComponentsJson } from '../components/design/studioHelpers'
+import {
+  DESIGN_COMPONENTS_FILE,
+  DESIGN_INSPECTOR_WIDTH_KEY,
+  DESIGN_LEFT_WIDTH_KEY,
+  DESIGN_PANEL_WIDTH,
+  designStudioPanelStyle,
+  designStudioResizeHandles,
+  hasDesignComponentsFile,
+  layerRowAriaLabel,
+  parseProjectComponentsJson,
+} from '../components/design/studioHelpers'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
 import type { Project, RunEvent } from '../types'
 
@@ -619,6 +630,11 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [rightCollapsed, setRightCollapsed] = React.useState<boolean>(() => { try { return localStorage.getItem('proxima.design.rightCollapsed') === '1' } catch { return false } })
   React.useEffect(() => { try { localStorage.setItem('proxima.design.leftCollapsed', leftCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [leftCollapsed])
   React.useEffect(() => { try { localStorage.setItem('proxima.design.rightCollapsed', rightCollapsed ? '1' : '0') } catch { /* storage disabled */ } }, [rightCollapsed])
+  // Desktop only: left rail (Chat/Assets/Layers) + inspector share one width each, like Graph plan chat.
+  const [leftWidth, dragLeft] = useDragWidth(DESIGN_LEFT_WIDTH_KEY, DESIGN_PANEL_WIDTH.fallback, DESIGN_PANEL_WIDTH.min, DESIGN_PANEL_WIDTH.max)
+  const [inspectorWidth, dragInspector] = useDragWidth(DESIGN_INSPECTOR_WIDTH_KEY, DESIGN_PANEL_WIDTH.fallback, DESIGN_PANEL_WIDTH.min, DESIGN_PANEL_WIDTH.max)
+  const panelStyle = designStudioPanelStyle(isMobile, leftWidth, inspectorWidth)
+  const resizeHandles = designStudioResizeHandles(isMobile, leftCollapsed, rightCollapsed)
   const [assets, setAssets] = React.useState<string[]>([])
   const [uploading, setUploading] = React.useState(false)
   const [imgPrompt, setImgPrompt] = React.useState('')
@@ -2128,7 +2144,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         </div>
       </div>
     </div>
-    <div className={`ds-body ${!isMobile && leftCollapsed ? 'left-collapsed' : ''} ${!isMobile && rightCollapsed ? 'right-collapsed' : ''}`}>
+    <div
+      className={`ds-body ${!isMobile && leftCollapsed ? 'left-collapsed' : ''} ${!isMobile && rightCollapsed ? 'right-collapsed' : ''}`}
+      style={panelStyle}
+    >
       {!isMobile && leftCollapsed && <button className="ds-panel-reopen left" onClick={() => setLeftCollapsed(false)} title="Show panel">›</button>}
       <aside className={`ds-left ${isMobile && mSheet === 'panel' ? 'sheet-open' : ''}`}>
         <div className="ds-left-tabs">
@@ -2251,6 +2270,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             })())}</>}</div>}
         </div>
       </aside>
+      {resizeHandles.left && <div className="panel-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" aria-valuemin={DESIGN_PANEL_WIDTH.min} aria-valuemax={DESIGN_PANEL_WIDTH.max} aria-valuenow={leftWidth} onPointerDown={dragLeft} />}
       <div className={`ds-canvas-wrap figma ${eyedrop ? 'ds-eyedropping' : ''}`} ref={wrapRef} style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.scale}px ${24 * view.scale}px` }}>
         {eyedrop && <div className="ds-eyedrop-hint">🎨 Click anywhere on the canvas to pick a colour · Esc to cancel</div>}
         <Stage ref={stageRef} width={box.w} height={box.h} x={view.x} y={view.y} scaleX={view.scale} scaleY={view.scale} onWheel={onWheel} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
@@ -2417,6 +2437,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           </div>
         </>}
       </div>
+      {resizeHandles.right && <div className="panel-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize inspector" data-grow="left" aria-valuemin={DESIGN_PANEL_WIDTH.min} aria-valuemax={DESIGN_PANEL_WIDTH.max} aria-valuenow={inspectorWidth} onPointerDown={dragInspector} />}
       <aside className={`ds-inspector ${isMobile && mSheet === 'inspector' ? 'sheet-open' : ''}`}>
         {!isMobile && <button className="ds-panel-collapse right" onClick={() => setRightCollapsed(true)} title="Hide inspector">›</button>}
         {selectedIds.length > 1 ? <div className="ds-fields">
