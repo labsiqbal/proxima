@@ -495,6 +495,8 @@ button:disabled {
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
+	/* Bound height to the shell grid cell so descendants can own scroll. */
+	overflow: hidden;
 	/* Subtle accent ambience on every window (same glow the Design start screen used). */
 	background: radial-gradient(
 		130% 80% at 50% -15%,
@@ -528,14 +530,20 @@ button:disabled {
 }
 
 .chat-stage {
-	flex: 1;
+	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	/* Clip here so .thread is the only vertical scrollport in Chat. */
+	overflow: hidden;
 }
 .thread {
-	flex: 1;
-	overflow: auto;
+	/* Real scrollport: take remaining height, shrink below content, scroll. */
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	/* Pack from the top under the header — never messenger-style pin-to-composer. */
 	justify-content: flex-start;
 	/* Generous bottom padding: streaming follows the bottom when overflowing, so the
@@ -2025,6 +2033,8 @@ button:disabled {
 	align-items: center;
 	/* Explicit top pack: short threads sit under the header, not vertically centered. */
 	justify-content: flex-start;
+	/* Reinforced: flex item default min-height:auto blocks overflow scroll. */
+	min-height: 0;
 }
 /* Compact progressive-disclosure empty (Chat, Alpha, Design home, …) */
 .compact-empty {

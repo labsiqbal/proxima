@@ -83,6 +83,33 @@ describe("ChatThread top-anchor layout", () => {
 		}
 		expect(stylesSource).toMatch(/\.chat-log\s*\{[^}]*flex:\s*0\s+0\s+auto/s);
 	});
+
+	it("CSS makes .thread a real scrollport in the flex chain", () => {
+		// main-pane / chat-stage bound height; thread is the overflow-y:auto scrollport.
+		const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
+		/** Match a rule whose selector is exactly `sel` (not a longer compound). */
+		const exactRule = (sel: string) => {
+			const esc = sel.replace(".", "\\.");
+			const m = stylesSource.match(
+				new RegExp(`(?:^|\\n)${esc}\\s*\\{([^}]*)\\}`),
+			);
+			return m ? strip(m[1]) : "";
+		};
+		const mainPane = exactRule(".main-pane");
+		const chatStage = exactRule(".chat-stage");
+		const thread = exactRule(".thread");
+
+		expect(mainPane).toMatch(/min-height:\s*0/);
+		expect(mainPane).toMatch(/overflow:\s*hidden/);
+		expect(chatStage).toMatch(/min-height:\s*0/);
+		expect(chatStage).toMatch(/overflow:\s*hidden/);
+		expect(thread).toMatch(/min-height:\s*0/);
+		expect(thread).toMatch(/overflow-y:\s*auto/);
+		// Content child must not be the scrollport (grows with messages).
+		const chatLog = exactRule(".chat-log");
+		expect(chatLog).not.toMatch(/overflow(-y)?:\s*auto/);
+		expect(chatLog).toMatch(/flex:\s*0\s+0\s+auto/);
+	});
 });
 
 describe("ChatThread scroll follow (layout metrics)", () => {
