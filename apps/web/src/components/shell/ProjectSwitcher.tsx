@@ -1,12 +1,16 @@
 import React from 'react'
 import type { Project } from '../../types'
-import { IconChevronRight } from './icons'
+import { renameProject } from '../../api/projects'
+import { promptDialog } from '../ui/Dialog'
+import { IconChevronRight, IconPencil } from './icons'
 
 /** Global active-project control for the shell top bar (text + chevron, not icon-only). */
 export function ProjectSwitcher({
   projects,
   activeProject,
   onSelectProject,
+  token,
+  onProjectRenamed,
   className,
   compact = false,
   locked = false,
@@ -15,6 +19,9 @@ export function ProjectSwitcher({
   projects: Project[]
   activeProject: Project | null
   onSelectProject: (project: Project) => void
+  /** When set with onProjectRenamed, each row offers Rename (Settings → Projects remains available too). */
+  token?: string
+  onProjectRenamed?: (project: Project) => void
   className?: string
   /** Slightly denser trigger for the mobile topbar. */
   compact?: boolean
@@ -23,6 +30,7 @@ export function ProjectSwitcher({
   lockedReason?: string
 }) {
   const [open, setOpen] = React.useState(false)
+  const [busySlug, setBusySlug] = React.useState<string | null>(null)
   const root = React.useRef<HTMLDivElement>(null)
   const menuId = React.useId()
 
@@ -50,6 +58,30 @@ export function ProjectSwitcher({
   const label = activeProject?.name || (projects.length ? 'Select project' : 'No projects')
   const disabled = projects.length === 0 || locked
   const title = locked ? lockedReason : label
+  const canRename = Boolean(token && onProjectRenamed)
+
+  async function rename(project: Project) {
+    if (!token || !onProjectRenamed || busySlug) return
+    setOpen(false)
+    const next = await promptDialog({
+      title: `Rename “${project.name}”`,
+      label: 'New name',
+      defaultValue: project.name,
+      confirmLabel: 'Rename',
+    })
+    if (next === null) return
+    const name = next.trim()
+    if (!name || name === project.name) return
+    setBusySlug(project.slug)
+    try {
+      const renamed = await renameProject(token, project.slug, name)
+      onProjectRenamed(renamed)
+    } catch {
+      // Switcher has no error bar; Settings → Projects remains the full manage surface.
+    } finally {
+      setBusySlug(null)
+    }
+  }
 
   return (
     <div className={`project-switcher ${compact ? 'compact' : ''} ${locked ? 'is-locked' : ''} ${className || ''}`} ref={root}>
@@ -73,21 +105,36 @@ export function ProjectSwitcher({
         <div className="project-switcher-menu" id={menuId} role="listbox" aria-label="Projects">
           {projects.map(project => {
             const selected = project.slug === activeProject?.slug
+            const renaming = busySlug === project.slug
             return (
-              <button
-                type="button"
-                role="option"
-                aria-selected={selected}
-                key={project.slug}
-                className={`project-switcher-item ${selected ? 'active' : ''}`}
-                onClick={() => {
-                  onSelectProject(project)
-                  setOpen(false)
-                }}
-              >
-                <strong>{project.name}</strong>
-                <small>{project.slug}</small>
-              </button>
+              <div key={project.slug} className={`project-switcher-row ${selected ? 'active' : ''}`}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className="project-switcher-item"
+                  disabled={!!busySlug}
+                  onClick={() => {
+                    onSelectProject(project)
+                    setOpen(false)
+                  }}
+                >
+                  <strong>{project.name}</strong>
+                  <small>{project.slug}</small>
+                </button>
+                {canRename && (
+                  <button
+                    type="button"
+                    className="project-switcher-rename"
+                    disabled={!!busySlug}
+                    aria-label={`Rename project ${project.name}`}
+                    title="Rename"
+                    onClick={() => void rename(project)}
+                  >
+                    {renaming ? '…' : <IconPencil size={13} />}
+                  </button>
+                )}
+              </div>
             )
           })}
         </div>

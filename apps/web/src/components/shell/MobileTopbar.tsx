@@ -7,6 +7,8 @@ export function MobileTopbar({
   activeProject,
   projects = [],
   onSelectProject,
+  token,
+  onProjectRenamed,
   projectLocked = false,
   projectLockedReason,
   chromeBackEnabled = false,
@@ -21,6 +23,8 @@ export function MobileTopbar({
   activeProject: Project | null
   projects?: Project[]
   onSelectProject?: (project: Project) => void
+  token?: string
+  onProjectRenamed?: (project: Project) => void
   projectLocked?: boolean
   projectLockedReason?: string
   chromeBackEnabled?: boolean
@@ -59,6 +63,8 @@ export function MobileTopbar({
           projects={projects}
           activeProject={activeProject}
           onSelectProject={onSelectProject}
+          token={token}
+          onProjectRenamed={onProjectRenamed}
           locked={projectLocked}
           lockedReason={projectLockedReason}
           compact

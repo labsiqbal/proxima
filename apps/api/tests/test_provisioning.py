@@ -55,6 +55,7 @@ def test_provision_private_project(tmp_path):
     user = add_user(conn, "alice")
     project = provisioning.provision_private_project(conn, cfg, user)
     assert project["slug"] == "alice"
+    assert project["name"] == "alice"
     assert project["visibility"] == "private"
     assert project["owner_user_id"] == user["id"]
     assert (tmp_path / "projects" / "alice" / "wiki").is_dir()

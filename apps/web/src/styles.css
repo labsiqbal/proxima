@@ -3223,8 +3223,8 @@ button:disabled {
 	top: calc(100% + var(--space-1));
 	left: 0;
 	z-index: 40;
-	min-width: max(100%, 12rem);
-	max-width: min(20rem, calc(100vw - var(--space-8)));
+	min-width: max(100%, 14rem);
+	max-width: min(22rem, calc(100vw - var(--space-8)));
 	max-height: min(18rem, 50vh);
 	overflow: auto;
 	border: 1px solid var(--ui-stroke-secondary);
@@ -3232,10 +3232,21 @@ button:disabled {
 	background: var(--ui-surface);
 	box-shadow: var(--shadow-composer);
 }
+.project-switcher-row {
+	display: flex;
+	align-items: stretch;
+	gap: 0;
+	min-width: 0;
+}
+.project-switcher-row:hover,
+.project-switcher-row.active {
+	background: var(--ui-row-hover-background);
+}
 .project-switcher-item {
 	display: grid;
 	gap: var(--space-1);
-	width: 100%;
+	flex: 1 1 auto;
+	min-width: 0;
 	border: 0;
 	padding: var(--space-2) var(--space-3);
 	background: transparent;
@@ -3243,17 +3254,37 @@ button:disabled {
 	text-align: left;
 	cursor: pointer;
 }
-.project-switcher-item:hover,
-.project-switcher-item.active {
-	background: var(--ui-row-hover-background);
-}
 .project-switcher-item strong {
 	font-size: var(--text-sm);
 	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .project-switcher-item small {
 	color: var(--ui-text-tertiary);
 	font-size: var(--text-xs);
+}
+.project-switcher-rename {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 2rem;
+	margin: var(--space-1) var(--space-1) var(--space-1) 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--ui-text-tertiary);
+	cursor: pointer;
+}
+.project-switcher-rename:hover:not(:disabled) {
+	color: var(--ui-accent);
+	background: var(--ui-bg-elevated);
+}
+.project-switcher-rename:disabled {
+	opacity: 0.55;
+	cursor: default;
 }
 .project-switcher.compact {
 	max-width: 9rem;
@@ -6019,23 +6050,18 @@ div.result-media {
 	width: min(880px, 100%);
 	text-align: center;
 }
-.graph-project-tag {
-	font-size: var(--text-xs);
-	margin: 0 0 var(--space-4);
-}
-/* Locked project chip in the graph editor header (1 workflow = 1 project). */
+/* Lock signal only — no project display name (shell switcher owns that). */
 .graph-project-lock {
 	display: inline-flex;
 	align-items: center;
-	gap: var(--space-1);
-	padding: 0 var(--space-2);
+	justify-content: center;
+	width: 1.75rem;
 	min-height: 1.75rem;
+	padding: 0;
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-md);
 	background: var(--ui-bg-elevated);
-	color: var(--ui-text-secondary);
-	font-size: var(--text-xs);
-	white-space: nowrap;
+	color: var(--ui-text-tertiary);
 }
 .graph-run-kinds {
 	display: inline-flex;
@@ -6057,10 +6083,6 @@ div.result-media {
 .graph-run-kind.is-scheduled {
 	color: var(--ui-text-secondary);
 	border-color: var(--ui-stroke);
-}
-.schedule-project-lock {
-	margin: 0 0 var(--space-2);
-	font-size: var(--text-xs);
 }
 .graph-start-inner h1 {
 	font-size: var(--text-xl);

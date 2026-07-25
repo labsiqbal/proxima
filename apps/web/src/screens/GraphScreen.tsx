@@ -24,7 +24,7 @@ import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
-import { IconTrash } from '../components/shell/icons'
+import { IconLock, IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { ScriptApprovalCard } from '../components/workflows/ScriptApprovalCard'
@@ -837,7 +837,6 @@ export function GraphScreen({
 
       <div className="graph-start">
         <div className="graph-start-inner">
-          {activeProject && <p className="muted graph-project-tag">Building in <strong>{activeProject.name}</strong> · runs stay in this project</p>}
           <h1>What should this plan do?</h1>
           <p className="muted graph-sub">Describe it and the agent draws the graph — independent branches run in parallel. Nothing's locked; you can rearrange everything on the canvas.</p>
           <div className="graph-prompt" onKeyDown={event => {
@@ -964,16 +963,17 @@ export function GraphScreen({
         })}
         aria-pressed={chatOpen}
       >Chat</button>}
-      {/* Project is locked to the open plan (1 workflow = 1 project). Shell filter
-          on the home stage does not rebind this instance mid-edit/run. */}
-      {(() => {
-        const lockedSlug = resolveOwnedProjectSlug(job, activeProject?.slug)
-        const locked = lockedSlug ? projects.find(item => item.slug === lockedSlug) : null
-        if (!locked && !lockedSlug) return null
-        return <span className="graph-project-lock" title="Project is owned by this plan — switch project only when starting a new workflow">
-          {locked?.name ?? lockedSlug}
+      {/* Project is locked to the open plan (1 workflow = 1 project). Shell already
+          shows the active project - do not dump the display name again here. */}
+      {resolveOwnedProjectSlug(job, activeProject?.slug) && (
+        <span
+          className="graph-project-lock"
+          title="Project locked to this plan - switch project only when starting a new workflow"
+          aria-label="Project locked to this plan"
+        >
+          <IconLock size={12} />
         </span>
-      })()}
+      )}
       <h1>{job?.title ?? 'Workflows'}</h1>
       {job && <>
         <span className={`graph-status st-${planStatusTone(job)}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job)}</span>
