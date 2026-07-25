@@ -107,6 +107,9 @@ anything, while Proxima never ships or manages binaries.
 session. The worker is bounded-concurrent (`run_worker_concurrency`) so one slow run
 never blocks other chats. Tool permissions ask the owner by default; auto-approve is
 an explicit Settings opt-in. Streaming uses SSE (`/events/stream`) + WebSocket.
+An empty thread (`ChatEmpty`) stays sparse by default - title, one lead line, short
+tooltip hints, and a **How it works** dialog for the fuller tutorial - so the composer
+remains the primary CTA rather than a wall of teaching copy.
 **Endpoints:** `POST /api/chat/send`, `/api/sessions/{id}/runs`, `/messages`,
 `/events/stream`, `WS /api/ws/sessions/{id}`, `/runs/{id}/cancel`, `/runs/{id}/permission`.
 

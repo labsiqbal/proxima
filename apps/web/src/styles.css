@@ -1997,19 +1997,107 @@ button:disabled {
 .chat-empty {
 	text-align: center;
 	color: var(--ui-text-tertiary);
-	padding: var(--space-10) var(--space-4);
+	/* Sparse empty: less vertical bulk so the composer stays the focal CTA */
+	padding: var(--space-8) var(--space-4) var(--space-6);
 	display: grid;
 	justify-items: center;
 	gap: var(--space-2);
+	max-width: 28rem;
+	margin-inline: auto;
 }
 .chat-empty-mark {
 	font-size: var(--text-2xl);
 	color: var(--ui-accent);
+	line-height: 1;
 }
 .chat-empty h3 {
-	margin: var(--space-2) 0 0;
+	margin: var(--space-1) 0 0;
 	color: var(--ui-text-secondary);
 	font-size: var(--text-md);
+	font-weight: 650;
+}
+.chat-empty-lead {
+	margin: 0;
+	max-width: 22rem;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	line-height: 1.55;
+}
+.chat-empty-hints {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--space-1) var(--space-2);
+	margin-top: var(--space-1);
+}
+.chat-empty-hint {
+	display: inline-flex;
+	align-items: center;
+	cursor: help;
+	border-radius: var(--radius-full, 999px);
+	padding: 2px var(--space-2);
+	background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-surface));
+	border: 1px solid color-mix(in srgb, var(--ui-accent) 18%, var(--ui-stroke-secondary));
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	line-height: 1.4;
+	outline: none;
+	transition:
+		background var(--t) var(--ease),
+		border-color var(--t) var(--ease),
+		color var(--t) var(--ease);
+}
+.chat-empty-hint:hover,
+.chat-empty-hint:focus-visible {
+	background: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface));
+	border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-stroke-secondary));
+	color: var(--ui-text);
+}
+.chat-empty-hint code {
+	background: transparent;
+	padding: 0;
+	font-size: inherit;
+	color: var(--ui-accent);
+	font-weight: 650;
+}
+.chat-empty-help-btn {
+	margin-top: var(--space-1);
+	color: var(--ui-text-secondary);
+}
+.chat-empty-help-btn:hover,
+.chat-empty-help-btn:focus-visible {
+	color: var(--ui-accent);
+}
+.chat-empty-help {
+	max-width: 26rem;
+	text-align: left;
+}
+.chat-empty-help-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+.chat-empty-help-head h3 {
+	margin: 0;
+}
+.chat-empty-help-close {
+	flex: 0 0 auto;
+	margin: calc(var(--space-1) * -1) calc(var(--space-1) * -1) 0 0;
+}
+.chat-empty-help-lead {
+	margin: 0;
+}
+.chat-empty-help .teaching-empty-caps,
+.chat-empty-help .teaching-empty-steps {
+	width: 100%;
+	justify-self: stretch;
+}
+.chat-empty-help .teaching-empty-caps {
+	margin-top: 0;
+}
+.chat-empty-help .teaching-empty-steps {
+	margin-top: var(--space-2);
 }
 .chat-empty code {
 	background: var(--ui-row-hover-background);
@@ -2100,16 +2188,6 @@ button:disabled {
 .teaching-empty-cta {
 	margin-top: var(--space-3);
 }
-.chat-empty .teaching-empty-caps,
-.chat-empty .teaching-empty-steps,
-.chat-empty .teaching-empty-lead {
-	text-align: left;
-	justify-self: center;
-}
-.chat-empty .teaching-empty-lead {
-	text-align: center;
-}
-
 .chat-line.enter {
 	animation: chat-in 0.18s ease-out;
 }
