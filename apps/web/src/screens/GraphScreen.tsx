@@ -19,7 +19,6 @@ import {
 } from '../api/graph'
 import { listSchedules } from '../api/schedules'
 import { activeRuns } from '../api/runs'
-import { Dropdown } from '../components/ui/Dropdown'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
@@ -823,12 +822,6 @@ export function GraphScreen({
   if (stage === 'home') {
     return <section className="graph-screen graph-home">
       <header className="graph-header">
-        {projects.length > 0 && <Dropdown
-          value={activeProject?.slug ?? ''}
-          minWidth={200}
-          onChange={value => { const project = projects.find(item => item.slug === value); if (project) onActiveProject?.(project) }}
-          options={projects.map(project => ({ value: project.slug, label: project.name }))}
-        />}
         <h1>Workflows</h1>
         <div className="graph-header-actions">
           <button className="ghost-button" onClick={() => void refreshList()}>Refresh</button>

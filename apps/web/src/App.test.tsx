@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAndStartOpsTask, resolveArtifactReviewSession } from "./App";
+import {
+	createAndStartOpsTask,
+	projectSelectNavigatesToChat,
+	recentSessionForProject,
+	resolveArtifactReviewSession,
+} from "./App";
 import type { ChatSession } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
 import { createRun } from "./api/runs";
@@ -27,6 +32,53 @@ const chatSession = (id: number, title: string): ChatSession => ({
 	runner_id: "claude-code",
 	project_slug: "alpha",
 	visibility: "private",
+});
+
+describe("Shell project selection", () => {
+	const enabled = () => true;
+	const alpha: ChatSession = {
+		id: 1,
+		title: "Alpha chat",
+		runner_id: "claude-code",
+		project_slug: "alpha",
+		visibility: "private",
+		updated_at: "2026-01-01T10:00:00Z",
+	};
+	const alphaNewer: ChatSession = {
+		...alpha,
+		id: 2,
+		title: "Alpha newer",
+		updated_at: "2026-01-02T10:00:00Z",
+	};
+	const beta: ChatSession = {
+		id: 3,
+		title: "Beta chat",
+		runner_id: "claude-code",
+		project_slug: "beta",
+		visibility: "private",
+		updated_at: "2026-01-03T10:00:00Z",
+	};
+
+	it("picks the most recent enabled session for the project", () => {
+		expect(recentSessionForProject([alpha, alphaNewer, beta], "alpha", enabled)).toEqual(alphaNewer);
+		expect(recentSessionForProject([alpha, beta], "beta", enabled)?.id).toBe(3);
+	});
+
+	it("returns null when the project has no sessions or slug is empty", () => {
+		expect(recentSessionForProject([alpha], "missing", enabled)).toBeNull();
+		expect(recentSessionForProject([alpha], null, enabled)).toBeNull();
+		expect(recentSessionForProject([alpha], undefined, enabled)).toBeNull();
+	});
+
+	it("respects sessionEnabled so disabled kinds do not become active chat", () => {
+		const design = { ...alphaNewer, mode: "design" };
+		expect(recentSessionForProject([alpha, design], "alpha", s => s.mode !== "design")).toEqual(alpha);
+	});
+
+	it("header shell-only mode does not navigate to chat; open-chat mode does", () => {
+		expect(projectSelectNavigatesToChat("shell-only")).toBe(false);
+		expect(projectSelectNavigatesToChat("open-chat")).toBe(true);
+	});
 });
 
 describe("Artifact review session handoff", () => {

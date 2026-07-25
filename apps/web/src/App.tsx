@@ -89,6 +89,25 @@ export async function createAndStartOpsTask(token: string, request: OpsTaskReque
   return job.id
 }
 
+/** Most recent feature-enabled chat for a project, or null when none / no project. */
+export function recentSessionForProject(
+  sessions: ChatSession[],
+  projectSlug: string | null | undefined,
+  sessionEnabled: (session: ChatSession) => boolean,
+): ChatSession | null {
+  if (!projectSlug) return null
+  return sessions
+    .filter(session => session.project_slug === projectSlug && sessionEnabled(session))
+    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null
+}
+
+/** Whether selecting a project should navigate to Chat (intentional open) or only filter the shell. */
+export type ProjectSelectMode = 'shell-only' | 'open-chat'
+
+export function projectSelectNavigatesToChat(mode: ProjectSelectMode): boolean {
+  return mode === 'open-chat'
+}
+
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
 }
@@ -464,18 +483,20 @@ export function App() {
 
   const createTask = (request: OpsTaskRequest) => createAndStartOpsTask(token, request)
 
-  // Switching project opens that project's most recent chat (not a task thread),
-  // or a blank new chat if it has none — so the chat view always reflects the
-  // chosen project instead of leaving you on an unrelated conversation.
-  function selectProject(p: Project | null) {
+  // Header ProjectSwitcher: filter the shell active project (and the chat session
+  // so Chat stays coherent when the owner later opens it). Do not force Chat —
+  // stay on Workflows / Alpha / Archive / Design / Tasks / Settings.
+  function setActiveProjectOnly(p: Project | null) {
     clearPendingNavigation()
     setActiveProject(p)
     if (!p) { setActiveSession(null); return }
-    const recent = sessions
-      .filter(s => s.project_slug === p.slug && sessionEnabled(s))
-      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null
-    setActiveSession(recent)
-    setView('chat')
+    setActiveSession(recentSessionForProject(sessions, p.slug, sessionEnabled))
+  }
+
+  // Intentional "open this project's chat" (Search, etc.): same shell filter, then Chat.
+  function selectProject(p: Project | null) {
+    setActiveProjectOnly(p)
+    if (p) setView('chat')
   }
 
   async function handleRenameSession(id: number, title: string) {
@@ -614,7 +635,8 @@ export function App() {
       onNewChat={() => void startNewSession()}
       onRenameSession={(id, title) => void handleRenameSession(id, title)}
       onDeleteSession={id => void handleDeleteSession(id)}
-      onSelectProject={selectProject}
+      onSelectProject={setActiveProjectOnly}
+      onOpenProject={selectProject}
       onSelectSession={session => { clearPendingNavigation(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
       onOpenDesign={session => { if (!features.designStudio) return; const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setPendingDesign({ id: session.id, title: session.title }); setView('design') }}
       seen={seen}
@@ -641,7 +663,7 @@ export function App() {
         // chat (kind is authoritative — this is the last-line guard behind the session
         // list + Home routing already excluding design sessions).
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={selectProject} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
+        const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setWorkflowMode('graph'); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
         // Workflow iterate/test chat gets a split layout: chat left, live result stage right.
         return activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom('chat'); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
