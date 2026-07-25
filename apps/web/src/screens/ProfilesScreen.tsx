@@ -1,5 +1,5 @@
 import React from 'react'
-import { createProfile, deleteProfile, updateProfile, runnerCapabilities } from '../api/profiles'
+import { createProfile, deleteProfile, updateProfile, runnerCapabilities, rescanRunnerCapabilities } from '../api/profiles'
 import type { Profile, RunnerCapabilities } from '../types'
 import { Dropdown } from '../components/ui/Dropdown'
 import {
@@ -105,15 +105,21 @@ function CapabilitiesModal({ token, profile, onSaved, onClose }: { token: string
   const [caps, setCaps] = React.useState<RunnerCapabilities | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
+  const [rescanning, setRescanning] = React.useState(false)
   const [filter, setFilter] = React.useState('')
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({})
   const [err, setErr] = React.useState('')
 
-  React.useEffect(() => {
-    if (!profile.runner_id) { setLoading(false); return }
-    runnerCapabilities(token, profile.runner_id)
+  const loadCaps = React.useCallback((rescan = false) => {
+    if (!profile.runner_id) { setLoading(false); return Promise.resolve() }
+    setLoading(true)
+    return runnerCapabilities(token, profile.runner_id, { rescan })
       .then(setCaps).catch(e => setErr(String(e?.message || e))).finally(() => setLoading(false))
   }, [profile.runner_id, token])
+
+  React.useEffect(() => {
+    void loadCaps(true) // open skills settings → rescan so newly installed host skills appear
+  }, [loadCaps])
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -154,18 +160,37 @@ function CapabilitiesModal({ token, profile, onSaved, onClose }: { token: string
   const mcp = (caps?.mcp || []).filter(m => !q || m.name.toLowerCase().includes(q))
   const leaf = (id: string) => id.includes('/') ? id.slice(id.indexOf('/') + 1) : id
 
+  async function rescan() {
+    if (!profile.runner_id || rescanning) return
+    setRescanning(true); setErr('')
+    try {
+      const next = await rescanRunnerCapabilities(token, profile.runner_id)
+      setCaps(next)
+    } catch (e: any) {
+      setErr(String(e?.message || e))
+    } finally {
+      setRescanning(false)
+    }
+  }
+
   return <div className="modal-scrim" onClick={onClose}>
     <div className="modal-card caps-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
       <div className="caps-modal-head">
         <div>
           <h3>Skills &amp; MCP</h3>
-          <p className="muted caps-modal-sub">Runtime <code>{profile.runner_id}</code> · profile “{profile.name}” · <b>{activeCount}</b>/{total} on{saving && ' · saving…'}</p>
+          <p className="muted caps-modal-sub">Runtime <code>{profile.runner_id}</code> · profile “{profile.name}” · <b>{activeCount}</b>/{total} on{saving && ' · saving…'}{rescanning && ' · rescanning…'}</p>
         </div>
-        <button className="ghost-button sm" onClick={onClose}>Close</button>
+        <div className="caps-modal-actions">
+          <button type="button" className="ghost-button sm" disabled={!profile.runner_id || rescanning || loading} onClick={() => void rescan()}>Rescan</button>
+          <button className="ghost-button sm" onClick={onClose}>Close</button>
+        </div>
       </div>
-      <p className="muted caps-modal-note">Detected on this host from the runtime's own config — enable what this profile should use. Unchecked = off; everything on = inherit the host's full set.</p>
+      <p className="muted caps-modal-note">Detected on this host via multi-root scan (runner home, shared registries, custom roots). Enable what this profile should use. Enabled skills appear as <code>/skill-name</code> in Chat. MCP is enable/disable only — not slash. Unchecked = off; everything on = inherit the host&apos;s full set.</p>
       {loading && <p className="muted">Detecting…</p>}
       {err && <p className="error-text">{err}</p>}
+      {caps?.warnings && caps.warnings.length > 0 && (
+        <p className="muted caps-modal-note">{caps.warnings.slice(0, 3).join(' · ')}{caps.warnings.length > 3 ? ` · +${caps.warnings.length - 3} more` : ''}</p>
+      )}
       {caps && total === 0 && <p className="muted">No skills or MCP servers found for this runner on this host.</p>}
       {caps && total > 0 && <>
         <div className="caps-modal-bar">

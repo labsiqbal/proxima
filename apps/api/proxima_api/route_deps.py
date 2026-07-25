@@ -173,8 +173,15 @@ def build_route_deps(
             # Activate detected skills/MCP into the home. New profile → inherit ALL
             # (selection None) so the host's skills AND the bundled skills work
             # out of the box.
-            apply_capabilities(spec, home, None, _cap_source_override(spec),
-                               bundle_dir=cfg.get("bundled_skills_dir"))
+            from . import app_settings as _app_settings
+            apply_capabilities(
+                spec,
+                home,
+                None,
+                _cap_source_override(spec),
+                bundle_dir=cfg.get("bundled_skills_dir"),
+                custom_roots=_app_settings.get_custom_skill_roots(db()),
+            )
         if is_default:
             db().execute("UPDATE profiles SET is_default = 0 WHERE user_id = ?", (user["id"],))
         cur = db().execute(
@@ -197,8 +204,15 @@ def build_route_deps(
         if not home:
             return {"skills": [], "mcp": []}
         selection = parse_selection(profile.get("capabilities"))
-        return apply_capabilities(spec, home, selection, _cap_source_override(spec),
-                                  bundle_dir=cfg.get("bundled_skills_dir"))
+        from . import app_settings as _app_settings
+        return apply_capabilities(
+            spec,
+            home,
+            selection,
+            _cap_source_override(spec),
+            bundle_dir=cfg.get("bundled_skills_dir"),
+            custom_roots=_app_settings.get_custom_skill_roots(db()),
+        )
 
     def ensure_default_profile(user: dict[str, Any]) -> dict[str, Any]:
         row = db().execute(

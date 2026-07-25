@@ -40,7 +40,8 @@ from .. import wiki_memory
 from .. import workflows as wf
 from ..prompt_collaborations import collaboration_card_payload
 from ..chat_collaboration import make_start_collaboration
-from ..commands import agent_turn_for_command
+from ..commands import agent_turn_for_command, skill_command_map
+from ..capabilities import detect_for_runner, parse_selection
 from ..run_state import active_run_clause, stale_params
 from ..run_prompting import (
     append_vision_references,
@@ -385,7 +386,33 @@ def register(app, deps):
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
         profile = profile_for_user(payload.profile_id, user)
-        agent_turn = agent_turn_for_command(payload.message)
+        # Skill slash map for the active profile (enabled skills only). Cached
+        # multi-root detection; MCP is never promoted to slash.
+        skill_map: dict[str, str] = {}
+        try:
+            rid = profile.get("runner_id") or ""
+            if rid:
+                from ..runner_specs import runner_is_selectable, runner_spec
+                if runner_is_selectable(rid):
+                    spec = runner_spec(rid)
+                    # Hermes source home comes from config (same as profiles route).
+                    override = cfg.get("source_hermes_home") if rid == "hermes" else None
+                    custom_roots = app_settings.get_custom_skill_roots(db())
+                    detected = detect_for_runner(
+                        spec,
+                        override,
+                        bundle_dir=cfg.get("bundled_skills_dir"),
+                        custom_roots=custom_roots,
+                    )
+                    selection = parse_selection(profile.get("capabilities"))
+                    skill_map = skill_command_map(
+                        list(detected.get("skills") or []),
+                        selection,
+                        config=feature_cfg,
+                    )
+        except Exception:
+            skill_map = {}
+        agent_turn = agent_turn_for_command(payload.message, skill_map=skill_map)
         # A first-class method command owns its methodology. It runs as one agent
         # turn even if a collaboration chip was left selected in the composer.
         effective_prompt_mode = "chat" if agent_turn is not None else payload.prompt_mode

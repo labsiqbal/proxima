@@ -67,6 +67,7 @@ export function Composer({
 	disabled,
 	token,
 	slug,
+	profileId,
 	features = DEFAULT_FEATURES,
 	placeholder = "Message your agent in this project…",
 	attachIconOnly = false,
@@ -82,10 +83,13 @@ export function Composer({
 	draftSeedNonce,
 	onDraftSeedConsumed,
 	onSubmit,
+	onCatalog,
 }: {
 	disabled?: boolean;
 	token: string;
 	slug?: string;
+	/** Active profile — skill slash catalog is per profile/runner selection. */
+	profileId?: number | null;
 	features?: AppFeatures;
 	placeholder?: string;
 	attachIconOnly?: boolean;
@@ -105,6 +109,8 @@ export function Composer({
 	draftSeedNonce?: number;
 	onDraftSeedConsumed?: () => void;
 	onSubmit: (text: string, promptMode?: PromptMode) => Promise<void>;
+	/** Optional: parent uses skill slash names to route agent-turn commands. */
+	onCatalog?: (commands: CatalogCommand[]) => void;
 }) {
 	const [draft, setDraft] = React.useState("");
 	const [mode, setMode] = React.useState<PromptMode>("chat");
@@ -237,19 +243,23 @@ export function Composer({
 		if (!token) {
 			catalogSeq.current += 1;
 			setCommands([]);
+			onCatalog?.([]);
 			return;
 		}
 		const seq = ++catalogSeq.current;
-		void getCommandCatalog(token)
+		void getCommandCatalog(token, { profileId: profileId ?? undefined })
 			.then((c) => {
-				if (mountedRef.current && seq === catalogSeq.current)
-					setCommands(c.groups.flatMap((g) => g.commands));
+				if (!mountedRef.current || seq !== catalogSeq.current) return;
+				const list = c.groups.flatMap((g) => g.commands);
+				setCommands(list);
+				onCatalog?.(list);
 			})
 			.catch(() => undefined);
 		return () => {
 			if (seq === catalogSeq.current) catalogSeq.current += 1;
 		};
-	}, [token]);
+		// Refresh when profile/runner selection changes so skill slash list matches.
+	}, [token, profileId, onCatalog]);
 
 	React.useEffect(() => {
 		slugRef.current = slug;

@@ -66,8 +66,20 @@ def test_tools_preamble_block_advertises_present_only():
 def test_real_repo_bundle_ships_a_tools_list():
     from proxima_api.settings import repo_root
     tools = rt.load_recommended_tools(repo_root() / "bundled-skills")
-    assert {t["bin"] for t in tools} >= {"markitdown", "lavish-axi", "gh"}
+    assert {t["bin"] for t in tools} >= {"markitdown", "lavish-axi", "gh", "headroom"}
     assert all(t["use"] for t in tools)  # every entry carries its one-liner
+    headroom = next(t for t in tools if t["bin"] == "headroom")
+    assert "headroom-ai" in (headroom.get("alts") or [])
+
+
+def test_probe_accepts_alternate_binary_names(tmp_path, monkeypatch):
+    bundle = _bundle_with_tools(tmp_path, [
+        {"bin": "headroom", "alts": ["headroom-ai"], "use": "token savings", "install": "n/a"},
+    ])
+    monkeypatch.setenv("PATH", str(_fake_bin(tmp_path, "headroom-ai")))
+    probed = rt.probe_recommended_tools(bundle)
+    assert probed[0]["present"] is True
+    assert probed[0]["detectedBin"] == "headroom-ai"
 
 
 def test_recommended_tools_endpoint(tmp_path, monkeypatch):

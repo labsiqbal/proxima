@@ -167,8 +167,20 @@ class RunPrompting:
                     "skills": list(dict.fromkeys([*selection["skills"], *required])),
                 }
             override = cfg.get("source_hermes_home") if getattr(spec, "id", "") == "hermes" else None
-            apply_capabilities(spec, Path(hermes_home), selection, override,
-                               bundle_dir=cfg.get("bundled_skills_dir"))
+            from . import app_settings as _app_settings
+            custom_roots: list[str] = []
+            try:
+                custom_roots = _app_settings.get_custom_skill_roots(self.app.state.worker_db)
+            except Exception:
+                custom_roots = []
+            apply_capabilities(
+                spec,
+                Path(hermes_home),
+                selection,
+                override,
+                bundle_dir=cfg.get("bundled_skills_dir"),
+                custom_roots=custom_roots,
+            )
         except Exception:
             logging.getLogger("proxima.worker").exception("capability re-apply failed (non-fatal)")
 

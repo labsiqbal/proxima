@@ -20,6 +20,8 @@ import {
   getSatpamSettings,
   saveSatpamSettings,
   getRecommendedTools,
+  getSkillRoots,
+  saveSkillRoots,
   type RecommendedTool,
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
@@ -143,14 +145,60 @@ function RecommendedToolsPanel({ token }: { token: string }) {
   const present = tools.filter(t => t.present).length
   return <div className="panel">
     <div className="panel-head"><h3>Recommended tools</h3><span>{present}/{tools.length} on PATH</span></div>
-    <p className="muted">Host CLIs Proxima advertises to agents when found on PATH. Bring your own - nothing is installed for you, and a missing tool never blocks a run.</p>
+    <p className="muted">Host CLIs Proxima advertises to agents when found on PATH. Bring your own - nothing is installed for you, and a missing tool never blocks a run. Optional tools like <code>headroom</code> / <code>headroom-ai</code> are best-practice for host-side token savings; if you install a headroom MCP server, enable it under a profile&apos;s Skills &amp; MCP panel (no wrap-by-default).</p>
     <div className="tools-list">
       {tools.map(t => <div className="tools-row" key={t.bin}>
-        <code>{t.bin}</code>
+        <code>{t.detectedBin || t.bin}</code>
         <span className="tools-use">{t.use}</span>
         <span className={`tools-status ${t.present ? 'present' : ''}`}>{t.present ? 'available' : t.install ? `not found · ${t.install}` : 'not found'}</span>
       </div>)}
     </div>
+  </div>
+}
+
+function CustomSkillRootsPanel({ token }: { token: string }) {
+  const [roots, setRoots] = React.useState<string[]>([])
+  const [draft, setDraft] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => {
+    let alive = true
+    getSkillRoots(token).then(r => { if (alive) setRoots(r.roots) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [token])
+  const save = async (next: string[]) => {
+    setBusy(true); setError('')
+    try {
+      const r = await saveSkillRoots(token, next)
+      setRoots(r.roots)
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const add = () => {
+    const path = draft.trim()
+    if (!path || roots.includes(path)) return
+    setDraft('')
+    void save([...roots, path])
+  }
+  const remove = (path: string) => void save(roots.filter(r => r !== path))
+  return <div className="panel">
+    <div className="panel-head"><h3>Custom skill roots</h3><span>{roots.length} path{roots.length === 1 ? '' : 's'}</span></div>
+    <p className="muted">Extra absolute directories included in every runner&apos;s skill scan (global, not per-profile). Invalid paths are skipped with a warning on rescan — they never crash detection. Enabled skills become <code>/skill-name</code> commands in Chat.</p>
+    <ul className="tools-list">
+      {roots.map(path => <li className="tools-row" key={path}>
+        <code>{path}</code>
+        <button type="button" className="link-button" disabled={busy} onClick={() => remove(path)}>Remove</button>
+      </li>)}
+      {!roots.length && <li className="muted">No custom roots yet.</li>}
+    </ul>
+    <div className="settings-rows">
+      <input className="profile-caps-filter" value={draft} onChange={e => setDraft(e.target.value)} placeholder="/absolute/path/to/skills" disabled={busy} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }} />
+      <button type="button" className="ghost-button sm" disabled={busy || !draft.trim()} onClick={add}>Add path</button>
+    </div>
+    {error && <p className="error-text">{error}</p>}
   </div>
 }
 
@@ -730,7 +778,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
     : activeSection === 'alpha'
       ? <AlphaSettingsPanel token={token} />
     : activeSection === 'agents'
-      ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
+      ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><CustomSkillRootsPanel token={token} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
       : activeSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : activeSection === 'media'
