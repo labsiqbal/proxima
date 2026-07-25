@@ -809,6 +809,10 @@ export function App() {
       onRenameSession={(id, title) => void handleRenameSession(id, title)}
       onDeleteSession={id => void handleDeleteSession(id)}
       onSelectProject={setActiveProjectOnly}
+      onProjectRenamed={project => {
+        setProjects(list => list.map(item => item.slug === project.slug ? project : item))
+        setActiveProject(current => current?.slug === project.slug ? project : current)
+      }}
       onOpenProject={selectProject}
       onSelectSession={session => { clearPendingNavigation(); clearDeepStack(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
       onOpenDesign={session => {

@@ -44,6 +44,8 @@ export function AppShell(props: {
   onDeleteSession: (id: number) => void
   /** Header project switcher: filter shell active project without changing view. */
   onSelectProject: (project: Project) => void
+  /** After rename from the switcher menu — update list + active project labels. */
+  onProjectRenamed?: (project: Project) => void
   /** Search / intentional open: select project and navigate to its chat when provided. */
   onOpenProject?: (project: Project) => void
   onSelectSession: (session: ChatSession) => void
@@ -215,6 +217,8 @@ export function AppShell(props: {
           projects={props.projects}
           activeProject={props.activeProject}
           onSelectProject={props.onSelectProject}
+          token={props.token}
+          onProjectRenamed={props.onProjectRenamed}
           locked={!!props.projectLocked}
           lockedReason={props.projectLockedReason}
         />
@@ -249,6 +253,8 @@ export function AppShell(props: {
         activeProject={props.activeProject}
         projects={props.projects}
         onSelectProject={props.onSelectProject}
+        token={props.token}
+        onProjectRenamed={props.onProjectRenamed}
         projectLocked={!!props.projectLocked}
         projectLockedReason={props.projectLockedReason}
         chromeBackEnabled={!!props.chromeBackEnabled}

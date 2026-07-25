@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { getGraphJob, listGraphJobs } from '../api/graph'
 import { GraphScreen } from './GraphScreen'
 
 vi.mock('../api/graph', () => ({
@@ -41,7 +42,7 @@ vi.mock('../hooks/useProjectMentionItems', () => ({
 }))
 
 const project = {
-  slug: 'owner-personal',
+  slug: 'owner',
   name: 'owner (personal)',
   path: '/tmp/owner',
   owner: 'owner',
@@ -49,24 +50,24 @@ const project = {
   visibility: 'private' as const,
 }
 
+const baseProps = {
+  token: 't',
+  projects: [project],
+  activeProject: project,
+  onActiveProject: vi.fn(),
+  profiles: [],
+  profileId: null as number | null,
+  features: { designStudio: false, workflowGraph: true },
+  activeProfile: null,
+}
+
 describe('GraphScreen home header', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('has no local project dropdown; global shell switcher is enough', async () => {
-    render(
-      <GraphScreen
-        token="t"
-        projects={[project]}
-        activeProject={project}
-        onActiveProject={vi.fn()}
-        profiles={[]}
-        profileId={null}
-        features={{ designStudio: false, workflowGraph: true }}
-        activeProfile={null}
-      />,
-    )
+  it('has no local project dropdown and does not dump project names on the home surface', async () => {
+    render(<GraphScreen {...baseProps} />)
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument()
@@ -76,7 +77,40 @@ describe('GraphScreen home header', () => {
     expect(header).toBeTruthy()
     expect(within(header).queryByRole('button', { name: /owner \(personal\)/i })).toBeNull()
     expect(header.querySelector('.dd')).toBeNull()
-    expect(screen.getByText(/Building in/i)).toBeInTheDocument()
-    expect(screen.getByText('owner (personal)')).toBeInTheDocument()
+    expect(screen.queryByText(/Building in/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('owner (personal)')).not.toBeInTheDocument()
+    expect(document.querySelector('.graph-project-tag')).toBeNull()
+  })
+
+  it('shows a name-free lock indicator in the open-plan header, not the project display name', async () => {
+    vi.mocked(listGraphJobs).mockResolvedValue({
+      items: [{
+        id: 42,
+        title: 'Untitled plan',
+        status: 'queued',
+        project_slug: project.slug,
+        node_states: [],
+      } as never],
+    })
+    vi.mocked(getGraphJob).mockResolvedValue({
+      id: 42,
+      title: 'Untitled plan',
+      status: 'queued',
+      project_slug: project.slug,
+      plan: { nodes: [], edges: [] },
+      node_states: [],
+    } as never)
+
+    render(<GraphScreen {...baseProps} pendingJobId={42} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Untitled plan' })).toBeInTheDocument()
+    })
+
+    const lock = document.querySelector('.graph-project-lock') as HTMLElement
+    expect(lock).toBeTruthy()
+    expect(lock).toHaveAttribute('aria-label', 'Project locked to this plan')
+    expect(lock.textContent?.trim()).toBe('')
+    expect(screen.queryByText('owner (personal)')).not.toBeInTheDocument()
   })
 })
