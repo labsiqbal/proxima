@@ -86,9 +86,10 @@ Create tabs, then used Skip for the rest of the tour.
 
 ## 3. Chat: hands-on work
 
-Chat is the direct path. An empty Chat is the default blank composer - no session
-until the first send. Pick an agent, type a prompt or `/` for commands, and use
-the header **New chat** action when you want another blank thread.
+Chat is the direct path. An empty Chat is sparse by default (title + short lead,
+tooltip hints, **How it works** for the fuller path) - no session until the first
+send. Pick an agent, type a prompt or `/` for commands, and use the header
+**New chat** action when you want another blank thread.
 
 ![Empty Chat with destinations-only nav](screenshots/deck-chat.png)
 

@@ -14,11 +14,12 @@ import { respondPermission } from "../../api/runs";
 import { previewTurnRestore, restoreTurn } from "../../api/sessions";
 import { designFromImage, previewUrl } from "../../api/files";
 import { ApiError } from "../../api/client";
-import { IconSparkle, IconArrowDown } from "../shell/icons";
+import { IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
 import { formatRunError } from "./runError";
 import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
 import { confirmDialog } from "../ui/Dialog";
+import { ChatEmpty } from "./ChatEmpty";
 
 const ROLE_LABEL: Record<string, string> = {
 	user: "You",
@@ -1122,38 +1123,7 @@ export function ChatThread({
 	return (
 		<div className="thread" ref={scrollRef} onScroll={onScroll}>
 			<div className="chat-log">
-				{empty && (
-					<div className="chat-empty">
-						{/* Teaching empty: title + capabilities + tutorial + CTA focus is the composer below. */}
-						<div className="chat-empty-mark">
-							<IconSparkle size={30} />
-						</div>
-						<h3>Start a conversation</h3>
-						<p className="teaching-empty-lead">
-							Chat is hands-on work with one agent in the active project. Type{' '}
-							<code>/</code> for commands, attach files, or @-mention paths.
-						</p>
-						<ul className="teaching-empty-caps" aria-label="What you can do here">
-							<li>Send prompts and watch tools run live</li>
-							<li>Review file changes and restore a turn when needed</li>
-							<li>Open deliverables with the same in-app viewer as Archive</li>
-						</ul>
-						<ol className="teaching-empty-steps" aria-label="Getting started">
-							<li>
-								<span className="teaching-empty-step-n" aria-hidden="true">1</span>
-								<span>Write a message and press <strong>Send</strong></span>
-							</li>
-							<li>
-								<span className="teaching-empty-step-n" aria-hidden="true">2</span>
-								<span>Watch progress under Tasks when work is durable</span>
-							</li>
-							<li>
-								<span className="teaching-empty-step-n" aria-hidden="true">3</span>
-								<span>Find outputs in Archive or open them from the thread</span>
-							</li>
-						</ol>
-					</div>
-				)}
+				{empty && <ChatEmpty />}
 				{messageEls}
 				{(tools.length > 0 ||
 					(live && streaming.includes("<question-form"))) && (
