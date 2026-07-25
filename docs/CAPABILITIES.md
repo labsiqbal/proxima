@@ -128,7 +128,9 @@ skill. Optional freeform args work like masterplan (`/skill freeform…`). Invok
 a skill slash queues an `agent_turn` whose prompt requires that skill id; the
 worker force-activates the skill for the run when needed. Composer loads the
 catalog with `profile_id` so switching profile/runner refreshes the list from the
-detection cache.
+detection cache. The Chat `/` popover shows at most four prefix matches
+(`SLASH_COMMAND_LIST_MAX`) — same short-list product language as `@` mentions,
+not a wall of every skill.
 **Endpoints:** `GET /api/commands/catalog?profile_id=…`, `POST /api/commands/execute`
 (with optional `profile_id`).
 

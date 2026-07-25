@@ -26,6 +26,39 @@ import {
 
 const isImg = (n: string) => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(n);
 
+/**
+ * Hard cap on slash-command rows in the Chat composer popover.
+ * Matches the ~4-row @-mention viewport intent so `/` never becomes a wall of skills.
+ */
+export const SLASH_COMMAND_LIST_MAX = 4;
+
+type SlashMatchable = { name: string };
+
+/**
+ * Filter enabled catalog commands by prefix on `draft`, rank lightly, then cap.
+ * Ranking: exact name match first, otherwise stable catalog order so empty `/`
+ * keeps top-of-catalog built-ins (e.g. /help, /masterplan) before long skill lists.
+ */
+export function matchSlashCommands<T extends SlashMatchable>(
+	commands: readonly T[],
+	draft: string,
+	enabled: (command: T) => boolean = () => true,
+	max: number = SLASH_COMMAND_LIST_MAX,
+): T[] {
+	const q = draft.toLowerCase();
+	const matched = commands.filter(enabled).filter((c) => c.name.startsWith(q));
+	const ranked = matched
+		.map((c, index) => ({ c, index }))
+		.sort((a, b) => {
+			const aExact = a.c.name === q ? 0 : 1;
+			const bExact = b.c.name === q ? 0 : 1;
+			if (aExact !== bExact) return aExact - bExact;
+			return a.index - b.index;
+		})
+		.map(({ c }) => c);
+	return ranked.slice(0, max);
+}
+
 /** Spaced accessible name for a slash-command row (avoids "/helpShow…proxima"). */
 export function slashCommandAriaLabel(command: {
 	name: string;
@@ -325,7 +358,7 @@ export function Composer({
 		return isFeatureCommandEnabled(command, features);
 	};
 	const commandMatches = showPopover
-		? commands.filter(commandEnabled).filter((c) => c.name.startsWith(draft.toLowerCase()))
+		? matchSlashCommands(commands, draft, commandEnabled)
 		: [];
 
 	async function submit(event: React.FormEvent) {

@@ -2,7 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Composer, slashCommandAriaLabel } from "./Composer";
+import {
+	Composer,
+	matchSlashCommands,
+	SLASH_COMMAND_LIST_MAX,
+	slashCommandAriaLabel,
+} from "./Composer";
 
 const mocks = vi.hoisted(() => ({
 	getCommandCatalog: vi.fn(),
@@ -209,6 +214,78 @@ describe("Composer project-file references", () => {
 	});
 });
 
+describe("matchSlashCommands", () => {
+	const many = [
+		{ name: "/help" },
+		{ name: "/status" },
+		{ name: "/new" },
+		{ name: "/session" },
+		{ name: "/project" },
+		{ name: "/grill-with-docs", skillId: "skills/grill-with-docs" },
+		{ name: "/grill-me", skillId: "skills/grill-me" },
+		{ name: "/masterplan", skillId: "bundled/masterplan" },
+	];
+
+	it("exports a single max of 4", () => {
+		expect(SLASH_COMMAND_LIST_MAX).toBe(4);
+	});
+
+	it("caps empty slash to at most 4, preserving top catalog order among built-ins", () => {
+		const matched = matchSlashCommands(many, "/");
+		expect(matched).toHaveLength(SLASH_COMMAND_LIST_MAX);
+		expect(matched.map((c) => c.name)).toEqual([
+			"/help",
+			"/status",
+			"/new",
+			"/session",
+		]);
+	});
+
+	it("never returns more than 4 prefix matches", () => {
+		const matched = matchSlashCommands(many, "/");
+		expect(matched.length).toBeLessThanOrEqual(4);
+		expect(matched).toHaveLength(4);
+	});
+
+	it("narrows as the user types and still caps", () => {
+		const gri = matchSlashCommands(many, "/gri");
+		// Catalog order among prefix matches (grill-with-docs listed before grill-me).
+		expect(gri.map((c) => c.name)).toEqual(["/grill-with-docs", "/grill-me"]);
+		expect(gri).toHaveLength(2);
+
+		const manyGri = [
+			{ name: "/grill-a", skillId: "a" },
+			{ name: "/grill-b", skillId: "b" },
+			{ name: "/grill-c", skillId: "c" },
+			{ name: "/grill-d", skillId: "d" },
+			{ name: "/grill-e", skillId: "e" },
+			{ name: "/grill-f", skillId: "f" },
+		];
+		expect(matchSlashCommands(manyGri, "/gri")).toHaveLength(4);
+	});
+
+	it("prefers exact name match first", () => {
+		const matched = matchSlashCommands(
+			[
+				{ name: "/help-extra" },
+				{ name: "/help" },
+				{ name: "/helper" },
+			],
+			"/help",
+		);
+		expect(matched[0]?.name).toBe("/help");
+	});
+
+	it("respects the enabled filter before ranking/cap", () => {
+		const matched = matchSlashCommands(
+			many,
+			"/",
+			(c) => c.name === "/project" || c.name === "/grill-me",
+		);
+		expect(matched.map((c) => c.name)).toEqual(["/project", "/grill-me"]);
+	});
+});
+
 describe("Composer slash commands", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -281,6 +358,43 @@ describe("Composer slash commands", () => {
 		// mousedown pick keeps the draft insertion without submitting.
 		fireEvent.mouseDown(help);
 		expect(textarea).toHaveValue("/help ");
+	});
+
+	it("renders at most four slash options when the catalog has more matches", async () => {
+		const user = userEvent.setup();
+		const commands = [
+			"/help",
+			"/status",
+			"/new",
+			"/session",
+			"/project",
+			"/runner",
+			"/goal",
+			"/skill-alpha",
+		].map((name) => ({
+			name,
+			description: `desc for ${name}`,
+			surface: "proxima",
+			unavailableMessage: null,
+		}));
+		mocks.getCommandCatalog.mockResolvedValue({
+			groups: [{ label: "proxima", commands }],
+		});
+
+		renderComposer();
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+		await waitFor(() => expect(mocks.getCommandCatalog).toHaveBeenCalled());
+		await user.type(textarea, "/");
+
+		const list = await screen.findByRole("listbox", { name: "Chat commands" });
+		const options = list.querySelectorAll('[role="option"]');
+		expect(options).toHaveLength(SLASH_COMMAND_LIST_MAX);
+		// Fifth catalog entry must not appear when only the first four fit.
+		expect(
+			screen.queryByRole("option", {
+				name: "/project desc for /project (proxima)",
+			}),
+		).not.toBeInTheDocument();
 	});
 });
 
