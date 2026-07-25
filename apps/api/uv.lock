@@ -190,7 +190,7 @@ wheels = [
 
 [[package]]
 name = "proxima-api"
-version = "1.0.1"
+version = "1.0.2"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
