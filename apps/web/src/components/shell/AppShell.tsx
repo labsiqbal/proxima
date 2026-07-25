@@ -8,6 +8,7 @@ import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogo
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
+import { ProjectSwitcher } from './ProjectSwitcher'
 import { CoreTour } from './CoreTour'
 import type { AttentionItem } from '../../api/alpha'
 
@@ -170,6 +171,12 @@ export function AppShell(props: {
   }
   const shellStyle = { ['--left-w']: leftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
 
+  // Account menu "Projects" opens Settings → Projects manage (not a primary nav destination).
+  const openProjectsManage = () => {
+    props.onSelectView('projects')
+    setMenuOpen(false)
+  }
+
   return (
     <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''}`} style={shellStyle}>
       <header className="top-bar">
@@ -179,6 +186,12 @@ export function AppShell(props: {
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
+        {/* Global active project sits immediately right of Search (desktop). */}
+        <ProjectSwitcher
+          projects={props.projects}
+          activeProject={props.activeProject}
+          onSelectProject={props.onSelectProject}
+        />
         <span className="top-bar-spacer" />
         <div className="user-menu-wrap">
           <button className={`tool-btn user-avatar-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(open => !open)} aria-label="Account actions" aria-expanded={menuOpen} aria-controls="account-actions" title={props.user.username}><span className="avatar xs">{props.user.username[0]?.toUpperCase()}</span></button>
@@ -186,7 +199,7 @@ export function AppShell(props: {
             <button className="menu-scrim" aria-label="Close account actions" onClick={() => setMenuOpen(false)} />
             <div className="user-menu" id="account-actions">
               <div className="user-menu-head"><span className="avatar">{props.user.username[0]?.toUpperCase()}</span><div><strong>{props.user.username}</strong><small>{props.activeProfile?.name || ''}</small></div></div>
-              <button className={`user-menu-item ${props.currentView === 'projects' ? 'active' : ''}`} onClick={() => { props.onSelectView('projects'); setMenuOpen(false) }}><IconProjects size={15} /> Projects</button>
+              <button className="user-menu-item" onClick={openProjectsManage}><IconProjects size={15} /> Projects</button>
               <button className={`user-menu-item ${props.currentView === 'profiles' ? 'active' : ''}`} onClick={() => { props.onSelectView('profiles'); setMenuOpen(false) }}><IconAgents size={15} /> Agents</button>
               <div className="user-menu-sep" />
               <button className={`user-menu-item ${props.currentView === 'settings' ? 'active' : ''}`} onClick={() => { props.onSelectView('settings'); setMenuOpen(false) }}><IconGear size={15} /> Settings</button>
@@ -208,6 +221,8 @@ export function AppShell(props: {
       </div>
       <MobileTopbar
         activeProject={props.activeProject}
+        projects={props.projects}
+        onSelectProject={props.onSelectProject}
         drawerOpen={drawerOpen}
         onMenu={() => setDrawerOpen(true)}
         onSearch={openSearch}

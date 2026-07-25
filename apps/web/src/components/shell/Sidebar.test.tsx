@@ -14,15 +14,17 @@ describe('Sidebar single-workspace IA', () => {
     const { rerender } = render(<Sidebar {...base} />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     // Destinations only — blank session lives on Chat header / mobile topbar / `/new`.
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Projects', 'Archive'])
+    // Project switch is the shell top bar; project manage is Settings → Projects.
+    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Archive'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
     // No workspace switch and no tool destinations: tools live on the right rail.
     expect(screen.queryByRole('button', { name: 'Ops' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Workflows' })).toBeInTheDocument()
     rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true }} />)
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Projects', 'Archive', 'Design'])
+    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Archive', 'Design'])
   })
 
   it('navigates the flow destinations', async () => {

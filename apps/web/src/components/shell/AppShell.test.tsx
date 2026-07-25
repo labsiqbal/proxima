@@ -86,4 +86,26 @@ describe('AppShell mobile drawer + search', () => {
     await user.keyboard('{Control>}k{/Control}')
     expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
   })
+
+  it('places a text project switcher next to Search in the top bar', () => {
+    render(
+      <AppShell
+        {...base}
+        projects={[{ id: 1, name: 'Demo', slug: 'demo', path: '/tmp/demo', visibility: 'private' } as never]}
+      >
+        <div>main</div>
+      </AppShell>,
+    )
+    const topBar = document.querySelector('.top-bar') as HTMLElement
+    expect(within(topBar).getByRole('button', { name: 'Active project: Demo' })).toBeInTheDocument()
+    expect(within(topBar).getByRole('button', { name: 'Search' })).toBeInTheDocument()
+  })
+
+  it('opens Projects manage from the account menu', async () => {
+    const user = userEvent.setup()
+    render(<AppShell {...base}><div>main</div></AppShell>)
+    await user.click(screen.getByRole('button', { name: 'Account actions' }))
+    await user.click(screen.getByRole('button', { name: /Projects/ }))
+    expect(base.onSelectView).toHaveBeenCalledWith('projects')
+  })
 })

@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildRunningItems, RunningTasks } from './RunningTasks'
+import { buildRunningItems, RunningTasks, runningTasksLabel } from './RunningTasks'
 import { listJobs } from '../../api/jobs'
 import { activeRuns } from '../../api/runs'
 import type { ChatSession, Job } from '../../types'
@@ -32,6 +32,18 @@ describe('buildRunningItems', () => {
   })
 })
 
+describe('runningTasksLabel', () => {
+  it('uses singular and plural full phrases', () => {
+    expect(runningTasksLabel(1)).toBe('1 task running')
+    expect(runningTasksLabel(3)).toBe('3 tasks running')
+  })
+
+  it('shortens for narrow layouts', () => {
+    expect(runningTasksLabel(1, true)).toBe('1 running')
+    expect(runningTasksLabel(4, true)).toBe('4 running')
+  })
+})
+
 describe('RunningTasks', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -39,26 +51,33 @@ describe('RunningTasks', () => {
     vi.mocked(listJobs).mockResolvedValue({ items: [job], total: 1, limit: 50, offset: 0 })
   })
 
-  it('shows a quiet zero state and a badge when work is running', async () => {
+  it('hides entirely when nothing is running (quiet header)', async () => {
     vi.mocked(activeRuns).mockResolvedValue({ session_ids: [] })
     vi.mocked(listJobs).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
-    render(<RunningTasks token="token" />)
-    const idle = await screen.findByRole('button', { name: '0 running tasks' })
-    expect(idle).toBeInTheDocument()
-    expect(idle).not.toHaveClass('has-work')
-    expect(screen.queryByText('99+')).not.toBeInTheDocument()
-    // Never an alarm face: activity icon only, no "!"
-    expect(idle).not.toHaveTextContent('!')
+    const { container } = render(<RunningTasks token="token" />)
+    await waitFor(() => expect(container).toBeEmptyDOMElement())
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('uses green pulse chrome with a count badge - never danger or "!"', async () => {
+  it('shows a text pill with the full phrase - never icon-only or "!"', async () => {
     render(<RunningTasks token="token" />)
-    const trigger = await screen.findByRole('button', { name: '1 running task' })
-    expect(trigger).toHaveClass('running-trigger')
-    expect(trigger).toHaveClass('has-work')
-    expect(trigger).not.toHaveClass('has-attention')
+    const trigger = await screen.findByRole('button', { name: '1 task running' })
+    expect(trigger).toHaveClass('running-pill')
+    expect(trigger).toHaveTextContent('1 task running')
+    expect(trigger).toHaveTextContent('1 running')
     expect(trigger).not.toHaveTextContent('!')
-    expect(trigger.querySelector('b')).toHaveTextContent('1')
+    expect(trigger.querySelector('svg')).not.toBeInTheDocument()
+  })
+
+  it('pluralizes for multiple running tasks', async () => {
+    vi.mocked(activeRuns).mockResolvedValue({ session_ids: [12, 99] })
+    render(
+      <RunningTasks
+        token="token"
+        sessions={[{ id: 99, title: 'Brainstorm', runner_id: 'pi', visibility: 'private' }]}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: '2 tasks running' })).toBeInTheDocument()
   })
 
   it('deep-links jobs and sessions from the popover', async () => {
@@ -75,14 +94,14 @@ describe('RunningTasks', () => {
         onOpenTasks={vi.fn()}
       />,
     )
-    await waitFor(() => expect(screen.getByRole('button', { name: '2 running tasks' })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '2 running tasks' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '2 tasks running' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: '2 tasks running' }))
 
     expect(screen.getByRole('dialog', { name: 'Running tasks' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Ship release notes/ }))
     expect(onOpenJob).toHaveBeenCalledWith(4, 'linear')
 
-    await user.click(screen.getByRole('button', { name: '2 running tasks' }))
+    await user.click(screen.getByRole('button', { name: '2 tasks running' }))
     await user.click(screen.getByRole('button', { name: /Brainstorm/ }))
     expect(onOpenSession).toHaveBeenCalledWith(99)
   })
@@ -90,7 +109,7 @@ describe('RunningTasks', () => {
   it('supports keyboard open and Escape dismiss', async () => {
     const user = userEvent.setup()
     render(<RunningTasks token="token" />)
-    const trigger = await screen.findByRole('button', { name: '1 running task' })
+    const trigger = await screen.findByRole('button', { name: '1 task running' })
     trigger.focus()
     await user.keyboard('{Enter}')
     expect(screen.getByRole('dialog', { name: 'Running tasks' })).toBeInTheDocument()

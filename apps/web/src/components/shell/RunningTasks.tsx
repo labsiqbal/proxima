@@ -2,7 +2,6 @@ import React from 'react'
 import { listJobs } from '../../api/jobs'
 import { activeRuns } from '../../api/runs'
 import type { ChatSession, Job } from '../../types'
-import { IconActivity } from './icons'
 
 export type RunningTaskItem =
   | { kind: 'job'; id: string; jobId: number; title: string; status: string; engine?: string; project?: string | null }
@@ -48,6 +47,12 @@ export function buildRunningItems(
     })
   }
   return items
+}
+
+export function runningTasksLabel(count: number, compact = false): string {
+  if (count <= 0) return compact ? '0 running' : '0 tasks running'
+  if (compact) return count === 1 ? '1 running' : `${count} running`
+  return count === 1 ? '1 task running' : `${count} tasks running`
 }
 
 export function RunningTasks({
@@ -123,19 +128,25 @@ export function RunningTasks({
     onOpenSession?.(item.sessionId)
   }
 
+  // Quiet header: hide the control entirely when nothing is running.
+  if (count === 0) return null
+
+  const fullLabel = runningTasksLabel(count, false)
+  const shortLabel = runningTasksLabel(count, true)
+
   return (
     <div className="running-tasks" ref={root}>
       <button
         type="button"
-        className={`attention-trigger running-trigger ${open ? 'active' : ''} ${count > 0 ? 'has-work' : ''}`}
+        className={`running-pill ${open ? 'active' : ''}`}
         onClick={() => setOpen(value => !value)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${count} running task${count === 1 ? '' : 's'}`}
-        title={count > 0 ? `${count} running` : 'No running tasks'}
+        aria-label={fullLabel}
+        title={fullLabel}
       >
-        <IconActivity size={15} />
-        {count > 0 && <b>{count > 99 ? '99+' : count}</b>}
+        <span className="running-pill-full">{fullLabel}</span>
+        <span className="running-pill-short">{shortLabel}</span>
       </button>
       {open && (
         <section className="attention-popover running-popover" role="dialog" aria-modal="false" aria-label="Running tasks">

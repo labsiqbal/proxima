@@ -10,7 +10,7 @@ There is **one workspace**. The old Ops/Code split is gone — no workspace swit
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
+The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Archive** (where deliverables live), plus feature-gated **Design**. The **active project** is switched from a text control in the shell top bar (immediately right of Search). Project **management** (list / link / create / remove / container settings) lives under **Settings → Projects**, not primary nav. Agents and Settings stay in the account menu. The default landing view is Chat.
 
 ## Chat — the front door
 
@@ -100,21 +100,25 @@ review and open-text decisions navigate instead. The popover has loading, empty,
 populated, and persistent retryable-error states, closes on Escape/outside click, and
 becomes a viewport-bounded sheet on narrow screens.
 
-Next to Attention, a **Running** control polls `GET /api/runs/active` plus running jobs
-and shows a quiet badge when work is in flight. The popover lists de-duplicated tasks
-and chat sessions with deep-links (task workspace / chat / Tasks index), matching
-Attention's open/refresh/empty/error affordances.
+Next to Attention, a **Running** text pill polls `GET /api/runs/active` plus running jobs
+and shows only while work is in flight (`1 task running` / `N tasks running`; mobile may
+shorten to `N running`). When the count is zero the control is hidden entirely (quiet
+header). The popover lists de-duplicated tasks and chat sessions with deep-links (task
+workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
+Attention stays a separate `!` control and remains hidden when empty.
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns Alpha budgets and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, Running + Attention (status cluster), and the account menu; the mobile drawer keeps its own brand copy since the top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns **Projects** (manage), Alpha budgets, and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across the app. Archive records and Designs remain owned by their Project.
+Projects remain shared application entities: one active project across the app (shell `activeProject`). Surfaces that already filter / default-attach / list by active project (Chat, Alpha, Workflows library, Archive, Design) keep that contract. Opening a workflow/plan still uses that workflow's owned project; the header switch does **not** rebind an open workflow instance to another project. Archive records and Designs remain owned by their Project.
 
 ## Projects
 
-Projects is a **card grid**, not a master/detail pair — a project carries a name and a slug,
-which is not enough to earn a permanent detail panel. It reuses the same shell as
-the shared list shell (`.tasks-view` + `.tasks-head` + `.wf-grid`/`.wf-card`): search
-on the left of the bar, **Add project** on the right, one card per project.
+Project **management** is a **card grid** under Settings → Projects (not a primary-nav
+destination). A project carries a name and a slug, which is not enough to earn a
+permanent detail panel. It reuses the same shell as the shared list shell
+(`.tasks-view` + `.tasks-head` + `.wf-grid`/`.wf-card`): search on the left of the bar,
+**Add project** on the right, one card per project. Deep links / `view === 'projects'`
+open Settings on the Projects section.
 
 A card shows the name and slug, marks the **active** project (the one the rest of the app
 is pointed at), and carries its own actions: the card body selects it, **Rename** opens a
@@ -132,7 +136,7 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Workflows, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
+Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
 
 ## Feature gates
 
