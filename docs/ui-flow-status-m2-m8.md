@@ -14,3 +14,5 @@ See also absolute STATUS at `/home/iqbal/firstmate/data/masterplan-proxima-ui-fl
 
 **Branch:** `fm/proxima-ui-flow-m2-m8`  
 **Commit:** `5afd19c`
+
+done: PR https://github.com/labsiqbal/proxima/pull/52
