@@ -105,10 +105,21 @@ chrome owns the action.
 switcher is disabled (locked). On top-level surfaces the switcher stays enabled and
 changing project **stays on the current view** (refilters content; does not force Chat).
 
-**Multitask foundation:** primary surfaces must not destroy in-flight UI on leave. Chat
-is kept mounted (hidden when inactive) so composer draft text and an in-flight run
-re-attach when the owner returns in the same browser session. Server work continues
+**Multitask foundation:** primary surfaces must not destroy in-flight UI on leave.
+Once visited, **Chat, Alpha, Tasks, Workflows, Archive, and Design** stay mounted in
+hidden `surface-pane`s so draft text, open panels, canvas/plan state, and in-flight
+runs re-attach when the owner returns in the same browser session. Server work continues
 regardless; the client contract is keep-alive / re-attach, not remount-from-zero.
+
+**Teaching empty states:** top-level empties share one grammar — title, what the surface
+can do, short tutorial steps, and one primary CTA where it applies (Chat, Alpha, Tasks,
+Workflows library context, Archive, Design home). Help/core tour nouns match the primary
+loop **Chat → Tasks → Workflows → Archive**, with Alpha as the delegate side path.
+
+**Workflow how-it-runs:** library cards show Manual and/or Scheduled badges derived from
+real schedule rows (optional short cron text). Schedule forms lock project to the workflow
+owner — no free rebinding. Open deliverables from Chat/Tasks/Archive use the same
+in-app **ArtifactViewer** for supported types.
 
 ## Global attention, running work, and account surfaces
 
@@ -126,7 +137,7 @@ header). The popover lists de-duplicated tasks and chat sessions with deep-links
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
 Attention stays a separate `!` control and remains hidden when empty.
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings also owns **Projects** (manage), Alpha budgets, and **Help & Tours**: a replayable four-step core tour plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge & Wiki, including files, links, graph, and search. Settings sections are grouped for scan: **Work setup** (Projects, Agents, Alpha, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Alpha side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
 Projects remain shared application entities: one active project across the app (shell `activeProject`). Surfaces that already filter / default-attach / list by active project (Chat, Alpha, Workflows library, Archive, Design) keep that contract. The header project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) — it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the header switch does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown (global switcher only; muted "Building in …" context under the hero is fine). Archive records and Designs remain owned by their Project.
 

@@ -286,11 +286,40 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
         })}</div>
       : <div className="job-list">
           {rows.length === 0
-            ? <div className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{mode === 'review'
-                ? (activeProject ? `Nothing waiting for review in ${activeProject.name}.` : 'Nothing waiting for review.')
-                : (activeProject
-                  ? `No tasks in ${activeProject.name} yet. Slice a plan from Chat or press New task — both land here. Switch project to see tasks from another folder.`
-                  : 'No tasks yet. Slice a plan from Chat or press New task — both land here.')}</p></div></div>
+            ? <div className="placeholder-view teaching-empty" data-testid="teaching-empty">
+                {mode === 'review' ? (
+                  <>
+                    <h3 className="teaching-empty-title">Nothing waiting for review</h3>
+                    <p className="teaching-empty-lead">{activeProject
+                      ? `No review items in ${activeProject.name} right now.`
+                      : 'No review items right now.'}</p>
+                    <ul className="teaching-empty-caps" aria-label="What you can do here">
+                      <li>Approve or reject changes when a job reaches Review</li>
+                      <li>Open a task from Attention when something needs you</li>
+                    </ul>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="teaching-empty-title">No tasks yet</h3>
+                    <p className="teaching-empty-lead">
+                      Tasks is where durable work runs and gets reviewed. Ad-hoc tasks, plans from Chat, Alpha jobs, and scheduled workflow runs all land here{activeProject ? ` for ${activeProject.name}` : ''}.
+                    </p>
+                    <ul className="teaching-empty-caps" aria-label="What you can do here">
+                      <li>Watch queued, running, and review work in one list or board</li>
+                      <li>Open a task for live progress, changes, and deliverables</li>
+                      <li>Save a good plan as a Workflow when the pattern is worth keeping</li>
+                    </ul>
+                    <ol className="teaching-empty-steps" aria-label="Getting started">
+                      <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Start from Chat (slice a plan) or press <strong>New task</strong></span></li>
+                      <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Return here anytime — leave/return keeps this list mounted</span></li>
+                      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>When a run finishes, open Archive for durable deliverables</span></li>
+                    </ol>
+                    {onNewTask && (
+                      <button type="button" className="primary-button teaching-empty-cta" onClick={onNewTask}>New task</button>
+                    )}
+                  </>
+                )}
+              </div>
             : <>
               <div className="job-row job-row-head">
                 <span className="jr-title">Task</span><span className="jr-wf">Type</span><span className="jr-status">Status</span><span className="jr-prog">Jobs</span><span className="jr-time">Created</span>

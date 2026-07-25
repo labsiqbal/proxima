@@ -2,10 +2,11 @@ import React from 'react'
 import { getAlphaSettings, saveAlphaSettings } from '../../api/alpha'
 
 const STEPS = [
-  { eyebrow: 'Two ways to work', title: 'Welcome to Proxima', body: 'Use Chat when you want to work hands-on with one agent. Use Alpha when you want to delegate an outcome and monitor several workers.' },
-  { eyebrow: 'Hands-on', title: 'Chat keeps you close', body: 'Talk through the work, watch tools run, and restore file-changing turns from the assistant message when you want to roll them back.' },
-  { eyebrow: 'Delegate', title: 'Alpha runs the work', body: 'Alpha creates durable Autonomous jobs, dispatches up to three workers, and queues the rest. Unattended mode is always opt-in and budgeted.' },
-  { eyebrow: 'Review safely', title: 'Tasks and Attention', body: 'Tasks holds execution and diff review. The global Attention inbox deep-links every decision; job checkpoints restore only the affected job and repository refs.' },
+  { eyebrow: 'Primary loop', title: 'Welcome to Proxima', body: 'The taught path is Chat → Tasks → Workflows → Archive. Use Chat for hands-on work, watch durable runs in Tasks, keep patterns in Workflows, and find deliverables in Archive.' },
+  { eyebrow: 'Hands-on', title: 'Chat keeps you close', body: 'Talk through the work, watch tools run, open outputs in the ArtifactViewer, and restore file-changing turns when you need to roll them back.' },
+  { eyebrow: 'Delegate', title: 'Alpha is the side path', body: 'Alpha creates durable Autonomous jobs, dispatches up to three workers, and queues the rest. Prefer Chat when you want to stay in the thread; use Alpha when you want outcomes delegated.' },
+  { eyebrow: 'Watch & keep', title: 'Tasks and Workflows', body: 'Tasks holds execution and diff review. When a pattern is worth repeating, save it as a Workflow (manual or scheduled) and re-run without re-explaining.' },
+  { eyebrow: 'Deliverables', title: 'Archive', body: 'Durable deliverables land in Archive with lineage and status. Open supported files with the same in-app viewer used from Chat and Tasks.' },
 ]
 
 export function CoreTour({ token }: { token: string }) {

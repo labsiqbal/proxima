@@ -18,6 +18,8 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { listSchedules } from '../api/schedules'
+import { cronHint } from '../components/workflows/ScheduleManager'
+import { cronLabelsByWorkflow, howItRunsBadges } from '../lib/scheduleBadges'
 import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
@@ -208,6 +210,8 @@ export function GraphScreen({
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
   /** Workflow ids that already have at least one schedule row (for Manual/Scheduled honesty). */
   const [scheduledWorkflowIds, setScheduledWorkflowIds] = React.useState<Set<number>>(() => new Set())
+  /** Short cron labels per workflow for how-it-runs badges. */
+  const [scheduleCronByWorkflow, setScheduleCronByWorkflow] = React.useState<Map<number, string[]>>(() => new Map())
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
@@ -286,6 +290,7 @@ export function GraphScreen({
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
         setScheduledWorkflowIds(new Set(scheduleRows.map(row => row.workflow_id)))
+        setScheduleCronByWorkflow(cronLabelsByWorkflow(scheduleRows, cronHint))
       }
     } catch (cause) {
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
@@ -897,6 +902,10 @@ export function GraphScreen({
                   ? <p className="muted graph-none">None yet. Open a plan and press <em>Save as Workflow</em>.</p>
                   : templates.map(template => {
                       const isScheduled = scheduledWorkflowIds.has(template.id)
+                      const runBadges = howItRunsBadges({
+                        scheduled: isScheduled,
+                        cronLabels: scheduleCronByWorkflow.get(template.id),
+                      })
                       return <div key={template.id} className="graph-card">
                       <button className="graph-card-main" disabled={!!busy} onClick={() => {
                         if (template.inputs?.length) setRunningTemplate(template)
@@ -905,10 +914,11 @@ export function GraphScreen({
                         <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
                         <span className="graph-card-meta">
                           <strong>{template.name}</strong>
-                          <small className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</small>
+                          <small className="muted">{template.description?.trim() || (template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it')}</small>
                           <span className="graph-run-kinds" aria-label="How it runs">
-                            <span className="graph-run-kind">Manual</span>
-                            {isScheduled && <span className="graph-run-kind is-scheduled">Scheduled</span>}
+                            {runBadges.map(b => (
+                              <span key={b.kind} className={`graph-run-kind${b.kind === 'scheduled' ? ' is-scheduled' : ''}`}>{b.label}</span>
+                            ))}
                           </span>
                         </span>
                       </button>

@@ -209,17 +209,31 @@ export function formatAuditMeta(raw: string | null | undefined, max = 160): stri
 }
 export type SettingsSectionKey = 'account' | 'projects' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
 
-const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
-  { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
+/** Flat section metadata (labels/hints). Menu order is SETTINGS_GROUPS. */
+export const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'projects', label: 'Projects', hint: 'Link, create, rename, remove, and container settings' },
-  { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
   { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
+  { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
   { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
-  { key: 'media', label: 'Media & Integrations', hint: 'Image generation backend' },
+  { key: 'media', label: 'Media', hint: 'Image generation backend' },
   { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
-  { key: 'help', label: 'Help & Tours', hint: 'Replay the core tour and explore every surface' },
+  { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
+  { key: 'help', label: 'Help', hint: 'Core tour and product chapters' },
 ]
+
+/** Work setup · Integrations · System · Help (UI Flow Q14). */
+export const SETTINGS_GROUPS: { id: string; label: string; keys: SettingsSectionKey[] }[] = [
+  { id: 'work', label: 'Work setup', keys: ['projects', 'agents', 'alpha', 'knowledge'] },
+  { id: 'integrations', label: 'Integrations', keys: ['media', 'remote'] },
+  { id: 'system', label: 'System', keys: ['account', 'diagnostics'] },
+  { id: 'help', label: 'Help', keys: ['help'] },
+]
+
+/** Ordered section keys for tests and first-load defaults. */
+export function settingsSectionOrder(): SettingsSectionKey[] {
+  return SETTINGS_GROUPS.flatMap(g => g.keys)
+}
 
 /** Spaced accessible name so title+hint do not smash (Account & PreferencesAccount…). */
 export function settingsMenuItemAriaLabel(label: string, hint: string): string {
@@ -540,7 +554,7 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
       <input className="auth-input" type="password" name="current-password" placeholder="Current password" aria-label="Current password" value={cur} onChange={e => setCur(e.target.value)} autoComplete="current-password" />
       <input className="auth-input" type="password" name="new-password" placeholder="New password" aria-label="New password" value={next} onChange={e => setNext(e.target.value)} autoComplete="new-password" />
       <input className="auth-input" type="password" name="confirm-password" placeholder="Confirm new password" aria-label="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />
-      {msg && <p className={msg.ok ? 'muted' : 'auth-error'} role={msg.ok ? undefined : 'alert'}>{msg.text}</p>}
+      {msg && <p className={msg.ok ? 'ok-text' : 'auth-error'} role={msg.ok ? 'status' : 'alert'}>{msg.text}</p>}
       <button className="primary-button" type="submit" disabled={busy || !cur || !next}>{busy ? 'Changing…' : 'Change password'}</button>
     </form>
   </div>
@@ -589,11 +603,14 @@ function AlphaSettingsPanel({ token }: { token: string }) {
 }
 
 const HELP_CHAPTERS = [
-  { id: 'core', title: 'Core flow', summary: 'Chat, Alpha, Tasks, Attention, and restore safety.' },
-  { id: 'recipes', title: 'Workflows & plans', summary: 'Turn repeatable work into plans, graph nodes, schedules, and review gates.' },
-  { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Files, Terminal, and app Preview.' },
-  { id: 'archive', title: 'Archive', summary: 'Review durable deliverables, versions, lineage, and approval status.' },
+  { id: 'core', title: 'Primary loop', summary: 'Chat → Tasks → Workflows → Archive, with Alpha as the delegate side path.' },
+  { id: 'chat', title: 'Chat', summary: 'Hands-on work with one agent: send prompts, watch tools, open deliverables.' },
+  { id: 'alpha', title: 'Alpha', summary: 'Delegate outcomes; up to three workers; unattended budgets stay opt-in.' },
+  { id: 'tasks', title: 'Tasks', summary: 'Watch durable jobs run, review changes, and open task workspaces.' },
+  { id: 'workflows', title: 'Workflows', summary: 'Save plans as templates, schedule runs, and author on the graph canvas.' },
+  { id: 'archive', title: 'Archive', summary: 'Durable deliverables, versions, lineage, and the shared ArtifactViewer.' },
   { id: 'design', title: 'Design', summary: 'Create and review visual scenes when Design Studio is enabled.' },
+  { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Files, Terminal, and app Preview.' },
   { id: 'agents', title: 'Agents', summary: 'Bring your own runner, choose profiles, models, skills, and tools.' },
   { id: 'remote', title: 'Remote & safety', summary: 'Owner password, loopback/Tailscale posture, audit history, checkpoints, and satpam.' },
   { id: 'settings', title: 'Settings', summary: 'Appearance, budgets, media providers, diagnostics, and update controls.' },
@@ -724,17 +741,25 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
     <aside className="settings-menu" aria-label="Settings sections">
       <p className="eyebrow">Settings</p>
       <div className="settings-menu-list">
-        {settingsSections.map(section => <button
-          key={section.key}
-          type="button"
-          className={`settings-menu-item ${activeSection === section.key ? 'active' : ''}`}
-          onClick={() => setActiveSection(section.key)}
-          aria-current={activeSection === section.key ? 'page' : undefined}
-          aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
-        >
-          <strong aria-hidden="true">{section.label}</strong>
-          <small aria-hidden="true">{section.hint}</small>
-        </button>)}
+        {SETTINGS_GROUPS.map(group => {
+          const items = group.keys
+            .map(key => settingsSections.find(s => s.key === key))
+            .filter((s): s is (typeof SETTINGS_SECTIONS)[number] => !!s)
+          return <div className="settings-menu-group" key={group.id} role="group" aria-label={group.label}>
+            <p className="settings-menu-group-label">{group.label}</p>
+            {items.map(section => <button
+              key={section.key}
+              type="button"
+              className={`settings-menu-item ${activeSection === section.key ? 'active' : ''}`}
+              onClick={() => setActiveSection(section.key)}
+              aria-current={activeSection === section.key ? 'page' : undefined}
+              aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
+            >
+              <strong aria-hidden="true">{section.label}</strong>
+              <small aria-hidden="true">{section.hint}</small>
+            </button>)}
+          </div>
+        })}
       </div>
     </aside>
     <div className="settings-content" aria-live="polite">

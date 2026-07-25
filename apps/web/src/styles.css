@@ -1450,6 +1450,22 @@ button:disabled {
 	font-size: var(--text-2xs);
 	line-height: 1.35;
 }
+.settings-menu-group {
+	display: grid;
+	gap: var(--space-1);
+}
+.settings-menu-group-label {
+	margin: var(--space-3) 0 var(--space-1);
+	padding: 0 var(--space-2);
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	font-weight: 650;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.settings-menu-group:first-child .settings-menu-group-label {
+	margin-top: 0;
+}
 .settings-menu-list {
 	display: grid;
 	gap: 4px;
@@ -1981,14 +1997,17 @@ button:disabled {
 .chat-empty {
 	text-align: center;
 	color: var(--ui-text-tertiary);
-	padding: 64px 16px;
+	padding: var(--space-10) var(--space-4);
+	display: grid;
+	justify-items: center;
+	gap: var(--space-2);
 }
 .chat-empty-mark {
 	font-size: var(--text-2xl);
 	color: var(--ui-accent);
 }
 .chat-empty h3 {
-	margin: 12px 0 4px;
+	margin: var(--space-2) 0 0;
 	color: var(--ui-text-secondary);
 	font-size: var(--text-md);
 }
@@ -1996,6 +2015,99 @@ button:disabled {
 	background: var(--ui-row-hover-background);
 	padding: 1px 6px;
 	border-radius: var(--radius-sm);
+}
+
+/* Shared teaching empty grammar (Chat, Alpha, Tasks, Archive, Design, …) */
+.teaching-empty {
+	display: grid;
+	justify-items: center;
+	align-content: center;
+	gap: var(--space-2);
+	padding: var(--space-8) var(--space-5);
+	text-align: center;
+	max-width: 36rem;
+	margin-inline: auto;
+}
+.teaching-empty-mark {
+	color: var(--ui-accent);
+	font-size: var(--text-2xl);
+	line-height: 1;
+}
+.teaching-empty-title {
+	margin: 0;
+	font-size: var(--text-lg);
+	font-weight: 650;
+	color: var(--ui-text);
+}
+.teaching-empty-lead {
+	margin: 0;
+	max-width: var(--read-width, 28rem);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	line-height: 1.6;
+}
+.teaching-empty-caps {
+	list-style: none;
+	margin: var(--space-2) 0 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-1);
+	text-align: left;
+	width: min(100%, 22rem);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+}
+.teaching-empty-caps li {
+	position: relative;
+	padding-left: var(--space-4);
+}
+.teaching-empty-caps li::before {
+	content: '·';
+	position: absolute;
+	left: var(--space-1);
+	color: var(--ui-accent);
+	font-weight: 700;
+}
+.teaching-empty-steps {
+	list-style: none;
+	margin: var(--space-3) 0 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-2);
+	text-align: left;
+	width: min(100%, 24rem);
+	font-size: var(--text-sm);
+	color: var(--ui-text-secondary);
+}
+.teaching-empty-steps li {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-2);
+}
+.teaching-empty-step-n {
+	flex: 0 0 auto;
+	display: inline-grid;
+	place-items: center;
+	width: 1.25rem;
+	height: 1.25rem;
+	border-radius: var(--radius-full, 999px);
+	background: color-mix(in srgb, var(--ui-accent) 14%, var(--ui-surface));
+	color: var(--ui-accent);
+	font-size: var(--text-xs);
+	font-weight: 650;
+	line-height: 1;
+}
+.teaching-empty-cta {
+	margin-top: var(--space-3);
+}
+.chat-empty .teaching-empty-caps,
+.chat-empty .teaching-empty-steps,
+.chat-empty .teaching-empty-lead {
+	text-align: left;
+	justify-self: center;
+}
+.chat-empty .teaching-empty-lead {
+	text-align: center;
 }
 
 .chat-line.enter {
@@ -8393,6 +8505,14 @@ div.result-media {
 .ds-sub {
 	margin: 0 auto var(--space-5);
 	max-width: 56ch;
+}
+.ds-start-inner .ds-teach-list {
+	justify-self: center;
+	margin-inline: auto;
+	text-align: left;
+}
+.ds-start-inner .ds-teach-steps {
+	margin-bottom: var(--space-3);
 }
 .ds-prompt {
 	border: 1px solid var(--ui-stroke-secondary);

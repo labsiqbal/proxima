@@ -57,3 +57,41 @@ describe('surface keep-alive (Chat leave/return)', () => {
     expect(screen.getByTestId('run-status')).toHaveTextContent('in-flight')
   })
 })
+
+describe('surface keep-alive (multi primary surfaces)', () => {
+  it('preserves Alpha and Tasks panes after leave/return', async () => {
+    const user = userEvent.setup()
+    function MultiKeepAlive() {
+      const [view, setView] = React.useState<'alpha' | 'activity' | 'chat'>('alpha')
+      const [alphaDraft, setAlphaDraft] = React.useState('delegate me')
+      const [taskFilter, setTaskFilter] = React.useState('all')
+      return (
+        <div>
+          <button type="button" onClick={() => setView('alpha')}>Go Alpha</button>
+          <button type="button" onClick={() => setView('activity')}>Go Tasks</button>
+          <button type="button" onClick={() => setView('chat')}>Go Chat</button>
+          <div className="surface-pane" hidden={view !== 'alpha'} aria-hidden={view !== 'alpha'}>
+            <label>Alpha draft<textarea aria-label="Alpha draft" value={alphaDraft} onChange={e => setAlphaDraft(e.target.value)} /></label>
+          </div>
+          <div className="surface-pane" hidden={view !== 'activity'} aria-hidden={view !== 'activity'}>
+            <label>Filter<input aria-label="Task filter" value={taskFilter} onChange={e => setTaskFilter(e.target.value)} /></label>
+          </div>
+          {view === 'chat' && <div>Chat surface</div>}
+        </div>
+      )
+    }
+    render(<MultiKeepAlive />)
+    expect(screen.getByLabelText('Alpha draft')).toHaveValue('delegate me')
+    await user.click(screen.getByRole('button', { name: 'Go Tasks' }))
+    await user.clear(screen.getByLabelText('Task filter'))
+    await user.type(screen.getByLabelText('Task filter'), 'review')
+    await user.click(screen.getByRole('button', { name: 'Go Chat' }))
+    expect(screen.getByText('Chat surface')).toBeInTheDocument()
+    expect(screen.getByLabelText('Alpha draft')).toBeInTheDocument()
+    expect(screen.getByLabelText('Task filter')).toHaveValue('review')
+    await user.click(screen.getByRole('button', { name: 'Go Alpha' }))
+    expect(screen.getByLabelText('Alpha draft')).toBeVisible()
+    expect(screen.getByLabelText('Alpha draft')).toHaveValue('delegate me')
+  })
+})
+
