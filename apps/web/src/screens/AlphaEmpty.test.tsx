@@ -16,8 +16,34 @@ describe("Alpha empty surface", () => {
 			screen.queryByText(/Describe an outcome and press Delegate/),
 		).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "How it works" })).toBeInTheDocument();
-		expect(screen.getByLabelText("Example delegations")).toBeInTheDocument();
+		const examples = screen.getByLabelText("Example delegations");
+		expect(examples).toBeInTheDocument();
+		expect(examples).toHaveClass("alpha-examples");
+		expect(within(examples).getByRole("button", { name: "Audit & fix" })).toHaveClass(
+			"alpha-example-chip",
+		);
+		expect(within(examples).getByRole("button", { name: "Split the release" })).toBeInTheDocument();
+		expect(
+			within(examples).getByRole("button", { name: "What needs attention" }),
+		).toBeInTheDocument();
 		expect(screen.getByTestId("alpha-empty")).toBeInTheDocument();
+	});
+
+	it("example chips seed the full prompt into the composer callback", async () => {
+		const user = userEvent.setup();
+		const onExample = vi.fn();
+		render(<AlphaEmpty onExample={onExample} />);
+
+		const chip = screen.getByRole("button", { name: "Audit & fix" });
+		expect(chip).toHaveAttribute(
+			"title",
+			"Audit this project and delegate independent fixes.",
+		);
+		await user.click(chip);
+		expect(onExample).toHaveBeenCalledTimes(1);
+		expect(onExample).toHaveBeenCalledWith(
+			"Audit this project and delegate independent fixes.",
+		);
 	});
 
 	it("opens How it works and dismisses via Got it, Esc, and scrim", async () => {
