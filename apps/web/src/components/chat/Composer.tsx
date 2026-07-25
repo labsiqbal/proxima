@@ -27,27 +27,27 @@ import {
 const isImg = (n: string) => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(n);
 
 /**
- * Hard cap on slash-command rows in the Chat composer popover.
- * Matches the ~4-row @-mention viewport intent so `/` never becomes a wall of skills.
+ * Visible row count for the slash popover viewport (~4 rows, then scroll).
+ * Not a hard cap on matches — the full ranked list stays in the DOM.
  */
-export const SLASH_COMMAND_LIST_MAX = 4;
+export const SLASH_COMMAND_LIST_VIEWPORT_ROWS = 4;
 
 type SlashMatchable = { name: string };
 
 /**
- * Filter enabled catalog commands by prefix on `draft`, rank lightly, then cap.
+ * Filter enabled catalog commands by prefix on `draft` and rank lightly.
  * Ranking: exact name match first, otherwise stable catalog order so empty `/`
  * keeps top-of-catalog built-ins (e.g. /help, /masterplan) before long skill lists.
+ * Returns every match; the popover CSS viewport (~4 rows) scrolls the rest.
  */
 export function matchSlashCommands<T extends SlashMatchable>(
 	commands: readonly T[],
 	draft: string,
 	enabled: (command: T) => boolean = () => true,
-	max: number = SLASH_COMMAND_LIST_MAX,
 ): T[] {
 	const q = draft.toLowerCase();
 	const matched = commands.filter(enabled).filter((c) => c.name.startsWith(q));
-	const ranked = matched
+	return matched
 		.map((c, index) => ({ c, index }))
 		.sort((a, b) => {
 			const aExact = a.c.name === q ? 0 : 1;
@@ -56,8 +56,10 @@ export function matchSlashCommands<T extends SlashMatchable>(
 			return a.index - b.index;
 		})
 		.map(({ c }) => c);
-	return ranked.slice(0, max);
 }
+
+/** Default catalog surface — Proxima handles the slash (not terminal-only / ui-owned). */
+const DEFAULT_SLASH_SURFACE = "proxima";
 
 /** Spaced accessible name for a slash-command row (avoids "/helpShow…proxima"). */
 export function slashCommandAriaLabel(command: {
@@ -65,7 +67,10 @@ export function slashCommandAriaLabel(command: {
 	description: string;
 	surface: string;
 }): string {
-	return `${command.name} ${command.description} (${command.surface})`;
+	const base = `${command.name} ${command.description}`;
+	// Omit the default surface from a11y names — it is noise on every skill row.
+	if (!command.surface || command.surface === DEFAULT_SLASH_SURFACE) return base;
+	return `${base} (${command.surface})`;
 }
 
 type Att = { path: string; name: string; img: boolean };
@@ -182,7 +187,9 @@ export function Composer({
 	const taRef = React.useRef<HTMLTextAreaElement>(null);
 	const pendingMentionCaret = React.useRef<{ caret: number; forText: string } | null>(null);
 	const mentionListRef = React.useRef<HTMLDivElement>(null);
+	const slashListRef = React.useRef<HTMLDivElement>(null);
 	const mentionListId = React.useId();
+	const slashListId = React.useId();
 	const fileRef = React.useRef<HTMLInputElement>(null);
 	const catalogSeq = React.useRef(0);
 	const uploadSeq = React.useRef(0);
@@ -199,6 +206,7 @@ export function Composer({
 		at: number;
 	} | null>(null);
 	const [mentionActive, setMentionActive] = React.useState(0);
+	const [slashActive, setSlashActive] = React.useState(0);
 	const mentionQuery = mention?.query;
 	const mentionMatches = React.useMemo(
 		() =>
@@ -361,6 +369,21 @@ export function Composer({
 		? matchSlashCommands(commands, draft, commandEnabled)
 		: [];
 
+	React.useEffect(() => {
+		setSlashActive(0);
+	}, [draft]);
+
+	React.useEffect(() => {
+		if (commandMatches.length === 0) return;
+		slashListRef.current
+			?.querySelector<HTMLElement>(`[data-slash-index="${slashActive}"]`)
+			?.scrollIntoView?.({ block: "nearest" });
+	}, [slashActive, commandMatches.length, draft]);
+
+	const pickSlashCommand = (command: CatalogCommand) => {
+		setDraft(command.name + " ");
+	};
+
 	async function submit(event: React.FormEvent) {
 		event.preventDefault();
 		const text = draft.trim();
@@ -433,26 +456,36 @@ export function Composer({
 			)}
 			{commandMatches.length > 0 && (
 				<div
+					id={slashListId}
+					ref={slashListRef}
 					className="slash-popover"
 					role="listbox"
 					aria-label="Chat commands"
 				>
-					{commandMatches.map((c) => (
+					{commandMatches.map((c, index) => (
 						<button
 							type="button"
 							key={c.name}
+							id={`${slashListId}-option-${index}`}
+							data-slash-index={index}
 							role="option"
+							aria-selected={index === slashActive}
 							aria-label={slashCommandAriaLabel(c)}
+							className={index === slashActive ? "active" : ""}
+							onMouseEnter={() => setSlashActive(index)}
 							onMouseDown={(e) => {
 								// Keep focus in the textarea (same as @-mention pick).
 								e.preventDefault();
-								setDraft(c.name + " ");
+								pickSlashCommand(c);
 							}}
 						>
 							<strong>{c.name}</strong>
 							{/* Leading spaces keep a fallback accessible name readable. */}
 							<span> {c.description}</span>
-							<em> {c.surface}</em>
+							{/* surface=proxima is the default for catalog rows; hide the noise. */}
+							{c.surface && c.surface !== DEFAULT_SLASH_SURFACE ? (
+								<em> {c.surface}</em>
+							) : null}
 						</button>
 					))}
 				</div>
@@ -502,14 +535,23 @@ export function Composer({
 				onBlur={() => window.setTimeout(() => setMention(null), 120)}
 				disabled={disabled || submitting}
 				aria-autocomplete="list"
-				aria-expanded={mention != null && mentionMatches.length > 0}
+				aria-expanded={
+					(mention != null && mentionMatches.length > 0) ||
+					commandMatches.length > 0
+				}
 				aria-controls={
-					mention && mentionMatches.length > 0 ? mentionListId : undefined
+					mention && mentionMatches.length > 0
+						? mentionListId
+						: commandMatches.length > 0
+							? slashListId
+							: undefined
 				}
 				aria-activedescendant={
 					mention && mentionMatches.length > 0
 						? `${mentionListId}-option-${Math.min(mentionActive, mentionMatches.length - 1)}`
-						: undefined
+						: commandMatches.length > 0
+							? `${slashListId}-option-${Math.min(slashActive, commandMatches.length - 1)}`
+							: undefined
 				}
 				onPaste={(e) => {
 					const files = [...e.clipboardData.items]
@@ -549,6 +591,31 @@ export function Composer({
 						if (e.key === "Escape") {
 							e.preventDefault();
 							setMention(null);
+							return;
+						}
+					}
+					if (commandMatches.length > 0) {
+						if (e.key === "ArrowDown") {
+							e.preventDefault();
+							setSlashActive((index) =>
+								(index + 1) % commandMatches.length,
+							);
+							return;
+						}
+						if (e.key === "ArrowUp") {
+							e.preventDefault();
+							setSlashActive((index) =>
+								(index + commandMatches.length - 1) % commandMatches.length,
+							);
+							return;
+						}
+						if (e.key === "Enter" || e.key === "Tab") {
+							e.preventDefault();
+							pickSlashCommand(
+								commandMatches[
+									Math.min(slashActive, commandMatches.length - 1)
+								],
+							);
 							return;
 						}
 					}

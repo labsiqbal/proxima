@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	Composer,
 	matchSlashCommands,
-	SLASH_COMMAND_LIST_MAX,
+	SLASH_COMMAND_LIST_VIEWPORT_ROWS,
 	slashCommandAriaLabel,
 } from "./Composer";
 
@@ -226,28 +226,24 @@ describe("matchSlashCommands", () => {
 		{ name: "/masterplan", skillId: "bundled/masterplan" },
 	];
 
-	it("exports a single max of 4", () => {
-		expect(SLASH_COMMAND_LIST_MAX).toBe(4);
+	it("exports a viewport row constant of 4 (not a match hard-cap)", () => {
+		expect(SLASH_COMMAND_LIST_VIEWPORT_ROWS).toBe(4);
 	});
 
-	it("caps empty slash to at most 4, preserving top catalog order among built-ins", () => {
+	it("returns all matches for empty slash, preserving top catalog order", () => {
 		const matched = matchSlashCommands(many, "/");
-		expect(matched).toHaveLength(SLASH_COMMAND_LIST_MAX);
-		expect(matched.map((c) => c.name)).toEqual([
-			"/help",
-			"/status",
-			"/new",
-			"/session",
-		]);
+		expect(matched.length).toBeGreaterThan(SLASH_COMMAND_LIST_VIEWPORT_ROWS);
+		expect(matched).toHaveLength(many.length);
+		expect(matched.map((c) => c.name)).toEqual(many.map((c) => c.name));
 	});
 
-	it("never returns more than 4 prefix matches", () => {
+	it("does not hard-cap prefix matches at 4", () => {
 		const matched = matchSlashCommands(many, "/");
-		expect(matched.length).toBeLessThanOrEqual(4);
-		expect(matched).toHaveLength(4);
+		expect(matched.length).toBeGreaterThan(4);
+		expect(matched).toHaveLength(8);
 	});
 
-	it("narrows as the user types and still caps", () => {
+	it("narrows as the user types and keeps every prefix match", () => {
 		const gri = matchSlashCommands(many, "/gri");
 		// Catalog order among prefix matches (grill-with-docs listed before grill-me).
 		expect(gri.map((c) => c.name)).toEqual(["/grill-with-docs", "/grill-me"]);
@@ -261,7 +257,7 @@ describe("matchSlashCommands", () => {
 			{ name: "/grill-e", skillId: "e" },
 			{ name: "/grill-f", skillId: "f" },
 		];
-		expect(matchSlashCommands(manyGri, "/gri")).toHaveLength(4);
+		expect(matchSlashCommands(manyGri, "/gri")).toHaveLength(6);
 	});
 
 	it("prefers exact name match first", () => {
@@ -276,7 +272,7 @@ describe("matchSlashCommands", () => {
 		expect(matched[0]?.name).toBe("/help");
 	});
 
-	it("respects the enabled filter before ranking/cap", () => {
+	it("respects the enabled filter before ranking", () => {
 		const matched = matchSlashCommands(
 			many,
 			"/",
@@ -287,7 +283,16 @@ describe("matchSlashCommands", () => {
 });
 
 describe("Composer slash commands", () => {
+	const scrollIntoView = vi.fn();
+	let originalScrollIntoView: typeof HTMLElement.prototype.scrollIntoView | undefined;
+
 	beforeEach(() => {
+		originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+			configurable: true,
+			value: scrollIntoView,
+		});
+		scrollIntoView.mockClear();
 		vi.clearAllMocks();
 		mocks.getCommandCatalog.mockResolvedValue({
 			groups: [
@@ -320,7 +325,18 @@ describe("Composer slash commands", () => {
 		mocks.listArtifacts.mockResolvedValue({ artifacts: [] });
 	});
 
-	it("spaces slash-command accessible names",
+	afterEach(() => {
+		if (originalScrollIntoView) {
+			Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+				configurable: true,
+				value: originalScrollIntoView,
+			});
+		} else {
+			Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+		}
+	});
+
+	it("spaces slash-command accessible names and omits default surface",
 		() => {
 			expect(
 				slashCommandAriaLabel({
@@ -328,11 +344,18 @@ describe("Composer slash commands", () => {
 					description: "Show Proxima chat commands",
 					surface: "proxima",
 				}),
-			).toBe("/help Show Proxima chat commands (proxima)");
+			).toBe("/help Show Proxima chat commands");
+			expect(
+				slashCommandAriaLabel({
+					name: "/shell",
+					description: "Run in terminal",
+					surface: "terminal-only",
+				}),
+			).toBe("/shell Run in terminal (terminal-only)");
 		},
 	);
 
-	it("lists commands with readable names and inserts on pick", async () => {
+	it("lists commands with readable names, hides default surface, and inserts on pick", async () => {
 		const user = userEvent.setup();
 		renderComposer();
 		const textarea = screen.getByRole("textbox", { name: "Message" });
@@ -343,24 +366,26 @@ describe("Composer slash commands", () => {
 		const list = await screen.findByRole("listbox", { name: "Chat commands" });
 		expect(list).toBeInTheDocument();
 		const help = screen.getByRole("option", {
-			name: "/help Show Proxima chat commands (proxima)",
+			name: "/help Show Proxima chat commands",
 		});
 		expect(help).toBeInTheDocument();
+		expect(help.querySelector("em")).toBeNull();
 		expect(screen.getByRole("option", {
-			name: "/masterplan Turn a product idea into an execution-ready masterplan package (proxima)",
+			name: "/masterplan Turn a product idea into an execution-ready masterplan package",
 		})).toBeInTheDocument();
 		expect(
 			screen.queryByRole("option", {
 				name: "/helpShow Proxima chat commandsproxima",
 			}),
 		).not.toBeInTheDocument();
+		expect(screen.queryByText("proxima")).not.toBeInTheDocument();
 
 		// mousedown pick keeps the draft insertion without submitting.
 		fireEvent.mouseDown(help);
 		expect(textarea).toHaveValue("/help ");
 	});
 
-	it("renders at most four slash options when the catalog has more matches", async () => {
+	it("keeps all slash matches in the scrollable viewport (not a hard cap of 4)", async () => {
 		const user = userEvent.setup();
 		const commands = [
 			"/help",
@@ -387,14 +412,64 @@ describe("Composer slash commands", () => {
 		await user.type(textarea, "/");
 
 		const list = await screen.findByRole("listbox", { name: "Chat commands" });
+		expect(list).toHaveClass("slash-popover");
 		const options = list.querySelectorAll('[role="option"]');
-		expect(options).toHaveLength(SLASH_COMMAND_LIST_MAX);
-		// Fifth catalog entry must not appear when only the first four fit.
+		expect(options.length).toBeGreaterThan(SLASH_COMMAND_LIST_VIEWPORT_ROWS);
+		expect(options).toHaveLength(8);
+		// Fifth+ catalog entries remain in the DOM; CSS max-height scrolls the list.
 		expect(
-			screen.queryByRole("option", {
-				name: "/project desc for /project (proxima)",
+			screen.getByRole("option", {
+				name: "/project desc for /project",
 			}),
-		).not.toBeInTheDocument();
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("option", {
+				name: "/skill-alpha desc for /skill-alpha",
+			}),
+		).toBeInTheDocument();
+
+		scrollIntoView.mockClear();
+		await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+		await waitFor(() => {
+			expect(textarea).toHaveAttribute(
+				"aria-activedescendant",
+				options[4].id,
+			);
+			expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+			expect(
+				scrollIntoView.mock.instances[scrollIntoView.mock.instances.length - 1],
+			).toBe(options[4]);
+		});
+
+		await user.keyboard("{Enter}");
+		expect(textarea).toHaveValue("/project ");
+	});
+
+	it("shows non-default surface labels when present", async () => {
+		const user = userEvent.setup();
+		mocks.getCommandCatalog.mockResolvedValue({
+			groups: [
+				{
+					label: "terminal",
+					commands: [
+						{
+							name: "/shell",
+							description: "Open a shell",
+							surface: "terminal-only",
+							unavailableMessage: null,
+						},
+					],
+				},
+			],
+		});
+		renderComposer();
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+		await waitFor(() => expect(mocks.getCommandCatalog).toHaveBeenCalled());
+		await user.type(textarea, "/");
+		const option = await screen.findByRole("option", {
+			name: "/shell Open a shell (terminal-only)",
+		});
+		expect(option.querySelector("em")?.textContent?.trim()).toBe("terminal-only");
 	});
 });
 
