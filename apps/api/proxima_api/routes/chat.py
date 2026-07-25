@@ -42,7 +42,6 @@ from ..prompt_collaborations import collaboration_card_payload
 from ..chat_collaboration import make_start_collaboration
 from ..commands import agent_turn_for_command, skill_command_map
 from ..capabilities import detect_for_runner, parse_selection
-from .. import app_settings
 from ..run_state import active_run_clause, stale_params
 from ..run_prompting import (
     append_vision_references,

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from proxima_api.commands import (
@@ -9,7 +7,6 @@ from proxima_api.commands import (
     execute_command,
     normalize_command,
     reserved_command_names,
-    skill_command_map,
     skill_slash_name,
 )
 from proxima_api.main import create_app

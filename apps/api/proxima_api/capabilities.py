@@ -187,7 +187,7 @@ def skill_roots_for_runner(
             continue
         expanded = expand_skill_root(text)
         if expanded is None:
-            warnings.append(f"skipped skill root (custom): empty path")
+            warnings.append("skipped skill root (custom): empty path")
             continue
         if not expanded.is_absolute() and not str(text).startswith(("~", "%", "$")):
             # Prefer absolute custom roots; still try expanduser for ~-relative.
