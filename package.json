@@ -1,6 +1,6 @@
 {
   "name": "proxima",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Self-hosted single-user control plane for AI agent work",
   "scripts": {
