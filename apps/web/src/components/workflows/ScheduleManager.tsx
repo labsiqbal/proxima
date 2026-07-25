@@ -46,7 +46,13 @@ export const isValidCron = (cron: string) => {
 // All a schedule needs to know about a workflow: which one, what to call it, and what
 // its runs must be asked for. Narrower than the full Workflow so graph templates — the
 // only authoring surface now — qualify without pretending to have steps.
-export type SchedulableWorkflow = { id: number; name: string; inputs?: WorkflowInput[] | null }
+export type SchedulableWorkflow = {
+  id: number
+  name: string
+  inputs?: WorkflowInput[] | null
+  /** Owning project — schedules inherit this; never pick a different project here. */
+  project_slug?: string | null
+}
 
 export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onOpenJob }: {
   token: string
@@ -99,7 +105,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   }
 
   const add = () => {
-    if (!selected) { setError('Choose a recipe first.'); return }
+    if (!selected) { setError('Choose a workflow first.'); return }
     if (!isValidCron(cron)) { setError('Enter a valid five-field cron using numbers, *, steps, ranges, or comma-separated parts.'); return }
     const declared = selected.inputs || []
     const missing = declared.find(input => input.required && !(values[input.id] || '').trim())
@@ -134,18 +140,19 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
 
   return <section className={`schedule-manager ${compact ? 'compact' : ''}`} aria-labelledby="schedule-manager-title">
     <header className="schedule-manager-head">
-      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">Scheduled</h1><p className="muted">Run saved recipes on a five-field cron cadence.</p></div>
+      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">Scheduled</h1><p className="muted">Run saved workflows on a five-field cron cadence.</p></div>
       {onClose && <button className="ghost-button" onClick={onClose} disabled={busy}>Close</button>}
     </header>
     {error && <div className="error-bar" role="alert">{error}</div>}
     {/* Only saved templates can be scheduled — a finished run is not schedulable until
         it is saved as one. Saying so here beats an inexplicably thin picker. */}
     {!workflowId && available.length === 0 && <div className="schedule-empty-hint">
-      <strong>No Recipes to schedule yet.</strong>
-      <p className="muted">Schedules run <em>saved Recipes</em>. Open a plan in the Editor — a finished run works too — press <em>Save as Recipe</em>, and it will appear here.</p>
+      <strong>No Workflows to schedule yet.</strong>
+      <p className="muted">Schedules run <em>saved Workflows</em>. Open a plan in the Editor — a finished run works too — press <em>Save as Workflow</em>, and it will appear here.</p>
     </div>}
     <div className="schedule-create-card">
-      {!workflowId && <label>Recipe<Dropdown value={selected?.id ? String(selected.id) : ''} onChange={v => setSelectedId(Number(v))} options={available.map(w => ({ value: String(w.id), label: w.name }))} /></label>}
+      {!workflowId && <label>Workflow<Dropdown value={selected?.id ? String(selected.id) : ''} onChange={v => setSelectedId(Number(v))} options={available.map(w => ({ value: String(w.id), label: w.name }))} /></label>}
+      {selected?.project_slug && <p className="muted schedule-project-lock" title="Project is owned by the workflow — not reassigned here">Project <strong>{selected.project_slug}</strong> · locked to this workflow</p>}
       <label>Cadence<Dropdown value={preset} onChange={pickPreset} options={CRON_PRESETS.map(p => ({ value: p.value, label: p.label }))} /></label>
       <label>Cron<input value={cron} onChange={e => { setCron(e.target.value); setPreset('custom') }} placeholder="0 9 * * *" spellCheck={false} /></label>
       <label>Overlap<div className="seg sched-seg"><button type="button" className={overlap === 'skip' ? 'active' : ''} onClick={() => setOverlap('skip')}>Skip</button><button type="button" className={overlap === 'allow' ? 'active' : ''} onClick={() => setOverlap('allow')}>Allow</button></div></label>
@@ -159,7 +166,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
       {schedules.length === 0 ? <p className="schedule-empty muted">No schedules yet.</p> : schedules.map(schedule => {
         const workflow = workflows.find(w => w.id === schedule.workflow_id)
         return <article className="schedule-row" key={schedule.id}>
-          <div><strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong><small>{cronHint(schedule.cron)} · <code>{schedule.cron}</code> · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'}</small></div>
+          <div><strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong><small>{cronHint(schedule.cron)} · <code>{schedule.cron}</code> · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'}{workflow?.project_slug ? ` · ${workflow.project_slug}` : ''} · Scheduled</small></div>
           <label className="schedule-toggle"><input type="checkbox" checked={schedule.enabled} disabled={busy} onChange={() => toggle(schedule)} /> {schedule.enabled ? 'On' : 'Off'}</label>
           <button className="ghost-button" disabled={busy} onClick={() => runNow(schedule)} title="Run this schedule now, without waiting for its cron">Run now</button>
           <button className="ghost-button danger" disabled={busy} onClick={() => void remove(schedule)}>Delete</button>

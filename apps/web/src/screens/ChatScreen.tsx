@@ -86,7 +86,7 @@ function localCommandReply(
 
 const defaultRunRecipePrompt = (features: AppFeatures) => {
 	const artifactKinds = features.designStudio ? "a design or file" : "an image or file";
-	return `Run this entire recipe from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for ${artifactKinds}, create it instead of only describing it. Finish with a concise summary of each step result.`;
+	return `Run this entire workflow from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for ${artifactKinds}, create it instead of only describing it. Finish with a concise summary of each step result.`;
 };
 
 export function ChatScreen(props: {
@@ -577,7 +577,7 @@ export function ChatScreen(props: {
 			lastRunNonce.current = n;
 			void runFromStage(
 					props.runRecipePrompt || defaultRunRecipePrompt(props.features),
-				props.runRecipeLabel || "Run recipe",
+				props.runRecipeLabel || "Run workflow",
 				props.runRecipeInstantResult,
 			);
 		}

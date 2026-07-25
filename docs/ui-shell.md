@@ -10,13 +10,13 @@ There is **one workspace**. The old Ops/Code split is gone — no workspace swit
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Recipes** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
+The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Projects** and **Archive** (where work lives), plus feature-gated **Design**. Agents and Settings stay in the account menu. The default landing view is Chat.
 
 ## Chat — the front door
 
 Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The left nav lists destinations only (**Chat**, **Alpha**, **Tasks**, …); it does not carry a separate **New chat** row. A blank session is started from the **Chat** header control (compact icon on the mobile topbar), or via `/new`. The database session is created lazily on the first message; recent chats appear under the nav once a thread exists.
 
-A recipe's iteration thread is not an ordinary chat: the nav attributes it to Recipes, and picking Chat while one is open switches to a plain conversation instead.
+A workflow's iteration thread is not an ordinary chat: the nav attributes it to Workflows, and picking Chat while one is open switches to a plain conversation instead.
 
 A file-changing assistant turn carries a **Restore changed paths** control. It first
 opens a path impact preview and asks for confirmation; active Alpha work in the same
@@ -49,9 +49,9 @@ Tasks is the durable execution/review index for queued, running, review, done, f
 
 The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
-## Recipes
+## Workflows
 
-Recipes is the template library for repeatable work. The screen owns two modes:
+Workflows is the template library for repeatable work. One workflow owns one project (the shell project filter on the library home does not rebind an open plan or template). The screen owns two modes:
 
 - **Editor** is the plan/graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
   with the recovery switch off the mode explains that the editor is off (the env var
@@ -71,7 +71,7 @@ and the canvas authors those too. The linear *engine* remains for pre-existing j
 sessions (`IterateStage` is still reachable from an old session carrying `workflow_id`),
 but no new linear workflow can be authored.
 
-Schedule inputs mirror each recipe's declared definitions, validate required values, and serialize values by declared input ID. Recipes without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
+Schedule inputs mirror each workflow's declared definitions, validate required values, and serialize values by declared input ID. Project is derived from the saved workflow (locked / display-only on the schedule form). Workflows without declarations may receive an optional `brief`. Cron accepts exactly five fields using numbers, `*`, positive steps, ranges, and comma-separated parts within valid bounds.
 
 Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
 
@@ -132,7 +132,7 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Recipes, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
+Primary screens (Chat, Tasks, Workflows, Projects, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
 
 ## Feature gates
 

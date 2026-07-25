@@ -10,7 +10,7 @@ A **solo operator** — a founder, indie builder, or one person on a small team 
 
 ## Product Purpose
 
-Proxima is a **self-hosted, single-user control plane / cockpit** for delegating real work to the AI agents the owner already owns: think it through in **Chat**, let AI slice it into reviewable jobs, watch the plan run in **Tasks** (with review gates, and local diff review + merge for jobs that touch a repo), and keep the good runs as repeatable **Recipes** - runnable on demand or on a cron schedule - with every deliverable landing in the **Archive** as a durable record. Code, content, and ops flow through the same loop. It is runner-agnostic (drives Claude Code / Codex / Grok / Hermes / Pi over ACP) and BYO-AI (no per-seat SaaS, no baked-in model or credentials). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Open source (AGPL); each user self-hosts their own single-owner cockpit.
+Proxima is a **self-hosted, single-user control plane / cockpit** for delegating real work to the AI agents the owner already owns: think it through in **Chat**, let AI slice it into reviewable jobs, watch the plan run in **Tasks** (with review gates, and local diff review + merge for jobs that touch a repo), and keep the good runs as repeatable **Workflows** - runnable on demand or on a cron schedule - with every deliverable landing in the **Archive** as a durable record. Code, content, and ops flow through the same loop. It is runner-agnostic (drives Claude Code / Codex / Grok / Hermes / Pi over ACP) and BYO-AI (no per-seat SaaS, no baked-in model or credentials). Success = the owner trusts it to run real work end-to-end, sees exactly what the agents did, and never feels they've left "their own machine." Open source (AGPL); each user self-hosts their own single-owner cockpit.
 
 Image generation and Design Studio are part of the active product (Design Studio
 sits behind a server-owned feature flag — on by default in dev, opt-in on
@@ -18,7 +18,7 @@ installed instances). Video Studio was removed.
 
 ## Brand Personality
 
-**Powerful through real work, not theater.** Proxima uses one calm, compact product register in a single workspace: flow-ordered navigation (Chat, Tasks, Recipes, Projects, Archive) with the technical tools (Terminal, Files, Preview) on a right rail. Chat is the front door; Tasks, Recipes, the Archive, and project knowledge stay focused and uncluttered. Character comes from precise hierarchy, truthful live state, and responsive interaction - not synthetic mission-control visuals.
+**Powerful through real work, not theater.** Proxima uses one calm, compact product register in a single workspace: flow-ordered navigation (Chat, Tasks, Workflows, Projects, Archive) with the technical tools (Terminal, Files, Preview) on a right rail. Chat is the front door; Tasks, Workflows, the Archive, and project knowledge stay focused and uncluttered. Character comes from precise hierarchy, truthful live state, and responsive interaction - not synthetic mission-control visuals.
 
 Voice: plain and direct, with operator energy (uppercase mono labels, status lines), never hypey marketing.
 

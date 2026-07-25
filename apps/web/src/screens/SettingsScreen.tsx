@@ -588,7 +588,7 @@ function AlphaSettingsPanel({ token }: { token: string }) {
 
 const HELP_CHAPTERS = [
   { id: 'core', title: 'Core flow', summary: 'Chat, Alpha, Tasks, Attention, and restore safety.' },
-  { id: 'recipes', title: 'Recipes & plans', summary: 'Turn repeatable work into plans, graph nodes, schedules, and review gates.' },
+  { id: 'recipes', title: 'Workflows & plans', summary: 'Turn repeatable work into plans, graph nodes, schedules, and review gates.' },
   { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Files, Terminal, and app Preview.' },
   { id: 'archive', title: 'Archive', summary: 'Review durable deliverables, versions, lineage, and approval status.' },
   { id: 'design', title: 'Design', summary: 'Create and review visual scenes when Design Studio is enabled.' },

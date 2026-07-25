@@ -116,8 +116,8 @@ export function App() {
   // the tabs while a workflow is open.
   const [graphStage, setGraphStage] = React.useState<'home' | 'editor'>('home')
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
-  // When a plan is opened from Tasks, Back should return there — not the Recipes
-  // home the canvas lives under. Null means the editor was reached from Recipes.
+  // When a plan is opened from Tasks, Back should return there — not the Workflows
+  // home the canvas lives under. Null means the editor was reached from Workflows.
   const [graphCameFrom, setGraphCameFrom] = React.useState<'activity' | null>(null)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
@@ -211,7 +211,7 @@ export function App() {
     clearPendingNavigation()
     if (v === 'workflows') {
       setWorkflowMode('graph')
-      // Sidebar Recipes means the Recipes home. Re-clicking while a plan is open
+      // Sidebar Workflows means the Workflows home. Re-clicking while a plan is open
       // (including one reached from Tasks) used to no-op on the canvas — bump the
       // same back signal the in-editor Back control uses so the list returns.
       if (view === 'workflows' && graphStage === 'editor') {
@@ -219,8 +219,8 @@ export function App() {
         setGraphBackNonce(n => n + 1)
       }
     }
-    // Chat in the nav means the conversation front door — never a recipe's
-    // iteration thread, which belongs to Recipes.
+    // Chat in the nav means the conversation front door — never a workflow's
+    // iteration thread, which belongs to Workflows.
     if (v === 'chat' && activeSession?.workflow_id) {
       setActiveSession(sessions.find(session => !session.workflow_id && !session.job_id && session.mode !== 'design') || null)
     }
@@ -641,7 +641,7 @@ export function App() {
       {view === 'projects' && <React.Suspense fallback={<ViewFallback label="Loading projects..." />}><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {view === 'artifacts' && <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={activeProject} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={openSessionById} onBack={returnToTask != null ? () => openTask(returnToTask) : returnToChat ? backToOriginChat : undefined} backLabel={returnToTask != null ? 'Task' : 'Chat'} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setDesignCameFrom(returnToTask != null ? 'task' : returnToChat ? 'chat' : 'artifacts'); setView('design') } : undefined} reviewSessionId={returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={continueArtifactReview} /></React.Suspense>}
-      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} graphBackLabel={graphCameFrom === 'activity' ? 'Tasks' : 'Recipes'} onGraphBack={() => {
+      {view === 'workflows' && <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen mode={workflowMode} onModeChange={setWorkflowMode} token={token} onOpenJob={openJobByEngine} graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={setGraphStage} backNonce={graphBackNonce} /> : undefined} graphEditorActive={graphStage === 'editor'} graphBackLabel={graphCameFrom === 'activity' ? 'Tasks' : 'Workflows'} onGraphBack={() => {
         if (graphCameFrom === 'activity') {
           setGraphCameFrom(null)
           setView('activity')

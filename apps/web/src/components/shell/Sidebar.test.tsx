@@ -14,15 +14,15 @@ describe('Sidebar single-workspace IA', () => {
     const { rerender } = render(<Sidebar {...base} />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     // Destinations only — blank session lives on Chat header / mobile topbar / `/new`.
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Recipes', 'Projects', 'Archive'])
+    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Projects', 'Archive'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     // No workspace switch and no tool destinations: tools live on the right rail.
     expect(screen.queryByRole('button', { name: 'Ops' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Workflows' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Workflows' })).toBeInTheDocument()
     rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true }} />)
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Recipes', 'Projects', 'Archive', 'Design'])
+    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Projects', 'Archive', 'Design'])
   })
 
   it('navigates the flow destinations', async () => {
@@ -34,7 +34,7 @@ describe('Sidebar single-workspace IA', () => {
     expect(base.onSelectView).toHaveBeenCalledWith('alpha')
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
     expect(base.onSelectView).toHaveBeenCalledWith('activity')
-    await user.click(screen.getByRole('button', { name: 'Recipes' }))
+    await user.click(screen.getByRole('button', { name: 'Workflows' }))
     expect(base.onSelectView).toHaveBeenCalledWith('workflows')
   })
 
@@ -54,7 +54,7 @@ describe('Sidebar single-workspace IA', () => {
     expect(base.onSelectView).toHaveBeenCalledWith('profiles')
   })
 
-  it('shows recent chats without any workspace switch, excluding recipe iteration threads', () => {
+  it('shows recent chats without any workspace switch, excluding workflow iteration threads', () => {
     const plain = { id: 90, title: 'Pricing rethink', workflow_id: null, job_id: null, project_slug: null, updated_at: '2026-01-01' }
     const workflowSession = { id: 91, title: 'Workflow iteration', workflow_id: 12, job_id: null, project_slug: null, updated_at: '2026-01-01' }
     render(<Sidebar {...base} sessions={[plain, workflowSession] as never} />)
@@ -62,10 +62,10 @@ describe('Sidebar single-workspace IA', () => {
     expect(screen.queryByText('Workflow iteration')).not.toBeInTheDocument()
   })
 
-  it('attributes a recipe iteration chat to Recipes, not Chat', () => {
+  it('attributes a workflow iteration chat to Workflows, not Chat', () => {
     const workflowSession = { id: 91, title: 'Iterate', workflow_id: 12, job_id: null, project_slug: null, updated_at: '2026-01-01' }
     render(<Sidebar {...base} currentView="chat" activeSession={workflowSession as never} />)
     const active = Array.from(document.querySelectorAll('.primary-nav > .nav-item.active strong')).map(node => node.textContent)
-    expect(active).toEqual(['Recipes'])
+    expect(active).toEqual(['Workflows'])
   })
 })

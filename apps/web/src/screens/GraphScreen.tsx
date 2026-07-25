@@ -17,6 +17,7 @@ import {
   startGraphJob,
   updateGraphPlan,
 } from '../api/graph'
+import { listSchedules } from '../api/schedules'
 import { activeRuns } from '../api/runs'
 import { Dropdown } from '../components/ui/Dropdown'
 import { getJobDiff } from '../api/jobs'
@@ -45,6 +46,7 @@ import type {
   DetectedSkill,
   Profile,
   Project,
+  Schedule,
   WorkflowGraph,
   WorkflowInput,
 } from '../types'
@@ -60,7 +62,7 @@ function outputText(state?: GraphNodeState): string {
 
 const clampWidth = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 
-/** Per-job Plan Chat open preference — survives leave/reopen of Recipes editor. */
+/** Per-job Plan Chat open preference — survives leave/reopen of Workflows editor. */
 export function graphChatOpenKey(jobId: number): string {
   return `proxima.graph.chatOpen.${jobId}`
 }
@@ -156,8 +158,20 @@ export function getOrStartDraftCreate(
   return promise
 }
 
-
-
+/**
+ * One workflow/plan owns one project. Prefer the owned entity's project_slug over
+ * the shell's active project so switching the shell filter cannot retarget an open
+ * template, job, or schedule mid-edit/run.
+ */
+export function resolveOwnedProjectSlug(
+  owned: { project_slug?: string | null } | null | undefined,
+  shellSlug?: string | null,
+): string | null {
+  const ownedSlug = owned?.project_slug?.trim()
+  if (ownedSlug) return ownedSlug
+  const shell = shellSlug?.trim()
+  return shell || null
+}
 
 export function GraphScreen({
   token,
@@ -193,6 +207,8 @@ export function GraphScreen({
 }) {
   const [jobs, setJobs] = React.useState<GraphJob[]>([])
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
+  /** Workflow ids that already have at least one schedule row (for Manual/Scheduled honesty). */
+  const [scheduledWorkflowIds, setScheduledWorkflowIds] = React.useState<Set<number>>(() => new Set())
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
@@ -262,13 +278,15 @@ export function GraphScreen({
   const refreshList = React.useCallback(async () => {
     const seq = ++loadSeq.current
     try {
-      const [jobResponse, templateResponse] = await Promise.all([
+      const [jobResponse, templateResponse, scheduleRows] = await Promise.all([
         listGraphJobs(token, activeProject?.slug),
         listGraphTemplates(token, activeProject?.slug),
+        listSchedules(token).catch(() => [] as Schedule[]),
       ])
       if (mounted.current && seq === loadSeq.current) {
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
+        setScheduledWorkflowIds(new Set(scheduleRows.map(row => row.workflow_id)))
       }
     } catch (cause) {
       if (mounted.current && seq === loadSeq.current) setError(String(cause))
@@ -304,7 +322,15 @@ export function GraphScreen({
     }
   }, [token])
 
-  // Persist the panel toggle per job so Recipes → leave → same recipe keeps chat open.
+  // Align shell project with the open plan so tools/mentions match ownership;
+  // never the reverse (shell must not retarget this plan).
+  React.useEffect(() => {
+    if (!job?.project_slug) return
+    const owned = projects.find(item => item.slug === job.project_slug)
+    if (owned && owned.slug !== activeProject?.slug) onActiveProject?.(owned)
+  }, [job?.id, job?.project_slug, projects, activeProject?.slug, onActiveProject])
+
+  // Persist the panel toggle per job so Workflows → leave → same plan keeps chat open.
   React.useEffect(() => {
     if (job?.id != null) writeChatOpen(job.id, chatOpen)
   }, [job?.id, chatOpen])
@@ -588,7 +614,7 @@ export function GraphScreen({
         // ran, which is the whole point of revising rather than rebuilding.
         graph: job.graph,
         input: job.input,
-        project_slug: job.project_slug ?? activeProject?.slug,
+        project_slug: resolveOwnedProjectSlug(job, activeProject?.slug) ?? undefined,
         profile_id: profileId,
       })
       if (!mounted.current) return
@@ -756,7 +782,9 @@ export function GraphScreen({
         graph: template.graph,
         input,
         workflow_id: template.id,
-        project_slug: activeProject?.slug ?? template.project_slug,
+        // Template ownership wins — shell active project is only a fallback for
+        // legacy rows that never stored a project (1 workflow = 1 project).
+        project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
         profile_id: profileId,
       })
       if (!mounted.current) return
@@ -801,7 +829,7 @@ export function GraphScreen({
           onChange={value => { const project = projects.find(item => item.slug === value); if (project) onActiveProject?.(project) }}
           options={projects.map(project => ({ value: project.slug, label: project.name }))}
         />}
-        <h1>Recipes</h1>
+        <h1>Workflows</h1>
         <div className="graph-header-actions">
           <button className="ghost-button" onClick={() => void refreshList()}>Refresh</button>
         </div>
@@ -871,10 +899,12 @@ export function GraphScreen({
                 drafts.length === 0
                   ? <p className="muted graph-none">Nothing in progress.</p>
                   : drafts.map(planCard))}
-              {column('templates', 'Recipes', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
+              {column('templates', 'Workflows', templates.length, 'run · schedule · pause', templatesOpen, () => setTemplatesOpen(v => !v),
                 templates.length === 0
-                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save as Recipe</em>.</p>
-                  : templates.map(template => <div key={template.id} className="graph-card">
+                  ? <p className="muted graph-none">None yet. Open a plan and press <em>Save as Workflow</em>.</p>
+                  : templates.map(template => {
+                      const isScheduled = scheduledWorkflowIds.has(template.id)
+                      return <div key={template.id} className="graph-card">
                       <button className="graph-card-main" disabled={!!busy} onClick={() => {
                         if (template.inputs?.length) setRunningTemplate(template)
                         else void createFromTemplate(template)
@@ -883,13 +913,17 @@ export function GraphScreen({
                         <span className="graph-card-meta">
                           <strong>{template.name}</strong>
                           <small className="muted">{template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it'}</small>
+                          <span className="graph-run-kinds" aria-label="How it runs">
+                            <span className="graph-run-kind">Manual</span>
+                            {isScheduled && <span className="graph-run-kind is-scheduled">Scheduled</span>}
+                          </span>
                         </span>
                       </button>
                       <div className="graph-card-actions">
                         <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
-                        <button className="row-action danger" title="Delete template" aria-label={`Delete template ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
+                        <button className="row-action danger" title="Delete workflow" aria-label={`Delete workflow ${template.name}`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
                       </div>
-                    </div>))}
+                    </div>}))}
               {column('runs', 'Runs', runs.length, attention.length > 0 ? `${attention.length} need${attention.length === 1 ? 's' : ''} attention` : 'history — frozen', runsOpen, () => setRunsOpen(v => !v),
                 <>
                   {runs.length === 0 && <p className="muted graph-none">No runs yet.</p>}
@@ -927,18 +961,17 @@ export function GraphScreen({
         })}
         aria-pressed={chatOpen}
       >Chat</button>}
-      {/* The shared Dropdown, in the bar — it used to be a raw <select> in the rail,
-          which is the very thing the shared component exists to replace. */}
-      {projects.length > 0 && <Dropdown
-        value={activeProject?.slug ?? ''}
-        minWidth={200}
-        onChange={value => {
-          const project = projects.find(item => item.slug === value)
-          if (project) onActiveProject?.(project)
-        }}
-        options={projects.map(project => ({ value: project.slug, label: project.name }))}
-      />}
-      <h1>{job?.title ?? 'Recipes'}</h1>
+      {/* Project is locked to the open plan (1 workflow = 1 project). Shell filter
+          on the home stage does not rebind this instance mid-edit/run. */}
+      {(() => {
+        const lockedSlug = resolveOwnedProjectSlug(job, activeProject?.slug)
+        const locked = lockedSlug ? projects.find(item => item.slug === lockedSlug) : null
+        if (!locked && !lockedSlug) return null
+        return <span className="graph-project-lock" title="Project is owned by this plan — switch project only when starting a new workflow">
+          {locked?.name ?? lockedSlug}
+        </span>
+      })()}
+      <h1>{job?.title ?? 'Workflows'}</h1>
       {job && <>
         <span className={`graph-status st-${planStatusTone(job)}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
@@ -946,13 +979,13 @@ export function GraphScreen({
       {dirty && <span className="graph-dirty">Unsaved edits</span>}
       <div className="graph-header-actions">
         {job && plan && job.status !== 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save as Recipe</button>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save as Workflow</button>
           <button className="ghost-button" onClick={() => void duplicatePlan()} disabled={!!busy}>
             {busy === 'duplicate' ? 'Copying…' : 'Duplicate to edit'}
           </button>
         </>}
         {job?.status === 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save as Recipe</button>
+          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save as Workflow</button>
           {/* Plan-level actions belong to the plan, not to whichever node happens
               to be selected — which is also what lets the inspector close. */}
           <button className="ghost-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>
@@ -1022,7 +1055,7 @@ export function GraphScreen({
           features={features}
           profiles={profiles}
           activeProfile={activeProfile}
-          projectSlug={job.project_slug ?? activeProject?.slug ?? null}
+          projectSlug={resolveOwnedProjectSlug(job, activeProject?.slug)}
           // A graph job already owns a chat session — the one it was created with — so
           // the conversation is pinned to the plan without inventing a second thread.
           ensureSession={async () => job.session_id}
