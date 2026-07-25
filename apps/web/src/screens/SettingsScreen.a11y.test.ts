@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { settingsMenuItemAriaLabel, themeSwatchAriaLabel } from './SettingsScreen'
 
 describe('settingsMenuItemAriaLabel', () => {
-  it('spaces label and hint so names do not smash', () => {
-    expect(settingsMenuItemAriaLabel('Account & Preferences', 'Account, appearance and notifications'))
-      .toBe('Account & Preferences. Account, appearance and notifications')
-    expect(settingsMenuItemAriaLabel('Remote Access', 'Tailscale and Cloudflare setup'))
-      .toBe('Remote Access. Tailscale and Cloudflare setup')
+  it('spaces short label and full hint so names do not smash', () => {
+    expect(settingsMenuItemAriaLabel('Account', 'Account, appearance and notifications'))
+      .toBe('Account. Account, appearance and notifications')
+    expect(settingsMenuItemAriaLabel('Remote', 'Tailscale and Cloudflare setup'))
+      .toBe('Remote. Tailscale and Cloudflare setup')
+    expect(settingsMenuItemAriaLabel('Agents', 'Runners, goals and prompt modes'))
+      .toBe('Agents. Runners, goals and prompt modes')
   })
 
   it('returns the label alone when hint is empty', () => {

@@ -46,7 +46,11 @@ vs the runner display name), Settings → Agents runner pickers show
 `ready` / `not ready`, and the Settings → Agents runner grid chips each installed
 runner as `Ready` / `Not ready` (with the auth hint under the card when auth
 failed) instead of a blanket `Runnable` - so the banner, profile pickers, and
-runner cards all agree when Hermes login is expired.
+runner cards all agree when Hermes login is expired. On Chat, the Agents dropdown
+locks while the open session has active work (`busyRun` from `useRunStream` —
+local send, goal-loop next turn, or reconnect restore of a still-running session),
+with title/aria "Agent locked while a run is in progress"; it unlocks when the
+session is clean so a mid-run agent switch cannot race `setSessionProfile`.
 Agent/app/script subprocesses share `subprocess_env` / `augmented_path`: common
 user-local bins are appended, and when the host has `python3` but no `python`, a
 workspace-local shim (`$PROXIMA_WORKSPACE_ROOT/shims/python` → python3) is
@@ -193,7 +197,7 @@ a `##` heading. The synthesis is NOT a card — it streams into the parent bubbl
 normal reply and lands as the final assistant message (synthesis only; per-agent
 detail lives in the cards). Child runs still do not save ordinary assistant
 messages; the card history replays from events.
-Settings groups these defaults under **Agents & Collaboration**. The mode
+Settings groups these defaults under **Agents**. The mode
 resets after send, so there is no global Meeting Mode toggle.
 
 ### Message-level Validate sidecar
@@ -714,7 +718,7 @@ powers `@` autocomplete without returning file contents; produced artifacts from
 project artifact scan are merged into the same picker on the client.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
-view, the **Wiki** tree under Settings → Knowledge & Wiki, chat attachments, and `@`
+view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
 file/artifact references — with the in-browser **Terminal** as the raw escape hatch.
 Inline New file / New folder / Rename rows share one tree input with an accessible
 name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
@@ -880,7 +884,7 @@ This is ArtifactViewer functionality, not a Design Studio canvas path.
 
 **Why:** Per-project + global knowledge that compounds across sessions.
 **How:** Markdown files under each project's `wiki/`; a built index + tree; global
-aggregation. Fed by Chat→Wiki (§5). Opened from **Settings → Knowledge & Wiki**
+aggregation. Fed by Chat→Wiki (§5). Opened from **Settings → Knowledge**
 (Files / Graph / Search). Preview renders `[[wikilinks]]`; existing targets open
 the note, and **missing (red) links create the note on click** (title heading stub,
 open in edit beside the current note when nested) so owners are never stuck on a
@@ -935,18 +939,19 @@ full markdown bodies.
 ## 18b. Account preferences (password, appearance, notifications)
 
 **Why:** Owner security and desktop alerts without babysitting a tab.
-**How:** Settings → Account & Preferences. Password change fields are named and
+**How:** Settings → Account. Password change fields are named and
 labeled (with a visually hidden username for password-manager heuristics). Desktop
 notifications use the browser Notification API while the tab is backgrounded; the
 toggle shows **On** / **Off**, or **Blocked** with an alert when the browser has
 denied permission for this site (so a click never fails silently). Re-enable by
 allowing notifications in the browser site settings, then try the toggle again.
-The left Settings section list exposes spaced accessible names (`Account &
-Preferences. Account, appearance and notifications`) so title+hint never smash;
-the active section keeps `aria-current="page"`. Theme swatches are a labeled
-group with `aria-pressed` and `Sunset, selected`-style names; the font-size
-slider reports its value in pixels. Agent permissions uses a pressed toggle
-with an explicit On/Ask label.
+The left Settings section list is title-only under group eyebrows (Work setup ·
+Integrations · System · Help); full section hints live on the `title` tooltip and
+spaced accessible names (`Account. Account, appearance and notifications`) so
+title+hint never smash. The active section keeps `aria-current="page"`. Theme
+swatches are a labeled group with `aria-pressed` and `Sunset, selected`-style
+names; the font-size slider reports its value in pixels. Agent permissions uses a
+pressed toggle with an explicit On/Ask label.
 
 ## 19. Audit log
 
@@ -1016,7 +1021,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge & Wiki. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.

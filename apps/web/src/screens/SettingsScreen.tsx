@@ -209,15 +209,19 @@ export function formatAuditMeta(raw: string | null | undefined, max = 160): stri
 }
 export type SettingsSectionKey = 'account' | 'projects' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
 
-/** Flat section metadata (labels/hints). Menu order is SETTINGS_GROUPS. */
+/**
+ * Flat section metadata. Menu order is SETTINGS_GROUPS.
+ * Nav rows are title-only; `hint` is the panel blurb and the menu tooltip / aria detail.
+ * Keep `SettingsSectionKey` stable — deep links and tests key on it, not on labels.
+ */
 export const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'projects', label: 'Projects', hint: 'Link, create, rename, remove, and container settings' },
-  { key: 'agents', label: 'Agents & Collaboration', hint: 'Runners, goals and prompt modes' },
+  { key: 'agents', label: 'Agents', hint: 'Runners, goals and prompt modes' },
   { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
-  { key: 'knowledge', label: 'Knowledge & Wiki', hint: 'Project notes, links, graph and search' },
+  { key: 'knowledge', label: 'Knowledge', hint: 'Project notes, links, graph and search' },
   { key: 'media', label: 'Media', hint: 'Image generation backend' },
-  { key: 'remote', label: 'Remote Access', hint: 'Tailscale and Cloudflare setup' },
-  { key: 'account', label: 'Account & Preferences', hint: 'Account, appearance and notifications' },
+  { key: 'remote', label: 'Remote', hint: 'Tailscale and Cloudflare setup' },
+  { key: 'account', label: 'Account', hint: 'Account, appearance and notifications' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
   { key: 'help', label: 'Help', hint: 'Core tour and product chapters' },
 ]
@@ -235,7 +239,7 @@ export function settingsSectionOrder(): SettingsSectionKey[] {
   return SETTINGS_GROUPS.flatMap(g => g.keys)
 }
 
-/** Spaced accessible name so title+hint do not smash (Account & PreferencesAccount…). */
+/** Spaced accessible name so title+hint do not smash (AccountAccount…). */
 export function settingsMenuItemAriaLabel(label: string, hint: string): string {
   const l = (label || '').trim()
   const h = (hint || '').trim()
@@ -754,9 +758,9 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
               onClick={() => setActiveSection(section.key)}
               aria-current={activeSection === section.key ? 'page' : undefined}
               aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
+              title={section.hint}
             >
-              <strong aria-hidden="true">{section.label}</strong>
-              <small aria-hidden="true">{section.hint}</small>
+              <span className="settings-menu-item-label">{section.label}</span>
             </button>)}
           </div>
         })}

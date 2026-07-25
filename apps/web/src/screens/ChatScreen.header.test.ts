@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chatHeaderProjectLabel, isAgentTurnSlashCommand } from "./ChatScreen";
+import {
+	AGENT_PICKER_LOCKED_REASON,
+	chatHeaderProjectLabel,
+	isAgentPickerLocked,
+	isAgentTurnSlashCommand,
+} from "./ChatScreen";
 import type { ChatSession, Project } from "../types";
 
 const projects: Project[] = [
@@ -38,6 +43,24 @@ describe("isAgentTurnSlashCommand", () => {
 		expect(isAgentTurnSlashCommand("/masterplanner")).toBe(false);
 		expect(isAgentTurnSlashCommand("/masterplan-foo")).toBe(false);
 		expect(isAgentTurnSlashCommand("/status")).toBe(false);
+	});
+});
+
+describe("isAgentPickerLocked", () => {
+	it("locks while a run is queued or running for the session", () => {
+		expect(isAgentPickerLocked(42)).toBe(true);
+		expect(isAgentPickerLocked(1)).toBe(true);
+	});
+
+	it("unlocks when the session is clean (no busy run)", () => {
+		expect(isAgentPickerLocked(null)).toBe(false);
+		expect(isAgentPickerLocked(undefined)).toBe(false);
+	});
+
+	it("exposes a stable lock reason for title and aria", () => {
+		expect(AGENT_PICKER_LOCKED_REASON).toBe(
+			"Agent locked while a run is in progress",
+		);
 	});
 });
 

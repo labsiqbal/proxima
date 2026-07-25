@@ -62,6 +62,21 @@ export function chatHeaderProjectLabel(
 	return "No project";
 }
 
+/** Tooltip / aria when the Agents picker is locked mid-run. */
+export const AGENT_PICKER_LOCKED_REASON =
+	"Agent locked while a run is in progress";
+
+/**
+ * Agents dropdown stays locked while this session has active work — the same
+ * `busyRun` truth that drives Cancel run (local send, goal-loop next turn, or
+ * reconnect restore of a still-running session).
+ */
+export function isAgentPickerLocked(
+	busyRun: number | null | undefined,
+): boolean {
+	return busyRun != null;
+}
+
 function localCommandReply(
 	name: string,
 	props: {
@@ -687,8 +702,20 @@ export function ChatScreen(props: {
 				<Dropdown
 					className="agent-dd"
 					dropUp
+					disabled={isAgentPickerLocked(busyRun)}
+					title={
+						isAgentPickerLocked(busyRun)
+							? AGENT_PICKER_LOCKED_REASON
+							: undefined
+					}
+					ariaLabel={
+						isAgentPickerLocked(busyRun)
+							? AGENT_PICKER_LOCKED_REASON
+							: undefined
+					}
 					value={String(props.activeProfile?.id || "")}
 					onChange={(id) => {
+						if (isAgentPickerLocked(busyRun)) return;
 						const p = props.profiles.find(
 							(profile) => profile.id === Number(id),
 						);

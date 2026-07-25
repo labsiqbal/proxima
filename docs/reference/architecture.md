@@ -423,7 +423,7 @@ on mobile. Brainstorm collects parallel independent ideas and synthesizes overla
 unique angles, and next steps. Debate runs ordered rounds so later agents can read
 and rebut prior positions before a neutral synthesis. Collaboration defaults live
 in app settings (`collaboration_brainstorm_agents`, `collaboration_debate_rounds`)
-and surface in Settings under Agents & Collaboration. The composer resets to
+and surface in Settings under Agents. The composer resets to
 Normal after send, so there is no global mode toggle.
 
 ### 3. Message-level Validate sidecar
