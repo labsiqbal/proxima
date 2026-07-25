@@ -3380,6 +3380,14 @@ button:disabled {
 	opacity: 0.3;
 }
 /* Multitask keep-alive panes: stay mounted, leave the layout when inactive. */
+.surface-pane {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
 .surface-pane[hidden] {
 	display: none !important;
 }

@@ -353,6 +353,7 @@ def register(app, deps):
     def list_graph_templates(
         project_id: int | None = None,
         project_slug: str | None = None,
+        include_archived: bool = False,
         user: dict[str, Any] = Depends(current_user),
     ):
         require_graph()
@@ -361,9 +362,10 @@ def register(app, deps):
             if project_id is not None or project_slug
             else None
         )
+        archive_filter = "" if include_archived else "AND status != 'archived' "
         if resolved_project_id is None:
             rows = db().execute(
-                "SELECT * FROM workflows WHERE graph IS NOT NULL AND status != 'archived' "
+                f"SELECT * FROM workflows WHERE graph IS NOT NULL {archive_filter}"
                 "AND (created_by = ? OR project_id IN "
                 "(SELECT id FROM projects WHERE owner_user_id = ?)) "
                 "ORDER BY updated_at DESC, id DESC",
@@ -371,7 +373,7 @@ def register(app, deps):
             ).fetchall()
         else:
             rows = db().execute(
-                "SELECT * FROM workflows WHERE graph IS NOT NULL AND status != 'archived' "
+                f"SELECT * FROM workflows WHERE graph IS NOT NULL {archive_filter}"
                 "AND (created_by = ? OR project_id IN "
                 "(SELECT id FROM projects WHERE owner_user_id = ?)) "
                 "AND project_id = ? ORDER BY updated_at DESC, id DESC",

@@ -203,6 +203,10 @@ CREATE TABLE IF NOT EXISTS workflows (
   description TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'other',
   status TEXT NOT NULL DEFAULT 'active',
+  -- Status the workflow held just before it was archived, captured at archive
+  -- time so restore can reinstate it (a paused template stays paused). NULL
+  -- while not archived and for legacy rows archived before this column existed.
+  pre_archive_status TEXT,
   steps TEXT NOT NULL DEFAULT '[]',
   -- Optional graph definition {nodes,edges} for the new orchestration engine
   -- (ADR-0001). NULL = linear recipe (steps only), the classic engine.
@@ -599,6 +603,7 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "sessions", "produced_artifacts", "produced_artifacts TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "workflows", "inputs", "inputs TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "workflows", "graph", "graph TEXT")
+    _add_column(conn, "workflows", "pre_archive_status", "pre_archive_status TEXT")
     # Graph engine (ADR-0001): additive, coexists with the linear cursor.
     _add_column(conn, "jobs", "engine", "engine TEXT NOT NULL DEFAULT 'linear'")
     _add_column(conn, "jobs", "graph", "graph TEXT")

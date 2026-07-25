@@ -146,7 +146,7 @@ default - title, one lead line, short tooltip hints, and a **How it works** dial
 for the fuller tutorial - so the composer remains the primary CTA rather than a wall
 of teaching copy. With messages, the log is **top-anchored** under the header
 (`.thread` `justify-content: flex-start`; no messenger-style pin-to-composer).
-The flex chain (`main-pane` → `chat-stage` → `thread`) bounds height with
+The keep-alive flex chain (`main-pane` → `surface-pane` → `chat-stage` → `thread`) bounds height with
 `min-height: 0` and keeps **`.thread` as the only vertical scrollport**
 (`overflow-y: auto`) so long chats scroll with wheel/trackpad. Short threads
 that fit the viewport do not force a bottom jump; overflowing sessions open on
@@ -417,6 +417,14 @@ The **Sequential recipe editor is retired** — a linear recipe is a graph with 
 branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
+The library has separate active and archived views. Archiving stops schedules and
+removes the workflow from the active library without changing its owned project or
+past runs, and records the pre-archive status in `workflows.pre_archive_status`.
+Restoring reinstates that saved status, so a workflow archived while paused (`draft`)
+returns paused and its schedules stay stopped, while an active one returns active
+(legacy rows with no saved status restore to active). Permanent deletion is available
+only from the archived view. `GET /api/graph/templates` hides archived rows by default
+and accepts `include_archived=true` for lifecycle management.
 **Schedules** target saved graph templates: a due tick (or **Run now**) spawns the same
 `engine='graph'` job a manual create + start produces — including repo isolation
 (`target_area_id` + worktree cut via the shared `bind_graph_job_repo_worktree` path).
@@ -903,7 +911,9 @@ rendered artifact, add overall feedback, and choose **Add feedback to chat**. Re
 notes are browser-local until that action; Proxima then opens the artifact's producing
 chat session and places an editable, path-linked review brief in the normal composer.
 Sending it uses the existing chat/run flow, so there is no Lavish poll, external URL,
-or second feedback service in the happy path.
+or second feedback service in the happy path. Unknown, binary, and directory-like
+paths immediately show the unsupported preview with a download action instead of an
+indefinite loading state.
 
 Mermaid fences in Markdown and standalone `.mmd` / `.mermaid` artifacts render as
 rich diagrams. **Edit as whiteboard** converts supported flowchart, sequence, class,

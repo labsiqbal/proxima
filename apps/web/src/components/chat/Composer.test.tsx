@@ -514,7 +514,7 @@ describe("Composer submit CTA grammar", () => {
 
 	it("defaults to Send for Chat-like surfaces", () => {
 		render(
-			<Composer token="token" slug="alpha" textareaLabel="Message" promptModes={false} onSubmit={vi.fn()} />,
+			<Composer token="" slug="alpha" textareaLabel="Message" promptModes={false} mentionItems={[]} onSubmit={vi.fn()} />,
 		);
 		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
 	});
@@ -522,10 +522,11 @@ describe("Composer submit CTA grammar", () => {
 	it("accepts Delegate for Alpha without changing shell grammar", () => {
 		render(
 			<Composer
-				token="token"
+				token=""
 				slug="alpha"
 				textareaLabel="Delegate an outcome"
 				promptModes={false}
+				mentionItems={[]}
 				submitLabel="Delegate"
 				onSubmit={vi.fn()}
 			/>,

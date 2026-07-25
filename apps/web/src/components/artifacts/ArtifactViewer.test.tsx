@@ -31,6 +31,28 @@ beforeEach(() => {
 })
 
 describe('ArtifactViewer v2 review flow', () => {
+  it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {
+    render(<ArtifactViewer
+      token="token"
+      slug="alpha"
+      items={[{ type: 'app', title: 'Starter app', path: 'artifacts/starter-app' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(screen.getByText(/Can't preview this file type/)).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Download' })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          href: expect.stringContaining('/preview/artifacts/starter-app'),
+        }),
+      ]),
+    )
+    expect(fsRead).not.toHaveBeenCalled()
+  })
+
   it('pins an annotation and returns actionable feedback to the producing chat', async () => {
     const onSendFeedback = vi.fn()
     render(<ArtifactViewer

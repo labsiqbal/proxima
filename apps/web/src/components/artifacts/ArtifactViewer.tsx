@@ -174,6 +174,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} />
     if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts" />
+    if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path)} download={name}>Download</a> to open it.</div>
     if (error) return <div className="av-msg muted">{error}</div>
     if (text == null) return <div className="av-msg muted">Loading...</div>
     if (kind === 'markdown') return <div className="av-doc">{splitMermaidSections(text).map((section, sectionIndex) => section.type === 'mermaid'
@@ -198,7 +199,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       </div>
     }
     if (kind === 'text') return <pre className="av-text">{text}</pre>
-    return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path)} download={name}>Download</a> to open it.</div>
+    return null
   }
 
   const placeAnnotation = (event: React.MouseEvent<HTMLDivElement>) => {

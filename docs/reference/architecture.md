@@ -260,6 +260,8 @@ Full column-level detail: [database.md](database.md).
 ordinary deliverables through Design Studio. Its v2 workspace composes the existing
 image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-annotation
 layer and review panel. Unsaved review notes live browser-side per `(project, path)`;
+unknown, binary, and directory-like paths bypass text loading and render the download
+fallback immediately.
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with
 path-linked feedback. The user can edit and send it through `POST /api/sessions/{id}/runs`
@@ -474,8 +476,8 @@ Cancel with `/goal/cancel`.
   tagged with its `target` (one code area or `ops`) and derived `touches_repo`; when
   the slicer cannot decide it marks the job ambiguous with a question instead of
   guessing, and the plan refuses to start until the owner picks a target. Saving as a
-  reusable Recipe (`POST /api/graph/jobs/{id}/save-template`) is an optional, separate
-  act — available before or after the run, from the canvas or from a Tasks plan row.
+  reusable Workflow (`POST /api/graph/jobs/{id}/save-template`) is an optional, separate
+  act, available before or after the run, from the canvas or from a Tasks plan row.
 
 ### 6. Workflow → Job → execution
 
@@ -515,6 +517,14 @@ keyboard path to the same edges. The screen allows node/dependency/layout edits 
 while queued, and exposes the correction and approval protocol once execution begins.
 Saved graph templates are listed and reused only through the gated graph surface;
 classic workflow lists and execution remain strictly linear.
+The graph template library loads active and archived rows with
+`GET /api/graph/templates?include_archived=true`, then projects them into separate
+views. Archive and restore use the existing status mutation, so the row keeps the same
+`project_id`, graph, and run lineage. Archiving snapshots the prior status into
+`workflows.pre_archive_status`; restore reinstates and clears it, so a paused (`draft`)
+workflow returns paused (legacy rows with no snapshot restore to active). Archived rows
+do not schedule or appear in the default list API; permanent deletion is exposed only
+from the archived view.
 
 The **Tasks screen** (`ActivityScreen.tsx`) is the index of plans + their jobs (T2):
 graph plans appear alongside classic linear tasks, and a plan row expands into its
@@ -524,7 +534,7 @@ live status (`planProjection.ts` computes the deterministic order and joins
 branch-less plans read as a plain list, and branching plans offer the read-only
 dependency canvas as a toggle (the same `GraphCanvas` component the editor uses —
 extracted, not duplicated). Plan rows also carry **Open plan** (to the canvas, where
-review actions live) and **Save as Recipe** (the same save-template mechanics).
+review actions live) and **Save as Workflow** (the same save-template mechanics).
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days.
@@ -794,9 +804,9 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner. It owns the Recipes Editor/Scheduled modes and embeds the graph surface under the single Recipes destination (view id `workflows`). The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly. The shell header ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session for coherence) and **stays on the current view**; only intentional open paths (Search project pick, etc.) call `selectProject` to open Chat.
+`App.tsx` remains the single view owner. It owns the Workflows Editor/Scheduled modes and embeds the graph surface under the single Workflows destination (view id `workflows`). The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly. The shell header ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session for coherence) and **stays on the current view**; only intentional open paths (Search project pick, etc.) call `selectProject` to open Chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Alpha, Tasks, Recipes, Projects, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Alpha's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Alpha, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Alpha's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 Generic frontend refresh loops use one non-overlapping polling hook. It pauses while
 the document is hidden and refreshes once when the tab becomes visible, avoiding

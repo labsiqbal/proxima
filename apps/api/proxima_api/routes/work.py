@@ -127,10 +127,31 @@ def register(app, deps):
             )):
                 raise HTTPException(status_code=422, detail="graph templates are authored on the canvas; only status can be changed here")
             if payload.status is not None:
-                db().execute(
-                    "UPDATE workflows SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (payload.status, workflow_id),
-                )
+                current, target = row["status"], payload.status
+                if target == "archived" and current != "archived":
+                    # Remember the pre-archive status so restore can bring the
+                    # template back exactly as it left (a paused template stays
+                    # paused, its schedules stay stopped).
+                    db().execute(
+                        "UPDATE workflows SET status='archived', pre_archive_status=?, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (current, workflow_id),
+                    )
+                elif current == "archived" and target != "archived":
+                    # Restore: reinstate the saved pre-archive status and consume
+                    # it. Legacy rows archived before this column existed have no
+                    # saved value, so they fall back to the requested target.
+                    restored = row["pre_archive_status"] or target
+                    db().execute(
+                        "UPDATE workflows SET status=?, pre_archive_status=NULL, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (restored, workflow_id),
+                    )
+                else:
+                    db().execute(
+                        "UPDATE workflows SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (target, workflow_id),
+                    )
             return _workflow_payload(_any_workflow_or_404(workflow_id, user))
         steps = json.dumps(wf.normalize_steps(payload.steps)) if payload.steps is not None else None
         inputs = json.dumps(payload.inputs) if payload.inputs is not None else None

@@ -398,6 +398,62 @@ def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
     resumed = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
     assert resumed.json()["status"] == "active"
 
+    archived = client.patch(f"/api/workflows/{template['id']}", json={"status": "archived"})
+    assert archived.json()["status"] == "archived"
+    assert all(
+        item["id"] != template["id"]
+        for item in client.get("/api/graph/templates").json()["items"]
+    )
+    archived_items = client.get(
+        "/api/graph/templates", params={"include_archived": True}
+    ).json()["items"]
+    assert [item["status"] for item in archived_items if item["id"] == template["id"]] == [
+        "archived"
+    ]
+
+    restored = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
+    assert restored.json()["status"] == "active"
+    assert any(
+        item["id"] == template["id"]
+        for item in client.get("/api/graph/templates").json()["items"]
+    )
+
+
+def test_archive_then_restore_reinstates_the_pre_archive_status(tmp_path):
+    """A paused (draft) template archived and later restored comes back paused, so
+    its still-existing schedules stay stopped rather than silently resuming."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
+    template = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template", json={"name": "Paused publisher"}
+    ).json()
+
+    # Pause it (schedules stop), then archive the paused template.
+    assert client.patch(
+        f"/api/workflows/{template['id']}", json={"status": "draft"}
+    ).json()["status"] == "draft"
+    assert client.patch(
+        f"/api/workflows/{template['id']}", json={"status": "archived"}
+    ).json()["status"] == "archived"
+
+    # Restore returns it to draft (paused), NOT active.
+    restored = client.patch(f"/api/workflows/{template['id']}", json={"status": "active"})
+    assert restored.json()["status"] == "draft"
+    listed = client.get("/api/graph/templates").json()["items"]
+    assert [t["status"] for t in listed if t["id"] == template["id"]] == ["draft"]
+
+    # An active template still round-trips through archive back to active.
+    assert client.patch(
+        f"/api/workflows/{template['id']}", json={"status": "active"}
+    ).json()["status"] == "active"
+    assert client.patch(
+        f"/api/workflows/{template['id']}", json={"status": "archived"}
+    ).json()["status"] == "archived"
+    assert client.patch(
+        f"/api/workflows/{template['id']}", json={"status": "active"}
+    ).json()["status"] == "active"
+
 
 def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
     """Found live: a cyclic graph in PATCH /graph crashed with an unhandled

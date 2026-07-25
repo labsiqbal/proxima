@@ -496,6 +496,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **26**. This is the exa
 | `description` | TEXT | NO | `''` |  |
 | `category` | TEXT | NO | `'other'` |  |
 | `status` | TEXT | NO | `'active'` |  |
+| `pre_archive_status` | TEXT | yes |  |  |
 | `steps` | TEXT | NO | `'[]'` |  |
 | `graph` | TEXT | yes |  |  |
 | `inputs` | TEXT | NO | `'[]'` |  |
@@ -507,4 +508,4 @@ SQLite (WAL mode). 27 tables. Applied migration version: **26**. This is the exa
 
 
 ---
-_Generated 2026-07-25 12:45 UTC._
+_Generated 2026-07-25 17:41 UTC._
