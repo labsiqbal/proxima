@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import container_registry, scripts_library
+from proxima_api import artifact_registry, container_registry, scripts_library
 from proxima_api.container_registry import (
     ContainerBoundaryError,
     migrate_container_ops,
@@ -400,6 +400,52 @@ def test_project_list_survives_ops_descendant_symlink(tmp_path: Path):
     listing = api.get("/api/projects", headers=headers)
     assert listing.status_code == 200, listing.text
     assert any(p["slug"] == "fresh" for p in listing.json()["projects"])
+
+
+def test_dashboard_survives_unavailable_container(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    healthy = api.post(
+        "/api/projects", headers=headers, json={"slug": "healthy", "name": "Healthy"}
+    )
+    assert healthy.status_code == 201, healthy.text
+    report = Path(healthy.json()["path"]) / "ops" / "reports" / "summary.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Summary", encoding="utf-8")
+
+    broken = api.post(
+        "/api/projects", headers=headers, json={"slug": "broken", "name": "Broken"}
+    )
+    assert broken.status_code == 201, broken.text
+    shutil.rmtree(Path(broken.json()["path"]))
+
+    dashboard = api.get("/api/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    artifacts = dashboard.json()["recentArtifacts"]
+    assert any(a["project_slug"] == "healthy" for a in artifacts)
+
+
+def test_archive_list_survives_unavailable_container(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    broken = api.post(
+        "/api/projects", headers=headers, json={"slug": "broken", "name": "Broken"}
+    )
+    assert broken.status_code == 201, broken.text
+    root = Path(broken.json()["path"])
+    report = root / "ops" / "reports" / "summary.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Summary", encoding="utf-8")
+    project_id = int(
+        api.app.state.db.execute(
+            "SELECT id FROM projects WHERE slug = 'broken'"
+        ).fetchone()["id"]
+    )
+    assert artifact_registry.seed_project(api.app.state.db, project_id, root / "ops") >= 1
+
+    shutil.rmtree(root)
+
+    listing = api.get("/api/archive", headers=headers)
+    assert listing.status_code == 200, listing.text
+    assert any(item["project_slug"] == "broken" for item in listing.json()["items"])
 
 
 def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path):

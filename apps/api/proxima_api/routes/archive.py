@@ -107,7 +107,7 @@ def register(app, deps):
                     "SELECT id, path FROM projects WHERE id = ?", (pid,)
                 ).fetchone()
                 roots[pid] = (
-                    container_registry.ops_root(conn, prow)
+                    container_registry.try_ops_root(conn, prow)
                     if prow and prow["path"]
                     else None
                 )

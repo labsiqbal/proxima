@@ -1071,8 +1071,8 @@ def register(app, deps):
 
         recent_artifacts: list[dict[str, Any]] = []
         for p in projects[:12]:
-            root = container_registry.ops_root(d, p)
-            if not root.is_dir():
+            root = container_registry.try_ops_root(d, p)
+            if root is None or not root.is_dir():
                 continue
             # Reuse the bounded/pruned artifact scanner used by run results. The
             # old dashboard rglob walked every descendant on every Home poll and

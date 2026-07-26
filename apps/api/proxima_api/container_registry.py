@@ -223,6 +223,26 @@ def ops_root(
     return resolve_area_root(conn, data, int(row["id"]), deep_ops_scan=deep_ops_scan)
 
 
+def try_ops_root(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    deep_ops_scan: bool = False,
+) -> Path | None:
+    """Best-effort Ops root for cross-Container reads; None when unavailable.
+
+    Returns None instead of raising when the Container is unavailable or
+    boundary-invalid on this machine (missing root or Area folder, unsafe
+    layout), so multi-Container list, dashboard, and history aggregations skip it
+    rather than failing the whole read. Direct single-Container access keeps
+    using ``ops_root`` and stays fail-closed.
+    """
+    try:
+        return ops_root(conn, container, deep_ops_scan=deep_ops_scan)
+    except ContainerBoundaryError:
+        return None
+
+
 def root_for_virtual_path(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],

@@ -239,7 +239,11 @@ resolution; the full recursive scan that rejects any symlink inside physical Ops
 opt-in (`deep_ops_scan`) and runs at the fail-closed boundaries - Ops creation,
 legacy migration, Area mutation, and Area-sensitive execution - so hot read paths
 (project lists, Home, file resolution) stay O(1) and lean on per-access realpath
-jailing instead. The intentional repo-at-root plus `ops/` containment is permitted
+jailing instead. Best-effort cross-Container aggregations (Home dashboard, Archive
+list) resolve through `try_ops_root`, which returns None for an unavailable or
+boundary-invalid Container so one missing folder skips that Container instead of
+failing the whole read; direct single-Container access still uses `ops_root` and
+stays fail-closed. The intentional repo-at-root plus `ops/` containment is permitted
 and `/ops/` is added to the root repo's local git exclude.
 
 Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
