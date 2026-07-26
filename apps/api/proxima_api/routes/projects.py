@@ -264,7 +264,7 @@ def register(app, deps):
                     "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
                     (project["id"], rel),
                 ).lastrowid
-            container_registry.validated_area_roots(db(), project)
+            container_registry.validated_area_roots(db(), project, deep_ops_scan=True)
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
                 "VALUES (?, 'project.area.add', 'project', ?, ?)",

@@ -99,10 +99,15 @@ cannot execute in the API process; auth stays the host's ambient ssh.
 
 Container file APIs resolve paths through the database-selected Container or Ops
 Area. Client input must be relative and normalized. Every active Area is realpath
-checked to remain inside its Container. Duplicate roots, unsafe overlaps, path
-escape, a symlinked Container root, and every symlink beneath physical `ops/` fail
-closed. Historical virtual Ops paths remain stable but resolve to the active Ops row,
-which may temporarily be legacy `.` while a collision awaits owner attention.
+checked to remain inside its Container, and every actual file access is realpath
+jailed, so a symlink under `ops/` can never read or write outside the Container.
+Duplicate roots, unsafe overlaps, path escape, and a symlinked Container or Ops
+root fail closed on every resolution. The full recursive scan that rejects every
+symlink beneath physical `ops/` runs at the fail-closed boundaries - Ops creation,
+legacy migration, Area mutation, and Area-sensitive execution - rather than on hot
+read paths (project lists, Home, file resolution), which stay O(1). Historical
+virtual Ops paths remain stable but resolve to the active Ops row, which may
+temporarily be legacy `.` while a collision awaits owner attention.
 
 Never allow:
 

@@ -211,7 +211,7 @@ with TestClient(serve.app) as client:
         assert projects_root in project_path.parents, (
             f"project escaped temporary workspace: {project_path}"
         )
-        for relative in ("", "wiki", "tasks", "artifacts", "README.md"):
+        for relative in ("", "ops/wiki", "ops/tasks", "ops/artifacts", "README.md"):
             target = project_path / relative
             assert target.exists(), f"missing provisioned path: {target}"
     print(
@@ -324,7 +324,7 @@ async function main() {
   for (const project of projects.projects) {
     const projectPath = path.resolve(project.path)
     assert.ok(projectPath.startsWith(`${projectsRoot}${path.sep}`), `project escaped temporary workspace: ${projectPath}`)
-    for (const relative of ['', 'wiki', 'tasks', 'artifacts', 'README.md']) {
+    for (const relative of ['', 'ops/wiki', 'ops/tasks', 'ops/artifacts', 'README.md']) {
       assert.ok(fs.existsSync(path.join(projectPath, relative)), `missing provisioned path: ${relative || projectPath}`)
     }
   }

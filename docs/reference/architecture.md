@@ -234,15 +234,21 @@ neutralizes repo-config credential helpers and hooks via `-c` overrides) and the
 push outcome lands on the `job_worktrees` row (`push_status/push_error/...`).
 `container_registry.py` is the only physical root resolver. Every active Area must
 resolve inside its Container after realpath resolution. Duplicate roots, unsafe
-overlap, escape, Container-root symlinks, and any symlink inside physical Ops are
-rejected. The intentional repo-at-root plus `ops/` containment is permitted and
-`/ops/` is added to the root repo's local git exclude.
+overlap, escape, and Container-or-Ops-root symlinks are rejected on every
+resolution; the full recursive scan that rejects any symlink inside physical Ops is
+opt-in (`deep_ops_scan`) and runs at the fail-closed boundaries - Ops creation,
+legacy migration, Area mutation, and Area-sensitive execution - so hot read paths
+(project lists, Home, file resolution) stay O(1) and lean on per-access realpath
+jailing instead. The intentional repo-at-root plus `ops/` containment is permitted
+and `/ops/` is added to the root repo's local git exclude.
 
 Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
 dry-run manifest with content hashes, rejects collisions or ambiguous types before
 moving anything, and atomically renames only known Ops-owned paths on the same
 filesystem. A durable `moving` marker supports restart after any completed rename.
-Failures open a `container_ops_migration` Attention item and retain the legacy row.
+Failures open a `container_ops_migration` Attention item and retain the legacy row;
+per-Container migration failures are isolated so one unhealthy Container (missing
+drive, deleted Area folder) never aborts control-plane startup.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
 file API all resolve through the active Ops row.
 Deliverables are durable records (Phase-1 slice 8, T4): `artifact_records` holds one

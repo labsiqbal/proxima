@@ -21,7 +21,6 @@ from .container_registry import (
     container_root,
     ops_root,
     root_for_virtual_path,
-    validated_area_roots,
 )
 from .profile_seed import seed_agent_home
 from .project_areas import areas_payload
@@ -280,7 +279,6 @@ def build_route_deps(
             raise http_exception(status_code=500, detail=detail) from exc
 
     def project_payload(row: dict[str, Any]) -> dict[str, Any]:
-        validated_area_roots(db(), row)
         payload = {"slug": row["slug"], "name": row["name"], "path": row["path"], "owner": row.get("owner"), "role": row.get("role"), "visibility": row.get("visibility", "private")}
         # Container areas (T1): every project row the routes select carries p.id.
         payload.update(areas_payload(db(), row["id"]))

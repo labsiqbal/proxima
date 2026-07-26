@@ -142,7 +142,7 @@ def sync_code_areas(
         elif row["source"] == "excluded":
             conn.execute("DELETE FROM project_areas WHERE id = ?", (row["id"],))
     if validate:
-        validated_area_roots(conn, project_id)
+        validated_area_roots(conn, project_id, deep_ops_scan=True)
     return {"detected": sorted(detected), "added": added, "removed": sorted(removed)}
 
 

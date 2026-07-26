@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import tempfile
@@ -16,6 +17,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .auth import iso_now
+
+logger = logging.getLogger("proxima.container_registry")
 
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
@@ -93,9 +96,11 @@ def _contains(root: Path, target: Path) -> bool:
     return target == root or root in target.parents
 
 
-def _reject_symlinks(root: Path) -> None:
+def _reject_symlinks(root: Path, *, deep: bool = True) -> None:
     if root.is_symlink():
         raise ContainerBoundaryError("physical Ops root cannot be a symlink")
+    if not deep:
+        return
     try:
         for path in root.rglob("*"):
             if path.is_symlink():
@@ -109,8 +114,17 @@ def _reject_symlinks(root: Path) -> None:
 def validated_area_roots(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    deep_ops_scan: bool = False,
 ) -> dict[int, Path]:
-    """Resolve every active Area and reject unsafe or ambiguous layouts."""
+    """Resolve every active Area and reject unsafe or ambiguous layouts.
+
+    ``deep_ops_scan`` controls whether the physical Ops root is walked for
+    descendant symlinks. Hot read paths (project lists, Home, file resolution)
+    leave it off and rely on the O(1) Ops-root symlink check plus per-access
+    realpath jailing in ``fsapi``; creation, migration, and Area-mutation
+    boundaries opt in to the full fail-closed recursive scan.
+    """
     data = get_container(conn, container)
     root = container_root(data)
     rows = conn.execute(
@@ -128,7 +142,7 @@ def validated_area_roots(
         rel = _safe_rel_path(row["rel_path"])
         candidate = root if rel.as_posix() == "." else root.joinpath(*rel.parts)
         if row["kind"] == "ops" and rel.as_posix() == OPS_RELPATH:
-            _reject_symlinks(candidate)
+            _reject_symlinks(candidate, deep=deep_ops_scan)
         target = candidate.resolve()
         if not target.is_dir():
             raise ContainerBoundaryError(
@@ -181,8 +195,10 @@ def resolve_area_root(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
     area_id: int,
+    *,
+    deep_ops_scan: bool = False,
 ) -> Path:
-    roots = validated_area_roots(conn, container)
+    roots = validated_area_roots(conn, container, deep_ops_scan=deep_ops_scan)
     try:
         return roots[int(area_id)]
     except KeyError as exc:
@@ -192,6 +208,8 @@ def resolve_area_root(
 def ops_root(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    deep_ops_scan: bool = False,
 ) -> Path:
     """Return the canonical Ops root, including the legacy ``.`` fallback."""
     data = get_container(conn, container)
@@ -202,7 +220,7 @@ def ops_root(
     ).fetchone()
     if row is None:
         raise ContainerBoundaryError("Container has no active Ops Area")
-    return resolve_area_root(conn, data, int(row["id"]))
+    return resolve_area_root(conn, data, int(row["id"]), deep_ops_scan=deep_ops_scan)
 
 
 def root_for_virtual_path(
@@ -613,8 +631,14 @@ def migrate_container_ops(
         _attention(conn, data, reason)
         return False
     if row["rel_path"] == OPS_RELPATH:
-        validated_area_roots(conn, data)
-        refresh_registry_projection(conn, data)
+        try:
+            validated_area_roots(conn, data)
+            refresh_registry_projection(conn, data)
+        except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+            reason = str(exc)
+            _attention(conn, data, reason)
+            return False
+        _resolve_attention(conn, int(data["id"]))
         return True
     if row["rel_path"] != ".":
         reason = f"unsupported legacy Ops Area path: {row['rel_path']}"
@@ -622,7 +646,7 @@ def migrate_container_ops(
         return False
 
     try:
-        validated_area_roots(conn, data)
+        validated_area_roots(conn, data, deep_ops_scan=True)
     except (ContainerBoundaryError, OSError) as exc:
         reason = str(exc)
         _upsert_marker(conn, int(data["id"]), "attention", None, reason)
@@ -667,7 +691,7 @@ def migrate_container_ops(
                 "UPDATE project_areas SET rel_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (OPS_RELPATH, row["id"]),
             )
-            validated_area_roots(conn, data)
+            validated_area_roots(conn, data, deep_ops_scan=True)
             _upsert_marker(conn, int(data["id"]), "complete", manifest)
             refresh_registry_projection(conn, data)
             _resolve_attention(conn, int(data["id"]))
@@ -695,6 +719,15 @@ def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:
                 summary["complete"] += 1
             else:
                 summary["attention"] += 1
-        except BaseException:
-            raise
+        except Exception as exc:
+            summary["attention"] += 1
+            if conn.in_transaction:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+            try:
+                _attention(conn, get_container(conn, row), str(exc))
+            except (ContainerBoundaryError, OSError, sqlite3.Error):
+                logger.exception("attention record failed for container %s", row["id"])
     return summary

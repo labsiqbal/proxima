@@ -405,7 +405,7 @@ def repo_area_for_job(conn: sqlite3.Connection, job: sqlite3.Row | dict[str, Any
     if not project:
         return None
     try:
-        return area, resolve_area_root(conn, project, int(area["id"]))
+        return area, resolve_area_root(conn, project, int(area["id"]), deep_ops_scan=True)
     except ContainerBoundaryError as exc:
         raise WorktreeError(str(exc)) from exc
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -238,7 +239,55 @@ def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(tmp_pa
 
     (root / "ops" / "outside").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ContainerBoundaryError, match="contains a symlink"):
-        validated_area_roots(conn, container_id)
+        validated_area_roots(conn, container_id, deep_ops_scan=True)
+
+
+def test_ops_descendant_symlink_scan_is_opt_in(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "scan"
+    container_id = _legacy_container(conn, root, "scan")
+    (root / "ops").mkdir()
+    conn.execute(
+        "UPDATE project_areas SET rel_path = 'ops' WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    )
+    outside = tmp_path / "scan-outside"
+    outside.mkdir()
+    (root / "ops" / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert validated_area_roots(conn, container_id)  # hot path skips the walk
+    with pytest.raises(ContainerBoundaryError, match="contains a symlink"):
+        validated_area_roots(conn, container_id, deep_ops_scan=True)
+
+
+def test_migrate_isolates_unhealthy_already_migrated_container(tmp_path: Path):
+    conn = _database(tmp_path)
+    healthy_root = tmp_path / "healthy"
+    healthy_id = _legacy_container(conn, healthy_root, "healthy")
+    (healthy_root / "wiki").mkdir()
+    (healthy_root / "wiki" / "note.md").write_bytes(b"# note\n")
+    assert migrate_container_ops(conn, healthy_id) is True
+
+    missing_root = tmp_path / "gone"
+    missing_id = _legacy_container(conn, missing_root, "gone")
+    conn.execute(
+        "UPDATE project_areas SET rel_path = 'ops' WHERE project_id = ? AND kind = 'ops'",
+        (missing_id,),
+    )
+    shutil.rmtree(missing_root)
+
+    summary = migrate_legacy_ops_containers(conn)
+    assert summary["complete"] >= 1
+    assert summary["attention"] >= 1
+    attention = conn.execute(
+        "SELECT status FROM attention_items WHERE source_key = ?",
+        (f"container-ops-migration:{missing_id}",),
+    ).fetchone()
+    assert attention is not None and attention["status"] == "open"
+    assert conn.execute(
+        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (healthy_id,),
+    ).fetchone()["rel_path"] == "ops"
 
 
 def _api(tmp_path: Path, database_path: Path | None = None) -> tuple[TestClient, dict[str, str]]:
@@ -333,6 +382,24 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     assert scripts_library.scan_catalog(root / "ops") == [
         {"rel_path": "report.sh", "description": "build the report"}
     ]
+
+
+def test_project_list_survives_ops_descendant_symlink(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    response = api.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": "fresh", "name": "Fresh"},
+    )
+    assert response.status_code == 201, response.text
+    root = Path(response.json()["path"])
+    outside = tmp_path / "list-outside"
+    outside.mkdir()
+    (root / "ops" / "linked").symlink_to(outside, target_is_directory=True)
+
+    listing = api.get("/api/projects", headers=headers)
+    assert listing.status_code == 200, listing.text
+    assert any(p["slug"] == "fresh" for p in listing.json()["projects"])
 
 
 def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path):

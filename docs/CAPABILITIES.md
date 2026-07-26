@@ -756,10 +756,14 @@ when the Container root is itself a repo. The Ops Area is physically rooted at
 **How:** The compatibility `projects` and `project_areas` tables remain the storage
 and foreign-key truth. New Containers create `ops/`, `ops/container.md`, and exactly
 one active Ops row with `rel_path='ops'`. `container_registry.py` is the canonical
-resolver for Container, Area, and Ops roots. It validates realpath containment,
-rejects path traversal, duplicate roots, unsafe overlaps, Container-root symlinks,
-and every symlink under the physical Ops root. A repo at `.` is the one intentional
-containment case; its local git exclude keeps `/ops/` out of that repo.
+resolver for Container, Area, and Ops roots. It validates realpath containment and
+rejects path traversal, duplicate roots, unsafe overlaps, and Container-or-Ops-root
+symlinks on every resolution; the recursive scan that rejects every symlink under the
+physical Ops root is opt-in (`deep_ops_scan`) and enforced fail-closed at Ops
+creation, migration, Area mutation, and Area-sensitive execution, keeping project
+lists and Home O(1) while per-access realpath jailing still blocks symlink escapes.
+A repo at `.` is the one intentional containment case; its local git exclude keeps
+`/ops/` out of that repo.
 
 Existing Containers whose Ops row is `.` migrate at startup. The migration first
 builds and hashes a dry-run manifest, then uses atomic same-filesystem moves for only
