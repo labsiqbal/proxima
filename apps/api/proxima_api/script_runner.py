@@ -2,9 +2,10 @@
 
 A ``wf_script_node`` run is claimed from the ordinary runs queue like any
 other, but instead of a runner/ACP session the worker hands it here: the frozen
-node names a library script (``scripts/<command>``), and this module executes
-it as a subprocess — exec array, never a shell string — with the project
-container as cwd. stdin carries the graph engine's typed hand-off (the same
+node names a library script (``scripts/<command>``, resolved under the Container's
+physical ``ops/`` root), and this module executes it as a subprocess - exec array,
+never a shell string - with the physical Ops Area as cwd. stdin carries the graph
+engine's typed hand-off (the same
 ``{"job_input": …, "upstream": […]}`` payload an agent node gets in its
 prompt), stdout becomes the node output (validated against the node's output
 contract by the ordinary graph advancer), and the exit code decides
@@ -202,7 +203,7 @@ class ScriptRunner:
 
         # Execute the hashed bytes from a private temp copy (0700 dir): the
         # agent-writable project file plays no further part, closing the
-        # hash-to-exec TOCTOU window. cwd stays the project container, so the
+        # hash-to-exec TOCTOU window. cwd stays the physical Ops Area, so the
         # script's own file access is unchanged. The copy keeps the original
         # name (exec_argv picks the interpreter by suffix) and its owner
         # exec bit (an executable script still runs via its shebang).

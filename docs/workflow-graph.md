@@ -117,7 +117,7 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | `trigger_kind` | Trigger nodes only. `manual` exposes intake fields; `scheduled` exposes cadence settings. |
 | `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required}` fields whose values fill `{{id}}` placeholders. |
 | `schedule` | Scheduled trigger only. `{cron, overlap_policy, enabled}` settings promoted to the workflow's schedule row. |
-| `command` | Script nodes only (required). The library script this step runs — a path relative to the container's `scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
+| `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
 | `rules` | Agent nodes only. Prose constraints on *how* to do it. Omitted from the prompt entirely when unset. |
@@ -175,8 +175,8 @@ modes can become further `trigger_kind` values here, not a second execution path
 
 ### Script nodes (deterministic steps, slice 6 / T6)
 
-A script node runs a saved script from the project container's **`scripts/` folder**
-— no LLM, no agent process. It is "a new kind here, not a new execution path": the
+A script node runs a saved script from the Container's physical **`ops/scripts/` folder**
+- no LLM, no agent process. It is "a new kind here, not a new execution path": the
 same `node_states` row, the same `pending → ready → running → done/failed` walk, the
 same concurrency budget, the same output validation. What differs is execution: the
 dispatcher queues a **`runs.kind='wf_script_node'`** row (so the run shares the
@@ -186,8 +186,8 @@ it to `script_runner.py` instead of a runner/ACP session.
 At normalization a script node keeps `command`/`args`, its output contract, and an
 optional `review_required` gate; agent-only fields (`profile_id`, `skill_ids`,
 `expected_output`, `rules`) and the T1 work binding (`target`/`touches_repo`) are
-forced off, the trigger's precedent. Scripts always execute with the **project
-container root as cwd** and take no part in repo worktrees.
+forced off, the trigger's precedent. Scripts always execute with the **physical
+Ops Area as cwd** and take no part in repo worktrees.
 
 **I/O contract** (the simplest thing that works, no expression language):
 
@@ -201,8 +201,8 @@ container root as cwd** and take no part in repo worktrees.
   being truncated.
 
 **Execution boundary (honest):** the script runs as the server user with an exec
-*array* (never a shell string — args cannot inject through a shell), the project
-container as cwd, and a minimal environment (`PATH`/`HOME`/locale only, so the
+*array* (never a shell string - args cannot inject through a shell), the physical
+Ops Area as cwd, and a minimal environment (`PATH`/`HOME`/locale only, so the
 server's own config/secrets env never reaches it). An executable file runs directly;
 otherwise the extension picks the interpreter (`.sh`/`.bash` → bash, `.py` → the
 server's Python, `.js`/`.mjs` → node). There is **no sandbox**: an approved script
@@ -270,8 +270,8 @@ reserves the repo jobs' path: the plan's single code-area target is pinned to
 plan stays queued). Phase-1 keeps **one worktree per plan**, so all repo jobs of a
 plan must target the *same* code area; a multi-area plan refuses to start with a
 split-the-plan message. During execution the worker's cwd seam is **node-aware**: a
-node runs in the worktree only when *it* touches the repo — its ops siblings run at
-the project root, where their artifact outputs belong. The final plan approve is the
+node runs in the worktree only when *it* touches the repo - its Ops siblings run at
+the physical Ops Area, where their artifact outputs belong. The final plan approve is the
 merge point, with the same guarded `--no-ff` local merge and park-in-review-on-conflict
 contract as a linear repo job.
 Flag **off** (the escape hatch): targets are inert metadata, no worktree is cut, and

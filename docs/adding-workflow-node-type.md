@@ -15,7 +15,7 @@ There are three execution types today, all carried by the node's `type` field:
   intake form) and `scheduled` (owns cadence) exist today. `webhook`/`event` belong here
   as further kinds — that is the whole reason the entry point is a node.
 - **`script`** (slice 6, T6 — ADR-0001's Phase-3 deterministic node in minimal form):
-  runs a library script from the container's `scripts/` folder as a subprocess. It is
+  runs a library script from the Container's physical `ops/scripts/` folder as a subprocess. It is
   the precedent for a deterministic type done right: dispatched as a `wf_script_node`
   run through the ordinary runs queue (durability, budget, quota, reaping), executed
   by `script_runner.py` behind the worker's kind branch, gated by the hash-bound

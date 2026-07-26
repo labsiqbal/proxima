@@ -158,11 +158,11 @@ its typed output replaced or be rerun; either action marks every transitive desc
 job reaches `done` only after all nodes are `done` and final approval is explicit.
 
 **Script nodes (Phase-1 slice 6, T6):** a third node kind, `script`, is the
-deterministic step — it runs a saved script from the project container's `scripts/`
+deterministic step - it runs a saved script from the Container's physical `ops/scripts/`
 folder with no LLM. `graph_executor.py` dispatches it through the same runs queue as
 a `wf_script_node` run (same budget, quota, heartbeats, reaping); `RunWorker`
 branches on the kind and hands it to `script_runner.py`, which executes the script
-as a subprocess (exec array, container root as cwd, minimal env), feeds it the typed
+as a subprocess (exec array, the physical Ops Area as cwd, minimal env), feeds it the typed
 hand-off as JSON on stdin plus `{{var}}`-substituted CLI args, and validates stdout
 against the node's output contract through the ordinary `graph_advancers.py` path.
 Execution is gated by hash-bound trust (`script_trust`, `scripts_library.py`): an
