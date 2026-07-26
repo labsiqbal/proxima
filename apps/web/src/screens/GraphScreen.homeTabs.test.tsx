@@ -1,0 +1,131 @@
+import '@testing-library/jest-dom/vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { GraphScreen } from './GraphScreen'
+
+vi.mock('../api/graph', () => ({
+  listGraphJobs: vi.fn().mockResolvedValue({
+    items: [
+      {
+        id: 1,
+        title: 'Draft report',
+        status: 'queued',
+        engine: 'graph',
+        graph: { nodes: [], edges: [] },
+        node_states: [],
+        created_at: '2026-07-26T00:00:00Z',
+      },
+      {
+        id: 2,
+        title: 'Daily report',
+        status: 'done',
+        engine: 'graph',
+        graph: { nodes: [], edges: [] },
+        node_states: [],
+        started_at: '2026-07-26T00:00:00Z',
+        finished_at: '2026-07-26T00:01:12Z',
+      },
+    ],
+  }),
+  listGraphTemplates: vi.fn().mockResolvedValue({
+    items: [
+      { id: 10, name: 'Manual report', category: 'research', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
+      { id: 11, name: 'Daily report', category: 'content', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
+    ],
+  }),
+  getGraphJob: vi.fn(),
+  createGraphJob: vi.fn(),
+  deleteGraphJob: vi.fn(),
+  deleteGraphTemplate: vi.fn(),
+  setGraphTemplateStatus: vi.fn(),
+  saveGraphTemplate: vi.fn(),
+  startGraphJob: vi.fn(),
+  updateGraphPlan: vi.fn(),
+  answerGraphNode: vi.fn(),
+  approveGraphJob: vi.fn(),
+  approveGraphNode: vi.fn(),
+  approveGraphNodeScript: vi.fn(),
+  editGraphNodeOutput: vi.fn(),
+  rerunGraphNode: vi.fn(),
+}))
+vi.mock('../api/schedules', () => ({
+  listSchedules: vi.fn().mockResolvedValue([
+    { id: 1, workflow_id: 11, cron: '0 9 * * *', enabled: true },
+  ]),
+}))
+vi.mock('../api/runs', () => ({
+  activeRuns: vi.fn().mockResolvedValue({ session_ids: [] }),
+}))
+vi.mock('../api/jobs', () => ({ getJobDiff: vi.fn() }))
+vi.mock('../api/profiles', () => ({
+  runnerCapabilities: vi.fn().mockResolvedValue({ skills: [], mcp: [] }),
+}))
+vi.mock('../api/projects', () => ({
+  listProjectAreas: vi.fn().mockResolvedValue({ code_areas: [], ops_area: null }),
+}))
+vi.mock('../hooks/useProjectMentionItems', () => ({
+  useProjectMentionItems: () => [],
+}))
+
+const project = {
+  slug: 'owner-personal',
+  name: 'owner (personal)',
+  path: '/tmp/owner',
+  owner: 'owner',
+  role: 'owner',
+  visibility: 'private' as const,
+}
+
+const props = {
+  token: 't',
+  projects: [project],
+  activeProject: project,
+  onActiveProject: vi.fn(),
+  profiles: [],
+  profileId: null,
+  features: { designStudio: false, workflowGraph: true },
+  activeProfile: null,
+}
+
+describe('GraphScreen workflow home tabs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('shows counted table tabs and the required row actions', async () => {
+    render(<GraphScreen {...props} />)
+
+    const workflowsTab = await screen.findByRole('tab', { name: 'Workflows 2' })
+    expect(workflowsTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('table', { name: 'Manual workflows' })).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Scheduled workflows' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Drafts 1' }))
+    const drafts = screen.getByRole('table', { name: 'Draft plans' })
+    expect(within(drafts).getByText('Draft report')).toBeInTheDocument()
+    expect(within(drafts).getByText('Draft')).toBeInTheDocument()
+    expect(within(drafts).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+    expect(within(drafts).getByRole('button', { name: 'Run' })).toBeInTheDocument()
+    expect(within(drafts).getByRole('button', { name: '★ Save as template' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs 1' }))
+    const runs = screen.getByRole('table', { name: 'Workflow runs' })
+    expect(within(runs).getByText('Daily report')).toBeInTheDocument()
+    expect(within(runs).getByText('1m 12s')).toBeInTheDocument()
+    expect(within(runs).getByRole('button', { name: 'View' })).toBeInTheDocument()
+  })
+
+  it('remembers the last selected tab across remounts', async () => {
+    const first = render(<GraphScreen {...props} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    expect(localStorage.getItem('proxima.graph.homeTab')).toBe('drafts')
+    first.unmount()
+
+    render(<GraphScreen {...props} />)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Drafts 1' })).toHaveAttribute('aria-selected', 'true')
+    })
+    expect(screen.getByRole('table', { name: 'Draft plans' })).toBeInTheDocument()
+  })
+})

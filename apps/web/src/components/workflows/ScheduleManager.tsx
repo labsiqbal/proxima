@@ -54,12 +54,14 @@ export type SchedulableWorkflow = {
   project_slug?: string | null
 }
 
-export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onOpenJob }: {
+export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onChanged, onOpenJob }: {
   token: string
   workflows: SchedulableWorkflow[]
   workflowId?: number
   compact?: boolean
   onClose?: () => void
+  /** Keep the owning workflow list in sync after create, update, or delete. */
+  onChanged?: () => void
   // Given, "Run now" hands the owner straight to the task it spawned — a schedule you
   // cannot watch is a schedule you cannot trust.
   onOpenJob?: (jobId: number, engine?: string) => void
@@ -99,7 +101,13 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     if (busy) return
     const seq = ++actionSeq.current
     setBusy(true); setError('')
-    try { await work(); if (mounted.current && seq === actionSeq.current) await reload() }
+    try {
+      await work()
+      if (mounted.current && seq === actionSeq.current) {
+        await reload()
+        onChanged?.()
+      }
+    }
     catch (e) { if (mounted.current && seq === actionSeq.current) setError(String(e)) }
     finally { if (mounted.current && seq === actionSeq.current) setBusy(false) }
   }
@@ -140,7 +148,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
 
   return <section className={`schedule-manager ${compact ? 'compact' : ''}`} aria-labelledby="schedule-manager-title">
     <header className="schedule-manager-head">
-      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">Scheduled</h1><p className="muted">Run saved workflows on a five-field cron cadence.</p></div>
+      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedule ${selected?.name || 'workflow'}` : 'Scheduled'}</h1><p className="muted">Run saved workflows on a five-field cron cadence.</p></div>
       {onClose && <button className="ghost-button" onClick={onClose} disabled={busy}>Close</button>}
     </header>
     {error && <div className="error-bar" role="alert">{error}</div>}

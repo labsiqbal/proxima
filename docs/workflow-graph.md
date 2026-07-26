@@ -400,12 +400,15 @@ and a rerun re-executes only the node itself plus its stale descendants.)
 ### Panels, labels and @-mentions
 
 The screen has **two stages**, Design Studio's shape: a browsable **home** and a
-focused **editor** — browsing and editing are different modes of work. Home is
-prompt-first (describe the workflow → a draft is created and the chat speaks the
-description as its first message → the agent draws), with card sections beneath:
-**Drafts** (queued, editable), **Templates** (run / schedule / pause / delete on the
-card), and **Runs** (needs-attention cards first, finished behind a "Finished (n)"
-fold). Opening anything lands in the editor: full-width canvas + workflow chat + node
+focused **editor** - browsing and editing are different modes of work. Home remembers
+the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
+can grow independently. Draft rows are queued and editable, runnable, or promotable to
+a saved workflow. Workflow rows are split into **Manual (on-demand)** and
+**Otomatis / Scheduled** groups by the presence of schedule rows, with category and
+trigger badges plus row actions. Scheduled rows open the complete schedule manager in
+a dialog and can be paused or resumed; manual rows retain a Schedule action so the
+first schedule can be created. Run rows show recency, status, duration, and a View
+action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
 stay phrased as what the owner can do next ("Draft — editable", "Needs your review").
@@ -551,7 +554,7 @@ are:
 ## Scheduling a graph
 
 Schedules fire only for **`status='active'`** workflows — the tick and Run-now both go
-through the same spawn, so a paused workflow runs nowhere. Template rail rows carry a
+through the same spawn, so a paused workflow runs nowhere. Scheduled workflow rows carry a
 **pause ⏸ / resume ▶** toggle (`status` draft ⇄ active over `PATCH /api/workflows`,
 which is lifecycle-only for graph rows — authoring fields 422). "This workflow needs
 fixing" is therefore one click out of rotation and one click back, with its schedules
@@ -579,8 +582,8 @@ Sequential mode, recipe form and recipe chat — is **retired**: new workflows a
 only on the canvas, and a linear recipe is expressed as a graph with no branches.
 `IterateStage` remains reachable from an old session that carries `workflow_id`. Graph
 jobs and templates are listed by the graph API; `GET /api/workflows` still lists only
-linear rows (`graph IS NULL`), which is why the Scheduled mode resolves names through
-`GET /api/graph/templates` instead.
+linear rows (`graph IS NULL`). The Workflows home resolves graph template names through
+`GET /api/graph/templates` and joins them with schedule rows in the client.
 
 See [adding-workflow-node-type.md](adding-workflow-node-type.md) before extending node
 execution or output contracts.

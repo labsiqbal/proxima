@@ -51,8 +51,16 @@ The **New task** launcher lives behind the Tasks screen's `+ New task` button (i
 
 ## Workflows
 
-Workflows is the template library for repeatable work. One workflow owns one project (the shell project filter on the library home does not rebind an open plan or template). The screen owns two modes:
+Workflows is the template library for repeatable work. One workflow owns one project (the shell project filter on the library home does not rebind an open plan or template). The screen has a browsable home and a focused editor:
 
+- **Home** remembers the last selected **Drafts**, **Workflows**, or **Runs** tab and
+  renders each collection as a table so long libraries remain scannable. Workflow rows
+  are split into **Manual (on-demand)** and **Otomatis / Scheduled** groups derived from
+  real schedule rows. Manual workflows can be edited or run; scheduled workflows can
+  be edited, rescheduled, paused, or resumed. The per-row Schedule action opens the
+  complete schedule form in a dialog, including create, enable, overlap, input, Run now,
+  and delete controls. A manual row also exposes Schedule so its first schedule can be
+  created. There is no standalone Scheduled navigation mode.
 - **Editor** is the plan/graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
   with the recovery switch off the mode explains that the editor is off (the env var
   itself stays out of the UI copy — it is documented here and in installation docs).
@@ -62,9 +70,6 @@ Workflows is the template library for repeatable work. One workflow owns one pro
   pinned to the graph job's own session, so reopening a plan resumes its conversation.
   The editor is **canvas-first**: node-level actions stay with the node; the plan list
   collapses; and the node inspector exists only while a node is selected.
-- **Scheduled** manages real schedule rows for saved graph templates. A schedule renders
-  its input form from the template's declared `{{inputs}}`, and a due tick spawns the
-  same `engine='graph'` job a manual run produces.
 
 The **Sequential recipe editor is retired**: a linear recipe is a graph with no branches,
 and the canvas authors those too. The linear *engine* remains for pre-existing jobs and
@@ -121,7 +126,7 @@ can do, short tutorial steps, and one primary CTA where it applies (Chat, Alpha,
 Workflows library context, Archive, Design home). Help/core tour nouns match the primary
 loop **Chat → Tasks → Workflows → Archive**, with Alpha as the delegate side path.
 
-**Workflow how-it-runs:** library cards show Manual and/or Scheduled badges derived from
+**Workflow how-it-runs:** library table rows show Manual or Scheduled badges derived from
 real schedule rows (optional short cron text). Schedule forms lock project to the workflow
 owner — no free rebinding. Open deliverables from Chat/Tasks/Archive use the same
 in-app **ArtifactViewer** for supported types. Unsupported binary or directory-like

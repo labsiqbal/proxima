@@ -1,34 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cronLabelsByWorkflow, howItRunsBadges } from './scheduleBadges'
-
-describe('howItRunsBadges', () => {
-  it('shows Manual only when not scheduled', () => {
-    expect(howItRunsBadges({ scheduled: false })).toEqual([
-      { kind: 'manual', label: 'Manual' },
-    ])
-  })
-
-  it('shows Manual + Scheduled when schedules exist', () => {
-    expect(howItRunsBadges({ scheduled: true })).toEqual([
-      { kind: 'manual', label: 'Manual' },
-      { kind: 'scheduled', label: 'Scheduled' },
-    ])
-  })
-
-  it('appends short cron text when a single cadence is known', () => {
-    expect(howItRunsBadges({ scheduled: true, cronLabels: ['every hour'] })).toEqual([
-      { kind: 'manual', label: 'Manual' },
-      { kind: 'scheduled', label: 'Scheduled · every hour' },
-    ])
-  })
-
-  it('omits cron suffix when multiple distinct cadences exist', () => {
-    expect(howItRunsBadges({ scheduled: true, cronLabels: ['every hour', 'daily'] })).toEqual([
-      { kind: 'manual', label: 'Manual' },
-      { kind: 'scheduled', label: 'Scheduled' },
-    ])
-  })
-})
+import { cronLabelsByWorkflow } from './scheduleBadges'
 
 describe('cronLabelsByWorkflow', () => {
   it('groups cron hints per workflow id', () => {

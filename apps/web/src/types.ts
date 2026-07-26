@@ -368,6 +368,8 @@ export type GraphJob = {
 	rejected_reason?: string | null;
 	created_at?: string;
 	updated_at?: string;
+	started_at?: string | null;
+	finished_at?: string | null;
 };
 // A cron schedule that fires a workflow on a cadence. `cron` is a standard
 // 5-field expression (min hour day-of-month month day-of-week).

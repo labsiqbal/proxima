@@ -18,13 +18,13 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { listSchedules } from '../api/schedules'
-import { cronHint } from '../components/workflows/ScheduleManager'
-import { cronLabelsByWorkflow, howItRunsBadges } from '../lib/scheduleBadges'
+import { cronHint, ScheduleManager } from '../components/workflows/ScheduleManager'
+import { cronLabelsByWorkflow } from '../lib/scheduleBadges'
 import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
-import { IconArtifacts, IconLock, IconTrash } from '../components/shell/icons'
+import { IconArtifacts, IconLock, IconPlus, IconSearch, IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { ScriptApprovalCard } from '../components/workflows/ScriptApprovalCard'
@@ -56,6 +56,45 @@ import { planStatusLabel, planStatusTone } from '../components/tasks/planProject
 import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
+const HOME_TAB_KEY = 'proxima.graph.homeTab'
+
+type WorkflowHomeTab = 'drafts' | 'workflows' | 'runs'
+
+function readWorkflowHomeTab(): WorkflowHomeTab {
+  try {
+    const value = localStorage.getItem(HOME_TAB_KEY)
+    if (value === 'drafts' || value === 'workflows' || value === 'runs') return value
+  } catch { /* storage disabled */ }
+  return 'workflows'
+}
+
+function relativeTime(value?: string | null): string {
+  if (!value) return 'Unknown'
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 'Unknown'
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
+  if (seconds < 60) return 'Just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return days === 1 ? 'Yesterday' : `${days}d ago`
+}
+
+function jobDuration(item: GraphJob): string {
+  if (!item.started_at) return 'Not started'
+  const start = Date.parse(item.started_at)
+  const end = item.finished_at ? Date.parse(item.finished_at) : Date.now()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 'Unknown'
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  if (minutes < 1) return `${remainder}s`
+  if (minutes < 60) return `${minutes}m ${remainder}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${minutes % 60}m`
+}
 
 function outputText(state?: GraphNodeState): string {
   if (state?.output == null) return ''
@@ -169,25 +208,28 @@ export function GraphScreen({
 }) {
   const [jobs, setJobs] = React.useState<GraphJob[]>([])
   const [templates, setTemplates] = React.useState<GraphTemplate[]>([])
-  /** Workflow ids that already have at least one schedule row (for Manual/Scheduled honesty). */
-  const [scheduledWorkflowIds, setScheduledWorkflowIds] = React.useState<Set<number>>(() => new Set())
+  /** Real schedule rows are the current trigger truth until scheduled trigger nodes ship. */
+  const [schedules, setSchedules] = React.useState<Schedule[]>([])
   /** Short cron labels per workflow for how-it-runs badges. */
   const [scheduleCronByWorkflow, setScheduleCronByWorkflow] = React.useState<Map<number, string[]>>(() => new Map())
   const [job, setJob] = React.useState<GraphJob | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
   const [inspectorWidth, dragInspector] = useDragWidth('proxima.graph.inspectorWidth', 336, 260, 720)
-  const [draftsOpen, setDraftsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.drafts') !== '0')
-  const [templatesOpen, setTemplatesOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.templates') !== '0')
-  const [runsOpen, setRunsOpen] = React.useState(() => localStorage.getItem('proxima.graph.col.runs') !== '0')
+  const [homeTab, setHomeTab] = React.useState<WorkflowHomeTab>(readWorkflowHomeTab)
+  const [homeQueries, setHomeQueries] = React.useState<Record<WorkflowHomeTab, string>>({
+    drafts: '',
+    workflows: '',
+    runs: '',
+  })
   const [showArchived, setShowArchived] = React.useState(false)
-  React.useEffect(() => { localStorage.setItem('proxima.graph.col.drafts', draftsOpen ? '1' : '0') }, [draftsOpen])
-  React.useEffect(() => { localStorage.setItem('proxima.graph.col.templates', templatesOpen ? '1' : '0') }, [templatesOpen])
-  React.useEffect(() => { localStorage.setItem('proxima.graph.col.runs', runsOpen ? '1' : '0') }, [runsOpen])
+  const [schedulingTemplate, setSchedulingTemplate] = React.useState<GraphTemplate | null>(null)
+  React.useEffect(() => {
+    try { localStorage.setItem(HOME_TAB_KEY, homeTab) } catch { /* storage disabled */ }
+  }, [homeTab])
   // Two stages, Design Studio's shape: a browsable home, and an editor focused on
   // one workflow. Browsing and editing are different modes of work.
   const [stage, setStage] = React.useState<'home' | 'editor'>('home')
-  const [heroText, setHeroText] = React.useState('')
   // Hero hand-off: the description the chat should speak first once the editor opens.
   const [initialAuthorText, setInitialAuthorText] = React.useState<string | null>(null)
   // Default closed; restored per job from localStorage (and auto-opened when that
@@ -251,7 +293,7 @@ export function GraphScreen({
       if (mounted.current && seq === loadSeq.current) {
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
-        setScheduledWorkflowIds(new Set(scheduleRows.map(row => row.workflow_id)))
+        setSchedules(scheduleRows)
         setScheduleCronByWorkflow(cronLabelsByWorkflow(scheduleRows, cronHint))
       }
     } catch (cause) {
@@ -805,6 +847,59 @@ export function GraphScreen({
     }
   }
 
+  async function editTemplate(template: GraphTemplate) {
+    if (busy) return
+    setBusy('edit-template')
+    setError('')
+    try {
+      const created = await createGraphJob(token, {
+        title: template.name,
+        graph: template.graph,
+        workflow_id: template.id,
+        project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
+        profile_id: profileId,
+      })
+      if (!mounted.current) return
+      setStage('editor')
+      setJob(created)
+      setPlan(created.graph)
+      setSelectedId(null)
+      setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
+      setNotice(`Editable draft created from “${template.name}”.`)
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  async function runDraft(item: GraphJob) {
+    if (busy) return
+    setBusy('start')
+    setError('')
+    try {
+      const next = await startGraphJob(token, item.id)
+      if (!mounted.current) return
+      setStage('editor')
+      setJob(next)
+      setPlan(next.graph)
+      setSelectedId(null)
+      setJobs(current => current.map(row => row.id === next.id ? next : row))
+      setNotice('Plan approved. Execution started.')
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  function prepareDraftTemplate(item: GraphJob) {
+    setJob(item)
+    setPlan(item.graph)
+    setDraftMeta({})
+    setSavingTemplate(true)
+  }
+
   const allDone = !!job?.node_states.length && job.node_states.every(state => state.status === 'done')
   // Mirror ChangesReview: final approve with an empty diff is "accept & close",
   // not "merge changes" (agent finished with no file edits).
@@ -824,13 +919,116 @@ export function GraphScreen({
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
   const archivedTemplates = templates.filter(item => item.status === 'archived')
   const activeTemplates = templates.filter(item => item.status !== 'archived')
-  const visibleTemplates = showArchived ? archivedTemplates : activeTemplates
 
   if (stage === 'home') {
+    const drafts = jobs.filter(item => item.status === 'queued')
+    const runs = jobs.filter(item => item.status !== 'queued')
+    const scheduledWorkflowIds = new Set(schedules.map(row => row.workflow_id))
+    const query = homeQueries[homeTab].trim().toLowerCase()
+    const matches = (...values: Array<string | null | undefined>) =>
+      !query || values.some(value => value?.toLowerCase().includes(query))
+    const visibleDrafts = drafts.filter(item => matches(item.title))
+    const visibleRuns = runs.filter(item => matches(item.title, item.status))
+    const searchedTemplates = (showArchived ? archivedTemplates : activeTemplates)
+      .filter(item => matches(item.name, item.description, item.category, ...(scheduleCronByWorkflow.get(item.id) || [])))
+    const manualTemplates = searchedTemplates.filter(item => !scheduledWorkflowIds.has(item.id))
+    const automaticTemplates = searchedTemplates.filter(item => scheduledWorkflowIds.has(item.id))
+    const searchPlaceholder = `Search ${homeTab}`
+    const setTab = (tab: WorkflowHomeTab) => {
+      setHomeTab(tab)
+      if (tab !== 'workflows') setShowArchived(false)
+    }
+    const runTemplate = (template: GraphTemplate) => {
+      if (template.inputs?.length) setRunningTemplate(template)
+      else void createFromTemplate(template)
+    }
+    const category = (template: GraphTemplate) => template.category?.trim() || 'other'
+    const scheduleLabel = (template: GraphTemplate) => {
+      const labels = scheduleCronByWorkflow.get(template.id) || []
+      if (labels.length === 0) return 'Scheduled'
+      return labels.length === 1 ? labels[0] : `${labels[0]} +${labels.length - 1}`
+    }
+    const workflowRow = (template: GraphTemplate, automatic: boolean) => <div className="workflow-home-row workflow-home-workflow-row" role="row" key={template.id}>
+      <div className="workflow-home-name" role="cell" data-label="Workflow">
+        <strong>{template.name}</strong>
+        {template.status !== 'active' && <small>Paused</small>}
+      </div>
+      <div role="cell" data-label="Category"><span className="workflow-home-chip workflow-home-category">#{category(template)}</span></div>
+      <div role="cell" data-label="Trigger">
+        <span className={`workflow-home-chip workflow-home-trigger${automatic ? ' is-scheduled' : ''}`}>
+          {automatic ? `⏰ ${scheduleLabel(template)}` : '▷ Manual'}
+        </span>
+      </div>
+      <div className="workflow-home-actions" role="cell" data-label="Actions">
+        <button className="ghost-button" disabled={!!busy} onClick={() => void editTemplate(template)}>Edit</button>
+        {automatic ? <>
+          <button className="ghost-button" disabled={!!busy} onClick={() => setSchedulingTemplate(template)}>Schedule</button>
+          <button
+            className="row-action"
+            title={template.status === 'active' ? 'Pause scheduled workflow' : 'Resume scheduled workflow'}
+            aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`}
+            disabled={!!busy}
+            onClick={() => void toggleTemplatePaused(template)}
+          >{template.status === 'active' ? '⏸' : '▶'}</button>
+        </> : <>
+          <button className="ghost-button workflow-home-schedule-create" disabled={!!busy} onClick={() => setSchedulingTemplate(template)}>Schedule</button>
+          <button className="primary-button" disabled={!!busy} onClick={() => runTemplate(template)}>Run</button>
+          {template.status !== 'active' && <button
+            className="row-action"
+            title="Resume workflow"
+            aria-label={`Resume ${template.name}`}
+            disabled={!!busy}
+            onClick={() => void toggleTemplatePaused(template)}
+          >▶</button>}
+        </>}
+        <button
+          className="row-action"
+          title="Archive workflow"
+          aria-label={`Archive ${template.name}`}
+          disabled={!!busy}
+          onClick={() => void archiveTemplate(template)}
+        ><IconArtifacts size={13} /></button>
+      </div>
+    </div>
+    const workflowTable = (rows: GraphTemplate[], automatic: boolean) => <div className="workflow-home-table" role="table" aria-label={`${automatic ? 'Scheduled' : 'Manual'} workflows`}>
+      <div className="workflow-home-row workflow-home-table-head workflow-home-workflow-row" role="row">
+        <div role="columnheader">Workflow</div>
+        <div role="columnheader">Category</div>
+        <div role="columnheader">Trigger</div>
+        <div className="workflow-home-actions-head" role="columnheader">Actions</div>
+      </div>
+      {rows.map(template => workflowRow(template, automatic))}
+    </div>
+    const emptySearch = query ? 'No matching items.' : null
+
     return <section className="graph-screen graph-home">
-      <header className="graph-header">
-        <h1>Workflows</h1>
-        <div className="graph-header-actions">
+      <header className="graph-header workflow-home-toolbar">
+        <h1 className="sr-only">Workflows</h1>
+        <div className="workflow-home-tabs" role="tablist" aria-label="Workflow library">
+          {([
+            ['drafts', 'Drafts', drafts.length],
+            ['workflows', 'Workflows', activeTemplates.length],
+            ['runs', 'Runs', runs.length],
+          ] as const).map(([tab, label, count]) => <button
+            key={tab}
+            className={homeTab === tab ? 'active' : ''}
+            role="tab"
+            aria-selected={homeTab === tab}
+            onClick={() => setTab(tab)}
+          >{label} <span>{count}</span></button>)}
+        </div>
+        <div className="workflow-home-toolbar-actions">
+          <label className="workflow-home-search">
+            <span className="sr-only">{searchPlaceholder}</span>
+            <IconSearch size={14} />
+            <input
+              type="search"
+              value={homeQueries[homeTab]}
+              placeholder={searchPlaceholder}
+              onChange={event => setHomeQueries(current => ({ ...current, [homeTab]: event.target.value }))}
+            />
+          </label>
+          {homeTab === 'workflows' && (
           <button
             className={`ghost-button${showArchived ? ' active' : ''}`}
             aria-label={showArchived ? 'View active workflows' : 'View archived workflows'}
@@ -840,129 +1038,117 @@ export function GraphScreen({
             <IconArtifacts size={14} />
             {showArchived ? 'Active workflows' : `Archived (${archivedTemplates.length})`}
           </button>
-          <button className="ghost-button" onClick={() => void refreshList()}>Refresh</button>
+          )}
+          {homeTab !== 'runs' && <button className="primary-button workflow-home-new" disabled={!!busy} onClick={() => void newPlan()}>
+            <IconPlus size={14} /> New
+          </button>}
         </div>
       </header>
       {error && <div className="error-bar">{error}</div>}
       {notice && <div className="graph-notice">{notice}</div>}
 
-      <div className="graph-start">
-        <div className="graph-start-inner">
-          <h1>What should this plan do?</h1>
-          <p className="muted graph-sub">Describe it and the agent draws the graph — independent branches run in parallel. Nothing's locked; you can rearrange everything on the canvas.</p>
-          <div className="graph-prompt" onKeyDown={event => {
-            if (!event.defaultPrevented && event.target instanceof HTMLTextAreaElement && (event.metaKey || event.ctrlKey) && event.key === 'Enter' && heroText.trim()) {
-              void newPlan(heroText)
-              setHeroText('')
-            }
-          }}>
-            <MentionTextarea
-              rows={3}
-              items={mentionItems}
-              value={heroText}
-              placeholder="Describe your plan — e.g. research a topic from {{brief}}, write the X and LinkedIn posts in parallel, bundle the results"
-              onChange={setHeroText}
-              ariaLabel="Plan brief"
-            />
-            <div className="graph-prompt-bar">
-              <button className="ghost-button" disabled={!!busy} onClick={() => void newPlan()}>Blank canvas</button>
-              <button className="primary-button" disabled={!!busy || !heroText.trim()} onClick={() => { void newPlan(heroText); setHeroText('') }}>{busy === 'create' ? 'Creating…' : 'Draw it →'}</button>
-            </div>
-          </div>
+      <div className="workflow-home-scroll">
+        <div className="workflow-home-content">
+          {homeTab === 'drafts' && (
+            visibleDrafts.length === 0
+              ? <p className="workflow-home-empty muted">{emptySearch || 'No draft plans yet. Create one to start building.'}</p>
+              : <div className="workflow-home-table" role="table" aria-label="Draft plans">
+                  <div className="workflow-home-row workflow-home-table-head workflow-home-draft-row" role="row">
+                    <div role="columnheader">Draft plan</div>
+                    <div role="columnheader">Status</div>
+                    <div className="workflow-home-actions-head" role="columnheader">Actions</div>
+                  </div>
+                  {visibleDrafts.map(item => <div className="workflow-home-row workflow-home-draft-row" role="row" key={item.id}>
+                    <div className="workflow-home-name" role="cell" data-label="Draft plan"><strong>{item.title || 'Untitled plan'}</strong></div>
+                    <div role="cell" data-label="Status"><span className="workflow-home-chip workflow-home-draft-chip">Draft</span></div>
+                    <div className="workflow-home-actions" role="cell" data-label="Actions">
+                      <button className="ghost-button" disabled={!!busy} onClick={() => openJob(item.id)}>Edit</button>
+                      <button className="primary-button" disabled={!!busy} onClick={() => void runDraft(item)}>Run</button>
+                      <button className="ghost-button workflow-home-star" disabled={!!busy} onClick={() => prepareDraftTemplate(item)}>★ Save as template</button>
+                      <button className="row-action danger" title="Delete draft" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
+                    </div>
+                  </div>)}
+                </div>
+          )}
 
-          {(() => {
-            const drafts = jobs.filter(item => item.status === 'queued')
-            const runs = jobs.filter(item => item.status !== 'queued')
-            const attention = runs.filter(item => item.status === 'review' || item.status === 'running')
-            const finished = runs.filter(item => item.status !== 'review' && item.status !== 'running')
-            const planCard = (item: GraphJob) => <div key={item.id} className="graph-card">
-              <button className="graph-card-main" onClick={() => openJob(item.id)}>
-                <span className="graph-card-glyph" aria-hidden="true"><i /><i /><i /></span>
-                <span className="graph-card-meta">
-                  <strong>{item.title}</strong>
-                  <small className={`graph-card-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</small>
-                </span>
-              </button>
-              <div className="graph-card-actions">
-                <button className="row-action danger" title="Delete" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
-              </div>
-            </div>
-            const column = (
-              key: 'drafts' | 'templates' | 'runs',
-              title: string,
-              count: number,
-              hint: string,
-              open: boolean,
-              toggle: () => void,
-              body: React.ReactNode,
-            ) => <div className={`graph-col${open ? ' open' : ''}`} key={key}>
-              <button className="graph-col-head" onClick={toggle} aria-expanded={open}>
-                <span className={`chevron ${open ? 'open' : ''}`}>▸</span>
-                <span className="graph-col-title"><strong>{title} ({count})</strong><small>{hint}</small></span>
-              </button>
-              {open && <div className="graph-col-body">{body}</div>}
-            </div>
-            return <div className="graph-columns">
-              {column('drafts', 'Drafts', drafts.length, 'being built — editable', draftsOpen, () => setDraftsOpen(v => !v),
-                drafts.length === 0
-                  ? <p className="muted graph-none">Nothing in progress.</p>
-                  : drafts.map(planCard))}
-              {column(
-                'templates',
-                showArchived ? 'Archived' : 'Workflows',
-                visibleTemplates.length,
-                showArchived ? 'restore · delete permanently' : 'run · schedule · pause · archive',
-                templatesOpen,
-                () => setTemplatesOpen(v => !v),
-                visibleTemplates.length === 0
-                  ? <p className="muted graph-none">{showArchived ? 'No archived workflows.' : <>None yet. Open a plan and press <em>Save as Workflow</em>.</>}</p>
-                  : visibleTemplates.map(template => {
-                      const isScheduled = scheduledWorkflowIds.has(template.id)
-                      const runBadges = howItRunsBadges({
-                        scheduled: isScheduled,
-                        cronLabels: scheduleCronByWorkflow.get(template.id),
-                      })
-                      return <div key={template.id} className="graph-card">
-                      <button className="graph-card-main" disabled={!!busy || showArchived} onClick={() => {
-                        if (template.inputs?.length) setRunningTemplate(template)
-                        else void createFromTemplate(template)
-                      }}>
-                        <span className="graph-card-glyph tpl" aria-hidden="true"><i /><i /><i /></span>
-                        <span className="graph-card-meta">
-                          <strong>{template.name}</strong>
-                          <small className="muted">{template.description?.trim() || (showArchived ? 'Archived — schedules stopped' : template.status === 'active' ? 'Run → new draft' : 'Paused — schedules skip it')}</small>
-                          {!showArchived && <span className="graph-run-kinds" aria-label="How it runs">
-                              {runBadges.map(b => (
-                                <span key={b.kind} className={`graph-run-kind${b.kind === 'scheduled' ? ' is-scheduled' : ''}`}>{b.label}</span>
-                              ))}
-                            </span>}
-                        </span>
-                      </button>
-                      <div className="graph-card-actions">
-                        {showArchived ? <>
-                          <button className="row-action" title="Restore workflow" aria-label={`Restore ${template.name}`} disabled={!!busy} onClick={() => void restoreTemplate(template)}>↩</button>
-                          <button className="row-action danger" title="Delete permanently" aria-label={`Delete workflow ${template.name} permanently`} disabled={!!busy} onClick={() => void deleteTemplate(template)}><IconTrash size={13} /></button>
-                        </> : <>
-                          <button className="row-action" title={template.status === 'active' ? 'Pause (schedules stop firing)' : 'Resume scheduling'} aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`} disabled={!!busy} onClick={() => void toggleTemplatePaused(template)}>{template.status === 'active' ? '⏸' : '▶'}</button>
-                          <button className="row-action" title="Archive workflow" aria-label={`Archive ${template.name}`} disabled={!!busy} onClick={() => void archiveTemplate(template)}><IconArtifacts size={13} /></button>
-                        </>}
-                      </div>
-                    </div>}),
-              )}
-              {column('runs', 'Runs', runs.length, attention.length > 0 ? `${attention.length} need${attention.length === 1 ? 's' : ''} attention` : 'history — frozen', runsOpen, () => setRunsOpen(v => !v),
-                <>
-                  {runs.length === 0 && <p className="muted graph-none">No runs yet.</p>}
-                  {attention.map(planCard)}
-                  {finished.length > 0 && <details className="graph-finished">
-                    <summary>Finished ({finished.length})</summary>
-                    {finished.map(planCard)}
-                  </details>}
-                </>)}
-            </div>
-          })()}
+          {homeTab === 'workflows' && (
+            showArchived
+              ? <div className="workflow-home-group">
+                  <div className="workflow-home-group-head">
+                    <div><strong>Archived workflows</strong><small>Restore one or delete it permanently.</small></div>
+                    <span>{searchedTemplates.length}</span>
+                  </div>
+                  {searchedTemplates.length === 0
+                    ? <p className="workflow-home-empty muted">{emptySearch || 'No archived workflows.'}</p>
+                    : <div className="workflow-home-table" role="table" aria-label="Archived workflows">
+                        <div className="workflow-home-row workflow-home-table-head workflow-home-archive-row" role="row">
+                          <div role="columnheader">Workflow</div>
+                          <div role="columnheader">Category</div>
+                          <div className="workflow-home-actions-head" role="columnheader">Actions</div>
+                        </div>
+                        {searchedTemplates.map(template => <div className="workflow-home-row workflow-home-archive-row" role="row" key={template.id}>
+                          <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{template.name}</strong></div>
+                          <div role="cell" data-label="Category"><span className="workflow-home-chip workflow-home-category">#{category(template)}</span></div>
+                          <div className="workflow-home-actions" role="cell" data-label="Actions">
+                            <button className="ghost-button" disabled={!!busy} aria-label={`Restore ${template.name}`} onClick={() => void restoreTemplate(template)}>Restore</button>
+                            <button className="ghost-button danger" disabled={!!busy} aria-label={`Delete workflow ${template.name} permanently`} onClick={() => void deleteTemplate(template)}>Delete permanently</button>
+                          </div>
+                        </div>)}
+                      </div>}
+                </div>
+              : <>
+                  <div className="workflow-home-group">
+                    <div className="workflow-home-group-head is-manual">
+                      <div><strong>▷ Manual (on-demand)</strong><small>You run these and provide input each time.</small></div>
+                      <span>{manualTemplates.length}</span>
+                    </div>
+                    {manualTemplates.length === 0
+                      ? <p className="workflow-home-empty muted">{emptySearch || 'No manual workflows.'}</p>
+                      : workflowTable(manualTemplates, false)}
+                  </div>
+                  <div className="workflow-home-group">
+                    <div className="workflow-home-group-head is-scheduled">
+                      <div><strong>⏰ Otomatis / Scheduled</strong><small>These run themselves on a saved cadence.</small></div>
+                      <span>{automaticTemplates.length}</span>
+                    </div>
+                    {automaticTemplates.length === 0
+                      ? <p className="workflow-home-empty muted">{emptySearch || 'No scheduled workflows.'}</p>
+                      : workflowTable(automaticTemplates, true)}
+                  </div>
+                </>
+          )}
+
+          {homeTab === 'runs' && (
+            visibleRuns.length === 0
+              ? <p className="workflow-home-empty muted">{emptySearch || 'No workflow runs yet.'}</p>
+              : <div className="workflow-home-table" role="table" aria-label="Workflow runs">
+                  <div className="workflow-home-row workflow-home-table-head workflow-home-run-row" role="row">
+                    <div role="columnheader">Workflow</div>
+                    <div role="columnheader">When</div>
+                    <div role="columnheader">Status</div>
+                    <div role="columnheader">Duration</div>
+                    <div className="workflow-home-actions-head" role="columnheader">Actions</div>
+                  </div>
+                  {visibleRuns.map(item => <div className="workflow-home-row workflow-home-run-row" role="row" key={item.id}>
+                    <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{item.title}</strong></div>
+                    <div className="workflow-home-secondary" role="cell" data-label="When">{relativeTime(item.started_at || item.created_at || item.updated_at)}</div>
+                    <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
+                    <div className="workflow-home-secondary" role="cell" data-label="Duration">{jobDuration(item)}</div>
+                    <div className="workflow-home-actions" role="cell" data-label="Actions">
+                      <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                    </div>
+                  </div>)}
+                </div>
+          )}
         </div>
       </div>
 
+      {savingTemplate && job && <SaveTemplateModal
+        title={job.title}
+        busy={busy === 'save-template'}
+        onCancel={() => setSavingTemplate(false)}
+        onSave={meta => void saveTemplate(meta)}
+      />}
       {runningTemplate && <RunModal
         title={runningTemplate.name}
         inputs={runningTemplate.inputs}
@@ -970,6 +1156,29 @@ export function GraphScreen({
         onCancel={() => setRunningTemplate(null)}
         onRun={async input => { await createFromTemplate(runningTemplate, input) }}
       />}
+      {schedulingTemplate && <div className="modal-scrim" onClick={() => setSchedulingTemplate(null)}>
+        <div
+          className="modal-card schedule-modal-card"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Schedule ${schedulingTemplate.name}`}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => { if (event.key === 'Escape') setSchedulingTemplate(null) }}
+        >
+          <ScheduleManager
+            token={token}
+            workflows={[schedulingTemplate]}
+            workflowId={schedulingTemplate.id}
+            compact
+            onClose={() => setSchedulingTemplate(null)}
+            onChanged={() => void refreshList()}
+            onOpenJob={jobId => {
+              setSchedulingTemplate(null)
+              openJob(jobId)
+            }}
+          />
+        </div>
+      </div>}
     </section>
   }
 
