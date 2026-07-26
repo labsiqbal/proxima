@@ -330,6 +330,10 @@ def build_route_deps(
         # Sessions only SET NULL on project delete, which would orphan every chat
         # and task thread. Delete them first so messages/events/runs/agent_sessions
         # cascade away cleanly.
+        # Delegated Tasks also retain a required Container/Area audit binding, so
+        # remove the Container's jobs first. Their delegation and dependency rows
+        # cascade with them, matching the existing full-Container purge contract.
+        db().execute("DELETE FROM jobs WHERE project_id = ?", (project["id"],))
         db().execute("DELETE FROM sessions WHERE project_id = ?", (project["id"],))
         db().execute("DELETE FROM projects WHERE id = ?", (project["id"],))
 

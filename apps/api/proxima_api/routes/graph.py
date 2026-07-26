@@ -1136,4 +1136,7 @@ def register(app, deps):
             artifact_registry.approve_records_for_job(db(), job_id)
         except Exception:
             logging.getLogger("proxima.graph").exception("registry approve sync failed (non-fatal)")
+        app.state.task_delegation.prerequisite_changed(
+            job_id, connection=db()
+        )
         return graph_job_payload(graph_job_or_404(job_id, user))

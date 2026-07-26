@@ -63,6 +63,35 @@ credential leakage but does not prevent the process reading files available to i
 Tool permission requests ask the owner by default. Auto-approve remains available as
 an explicit trusted-owner setting and is recorded in run events.
 
+## Task delegation boundary
+
+Scoped Task creation is a server-owned operation. Work, Home quick Task, Alpha, and
+future orchestration callers pass database identities, never filesystem paths, to
+`TaskDelegationService`. The service verifies that the authenticated owner owns the
+Container, that the one selected Area is active and belongs to that Container, that
+the Task-agent profile belongs to the owner and is not a system identity, and that
+origin messages belong to their origin session. A Recipe bound to another Container
+is rejected.
+
+Creation is transactional and idempotent. The worker session, job, delegation audit,
+and dependency edges either all commit or none do. A caller-provided idempotency key
+is bound to a fingerprint of the request; replay returns the same Task, while reuse
+for different input is rejected. Dependency edges reject duplicates, self-edges,
+cycles, inaccessible prerequisites, and prerequisites already failed or cancelled.
+SQLite cycle triggers protect the same invariant from non-service writers.
+
+Start happens only after that transaction commits. A durable start intent lets restart
+recovery retry safely. Dependency readiness is checked from live `jobs` state, and
+unmet or failed prerequisites persist a visible blocked reason rather than leaving an
+unexplained queue row. Starting still uses the existing guarded job claim, worktree,
+and run queue.
+
+This service is an authority and consistency boundary, not an OS sandbox. Repo Tasks
+still run in the existing external worktree and require review before local merge.
+Ops Tasks still receive the physical `ops/` cwd. The runner process retains the
+service user's host permissions as described above; this slice does not claim that a
+cwd alone prevents `..` traversal or arbitrary host reads.
+
 ## Script steps (hash-bound trust, honest statement)
 
 A plan's `script` node executes a file from the Container's `ops/scripts/` folder as

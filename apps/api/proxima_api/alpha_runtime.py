@@ -8,10 +8,15 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-from . import app_settings, features, workflows as wf, worktrees
+from . import app_settings
 from .auth import iso_now
 from .job_checkpoints import create_checkpoint
-from .schemas import GraphJobCreateRequest
+from .task_delegation import (
+    DependencyRequest,
+    TaskDelegationError,
+    TaskDelegationRequest,
+    new_idempotency_key,
+)
 
 ALPHA_MAX_PARALLEL = 3
 ALPHA_MAX_TOOL_ROUNDS = 6
@@ -217,6 +222,18 @@ def _job_payload(conn, job_id: int) -> dict[str, Any]:
             data[key] = json.loads(data.get(key) or json.dumps(fallback))
         except (TypeError, ValueError):
             data[key] = fallback
+    delegation = conn.execute(
+        "SELECT * FROM task_delegations WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    if delegation:
+        data["delegation"] = dict(delegation)
+    dependencies = conn.execute(
+        "SELECT task_id, depends_on_task_id, required_status, created_at, updated_at "
+        "FROM task_dependencies WHERE task_id = ? ORDER BY depends_on_task_id",
+        (job_id,),
+    ).fetchall()
+    if dependencies:
+        data["dependencies"] = [dict(row) for row in dependencies]
     return data
 
 
@@ -230,44 +247,55 @@ def create_alpha_job(conn, app, user: dict[str, Any], alpha_session_id: int, tas
     project = _project_for_slug(conn, user["id"], task.get("project_slug"))
     profile = _profile_for_worker(conn, user["id"], task.get("profile_id"))
     target_area_id = task.get("target_area_id")
-    if target_area_id is not None:
+    if target_area_id is None:
         area = conn.execute(
-            "SELECT id FROM project_areas WHERE id = ? AND project_id = ? AND source != 'excluded'",
+            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops' "
+            "AND source != 'excluded'",
+            (project["id"],),
+        ).fetchone()
+    else:
+        area = conn.execute(
+            "SELECT id FROM project_areas WHERE id = ? AND project_id = ? "
+            "AND source != 'excluded'",
             (_as_int(target_area_id), project["id"]),
         ).fetchone()
-        if not area:
-            raise AlphaToolError("target_area_not_found", "Target area is not in this project")
-        target_area_id = area["id"]
-    step = wf.normalize_steps([{"name": "Task", "instruction": brief}])[0]
+    if not area:
+        raise AlphaToolError("target_area_not_found", "Target area is not in this project")
     input_data = {
         "brief": brief,
         "task_kind": "agent",
         "execution_policy": "autonomous",
         "alpha_dispatched": True,
     }
-    steps_state = [wf.step_state_from(step, input_data)]
-    scur = conn.execute(
-        "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) "
-        "VALUES (?, ?, ?, ?, ?, 'project')",
-        (title[:80], project["id"], user["id"], profile["id"], profile["runner_id"]),
-    )
-    session_id = _as_int(scur.lastrowid)
-    jcur = conn.execute(
-        "INSERT INTO jobs(project_id, session_id, title, input, steps_state, target_area_id, created_by, alpha_session_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            project["id"], session_id, title, json.dumps(input_data), json.dumps(steps_state),
-            target_area_id, user["id"], alpha_session_id,
-        ),
-    )
-    job_id = _as_int(jcur.lastrowid)
-    conn.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
-    conn.execute(
-        "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-        "VALUES (?, 'alpha.job.create', 'job', ?, ?)",
-        (user["id"], str(job_id), json.dumps({"alpha_session_id": alpha_session_id, "project": project["slug"]})),
-    )
-    return _job_payload(conn, job_id)
+    try:
+        result = app.state.task_delegation.create_and_start(
+            user,
+            TaskDelegationRequest(
+                title=title,
+                brief=brief,
+                container_id=_as_int(project["id"]),
+                area_id=_as_int(area["id"]),
+                profile_id=_as_int(profile["id"]),
+                execution_policy="autonomous",
+                input_data=input_data,
+                origin_session_id=alpha_session_id,
+                routing_mode="explicit",
+                routing_reason=(
+                    "Alpha selected the Task Area"
+                    if target_area_id is not None
+                    else "Alpha defaulted to the Container Ops Area"
+                ),
+                idempotency_key=str(
+                    task.get("idempotency_key")
+                    or new_idempotency_key("alpha")
+                ),
+            ),
+            start=False,
+            connection=conn,
+        )
+    except TaskDelegationError as exc:
+        raise AlphaToolError(exc.code, str(exc)) from exc
+    return _job_payload(conn, _as_int(result.job["id"]))
 
 
 def create_alpha_plan(conn, app, user: dict[str, Any], alpha_session_id: int, args: dict[str, Any]) -> dict[str, Any]:
@@ -283,68 +311,80 @@ def create_alpha_plan(conn, app, user: dict[str, Any], alpha_session_id: int, ar
     project_slug = args.get("project_slug")
     project = _project_for_slug(conn, user["id"], project_slug) if project_slug else None
     project_id = project["id"] if project else workflow["project_id"]
-    if workflow["graph"] is not None:
-        create_graph = getattr(app.state, "alpha_create_graph_job", None)
-        start_graph = getattr(app.state, "alpha_start_graph_job", None)
-        if not create_graph or not start_graph:
-            raise AlphaToolError("plan_engine_unavailable", "Graph plan engine is unavailable")
-        created = create_graph(
-            GraphJobCreateRequest(
-                title=str(workflow["name"]),
-                graph=json.loads(workflow["graph"]),
-                input=args.get("input") if isinstance(args.get("input"), dict) else {},
-                project_id=project_id,
-                profile_id=profile["id"],
-                workflow_id=workflow_id,
-            ),
-            user,
+    if project_id is None:
+        raise AlphaToolError(
+            "container_required", "A delegated Recipe needs one Container"
         )
-        job_id = _as_int(created["id"])
-        conn.execute("UPDATE jobs SET alpha_session_id = ? WHERE id = ?", (alpha_session_id, job_id))
-        conn.execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-            "VALUES (?, 'alpha.job.create', 'job', ?, ?)",
-            (user["id"], str(job_id), json.dumps({"alpha_session_id": alpha_session_id, "workflow_id": workflow_id})),
+    selected_area_id = args.get("target_area_id")
+    if selected_area_id is None:
+        area = conn.execute(
+            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops' "
+            "AND source != 'excluded'",
+            (project_id,),
+        ).fetchone()
+    else:
+        area = conn.execute(
+            "SELECT id FROM project_areas WHERE id = ? AND project_id = ? "
+            "AND source != 'excluded'",
+            (_as_int(selected_area_id), project_id),
+        ).fetchone()
+    if area is None:
+        raise AlphaToolError(
+            "target_area_not_found", "Target Area is not in this Container"
         )
-        create_checkpoint(conn, job_id)
-        start_error = None
-        if args.get("start", True):
-            try:
-                start_graph(job_id, user)
-            except HTTPException as exc:
-                start_error = exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc.detail)
-        result = _job_payload(conn, job_id)
-        if start_error:
-            result["_start_error"] = start_error
-        return result
-    steps = json.loads(workflow["steps"] or "[]")
     inputs = args.get("input") if isinstance(args.get("input"), dict) else {}
-    states = [wf.step_state_from(step, inputs) for step in steps]
-    visibility = "project" if project_id else "private"
-    scur = conn.execute(
-        "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
-        (str(workflow["name"])[:80], project_id, user["id"], profile["id"], profile["runner_id"], visibility),
-    )
-    jcur = conn.execute(
-        "INSERT INTO jobs(project_id, workflow_id, session_id, title, input, steps_state, created_by, alpha_session_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (project_id, workflow_id, scur.lastrowid, workflow["name"], json.dumps(inputs), json.dumps(states), user["id"], alpha_session_id),
-    )
-    job_id = _as_int(jcur.lastrowid)
-    conn.execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, scur.lastrowid))
-    conn.execute(
-        "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-        "VALUES (?, 'alpha.job.create', 'job', ?, ?)",
-        (user["id"], str(job_id), json.dumps({"alpha_session_id": alpha_session_id, "workflow_id": workflow_id})),
-    )
-    if args.get("start", True):
+    should_start = bool(args.get("start", True))
+    try:
+        result = app.state.task_delegation.create_batch(
+            user,
+            [
+                TaskDelegationRequest(
+                    title=str(workflow["name"]),
+                    brief=str(
+                        inputs.get("brief")
+                        or workflow["description"]
+                        or workflow["name"]
+                    ),
+                    container_id=_as_int(project_id),
+                    area_id=_as_int(area["id"]),
+                    profile_id=_as_int(profile["id"]),
+                    execution_policy="autonomous",
+                    recipe_id=workflow_id,
+                    input_data=inputs,
+                    origin_session_id=alpha_session_id,
+                    routing_mode="explicit",
+                    routing_reason=(
+                        "Alpha selected the Recipe Area"
+                        if selected_area_id is not None
+                        else "Alpha defaulted the Recipe to the Container Ops Area"
+                    ),
+                    idempotency_key=str(
+                        args.get("idempotency_key")
+                        or new_idempotency_key("alpha-recipe")
+                    ),
+                ),
+            ],
+            start=should_start,
+            defer_start=should_start,
+            connection=conn,
+        )[0]
+    except TaskDelegationError as exc:
+        raise AlphaToolError(exc.code, str(exc)) from exc
+    job_id = _as_int(result.job["id"])
+    start_error = None
+    if should_start:
         try:
-            return start_alpha_job(conn, app, user, job_id)
+            start_alpha_job(conn, app, user, job_id)
         except AlphaToolError as exc:
-            result = _job_payload(conn, job_id)
-            result["_start_error"] = str(exc)
-            return result
-    return _job_payload(conn, job_id)
+            start_error = str(exc)
+    if workflow["graph"] is not None and not conn.execute(
+        "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
+    ).fetchone():
+        create_checkpoint(conn, job_id)
+    payload = _job_payload(conn, job_id)
+    if start_error:
+        payload["_start_error"] = start_error
+    return payload
 
 
 def start_alpha_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, Any]:
@@ -354,60 +394,10 @@ def start_alpha_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, A
     ).fetchone()
     if not row:
         raise AlphaToolError("job_not_found", f"Alpha job {job_id} was not found")
-    job = dict(row)
-    if job["status"] != "queued":
-        return _job_payload(conn, job_id)
-    steps = json.loads(job["steps_state"] or "[]")
-    if not steps or not job.get("session_id"):
-        raise AlphaToolError("job_not_startable", "Job has no runnable session or step")
-    if features.enabled(app.state.config, features.REPO_WORKTREES):
-        try:
-            worktrees.ensure_job_worktree(conn, app.state.config, job)
-        except worktrees.WorktreeError as exc:
-            raise AlphaToolError("worktree_failed", f"Cannot start repo job: {exc}") from exc
-    # Capture the queued job after any isolated worktree exists, but before a
-    # run is enqueued. This makes a repo checkpoint genuinely restorable while
-    # the primary checkout remains reference-only.
-    create_checkpoint(conn, job_id)
-    session = conn.execute("SELECT * FROM sessions WHERE id = ?", (job["session_id"],)).fetchone()
-    profile = conn.execute("SELECT * FROM profiles WHERE id = ?", (session["profile_id"],)).fetchone() if session else None
-    if not profile:
-        raise AlphaToolError("worker_profile_not_found", "Worker agent is no longer available")
-    inputs = json.loads(job["input"] or "{}")
-    prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
-    with app.state.db_lock:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            claimed = conn.execute(
-                "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, current_step_idx=0, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='queued'",
-                (job_id,),
-            )
-            if claimed.rowcount == 0:
-                conn.execute("ROLLBACK")
-                return _job_payload(conn, job_id)
-            cur = conn.execute(
-                "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home) "
-                "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                (
-                    job["session_id"], job["project_id"], user["id"], profile["id"],
-                    profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"],
-                ),
-            )
-            run_id = _as_int(cur.lastrowid)
-            steps[0].update({"status": "running", "run_id": run_id, "started_at": iso_now()})
-            conn.execute(
-                "UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (json.dumps(steps), job_id),
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    app.state.worker.add_event(
-        run_id, job["session_id"], job["project_id"], "run.queued",
-        {"runner": profile["runner_id"], "job": job_id, "alpha": True},
-    )
+    try:
+        app.state.task_delegation.start(job_id, user, connection=conn)
+    except TaskDelegationError as exc:
+        raise AlphaToolError(exc.code, str(exc)) from exc
     return _job_payload(conn, job_id)
 
 
@@ -465,16 +455,115 @@ def execute_tool(conn, app, user: dict[str, Any], alpha_session_id: int, name: s
                 raise AlphaToolError("invalid_tasks", "dispatch_jobs needs 1 to 20 tasks")
             if not all(isinstance(task, dict) for task in tasks):
                 raise AlphaToolError("invalid_task", "Every task must be an object")
-            # Validate/create the batch atomically so one malformed task cannot
-            # leave an unreported partial dispatch behind.
-            conn.execute("SAVEPOINT alpha_dispatch")
+            batch_key = str(
+                args.get("idempotency_key")
+                or new_idempotency_key("alpha-batch")
+            )
+            requests: list[TaskDelegationRequest] = []
+            for index, task in enumerate(tasks):
+                title = str(task.get("title") or "").strip()
+                brief = str(task.get("brief") or "").strip()
+                if not title or not brief:
+                    raise AlphaToolError(
+                        "invalid_task", "Each task needs a title and brief"
+                    )
+                project = _project_for_slug(
+                    conn, user["id"], task.get("project_slug")
+                )
+                profile = _profile_for_worker(
+                    conn, user["id"], task.get("profile_id")
+                )
+                selected_area_id = task.get("target_area_id")
+                if selected_area_id is None:
+                    area = conn.execute(
+                        "SELECT id FROM project_areas WHERE project_id = ? "
+                        "AND kind = 'ops' AND source != 'excluded'",
+                        (project["id"],),
+                    ).fetchone()
+                else:
+                    area = conn.execute(
+                        "SELECT id FROM project_areas WHERE id = ? "
+                        "AND project_id = ? AND source != 'excluded'",
+                        (_as_int(selected_area_id), project["id"]),
+                    ).fetchone()
+                if area is None:
+                    raise AlphaToolError(
+                        "target_area_not_found",
+                        "Target Area is not in this Container",
+                    )
+                client_key = str(
+                    task.get("key") or task.get("client_key") or f"task-{index + 1}"
+                )
+                raw_dependencies = task.get("depends_on") or []
+                if not isinstance(raw_dependencies, list):
+                    raise AlphaToolError(
+                        "invalid_dependencies", "depends_on must be a list"
+                    )
+                dependencies: list[DependencyRequest] = []
+                for raw_dependency in raw_dependencies:
+                    if isinstance(raw_dependency, dict):
+                        dependency_task = raw_dependency.get(
+                            "task", raw_dependency.get("key")
+                        )
+                        required_status = str(
+                            raw_dependency.get("required_status") or "done"
+                        )
+                    else:
+                        dependency_task = raw_dependency
+                        required_status = "done"
+                    if not isinstance(dependency_task, (int, str)):
+                        raise AlphaToolError(
+                            "invalid_dependency",
+                            "Each dependency must be a Task id or client-local key",
+                        )
+                    dependencies.append(
+                        DependencyRequest(
+                            dependency_task, required_status=required_status
+                        )
+                    )
+                requests.append(
+                    TaskDelegationRequest(
+                        title=title,
+                        brief=brief,
+                        container_id=_as_int(project["id"]),
+                        area_id=_as_int(area["id"]),
+                        profile_id=_as_int(profile["id"]),
+                        execution_policy="autonomous",
+                        input_data={
+                            "brief": brief,
+                            "task_kind": "agent",
+                            "execution_policy": "autonomous",
+                            "alpha_dispatched": True,
+                        },
+                        dependencies=tuple(dependencies),
+                        origin_session_id=alpha_session_id,
+                        routing_mode="explicit",
+                        routing_reason=(
+                            "Alpha selected the Task Area"
+                            if selected_area_id is not None
+                            else "Alpha defaulted to the Container Ops Area"
+                        ),
+                        idempotency_key=str(
+                            task.get("idempotency_key")
+                            or f"{batch_key}:{client_key}"
+                        ),
+                        client_key=client_key,
+                    )
+                )
             try:
-                jobs = [create_alpha_job(conn, app, user, alpha_session_id, task) for task in tasks]
-                conn.execute("RELEASE SAVEPOINT alpha_dispatch")
-            except Exception:
-                conn.execute("ROLLBACK TO SAVEPOINT alpha_dispatch")
-                conn.execute("RELEASE SAVEPOINT alpha_dispatch")
-                raise
+                delegated = app.state.task_delegation.create_batch(
+                    user,
+                    requests,
+                    start=bool(args.get("start", True)),
+                    defer_start=bool(args.get("start", True)),
+                    connection=conn,
+                )
+            except TaskDelegationError as exc:
+                raise AlphaToolError(exc.code, str(exc)) from exc
+            jobs = [
+                _job_payload(conn, _as_int(result.job["id"]))
+                for result in delegated
+            ]
             start_errors: list[dict[str, Any]] = []
             if args.get("start", True):
                 started_jobs: list[dict[str, Any]] = []

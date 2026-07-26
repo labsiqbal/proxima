@@ -426,8 +426,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28]
-    assert current_version(conn) == 28
+    assert run_migrations(conn, str(db_path)) == [28, 29]
+    assert current_version(conn) == 29
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -449,4 +449,43 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "SELECT rel_path FROM project_areas WHERE id = ?", (ops_area_id,)
     ).fetchone()["rel_path"] == "ops"
     assert (root / "ops" / "wiki" / "alpha.md").read_bytes() == b"alpha history bytes"
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v29_adds_task_delegation_and_dependency_contracts_to_schema_28(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "schema-28.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("DROP TABLE task_dependencies")
+    conn.execute("DROP TABLE task_delegations")
+    conn.execute("ALTER TABLE jobs DROP COLUMN blocked_reason")
+    current_version(conn)
+    conn.executemany(
+        "INSERT INTO schema_migrations(version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [(version, f"schema {version}") for version in range(1, 29)],
+    )
+
+    assert run_migrations(conn, str(db_path)) == [29]
+    assert current_version(conn) == 29
+    assert "blocked_reason" in {
+        row[1] for row in conn.execute("PRAGMA table_info(jobs)")
+    }
+    assert {
+        "task_delegations",
+        "task_dependencies",
+    }.issubset(
+        {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    )
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+        "AND name = 'task_dependencies_no_cycle'"
+    ).fetchone()
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

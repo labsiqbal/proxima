@@ -97,6 +97,72 @@ def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: 
     assert app.state.db.execute("SELECT COUNT(*) AS c FROM jobs WHERE alpha_session_id IS NOT NULL").fetchone()["c"] == 0
 
 
+def test_alpha_batch_dispatch_uses_durable_idempotent_dependency_dag(
+    tmp_path: Path,
+):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/alpha/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    args = {
+        "idempotency_key": "alpha-dag-timeout",
+        "tasks": [
+            {
+                "key": "research",
+                "title": "Research",
+                "brief": "Collect evidence",
+                "project_slug": project["slug"],
+            },
+            {
+                "key": "report",
+                "title": "Report",
+                "brief": "Write the report",
+                "project_slug": project["slug"],
+                "depends_on": ["research"],
+            },
+        ],
+    }
+
+    first = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        args,
+    )
+    repeated = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        args,
+    )
+
+    assert first["ok"] is repeated["ok"] is True
+    assert [job["id"] for job in first["result"]["jobs"]] == [
+        job["id"] for job in repeated["result"]["jobs"]
+    ]
+    assert [job["status"] for job in first["result"]["jobs"]] == [
+        "running",
+        "queued",
+    ]
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM task_delegations"
+    ).fetchone()[0] == 2
+    dependency = app.state.db.execute(
+        "SELECT * FROM task_dependencies"
+    ).fetchone()
+    assert dependency["task_id"] == first["result"]["jobs"][1]["id"]
+    assert dependency["depends_on_task_id"] == first["result"]["jobs"][0]["id"]
+    blocked = app.state.db.execute(
+        "SELECT blocked_reason FROM jobs WHERE id = ?",
+        (dependency["task_id"],),
+    ).fetchone()["blocked_reason"]
+    assert "currently running" in blocked
+    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
+
+
 def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/alpha/desk").json()

@@ -348,6 +348,42 @@ def test_repo_job_start_diff_approve_merge_lifecycle(tmp_path: Path):
     assert {(f["path"], f["status"]) for f in after["files"]} == {("README.md", "M"), ("feature.py", "A")}
 
 
+def test_autonomous_repo_task_still_stops_for_diff_review(tmp_path: Path):
+    repo = _scratch_repo(tmp_path / "autonomous-repo")
+    app = _app(tmp_path, feature_repo_worktrees=True)
+    client = _client(app)
+    linked = client.post(
+        "/api/projects/link",
+        json={"path": str(repo), "slug": "autonomous-repo"},
+    )
+    assert linked.status_code == 201, linked.text
+    area_id = linked.json()["code_areas"][0]["id"]
+    created = client.post(
+        "/api/jobs",
+        json={
+            "project_slug": "autonomous-repo",
+            "target_area_id": area_id,
+            "input": {
+                "brief": "Make a reviewed repo change",
+                "execution_policy": "autonomous",
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    job = created.json()
+    started = client.post(f"/api/jobs/{job['id']}/start")
+    assert started.status_code == 200, started.text
+    run = app.state.db.execute(
+        "SELECT * FROM runs WHERE session_id = ?", (job["session_id"],)
+    ).fetchone()
+
+    app.state.worker._advance_job(dict(run), "Completed the requested change")
+
+    refreshed = client.get(f"/api/jobs/{job['id']}").json()
+    assert refreshed["status"] == "review"
+    assert refreshed["worktree"]["status"] == "active"
+
+
 def test_repo_job_worktree_cut_from_subfolder_area(tmp_path: Path):
     container = tmp_path / "container"
     (container / "reports").mkdir(parents=True)

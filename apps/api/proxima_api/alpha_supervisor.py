@@ -73,7 +73,9 @@ class AlphaSupervisor:
         started: list[int] = []
         for row in rows:
             try:
-                start_alpha_job(conn, self.app, {"id": row["created_by"]}, row["id"])
+                job = start_alpha_job(
+                    conn, self.app, {"id": row["created_by"]}, row["id"]
+                )
             except Exception as exc:
                 conn.execute(
                     "INSERT OR IGNORE INTO attention_items(kind, title, target_json, inline_ok, status, source_key) "
@@ -83,6 +85,10 @@ class AlphaSupervisor:
                         f"alpha-start:{row['id']}",
                     ),
                 )
+                continue
+            if job["status"] == "queued":
+                # Dependency blockers are durable on the Task and are not start
+                # failures. A prerequisite transition will retry this Task.
                 continue
             started.append(row["id"])
             turns_used += 1

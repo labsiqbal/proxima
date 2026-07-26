@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 29 tables. Applied migration version: **28**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 31 tables. Applied migration version: **29**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -201,6 +201,7 @@ SQLite (WAL mode). 29 tables. Applied migration version: **28**. This is the exa
 | `graph` | TEXT | yes |  |  |
 | `schedule_id` | INTEGER | yes |  |  |
 | `target_area_id` | INTEGER | yes |  | → `project_areas.id` (ON DELETE SET NULL) |
+| `blocked_reason` | TEXT | yes |  |  |
 | `rejected_reason` | TEXT | yes |  |  |
 | `alpha_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
 | `created_by` | INTEGER | yes |  | → `users.id` |
@@ -491,6 +492,48 @@ SQLite (WAL mode). 29 tables. Applied migration version: **28**. This is the exa
 **Indexes:** `idx_sessions_project` - (project_id, updated_at); `idx_sessions_owner` - (owner_user_id, updated_at)
 
 
+### task_delegations
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `origin_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
+| `origin_message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE SET NULL) |
+| `container_id` | INTEGER | NO |  | → `projects.id` (ON DELETE RESTRICT) |
+| `target_area_id` | INTEGER | NO |  | → `project_areas.id` (ON DELETE RESTRICT) |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `routing_mode` | TEXT | NO |  |  |
+| `routing_reason` | TEXT | yes |  |  |
+| `created_by` | INTEGER | NO |  | → `users.id` (ON DELETE CASCADE) |
+| `idempotency_key` | TEXT | NO |  |  |
+| `idempotency_identity` | TEXT | NO |  |  |
+| `request_fingerprint` | TEXT | NO |  |  |
+| `start_requested` | INTEGER | NO | `0` |  |
+| `start_state` | TEXT | NO | `'pending'` |  |
+| `blocked_reason` | TEXT | yes |  |  |
+| `last_start_error` | TEXT | yes |  |  |
+| `start_attempts` | INTEGER | NO | `0` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `start_attempted_at` | TEXT | yes |  |  |
+| `started_at` | TEXT | yes |  |  |
+
+**Indexes:** `idx_task_delegations_start` - (start_requested, start_state, updated_at); `idx_task_delegations_container` - (container_id, target_area_id, created_at); `idx_task_delegations_origin` - (origin_session_id, origin_message_id)
+
+
+### task_dependencies
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `task_id` | INTEGER | NO |  | PK → `jobs.id` (ON DELETE CASCADE) |
+| `depends_on_task_id` | INTEGER | NO |  | PK → `jobs.id` (ON DELETE CASCADE) |
+| `required_status` | TEXT | NO | `'done'` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_task_dependencies_prerequisite` - (depends_on_task_id, task_id)
+
+
 ### turn_file_journals
 
 | Column | Type | Null | Default | Key / FK |
@@ -539,4 +582,4 @@ SQLite (WAL mode). 29 tables. Applied migration version: **28**. This is the exa
 
 
 ---
-_Generated 2026-07-26 22:47 UTC._
+_Generated 2026-07-26 23:52 UTC._

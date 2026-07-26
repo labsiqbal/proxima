@@ -774,6 +774,9 @@ class RunWorker:
                     self.graph_advancers.fail_run(dict(run), error, self.add_event)
                 return
             self._mark_job_failed(job, error)
+            self.app.state.task_delegation.prerequisite_changed(
+                int(job["id"]), connection=db
+            )
 
     def _continue_after_timeout(self, run: dict[str, Any]) -> dict[str, Any]:
         """Timeout auto-continuation for job runs (Phase-1 slice 5, T5). The caller
@@ -979,7 +982,9 @@ class RunWorker:
             # Ops-owned work runs in the physical Ops Area. General chat keeps its
             # Container cwd for compatibility. A project-less job gets scratch.
             jrow = db.execute(
-                "SELECT s.job_id, s.workflow_id, pa.kind AS target_kind "
+                "SELECT s.job_id, s.workflow_id, pa.kind AS target_kind, "
+                "EXISTS(SELECT 1 FROM task_delegations td WHERE td.job_id = s.job_id) "
+                "AS is_delegated_task "
                 "FROM sessions s "
                 "LEFT JOIN jobs j ON j.id = s.job_id "
                 "LEFT JOIN project_areas pa ON pa.id = j.target_area_id "
@@ -1009,7 +1014,11 @@ class RunWorker:
                     node_row["graph"],
                     str(node_row["node_id"]),
                 )
-                if not graph_node_touches_repo and project_ops is not None:
+                if (
+                    not jrow["is_delegated_task"]
+                    and not graph_node_touches_repo
+                    and project_ops is not None
+                ):
                     cwd = str(project_ops)
             # Repo jobs (Phase-1 slice 2, flag-gated): a job with an active
             # worktree runs THERE, never in the primary tree. Flag off ⇒ this
@@ -1027,7 +1036,10 @@ class RunWorker:
                     # siblings keep the physical Ops root. Linear jobs bind at
                     # the job level, exactly as slice 2 shipped.
                     in_worktree = True
-                    if graph_node_touches_repo is not None:
+                    if (
+                        graph_node_touches_repo is not None
+                        and not jrow["is_delegated_task"]
+                    ):
                         in_worktree = graph_node_touches_repo
                     if in_worktree:
                         if not Path(wt["worktree_path"]).is_dir():
