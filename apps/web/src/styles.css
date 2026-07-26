@@ -13000,7 +13000,6 @@ div.result-media {
 .code-new-session { flex: 0 0 auto; }
 
 /* Scheduled workflow mode */
-.scheduled-view { overflow: auto; }
 .schedule-manager { width: min(100%, var(--shell-content-max)); margin-inline: auto; padding: var(--space-6); }
 .schedule-manager-head { display: flex; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
 .schedule-manager-head h1 { margin: 0; }
