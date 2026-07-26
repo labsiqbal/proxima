@@ -176,8 +176,8 @@ def test_upload_streams_content_and_deduplicates_names(tmp_path):
     assert first.json()["path"] == "uploads/bundle.bin"
     assert second.json()["path"] == "uploads/bundle-1.bin"
     project_root = Path(c.get("/api/projects", headers=headers).json()["projects"][0]["path"])
-    assert (project_root / first.json()["path"]).read_bytes() == content
-    assert (project_root / second.json()["path"]).read_bytes() == b"second"
+    assert (project_root / "ops" / first.json()["path"]).read_bytes() == content
+    assert (project_root / "ops" / second.json()["path"]).read_bytes() == b"second"
 
 
 def test_upload_limit_rejects_and_removes_partial_file(tmp_path):
@@ -200,7 +200,7 @@ def test_upload_limit_rejects_and_removes_partial_file(tmp_path):
     assert response.status_code == 413
     projects = c.get("/api/projects", headers=headers).json()["projects"]
     project_root = Path(next(p["path"] for p in projects if p["slug"] == "demo"))
-    assert not (project_root / "uploads" / "large.bin").exists()
+    assert not (project_root / "ops" / "uploads" / "large.bin").exists()
 
 
 def test_traversal_is_rejected(tmp_path):
@@ -271,7 +271,7 @@ def test_design_from_image_seeds_full_bleed_scene(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
     root = _project_path(c, headers)
-    img = root / "artifacts/media/images/chat-1.png"
+    img = root / "ops/artifacts/media/images/chat-1.png"
     img.parent.mkdir(parents=True, exist_ok=True)
     img.write_bytes(PNG_1x2)
 
@@ -279,7 +279,7 @@ def test_design_from_image_seeds_full_bleed_scene(tmp_path):
 
     assert res.status_code == 200, res.text
     body = res.json()
-    scene = json.loads((root / body["path"] / "scene.json").read_text())
+    scene = json.loads((root / "ops" / body["path"] / "scene.json").read_text())
     ab = scene["artboards"][0]
     assert ab["width"] == 1 and ab["height"] == 2  # dims read from the PNG header
     layer = ab["layers"][0]
@@ -302,7 +302,7 @@ def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
     root = _project_path(c, headers)
-    img = root / "artifacts/media/images/ref.png"
+    img = root / "ops/artifacts/media/images/ref.png"
     img.parent.mkdir(parents=True, exist_ok=True)
     img.write_bytes(PNG_1x2)
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import iso_now
+from .container_registry import ops_root
 
 log = logging.getLogger("proxima.archive")
 
@@ -148,8 +149,10 @@ def record_run_outputs(
     """
     if not project_id or not output_links:
         return
-    prow = conn.execute("SELECT path FROM projects WHERE id = ?", (project_id,)).fetchone()
-    root = Path(prow["path"]) if prow and prow["path"] else None
+    prow = conn.execute(
+        "SELECT id, path FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    root = ops_root(conn, prow) if prow and prow["path"] else None
     rrow = conn.execute("SELECT kind FROM runs WHERE id = ?", (run_id,)).fetchone()
     run_kind = rrow["kind"] if rrow else None
     node = conn.execute(

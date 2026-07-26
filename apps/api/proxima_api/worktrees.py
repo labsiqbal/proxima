@@ -46,6 +46,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .container_registry import ContainerBoundaryError, resolve_area_root
 GIT_TIMEOUT_SECONDS = 120
 # Unified diffs can be huge; the review payload caps the patch so one giant
 # vendored-file change cannot balloon an API response. File statuses are
@@ -398,11 +399,15 @@ def repo_area_for_job(conn: sqlite3.Connection, job: sqlite3.Row | dict[str, Any
     ).fetchone()
     if not area or area["kind"] != "code" or area["source"] == "excluded":
         return None
-    project = conn.execute("SELECT path FROM projects WHERE id = ?", (job["project_id"],)).fetchone()
+    project = conn.execute(
+        "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+    ).fetchone()
     if not project:
         return None
-    root = Path(project["path"])
-    return area, (root if area["rel_path"] == "." else root / area["rel_path"])
+    try:
+        return area, resolve_area_root(conn, project, int(area["id"]))
+    except ContainerBoundaryError as exc:
+        raise WorktreeError(str(exc)) from exc
 
 
 def bind_graph_job_repo_worktree(

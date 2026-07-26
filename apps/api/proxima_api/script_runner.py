@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from . import app_settings, scripts_library
+from .container_registry import ops_root
 from .graph import normalize_graph
 from .runners import augmented_path
 from .workflows import substitute
@@ -144,12 +145,12 @@ class ScriptRunner:
             self._fail(run, "script steps need a project container to run in")
             return
         project = db.execute(
-            "SELECT path FROM projects WHERE id = ?", (attempt["job_project_id"],)
+            "SELECT id, path FROM projects WHERE id = ?", (attempt["job_project_id"],)
         ).fetchone()
         if not project or not project["path"]:
             self._fail(run, "script step's project path is unavailable")
             return
-        project_root = Path(project["path"])
+        project_root = ops_root(db, project)
 
         try:
             graph = normalize_graph(attempt["job_graph"] or "")

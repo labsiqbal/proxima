@@ -59,7 +59,7 @@ def test_dashboard_reuses_artifact_rules_for_legacy_video_shells(tmp_path):
         headers=headers,
         json={"slug": "demo", "name": "Demo"},
     ).json()
-    legacy = Path(project["path"]) / "artifacts" / "video" / "old-studio"
+    legacy = Path(project["path"]) / "ops" / "artifacts" / "video" / "old-studio"
     legacy.mkdir(parents=True)
     (legacy / "index.html").write_text("<main>legacy</main>")
     (legacy / "brief.json").write_text("{}")

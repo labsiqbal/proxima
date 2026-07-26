@@ -33,6 +33,7 @@ from . import features
 from . import state
 from . import turn_restore
 from .artifacts import scan_project_artifacts
+from .container_registry import container_root, ops_root
 from .message_reviews import parse_review_output, review_payload
 from .prompt_collaborations import (
     build_brainstorm_synthesis_prompt,
@@ -900,7 +901,9 @@ class RunWorker:
         db = self.app.state.worker_db
         if not job["project_id"]:
             return []
-        prow = db.execute("SELECT path FROM projects WHERE id = ?", (job["project_id"],)).fetchone()
+        prow = db.execute(
+            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+        ).fetchone()
         if not prow:
             return []
         from datetime import timezone
@@ -918,7 +921,7 @@ class RunWorker:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 start = dt.timestamp() - 5
-        return scan_project_artifacts(Path(prow["path"]), start)
+        return scan_project_artifacts(ops_root(db, prow), start)
 
     async def execute_run(self, run: dict[str, Any]) -> None:
         db = self.app.state.worker_db
@@ -959,20 +962,55 @@ class RunWorker:
             project_name: str | None = None
             project_slug: str | None = None
             project_wiki: Path | None = None
+            project_container: Path | None = None
+            project_ops: Path | None = None
+            row = None
             if project_id:
-                row = db.execute("SELECT name, slug, path FROM projects WHERE id = ?", (project_id,)).fetchone()
+                row = db.execute(
+                    "SELECT id, name, slug, path FROM projects WHERE id = ?",
+                    (project_id,),
+                ).fetchone()
                 if row and row["path"]:
-                    cwd = row["path"]
+                    project_container = container_root(row)
+                    cwd = str(project_container)
                     project_name, project_slug = row["name"], row["slug"]
-                    project_wiki = Path(row["path"]) / "wiki"
-            # A workflow job runs at the PROJECT ROOT (so it naturally uses the project's
-            # artifacts/design, wiki, and files like any project session). A project-less
-            # job gets its own folder under scratch instead of polluting the shared dir.
-            jrow = db.execute("SELECT job_id, workflow_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                    project_ops = ops_root(db, row)
+                    project_wiki = project_ops / "wiki"
+            # Ops-owned work runs in the physical Ops Area. General chat keeps its
+            # Container cwd for compatibility. A project-less job gets scratch.
+            jrow = db.execute(
+                "SELECT s.job_id, s.workflow_id, pa.kind AS target_kind "
+                "FROM sessions s "
+                "LEFT JOIN jobs j ON j.id = s.job_id "
+                "LEFT JOIN project_areas pa ON pa.id = j.target_area_id "
+                "WHERE s.id = ?",
+                (session_id,),
+            ).fetchone()
             is_job = bool(jrow and jrow["job_id"])
             is_build = bool(jrow and jrow["workflow_id"])  # a workflow iterate/test chat
+            if row and (
+                session_mode == "design"
+                or str(run.get("kind") or "") == "brand_guide"
+                or (is_job and jrow["target_kind"] == "ops")
+            ):
+                cwd = str(ops_root(db, row))
             if is_job and not project_id:
                 cwd = str(Path(cwd) / "workflow-runs" / f"job-{jrow['job_id']}")
+            graph_node_touches_repo: bool | None = None
+            if is_job and str(run.get("kind") or "") == GRAPH_NODE_RUN_KIND:
+                node_row = db.execute(
+                    "SELECT ns.node_id, j.graph FROM node_states ns "
+                    "JOIN jobs j ON j.id = ns.job_id WHERE ns.run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                graph_node_touches_repo = bool(
+                    node_row
+                ) and graph_mod.node_touches_repo(
+                    node_row["graph"],
+                    str(node_row["node_id"]),
+                )
+                if not graph_node_touches_repo and project_ops is not None:
+                    cwd = str(project_ops)
             # Repo jobs (Phase-1 slice 2, flag-gated): a job with an active
             # worktree runs THERE, never in the primary tree. Flag off ⇒ this
             # block is skipped entirely and cwd selection is exactly as above.
@@ -985,20 +1023,12 @@ class RunWorker:
                 ).fetchone()
                 if wt:
                     # Graph plans bind per JOB-IN-PLAN (slice 3): only a node
-                    # tagged touches_repo works in the worktree; its ops
-                    # siblings keep the project root, where their outputs
-                    # (artifacts, files) actually belong. Linear jobs bind at
+                    # tagged touches_repo works in the worktree; its Ops
+                    # siblings keep the physical Ops root. Linear jobs bind at
                     # the job level, exactly as slice 2 shipped.
                     in_worktree = True
-                    if str(run.get("kind") or "") == GRAPH_NODE_RUN_KIND:
-                        node_row = db.execute(
-                            "SELECT ns.node_id, j.graph FROM node_states ns "
-                            "JOIN jobs j ON j.id = ns.job_id WHERE ns.run_id = ?",
-                            (run_id,),
-                        ).fetchone()
-                        in_worktree = bool(node_row) and graph_mod.node_touches_repo(
-                            node_row["graph"], str(node_row["node_id"])
-                        )
+                    if graph_node_touches_repo is not None:
+                        in_worktree = graph_node_touches_repo
                     if in_worktree:
                         if not Path(wt["worktree_path"]).is_dir():
                             raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
@@ -1141,7 +1171,18 @@ class RunWorker:
                 session_mode,
                 fresh_session,
             )
-            prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
+            vision_fallback = project_ops
+            if (
+                project_container is not None
+                and project_ops is not None
+                and Path(cwd).resolve() == project_ops
+            ):
+                vision_fallback = project_container
+            prompt_text, vision_images = extract_vision_images(
+                prompt_text,
+                cwd,
+                vision_fallback,
+            )
             run_start_ts = time.time()
             try:
                 stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
@@ -1171,7 +1212,11 @@ class RunWorker:
                     session_mode,
                     True,
                 )
-                prompt_text, vision_images = extract_vision_images(prompt_text, cwd)
+                prompt_text, vision_images = extract_vision_images(
+                    prompt_text,
+                    cwd,
+                    vision_fallback,
+                )
                 chunks.clear()
                 stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
 

@@ -215,9 +215,13 @@ maps a chat to its per-home ACP session.
 A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
 and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-node state
 in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_GRAPH`.
-A project is additionally a **work container** (Phase-1, T1): `project_areas` rows
-record its git-repo subfolders (*code areas*, auto-detected from `.git` with manual
-override - `.` means repo-at-root) and its single *ops area* (non-code output space).
+A project row is the compatibility persistence record for a **Container**.
+`project_areas` records zero or more repo Areas (auto-detected from `.git` with manual
+override, where `.` means repo-at-root) and exactly one active Ops Area. Fresh
+Containers use the physical `ops/` folder and an Ops row with `rel_path='ops'`.
+`container_registry` stores a bounded projection of identity and summary from
+`ops/container.md`; `container_ops_migrations` stores the versioned, hash-bound,
+resumable migration marker for legacy root-level Ops data.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -228,8 +232,19 @@ mismatch with the repo's current `.git/config`. `repo_remote.py` shells
 out to the host's own `git`/`gh` (BYO - no brokered auth, no stored tokens; the push
 neutralizes repo-config credential helpers and hooks via `-c` overrides) and the
 push outcome lands on the `job_worktrees` row (`push_status/push_error/...`).
-Artifact scanning still ignores areas; the slicer that sets the binding at slice
-time is slice 3.
+`container_registry.py` is the only physical root resolver. Every active Area must
+resolve inside its Container after realpath resolution. Duplicate roots, unsafe
+overlap, escape, Container-root symlinks, and any symlink inside physical Ops are
+rejected. The intentional repo-at-root plus `ops/` containment is permitted and
+`/ops/` is added to the root repo's local git exclude.
+
+Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
+dry-run manifest with content hashes, rejects collisions or ambiguous types before
+moving anything, and atomically renames only known Ops-owned paths on the same
+filesystem. A durable `moving` marker supports restart after any completed rename.
+Failures open a `container_ops_migration` Attention item and retain the legacy row.
+Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
+file API all resolve through the active Ops row.
 Deliverables are durable records (Phase-1 slice 8, T4): `artifact_records` holds one
 row per deliverable **version** - identity (project, type, path), lineage
 (session → job/node → run), the single approval status (`draft/review/approved/
@@ -625,7 +640,7 @@ worktree before claiming `running` — same loud-refusal ordering as the linear 
 plan's repo jobs must share ONE code area (Phase-1: one worktree row per job); a
 multi-area plan refuses to start with a split-the-plan message. The worker's cwd seam
 is node-aware: a `wf_node` run executes in the worktree only when ITS node touches the
-repo, while ops siblings run at the project root, where their artifact outputs belong.
+repo, while Ops siblings run at the physical Ops Area, where their artifact outputs belong.
 The final `POST /api/graph/jobs/{id}/approve` is the merge point, with the identical
 guarded-merge/park-in-review contract as the linear approve. Flag off: none of this
 runs and target tags are inert metadata.

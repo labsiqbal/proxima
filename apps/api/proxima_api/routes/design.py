@@ -30,7 +30,7 @@ def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
     current_user = deps["current_user"]
-    _project_root = deps["_project_root"]
+    _ops_root = deps["_ops_root"]
     profile_for_user = deps["profile_for_user"]
     visible_project = deps["visible_project"]
 
@@ -44,7 +44,7 @@ def register(app, deps):
     def list_moodboard(slug: str, user: dict[str, Any] = Depends(current_user)):
         """List this project's curated visual references."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         return {"items": moodboard.read_items(root)}
 
     @app.post("/api/projects/{slug}/design/moodboard")
@@ -56,7 +56,7 @@ def register(app, deps):
         """
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         raw_url = str(data.get("url") or "").strip()
         image_path = str(data.get("imagePath") or "").strip()
         if not raw_url and not image_path:
@@ -131,7 +131,7 @@ def register(app, deps):
             patch["useAsReference"] = bool(data.get("useAsReference"))
         if not patch:
             raise HTTPException(status_code=400, detail="No editable Moodboard fields were provided.")
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         item = moodboard.patch_item(root, item_id, patch)
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
@@ -142,7 +142,7 @@ def register(app, deps):
     def remove_moodboard_item(slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)):
         """Delete a Moodboard card and its private cached/uploaded image."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         item = moodboard.delete_item(root, item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
@@ -162,7 +162,7 @@ def register(app, deps):
         urls = [u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()][:8]
         notes = (data.get("notes") or "").strip()[:4000]
         image_rels: list[str] = []
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         for rel in (data.get("imagePaths") or [])[:6]:
             if not isinstance(rel, str):
                 continue
@@ -226,7 +226,7 @@ def register(app, deps):
         full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
         features.require(cfg, features.DESIGN_STUDIO)
         payload = payload or {}
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         rel = str(payload.get("path") or "").strip()
         if not rel:
             raise HTTPException(status_code=400, detail="path is required")
@@ -249,7 +249,7 @@ def register(app, deps):
         provider (Settings); save the result into the project's shared design
         asset library and return its path."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         prov = media_settings.resolve_image_gen(db())
         # Source/reference images — the multi-image list wins over the single `image`.
         src_paths = payload.images if payload.images else ([payload.image] if payload.image else [])

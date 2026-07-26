@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Query
 
-from .. import artifact_registry
+from .. import artifact_registry, container_registry
 from ..schemas import ArchiveStatusRequest
 
 _TYPES = ("design", "app", "page", "image", "doc", "video-file", "file", "script-output")
@@ -103,8 +103,14 @@ def register(app, deps):
         for it in items:
             pid = int(it["project_id"])
             if pid not in roots:
-                prow = conn.execute("SELECT path FROM projects WHERE id = ?", (pid,)).fetchone()
-                roots[pid] = Path(prow["path"]) if prow and prow["path"] else None
+                prow = conn.execute(
+                    "SELECT id, path FROM projects WHERE id = ?", (pid,)
+                ).fetchone()
+                roots[pid] = (
+                    container_registry.ops_root(conn, prow)
+                    if prow and prow["path"]
+                    else None
+                )
         try:
             artifact_registry.refresh_file_presence(conn, items, roots)
         except Exception:
@@ -137,7 +143,13 @@ def register(app, deps):
         record = _record_payload(row)
         try:
             artifact_registry.refresh_file_presence(
-                conn, [record], {int(p["id"]): Path(p["path"]) if p.get("path") else None}
+                conn,
+                [record],
+                {
+                    int(p["id"]): container_registry.ops_root(conn, p)
+                    if p.get("path")
+                    else None
+                },
             )
         except Exception:
             logging.getLogger("proxima.archive").exception("file presence refresh failed (non-fatal)")

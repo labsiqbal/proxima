@@ -36,9 +36,10 @@ def test_scaffold_project_dir_creates_folders_and_readme(tmp_path):
     cfg = make_cfg(tmp_path)
     path = provisioning.scaffold_project_dir(cfg, "demo")
     assert path == tmp_path / "projects" / "demo"
-    assert (path / "wiki").is_dir()
-    assert (path / "tasks").is_dir()
-    assert (path / "artifacts").is_dir()
+    assert (path / "ops" / "wiki").is_dir()
+    assert (path / "ops" / "tasks").is_dir()
+    assert (path / "ops" / "artifacts").is_dir()
+    assert (path / "ops" / "container.md").is_file()
     assert (path / "README.md").read_text().startswith("# demo")
 
 
@@ -46,7 +47,7 @@ def test_scaffold_is_idempotent(tmp_path):
     cfg = make_cfg(tmp_path)
     provisioning.scaffold_project_dir(cfg, "demo")
     provisioning.scaffold_project_dir(cfg, "demo")  # must not raise
-    assert (tmp_path / "projects" / "demo" / "wiki").is_dir()
+    assert (tmp_path / "projects" / "demo" / "ops" / "wiki").is_dir()
 
 
 def test_provision_private_project(tmp_path):
@@ -58,7 +59,7 @@ def test_provision_private_project(tmp_path):
     assert project["name"] == "alice"
     assert project["visibility"] == "private"
     assert project["owner_user_id"] == user["id"]
-    assert (tmp_path / "projects" / "alice" / "wiki").is_dir()
+    assert (tmp_path / "projects" / "alice" / "ops" / "wiki").is_dir()
     actions = [r["action"] for r in conn.execute("SELECT action FROM audit_log").fetchall()]
     assert "workspace.provision.private" in actions
 

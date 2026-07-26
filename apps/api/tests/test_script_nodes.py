@@ -45,7 +45,7 @@ def _project(client: TestClient, tmp_path: Path, slug: str = "proj") -> Path:
     (folder / "scripts").mkdir(parents=True, exist_ok=True)
     res = client.post("/api/projects/link", json={"path": str(folder), "slug": slug})
     assert res.status_code == 201, res.text
-    return folder
+    return folder / "ops"
 
 
 def _write_script(folder: Path, name: str, body: str) -> Path:

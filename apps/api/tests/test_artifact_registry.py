@@ -31,9 +31,10 @@ def _client(app) -> tuple[TestClient, dict[str, str]]:
 
 
 def _project(api: TestClient, h: dict[str, str], root: Path, slug: str) -> dict:
-    (root / "reports").mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     res = api.post("/api/projects/link", headers=h, json={"path": str(root), "slug": slug})
     assert res.status_code == 201, res.text
+    (root / "ops" / "reports").mkdir(parents=True, exist_ok=True)
     payload = res.json()
     row = api.app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
     return {**payload, "id": int(row["id"])}
@@ -77,7 +78,7 @@ def test_feed_creates_draft_records_with_lineage(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "plan.md").write_text("# plan", encoding="utf-8")
+    (root / "ops" / "reports" / "plan.md").write_text("# plan", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
@@ -97,7 +98,7 @@ def test_feed_is_idempotent_for_the_same_run(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "plan.md").write_text("# plan", encoding="utf-8")
+    (root / "ops" / "reports" / "plan.md").write_text("# plan", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
@@ -114,8 +115,8 @@ def test_script_run_files_become_script_output_records(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "sync.log").write_text("ok", encoding="utf-8")
-    (root / "reports" / "summary.md").write_text("# s", encoding="utf-8")
+    (root / "ops" / "reports" / "sync.log").write_text("ok", encoding="utf-8")
+    (root / "ops" / "reports" / "summary.md").write_text("# s", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"], kind="wf_script_node")
@@ -142,12 +143,12 @@ def test_new_producer_at_same_path_creates_next_version_and_supersedes(tmp_path:
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "churn.md").write_text("june", encoding="utf-8")
+    (root / "ops" / "reports" / "churn.md").write_text("june", encoding="utf-8")
     conn = app.state.db
     s1 = _session(conn, p["id"])
     r1 = _run(conn, s1, p["id"])
     _feed(conn, r1, s1, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
-    (root / "reports" / "churn.md").write_text("july update", encoding="utf-8")
+    (root / "ops" / "reports" / "churn.md").write_text("july update", encoding="utf-8")
     s2 = _session(conn, p["id"])
     r2 = _run(conn, s2, p["id"])
     _feed(conn, r2, s2, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
@@ -168,7 +169,7 @@ def test_job_approve_auto_approves_its_records(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "out.md").write_text("done", encoding="utf-8")
+    (root / "ops" / "reports" / "out.md").write_text("done", encoding="utf-8")
     conn = app.state.db
     cur = conn.execute(
         "INSERT INTO jobs(project_id, title, status, current_step_idx, steps_state, created_by) "
@@ -194,7 +195,7 @@ def test_archive_door_edits_the_same_status(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "out.md").write_text("x", encoding="utf-8")
+    (root / "ops" / "reports" / "out.md").write_text("x", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
@@ -217,7 +218,7 @@ def _seed_many(api, h, app, tmp_path: Path, n: int = 5):
     conn = app.state.db
     sid = _session(conn, p["id"])
     for i in range(n):
-        (root / "reports" / f"r{i}.md").write_text(f"r{i}", encoding="utf-8")
+        (root / "ops" / "reports" / f"r{i}.md").write_text(f"r{i}", encoding="utf-8")
         rid = _run(conn, sid, p["id"])
         _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": f"r{i}.md", "path": f"reports/r{i}.md"}])
     return p, conn, sid
@@ -245,7 +246,7 @@ def test_list_filters_by_type_status_query_and_project(tmp_path: Path):
     app = _app(tmp_path)
     api, h = _client(app)
     p, conn, sid = _seed_many(api, h, app, tmp_path, n=3)
-    (tmp_path / "proj" / "reports" / "shot.png").write_bytes(b"\x89PNG")
+    (tmp_path / "proj" / "ops" / "reports" / "shot.png").write_bytes(b"\x89PNG")
     rid = _run(conn, sid, p["id"])
     _feed(conn, rid, sid, p["id"], [{"type": "image", "title": "shot.png", "path": "reports/shot.png"}])
     assert api.get("/api/archive?type=image", headers=h).json()["total"] == 1
@@ -282,7 +283,7 @@ def test_version_history_on_record_page(tmp_path: Path):
     p = _project(api, h, root, "proj")
     conn = app.state.db
     sid = _session(conn, p["id"])
-    (root / "reports" / "churn.md").write_text("v1", encoding="utf-8")
+    (root / "ops" / "reports" / "churn.md").write_text("v1", encoding="utf-8")
     _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
     _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
     v1, v2 = _records(conn, p["id"])
@@ -299,7 +300,7 @@ def test_record_survives_file_deletion_and_notes_it(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    f = root / "reports" / "gone.md"
+    f = root / "ops" / "reports" / "gone.md"
     f.write_text("bye", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
@@ -321,16 +322,16 @@ def test_seed_registers_existing_artifacts_as_draft_records(tmp_path: Path):
     api, h = _client(app)
     root = tmp_path / "proj"
     p = _project(api, h, root, "proj")
-    (root / "reports" / "old.md").write_text("existing", encoding="utf-8")
-    (root / "artifacts").mkdir()
-    (root / "artifacts" / "page.html").write_text("<html></html>", encoding="utf-8")
+    (root / "ops" / "reports" / "old.md").write_text("existing", encoding="utf-8")
+    (root / "ops" / "artifacts").mkdir()
+    (root / "ops" / "artifacts" / "page.html").write_text("<html></html>", encoding="utf-8")
     conn = app.state.db
-    inserted = artifact_registry.seed_project(conn, p["id"], root)
+    inserted = artifact_registry.seed_project(conn, p["id"], root / "ops")
     assert inserted == 2
     recs = _records(conn, p["id"])
     assert {r["status"] for r in recs} == {"draft"}
     assert all(r["version"] == 1 for r in recs)
     # Re-running the seed (or the migration fn) is harmless.
-    assert artifact_registry.seed_project(conn, p["id"], root) == 0
+    assert artifact_registry.seed_project(conn, p["id"], root / "ops") == 0
     _add_artifact_registry(conn)
     assert len(_records(conn, p["id"])) == 2

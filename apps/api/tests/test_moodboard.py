@@ -86,7 +86,7 @@ def test_moodboard_link_crud_and_project_isolation(tmp_path, monkeypatch):
     assert item["siteName"] == "inspiration.test"
     assert item["tags"] == ["hero", "dark"]
     assert item["imagePath"].startswith("artifacts/moodboard/images/")
-    assert Path(first["path"], item["imagePath"]).read_bytes() == b"preview"
+    assert Path(first["path"], "ops", item["imagePath"]).read_bytes() == b"preview"
 
     assert client.get("/api/projects/second/design/moodboard", headers=headers).json() == {"items": []}
     listed = client.get("/api/projects/first/design/moodboard", headers=headers).json()["items"]
@@ -103,7 +103,7 @@ def test_moodboard_link_crud_and_project_isolation(tmp_path, monkeypatch):
 
     removed = client.delete(f"/api/projects/first/design/moodboard/{item['id']}", headers=headers)
     assert removed.status_code == 200
-    assert not Path(first["path"], item["imagePath"]).exists()
+    assert not Path(first["path"], "ops", item["imagePath"]).exists()
     assert client.get("/api/projects/first/design/moodboard", headers=headers).json() == {"items": []}
     app.state.db.close()
 
@@ -112,7 +112,7 @@ def test_moodboard_upload_and_failed_preview_fallback(tmp_path, monkeypatch):
     app, client, headers = _client(tmp_path)
     project = client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}).json()
     root = Path(project["path"])
-    upload = root / "artifacts/moodboard/images/upload.png"
+    upload = root / "ops" / "artifacts/moodboard/images/upload.png"
     upload.parent.mkdir(parents=True, exist_ok=True)
     upload.write_bytes(b"image")
 

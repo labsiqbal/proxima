@@ -382,7 +382,7 @@ def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_
 def test_script_trust_attention_shows_hash_and_uses_in_process_approval(tmp_path: Path):
     app, client = _client(tmp_path)
     project = client.get("/api/projects").json()["projects"][0]
-    project_root = Path(project["path"])
+    project_root = Path(project["path"]) / "ops"
     (project_root / "scripts").mkdir(exist_ok=True)
     script_bytes = b"print('ok')\n"
     (project_root / "scripts" / "hello.py").write_bytes(script_bytes)

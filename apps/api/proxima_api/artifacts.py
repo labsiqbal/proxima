@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 _ARTIFACT_EXCLUDE = {"node_modules", ".git", ".next", "dist", "build", "out", "__pycache__", ".cache", ".turbo", ".venv", "venv", "wiki"}
-_ARTIFACT_SKIP_NAMES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".impeccable.md", "CONTRIBUTING.md", "LICENSE.md"}
+_ARTIFACT_SKIP_NAMES = {
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".impeccable.md",
+    "CONTRIBUTING.md",
+    "LICENSE.md",
+    "container.md",
+}
 
 
 def scan_project_artifacts(root: "Path", start_ts: float, *, cap: int = 40) -> list[dict[str, Any]]:

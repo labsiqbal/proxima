@@ -53,7 +53,8 @@ Prompts, project files, wiki notes, artifacts, and runner output are untrusted
 input. Prompt text cannot grant itself permission.
 
 Agents run with the same OS privileges as the Proxima service user. If the owner
-links `$HOME` or another broad root as a project, the runner can operate there.
+links `$HOME` or another broad root as a Container, a general chat runner can operate
+there.
 Agent subprocesses no longer inherit the entire service environment: platform basics
 and common provider credentials are passed, unrelated Proxima/Cloudflare/update secrets
 are omitted, and extra variables require `PROXIMA_RUNNER_ENV_ALLOWLIST`. This reduces
@@ -64,8 +65,8 @@ an explicit trusted-owner setting and is recorded in run events.
 
 ## Script steps (hash-bound trust, honest statement)
 
-A plan's `script` node executes a file from the project's `scripts/` folder as the
-service OS user, with the project container as cwd and a minimal environment
+A plan's `script` node executes a file from the Container's `ops/scripts/` folder as
+the service OS user, with the physical Ops Area as cwd and a minimal environment
 (`PATH`/`HOME`/locale — never the server's config/secrets env). Execution uses an
 exec array, never a shell string, so node args cannot shell-inject; the script path
 is jailed to `scripts/` at plan validation and again at resolution (no `..`,
@@ -96,8 +97,12 @@ cannot execute in the API process; auth stays the host's ambient ssh.
 
 ## Filesystem Rules
 
-Project file APIs must be rooted in the project path from the database. Client
-input must be relative and normalized.
+Container file APIs resolve paths through the database-selected Container or Ops
+Area. Client input must be relative and normalized. Every active Area is realpath
+checked to remain inside its Container. Duplicate roots, unsafe overlaps, path
+escape, a symlinked Container root, and every symlink beneath physical `ops/` fail
+closed. Historical virtual Ops paths remain stable but resolve to the active Ops row,
+which may temporarily be legacy `.` while a collision awaits owner attention.
 
 Never allow:
 

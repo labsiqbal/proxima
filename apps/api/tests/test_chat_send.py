@@ -1001,7 +1001,7 @@ def test_concurrent_same_second_media_runs_use_distinct_files(tmp_path, monkeypa
         app.state.db.execute(
             "SELECT path FROM projects WHERE slug = 'demo'"
         ).fetchone()["path"]
-    )
+    ) / "ops"
     assert (project_root / first_path).read_bytes() != (project_root / second_path).read_bytes()
 
 
@@ -1074,7 +1074,7 @@ def test_image_studio_command_creates_design_draft(tmp_path):
     link = body["artifact"]
     assert link["type"] == "design" and link["path"].startswith("artifacts/design/")
     project_path = Path(app.state.db.execute("SELECT path FROM projects WHERE slug = ?", ("demo",)).fetchone()["path"])
-    scene = json.loads((project_path / link["path"] / "scene.json").read_text())
+    scene = json.loads((project_path / "ops" / link["path"] / "scene.json").read_text())
     assert scene["id"] == link["id"] and scene["artboards"]
     # a linked design session exists with a queued design-agent run composing the brief
     with app.state.db_lock:
@@ -1114,7 +1114,7 @@ def test_image_mention_in_design_command_becomes_jailed_vision_input(tmp_path):
     )
 
     assert response.status_code == 202, response.text
-    scene_path = root / response.json()["artifact"]["path"] / "scene.json"
+    scene_path = root / "ops" / response.json()["artifact"]["path"] / "scene.json"
     scene = json.loads(scene_path.read_text(encoding="utf-8"))
     with app.state.db_lock:
         prompt = app.state.db.execute(

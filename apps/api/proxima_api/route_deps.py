@@ -17,6 +17,12 @@ import json as _json
 
 from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
+from .container_registry import (
+    container_root,
+    ops_root,
+    root_for_virtual_path,
+    validated_area_roots,
+)
 from .profile_seed import seed_agent_home
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
@@ -274,6 +280,7 @@ def build_route_deps(
             raise http_exception(status_code=500, detail=detail) from exc
 
     def project_payload(row: dict[str, Any]) -> dict[str, Any]:
+        validated_area_roots(db(), row)
         payload = {"slug": row["slug"], "name": row["name"], "path": row["path"], "owner": row.get("owner"), "role": row.get("role"), "visibility": row.get("visibility", "private")}
         # Container areas (T1): every project row the routes select carries p.id.
         payload.update(areas_payload(db(), row["id"]))
@@ -338,7 +345,15 @@ def build_route_deps(
 
     def _project_root(slug: str, user: dict[str, Any]) -> Path:
         project = visible_project(slug, user)
-        return Path(project["path"])
+        return container_root(project)
+
+    def _ops_root(slug: str, user: dict[str, Any]) -> Path:
+        project = visible_project(slug, user)
+        return ops_root(db(), project)
+
+    def _virtual_root(slug: str, path: str, user: dict[str, Any]) -> Path:
+        project = visible_project(slug, user)
+        return root_for_virtual_path(db(), project, path)
 
     def user_from_token_query(token: str) -> dict[str, Any]:
         with app.state.db_lock:
@@ -371,6 +386,8 @@ def build_route_deps(
         "run_projectctl": run_projectctl,
         "_purge_project": _purge_project,
         "_project_root": _project_root,
+        "_ops_root": _ops_root,
+        "_virtual_root": _virtual_root,
         "user_from_token_query": user_from_token_query,
         "create_token": create_token,
         "public_user": public_user,

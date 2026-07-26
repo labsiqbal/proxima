@@ -5,13 +5,13 @@ import json
 import logging
 import sqlite3
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
 from .. import (
     artifact_registry,
+    container_registry,
     features,
     repo_remote,
     satpam,
@@ -932,13 +932,15 @@ def register(app, deps):
         if not job["project_id"]:
             raise HTTPException(status_code=409, detail="script steps need a project container")
         project = db().execute(
-            "SELECT path FROM projects WHERE id = ?", (job["project_id"],)
+            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
         ).fetchone()
         if not project or not project["path"]:
             raise HTTPException(status_code=409, detail="this plan's project path is unavailable")
         try:
             rel = scripts_library.normalize_script_rel_path(str(node["command"]))
-            script_path = scripts_library.resolve_script(Path(project["path"]), rel)
+            script_path = scripts_library.resolve_script(
+                container_registry.ops_root(db(), project), rel
+            )
             return rel, script_path.read_bytes()
         except (scripts_library.ScriptResolutionError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

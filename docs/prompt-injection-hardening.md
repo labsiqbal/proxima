@@ -35,8 +35,9 @@ Before starting a run, Proxima resolves:
 
 - the authenticated owner session
 - selected profile (and its isolated credential home)
-- selected project
-- allowed working directory (the project root)
+- selected Container
+- allowed working directory (the selected repo Area, physical Ops Area, or
+  compatibility Container root for general chat)
 - allowed tools / capabilities
 
 The runner receives this resolved context and a filtered environment. This is a
@@ -47,9 +48,11 @@ permissions.
 
 Runner/file APIs must enforce:
 
-- project-root confinement
+- selected Area or Container-root confinement
 - no absolute path from prompt text
 - no `..` traversal
+- no symlinked physical Ops content
+- no duplicate or unsafe overlapping Area roots
 - no raw secret paths
 
 Sensitive paths to keep out of runner/file-API reach by default:
@@ -78,7 +81,7 @@ conservative with tools:
 When launching a runner:
 
 - set its credential home (e.g. `HERMES_HOME`) to the selected profile home
-- set `cwd` to the authorized project path
+- set `cwd` to the authorized Container or Area path
 - pass minimal env; do not pass server secrets unless explicitly scoped
 - record run / profile / project in audit/events
 
@@ -92,7 +95,7 @@ Current environment behavior:
 
 ## Script steps (deterministic plan nodes)
 
-Agent-written scripts in a project's `scripts/` folder are untrusted content like
+Agent-written scripts in a Container's `ops/scripts/` folder are untrusted content like
 any other project file — a prompt-injected run can write one. The controls:
 
 - a script executes as a plan step only after the owner's one-time approval of its
@@ -101,8 +104,8 @@ any other project file — a prompt-injected run can write one. The controls:
   request must echo that hash — a file edited after review is refused (409), and
   the run executes the hashed bytes from a private temp copy, so a concurrent
   swap after the trust check cannot run unapproved content (audit F4);
-- execution uses an exec array (node args cannot shell-inject), the project
-  container as cwd, and a minimal env (`PATH`/`HOME`/locale — no server secrets);
+- execution uses an exec array (node args cannot shell-inject), the physical Ops
+  Area as cwd, and a minimal env (`PATH`/`HOME`/locale - no server secrets);
 - the script path is jailed to `scripts/` at plan validation and at resolution
   (no `..`/absolute/symlink escape).
 

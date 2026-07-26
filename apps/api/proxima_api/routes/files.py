@@ -37,6 +37,8 @@ def register(app, deps):
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
     _project_root = deps["_project_root"]
+    _ops_root = deps["_ops_root"]
+    _virtual_root = deps["_virtual_root"]
 
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         """Project-scoped path audit (file writes, app starts, tree ops)."""
@@ -57,9 +59,28 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}/tree")
     def project_tree(slug: str, path: str = "", user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
         try:
-            return {"path": path, "entries": fsapi.list_tree(root, path)}
+            root = _virtual_root(slug, path, user)
+            if path:
+                return {"path": path, "entries": fsapi.list_tree(root, path)}
+            container = _project_root(slug, user)
+            ops = _ops_root(slug, user)
+            if container.resolve() == ops.resolve():
+                return {"path": path, "entries": fsapi.list_tree(container, path)}
+            entries = {
+                entry["name"]: entry
+                for entry in fsapi.list_tree(container, path)
+                if entry["name"] != "ops"
+            }
+            for entry in fsapi.list_tree(ops, path):
+                entries.setdefault(entry["name"], entry)
+            return {
+                "path": path,
+                "entries": sorted(
+                    entries.values(),
+                    key=lambda entry: (entry["type"] != "dir", entry["name"].lower()),
+                ),
+            }
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -70,13 +91,28 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         """Safe, path-only project file index for @-reference autocomplete."""
-        root = _project_root(slug, user)
-        files, truncated = fsapi.list_reference_files(root, limit=limit)
-        return {"files": files, "truncated": truncated}
+        container = _project_root(slug, user)
+        ops = _ops_root(slug, user)
+        if container.resolve() == ops.resolve():
+            files, truncated = fsapi.list_reference_files(container, limit=limit)
+            return {"files": files, "truncated": truncated}
+        container_files, container_truncated = fsapi.list_reference_files(
+            container, limit=limit
+        )
+        ops_files, ops_truncated = fsapi.list_reference_files(ops, limit=limit)
+        merged = {
+            item["path"]: item
+            for item in container_files
+            if not item["path"].startswith("ops/")
+        }
+        merged.update({item["path"]: item for item in ops_files})
+        files = sorted(merged.values(), key=lambda item: item["path"].casefold())
+        truncated = container_truncated or ops_truncated or len(files) > limit
+        return {"files": files[:limit], "truncated": truncated}
 
     @app.get("/api/projects/{slug}/file")
     def project_read_file(slug: str, path: str, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, path, user)
         try:
             return {"path": path, "content": fsapi.read_file(root, path)}
         except fsapi.FsError as exc:
@@ -84,7 +120,7 @@ def register(app, deps):
 
     @app.put("/api/projects/{slug}/file")
     def project_write_file(slug: str, path: str, payload: FileWriteRequest, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, path, user)
         try:
             fsapi.write_file(root, path, payload.content)
         except fsapi.FsError as exc:
@@ -94,9 +130,9 @@ def register(app, deps):
 
     @app.post("/api/projects/{slug}/upload")
     async def project_upload(slug: str, file: UploadFile = File(...), dir: str = "uploads", user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
         name = Path(file.filename or "file").name or "file"
         folder = (dir or "uploads").strip("/") or "uploads"
+        root = _virtual_root(slug, folder, user)
         try:
             target = fsapi.resolve_in_project(root, f"{folder}/{name}")
         except fsapi.FsError as exc:
@@ -342,7 +378,7 @@ def register(app, deps):
         if not p.get("path"):
             return {"artifacts": []}
         start = time.time() - max(1, since_minutes) * 60
-        return {"artifacts": scan_project_artifacts(Path(p["path"]), start)}
+        return {"artifacts": scan_project_artifacts(_ops_root(slug, user), start)}
 
     @app.get("/api/sessions/{session_id}/artifacts")
     def session_artifacts(session_id: int, user: dict[str, Any] = Depends(current_user)):
@@ -358,7 +394,7 @@ def register(app, deps):
         if session.get("project_id"):
             p = db().execute("SELECT slug FROM projects WHERE id = ?", (session["project_id"],)).fetchone()
             if p:
-                root = _project_root(p["slug"], user)
+                root = _virtual_root(p["slug"], path, user)
                 try:
                     fsapi.delete(root, path)
                 except fsapi.FsError:
@@ -513,7 +549,7 @@ def register(app, deps):
 
     @app.post("/api/projects/{slug}/fs/mkdir")
     def project_mkdir(slug: str, payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, payload.path, user)
         try:
             fsapi.mkdir(root, payload.path)
         except fsapi.FsError as exc:
@@ -523,9 +559,15 @@ def register(app, deps):
 
     @app.post("/api/projects/{slug}/fs/rename")
     def project_rename(slug: str, payload: FsRenameRequest, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        source_root = _virtual_root(slug, payload.from_, user)
+        destination_root = _virtual_root(slug, payload.to, user)
+        if source_root.resolve() != destination_root.resolve():
+            raise HTTPException(
+                status_code=400,
+                detail="cannot move a file across Container Area boundaries",
+            )
         try:
-            fsapi.rename(root, payload.from_, payload.to)
+            fsapi.rename(source_root, payload.from_, payload.to)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit_fs(user, "fs.rename", slug, f"{payload.from_} -> {payload.to}")
@@ -533,7 +575,7 @@ def register(app, deps):
 
     @app.delete("/api/projects/{slug}/fs")
     def project_delete(slug: str, path: str, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, path, user)
         try:
             fsapi.delete(root, path)
         except fsapi.FsError as exc:
@@ -543,7 +585,7 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}/raw")
     def project_raw(slug: str, path: str, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, path, user)
         try:
             target = fsapi.resolve_in_project(root, path)
         except fsapi.FsError as exc:
@@ -557,7 +599,7 @@ def register(app, deps):
         # Serve a project file inline for live preview (rendering a built site in an
         # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
         # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
-        root = _project_root(slug, user)
+        root = _virtual_root(slug, file_path, user)
         try:
             target = fsapi.resolve_in_project(root, file_path)
         except fsapi.FsError as exc:

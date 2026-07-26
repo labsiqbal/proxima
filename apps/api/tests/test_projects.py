@@ -128,7 +128,8 @@ def test_link_mkdir_creates_folder_and_registers_project(tmp_path: Path):
     assert body["name"] == "Fresh App"
     assert body["path"] == str(target.resolve())
     assert target.is_dir()
-    assert list(target.iterdir()) == []  # empty; never scaffolded or copied into
+    assert [path.name for path in target.iterdir()] == ["ops"]
+    assert (target / "ops" / "container.md").is_file()
 
 
 def test_link_mkdir_rejects_existing_name(tmp_path: Path):

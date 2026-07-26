@@ -10,6 +10,7 @@ from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[re
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
 
 from . import features, satpam, state
+from .container_registry import ops_root
 from .graph import normalize_graph, parse_output_contract, ready_node_ids
 from .graph_executor import GraphExecutor  # pyright: ignore[reportMissingImports]
 
@@ -60,11 +61,11 @@ def _parse_json_output(answer: str) -> Any:
 def _artifact_root(app: Any, job: Mapping[str, Any]) -> Path:
     if job.get("project_id"):
         row = app.state.worker_db.execute(
-            "SELECT path FROM projects WHERE id = ?", (job["project_id"],)
+            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
         ).fetchone()
         if not row or not row["path"]:
             raise NodeOutputError("graph job project path is unavailable")
-        return Path(row["path"]).resolve()
+        return ops_root(app.state.worker_db, row)
     return (
         Path(app.state.config["workspace_root"])
         / "scratch"

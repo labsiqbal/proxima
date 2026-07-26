@@ -413,8 +413,8 @@ def _add_project_areas(conn: sqlite3.Connection) -> None:
     if not {"id", "path"}.issubset(cols):
         return  # minimal test fixture, nothing to wrap
     for row in conn.execute("SELECT id, path FROM projects").fetchall():
-        ensure_ops_area(conn, row["id"])
-        sync_code_areas(conn, row["id"], row["path"])
+        ensure_ops_area(conn, row["id"], rel_path=".")
+        sync_code_areas(conn, row["id"], row["path"], validate=False)
 
 
 def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
@@ -541,6 +541,7 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
     records appear when runs produce new output.
     """
     from .artifact_registry import seed_project
+    from .container_registry import ops_root
 
     conn.execute(
         """
@@ -584,7 +585,7 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
         if not prow["path"]:
             continue
         try:
-            seed_project(conn, int(prow["id"]), Path(prow["path"]))
+            seed_project(conn, int(prow["id"]), ops_root(conn, prow))
         except Exception:
             # Best-effort per project: an unreadable path must not block the
             # upgrade; the registry fills in as new runs produce output.
@@ -825,6 +826,45 @@ def _move_workflow_inputs_to_trigger(conn: sqlite3.Connection) -> None:
         )
 
 
+def _add_container_foundation(conn: sqlite3.Connection) -> None:
+    """Container registry and resumable physical Ops migration state."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS container_registry (
+          container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          identity_label TEXT,
+          summary TEXT,
+          source_hash TEXT,
+          indexed_at TEXT,
+          last_activity_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_container_registry_activity "
+        "ON container_registry(last_activity_at DESC, container_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS container_ops_migrations (
+          container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          migration_version INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          manifest_json TEXT,
+          manifest_hash TEXT,
+          last_error TEXT,
+          started_at TEXT,
+          completed_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_container_ops_migrations_status "
+        "ON container_ops_migrations(status, updated_at)"
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -853,6 +893,7 @@ MIGRATIONS: list[Migration] = [
     (25, "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)", _add_satpam_supervision),
     (26, "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox", _add_alpha_foundation),
     (27, "move graph workflow inputs onto trigger nodes", _move_workflow_inputs_to_trigger),
+    (28, "add Container registry and durable physical Ops migration state", _add_container_foundation),
 ]
 
 

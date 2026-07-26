@@ -156,7 +156,7 @@ def test_design_image_edit_passes_source_mime(tmp_path, monkeypatch):
     })
     slug = c.get("/api/projects").json()["projects"][0]["slug"]
     project_path = c.app.state.db.execute("SELECT path FROM projects WHERE slug = ?", (slug,)).fetchone()["path"]
-    source = Path(project_path) / "artifacts/design/_assets/source.webp"
+    source = Path(project_path) / "ops/artifacts/design/_assets/source.webp"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"WEBP")
 
