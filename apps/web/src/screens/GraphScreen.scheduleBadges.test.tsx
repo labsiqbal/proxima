@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { listGraphTemplates } from '../api/graph'
 import { listSchedules } from '../api/schedules'
@@ -68,6 +68,17 @@ describe('GraphScreen how-it-runs badges', () => {
           created_at: '',
           updated_at: '',
         } as never,
+        {
+          id: 11,
+          name: 'Publish on demand',
+          description: 'Manual publish',
+          status: 'active',
+          category: 'content',
+          project_id: 1,
+          project_slug: 'owner-personal',
+          graph: { nodes: [], edges: [] },
+          inputs: [],
+        } as never,
       ],
     })
     vi.mocked(listSchedules).mockResolvedValue([
@@ -75,7 +86,7 @@ describe('GraphScreen how-it-runs badges', () => {
     ])
   })
 
-  it('shows Manual + Scheduled with short cron from real schedule data', async () => {
+  it('splits manual and scheduled workflows using real schedule data', async () => {
     render(
       <GraphScreen
         token="t"
@@ -89,10 +100,15 @@ describe('GraphScreen how-it-runs badges', () => {
       />,
     )
     await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
-    const kinds = document.querySelector('.graph-run-kinds')
-    expect(kinds).toBeTruthy()
-    expect(kinds?.textContent).toMatch(/Manual/)
-    expect(kinds?.textContent).toMatch(/Scheduled/)
-    expect(kinds?.textContent).toMatch(/Every hour|0 \* \* \* \*/)
+    const manual = screen.getByRole('table', { name: 'Manual workflows' })
+    const scheduled = screen.getByRole('table', { name: 'Scheduled workflows' })
+    expect(within(manual).getByText('Publish on demand')).toBeInTheDocument()
+    expect(within(manual).getByText('▷ Manual')).toBeInTheDocument()
+    expect(within(scheduled).getByText('Nightly publish')).toBeInTheDocument()
+    expect(within(scheduled).getByText(/Every hour|0 \* \* \* \*/)).toBeInTheDocument()
+    expect(within(scheduled).getByRole('button', { name: 'Pause Nightly publish' })).toBeInTheDocument()
+
+    fireEvent.click(within(scheduled).getByRole('button', { name: 'Schedule' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
   })
 })

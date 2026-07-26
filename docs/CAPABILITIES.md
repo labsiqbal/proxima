@@ -417,6 +417,13 @@ The **Sequential recipe editor is retired** — a linear recipe is a graph with 
 branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
+The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
+and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
+**Otomatis / Scheduled** groups from real schedule rows, with category and trigger
+badges plus actions appropriate to each row. Scheduling is a per-workflow dialog that
+retains create, edit, enable, overlap, input, Run now, and delete capability; manual
+rows expose it too so a first schedule can be created. There is no separate Scheduled
+mode.
 The library has separate active and archived views. Archiving stops schedules and
 removes the workflow from the active library without changing its owned project or
 past runs, and records the pre-archive status in `workflows.pre_archive_status`.
@@ -1074,7 +1081,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
-+ The single **Workflows** destination contains the plan Editor (graph canvas) and Scheduled automation. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode. Scheduled is an internal mode rather than a duplicate sidebar route or database concept; it keeps five-field cron, overlap, enabled, and delete behavior.
++ The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Otomatis / Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
