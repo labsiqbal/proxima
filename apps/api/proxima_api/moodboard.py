@@ -39,6 +39,7 @@ _IMAGE_EXTENSIONS = {
     "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
+_REMOTE_IMAGE_EXTENSIONS = {mime: ext for mime, ext in _IMAGE_EXTENSIONS.items() if mime != "image/svg+xml"}
 
 
 class UnsafeUrlError(ValueError):
@@ -192,32 +193,62 @@ def _normalize_url_syntax(raw: str) -> str:
     return urlunsplit((parsed.scheme.lower(), host, parsed.path or "/", parsed.query, ""))
 
 
+def _is_safe_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolve_public_ip(host: str | None, port: int | None) -> str:
+    if not host:
+        raise UnsafeUrlError("Private or local network links cannot be previewed.")
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise UrlResolutionError("The link host could not be resolved.") from exc
+    addresses = [info[4][0] for info in infos]
+    if not addresses:
+        raise UrlResolutionError("The link host could not be resolved.")
+    for address in addresses:
+        if not _is_safe_public_ip(ipaddress.ip_address(address)):
+            raise UnsafeUrlError("Private or local network links cannot be previewed.")
+    return addresses[0]
+
+
 def normalize_public_url(raw: str) -> str:
     normalized = _normalize_url_syntax(raw)
     parsed = urlsplit(normalized)
-    try:
-        addresses = {
-            result[4][0]
-            for result in socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)
-        }
-    except OSError as exc:
-        raise UrlResolutionError("The link host could not be resolved.") from exc
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if not ip.is_global:
-            raise UnsafeUrlError("Private or local network links cannot be previewed.")
+    _resolve_public_ip(parsed.hostname, parsed.port)
     return normalized
 
 
+def _pin_connection(parsed: Any, ip: str) -> tuple[str, str, str]:
+    ip_literal = f"[{ip}]" if ipaddress.ip_address(ip).version == 6 else ip
+    connect_netloc = f"{ip_literal}:{parsed.port}" if parsed.port else ip_literal
+    connect_url = urlunsplit((parsed.scheme, connect_netloc, parsed.path or "/", parsed.query, ""))
+    return connect_url, parsed.netloc, parsed.hostname
+
+
 def _bounded_get(client: httpx.Client, url: str, *, max_bytes: int) -> tuple[bytes, str, str]:
-    target = normalize_public_url(url)
+    target = _normalize_url_syntax(url)
     for _ in range(MAX_REDIRECTS + 1):
-        with client.stream("GET", target) as response:
+        parsed = urlsplit(target)
+        pinned_ip = _resolve_public_ip(parsed.hostname, parsed.port)
+        connect_url, host_header, sni_hostname = _pin_connection(parsed, pinned_ip)
+        extensions = {"sni_hostname": sni_hostname} if parsed.scheme == "https" else {}
+        with client.stream("GET", connect_url, headers={"Host": host_header}, extensions=extensions) as response:
             if response.status_code in {301, 302, 303, 307, 308}:
                 location = response.headers.get("location")
                 if not location:
                     raise httpx.HTTPError("redirect response had no location")
-                target = normalize_public_url(urljoin(target, location))
+                target = _normalize_url_syntax(urljoin(target, location))
                 continue
             response.raise_for_status()
             body = bytearray()
@@ -268,7 +299,7 @@ def fetch_link_preview(raw_url: str, timeout: float = 12.0) -> dict[str, Any]:
                     urljoin(final_url, image_url),
                     max_bytes=MAX_IMAGE_BYTES,
                 )
-                if image_mime not in _IMAGE_EXTENSIONS:
+                if image_mime not in _REMOTE_IMAGE_EXTENSIONS:
                     raise httpx.HTTPError("preview image used an unsupported format")
                 result["imageBytes"] = image_body
                 result["imageMime"] = image_mime
@@ -280,9 +311,9 @@ def fetch_link_preview(raw_url: str, timeout: float = 12.0) -> dict[str, Any]:
 
 
 def cache_preview_image(project_root: Path, item_id: str, data: bytes | None, mime: str) -> str | None:
-    if not data or mime not in _IMAGE_EXTENSIONS:
+    if not data or mime not in _REMOTE_IMAGE_EXTENSIONS:
         return None
-    rel = f"{IMAGE_DIR}/{item_id}{_IMAGE_EXTENSIONS[mime]}"
+    rel = f"{IMAGE_DIR}/{item_id}{_REMOTE_IMAGE_EXTENSIONS[mime]}"
     target = fsapi.resolve_in_project(project_root, rel)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)

@@ -1,12 +1,48 @@
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import moodboard, run_prompting, wiki_memory
 from proxima_api.main import create_app
+
+
+def _addrinfo(ip: str, port: int = 443) -> list[tuple]:
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+
+class _FakeResponse:
+    def __init__(self, *, status_code: int = 200, headers: dict | None = None, body: bytes = b"") -> None:
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise moodboard.httpx.HTTPError(f"status {self.status_code}")
+
+    def iter_bytes(self):
+        yield self._body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+class _FakeClient:
+    def __init__(self, responses: list[_FakeResponse]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def stream(self, method: str, url: str, *, headers: dict | None = None, extensions: dict | None = None):
+        self.calls.append({"url": url, "headers": headers or {}, "extensions": extensions or {}})
+        return self._responses.pop(0)
 
 
 def _client(tmp_path: Path, *, enabled: bool = True) -> tuple[object, TestClient, dict[str, str]]:
@@ -188,3 +224,57 @@ def test_unresolvable_preview_host_returns_fallback(monkeypatch):
     assert preview["siteName"] == "offline.test"
     assert preview["imageBytes"] is None
     assert preview["warning"].startswith("Preview unavailable:")
+
+
+def test_bounded_get_pins_validated_ip_against_dns_rebinding(monkeypatch):
+    answers = [_addrinfo("93.184.216.34"), _addrinfo("127.0.0.1")]
+    calls = {"n": 0}
+
+    def rebinding(*args, **kwargs):
+        result = answers[min(calls["n"], len(answers) - 1)]
+        calls["n"] += 1
+        return result
+
+    monkeypatch.setattr(moodboard.socket, "getaddrinfo", rebinding)
+    client = _FakeClient([_FakeResponse(headers={"content-type": "text/html"}, body=b"<title>ok</title>")])
+
+    body, mime, final = moodboard._bounded_get(client, "https://rebind.test/", max_bytes=1000)
+
+    assert body == b"<title>ok</title>"
+    assert final == "https://rebind.test/"
+    assert client.calls[0]["url"] == "https://93.184.216.34/"
+    assert client.calls[0]["headers"]["Host"] == "rebind.test"
+    assert client.calls[0]["extensions"]["sni_hostname"] == "rebind.test"
+    assert calls["n"] == 1
+
+
+def test_bounded_get_rejects_redirect_to_internal_host(monkeypatch):
+    def resolve(host, *args, **kwargs):
+        return _addrinfo("93.184.216.34") if host == "public.test" else _addrinfo("169.254.169.254")
+
+    monkeypatch.setattr(moodboard.socket, "getaddrinfo", resolve)
+    client = _FakeClient([_FakeResponse(status_code=302, headers={"location": "http://metadata.internal/latest"})])
+
+    with pytest.raises(moodboard.UnsafeUrlError):
+        moodboard._bounded_get(client, "https://public.test/", max_bytes=1000)
+
+
+def test_remote_svg_preview_image_is_rejected(monkeypatch):
+    monkeypatch.setattr(moodboard.socket, "getaddrinfo", lambda *a, **k: _addrinfo("93.184.216.34"))
+
+    def fake_bounded_get(client, url, *, max_bytes):
+        if max_bytes == moodboard.MAX_HTML_BYTES:
+            return (b'<meta property="og:image" content="/logo.svg">', "text/html", "https://svg.test/")
+        return (b"<svg onload=alert(1)></svg>", "image/svg+xml", "https://svg.test/logo.svg")
+
+    monkeypatch.setattr(moodboard, "_bounded_get", fake_bounded_get)
+    preview = moodboard.fetch_link_preview("svg.test")
+
+    assert preview["imageBytes"] is None
+    assert preview["imageMime"] == ""
+    assert "unsupported format" in preview["warning"]
+
+
+def test_cache_preview_image_refuses_remote_svg(tmp_path):
+    assert moodboard.cache_preview_image(tmp_path, "mb-svg", b"<svg></svg>", "image/svg+xml") is None
+    assert not (tmp_path / moodboard.IMAGE_DIR).exists()
