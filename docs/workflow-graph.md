@@ -24,7 +24,8 @@ opens the graph Editor directly.
 - Every node attempt runs in a fresh hidden ACP session against the selected runner.
 - Each node may name **its own agent**; nodes without one use the job's agent.
 - Independent branches execute **in parallel**, bounded by a concurrency budget.
-- An optional **trigger node** is the graph's entry point. Only `manual` exists today.
+- An optional **trigger node** is the graph's entry point. It owns `manual` or
+  `scheduled` mode and the corresponding intake or cadence configuration.
 - A **script node** is a deterministic step (T6): it runs a saved script from the
   project's `scripts/` library as a subprocess — no LLM, no agent — under the same
   node state machine and dispatch budget, gated by a one-time hash-bound approval.
@@ -113,7 +114,9 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | Field | Meaning |
 | --- | --- |
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
-| `trigger_kind` | Trigger nodes only. `manual` is the only kind today. |
+| `trigger_kind` | Trigger nodes only. `manual` exposes intake fields; `scheduled` exposes cadence settings. |
+| `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required}` fields whose values fill `{{id}}` placeholders. |
+| `schedule` | Scheduled trigger only. `{cron, overlap_policy, enabled}` settings promoted to the workflow's schedule row. |
 | `command` | Script nodes only (required). The library script this step runs — a path relative to the container's `scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
@@ -140,11 +143,13 @@ vanishing. The whole input is still handed to the node as typed data in
 and a profile already carries its skill/MCP selection — a second picker on the node would
 be a second answer to the same question. Choosing the agent is choosing the tool surface.
 
-A graph template carries declared **`inputs`** in the same shape a linear recipe does
-(`{id, label, kind, required}`), stored exactly as declared by the same rule the linear
-route uses. They are authored when a plan is saved as a template — the moment its reusable
-contract is defined — and a run created from that template asks for them first, because a
-node's `{{var}}` is useless if nothing filled it in.
+A manual trigger carries declared **`inputs`** in the same shape a linear recipe does
+(`{id, label, kind, required}`). They are authored in the trigger inspector as the
+reusable intake contract, and a run created from that template asks for them first.
+`workflows.inputs` remains a compatibility projection for existing RunModal and API
+consumers. New saves derive it from the trigger, while migration and read-time
+hydration move legacy declarations onto the trigger without breaking `{{var}}`
+references.
 
 `profile_id` is only a reference. `graph.py` does no I/O, so whether the profile exists
 and belongs to the job's owner is checked by the executor at dispatch time — a node
@@ -160,11 +165,13 @@ be a contradiction). Its contract is fixed rather than authored — it is forced
 
 It resolves without a runner: `dispatch_ready` completes it immediately with the
 approved **job input** as its output, so downstream nodes receive that input as
-ordinary typed upstream data rather than through a special case. A manual trigger *is*
-the owner pressing start, so there is no work to do.
+ordinary typed upstream data rather than through a special case. A manual trigger is
+the owner pressing start and exposes its intake-form editor. A scheduled trigger
+exposes cron, overlap, and enabled settings instead; promotion creates the schedule
+with an empty input payload, so cadence execution does not prompt a human.
 
-The point of modelling the entry point as a node is that `schedule`, `webhook`, and
-`event` become further `trigger_kind` values here — not a second execution path.
+The point of modelling the entry point as a node is that future webhook and event
+modes can become further `trigger_kind` values here, not a second execution path.
 
 ### Script nodes (deterministic steps, slice 6 / T6)
 
@@ -333,7 +340,8 @@ attempt cannot overwrite a corrected or rerun node.
    **agent**, output contract, review gate, or dependencies; add/remove nodes; add a
    trigger; and drag nodes and connections. The draft autosaves, including layout.
 4. Optionally choose **Save as Workflow**. Promotion is one click because the inline
-   plan name already exists; category, description, and inputs are optional metadata.
+   plan name and trigger contract already exist; category and description are optional
+   metadata.
 5. Choose **Run**. The latest pending autosave flushes before execution starts.
 6. Inspect live node state and validated outputs on the canvas.
 7. When paused in review, choose **Approve node**, **Save correction**, or
@@ -362,8 +370,9 @@ the agent's work.
 
 What differs from the recipe chat is only the schema and where the reply lands, so both
 share one `AuthoringChat` component and inject their own prompt/parse/apply. The graph
-prompt asks for `<workflow-graph>` — `{name, description, category, inputs[],
-graph:{nodes[], edges[]}}` — and tells the agent that nodes with no edge between them run
+prompt asks for `<workflow-graph>` containing
+`{name, description, category, graph:{nodes[], edges[]}}`; a trigger node carries its
+own `trigger_kind`, `inputs`, or `schedule`. It tells the agent that nodes with no edge between them run
 at the same time, which is the whole reason to leave an ordered list behind.
 
 The chat is pinned to the graph job's **own session** (`jobs.session_id`, created with the
@@ -405,10 +414,9 @@ focused **editor** - browsing and editing are different modes of work. Home reme
 the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
 a saved workflow. Workflow rows are split into **Manual (on-demand)** and
-**Scheduled** groups by the presence of schedule rows, with category and
-trigger badges plus row actions. Scheduled rows open the complete schedule manager in
-a dialog and can be paused or resumed; manual rows retain a Schedule action so the
-first schedule can be created. Run rows show recency, status, duration, and a View
+**Scheduled** groups by trigger mode, with legacy schedule rows as a compatibility
+fallback. Manual rows run with their trigger intake; Scheduled rows show cadence and
+open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
 action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
@@ -446,10 +454,10 @@ The canvas is the workspace; the chrome yields to it.
 A **new blank plan** starts from the rail's ＋ — a starter trigger wired to an empty
 first step, with the authoring chat opened, since describing the workflow is the fastest
 way to fill a blank canvas. (Sequential's "New workflow" retired with it; chat promotion
-must not be the only door into the editor.) Template metadata the chat proposes — name,
-description, declared inputs — rides along client-side and pre-fills the Save-template
-modal, because a job has nowhere to persist it and dropping it silently would make the
-owner re-declare what the agent already wrote.
+must not be the only door into the editor.) Template metadata the chat proposes, such as
+name and description, rides along client-side and pre-fills the lightweight promotion
+dialog. The trigger's intake or cadence contract stays in the graph and autosaves with
+the plan.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
 cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and

@@ -19,6 +19,7 @@ entry. Prefer additive changes (``ADD COLUMN``, ``CREATE TABLE``).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -733,6 +734,97 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC)")
 
 
+def _move_workflow_inputs_to_trigger(conn: sqlite3.Connection) -> None:
+    """Backfill legacy graph-template inputs into their entry node.
+
+    The ``workflows.inputs`` column remains for old clients and RunModal, but new
+    authoring reads and writes the same declaration on the trigger. Graphs without
+    a trigger receive a no-op trigger connected to every former root so their
+    execution order and existing placeholders remain intact.
+    """
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "workflows" not in tables:
+        return
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()
+    }
+    if not {"id", "graph", "inputs"}.issubset(columns):
+        return
+    rows = conn.execute(
+        "SELECT id, graph, inputs FROM workflows WHERE graph IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        try:
+            graph = json.loads(row["graph"])
+            inputs = json.loads(row["inputs"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list):
+            continue
+        if not isinstance(inputs, list):
+            inputs = []
+        nodes = graph["nodes"]
+        trigger = next(
+            (
+                node
+                for node in nodes
+                if isinstance(node, dict) and node.get("type") == "trigger"
+            ),
+            None,
+        )
+        if trigger is None and inputs:
+            node_ids = {
+                str(node.get("id"))
+                for node in nodes
+                if isinstance(node, dict) and node.get("id") is not None
+            }
+            trigger_id = "trigger"
+            suffix = 2
+            while trigger_id in node_ids:
+                trigger_id = f"trigger-{suffix}"
+                suffix += 1
+            edges = graph.get("edges")
+            if not isinstance(edges, list):
+                edges = []
+            incoming = {
+                str(edge.get("to", edge.get("target")))
+                for edge in edges
+                if isinstance(edge, dict)
+            }
+            roots = [
+                str(node["id"])
+                for node in nodes
+                if isinstance(node, dict)
+                and node.get("id") is not None
+                and str(node["id"]) not in incoming
+                and not node.get("depends_on")
+            ]
+            trigger = {
+                "id": trigger_id,
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "instruction": "",
+                "output_kind": "json",
+            }
+            nodes.insert(0, trigger)
+            graph["edges"] = [
+                {"from": trigger_id, "to": root} for root in roots
+            ] + edges
+        if trigger is None or "inputs" in trigger:
+            continue
+        trigger["inputs"] = inputs
+        conn.execute(
+            "UPDATE workflows SET graph = ? WHERE id = ?",
+            (json.dumps(graph, ensure_ascii=False), row["id"]),
+        )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -760,6 +852,7 @@ MIGRATIONS: list[Migration] = [
     (24, "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)", _add_repo_remote_push),
     (25, "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)", _add_satpam_supervision),
     (26, "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox", _add_alpha_foundation),
+    (27, "move graph workflow inputs onto trigger nodes", _move_workflow_inputs_to_trigger),
 ]
 
 

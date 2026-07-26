@@ -13,10 +13,12 @@ const snapshot: GraphSnapshot = {
   name: 'Repurpose',
   description: '',
   category: 'content',
-  inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }],
   graph: {
-    nodes: [{ id: 'research', type: 'agent', name: 'Research', instruction: 'Collect facts', output_kind: 'text' }],
-    edges: [],
+    nodes: [
+      { id: 'trigger', type: 'trigger', name: 'When I run it', instruction: '', output_kind: 'json', inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }] },
+      { id: 'research', type: 'agent', name: 'Research', instruction: 'Collect facts', output_kind: 'text' },
+    ],
+    edges: [{ from: 'trigger', to: 'research' }],
   },
 }
 
@@ -42,19 +44,21 @@ describe('parseGraphDraft', () => {
       inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }],
       graph: {
         nodes: [
+          { id: 'trigger', type: 'trigger', name: 'When I run it', instruction: '' },
           { id: 'research', name: 'Research', instruction: 'Collect facts', expected_output: 'Five bullets', rules: 'Cite each' },
           { id: 'post', name: 'Post', instruction: 'Write it', review_required: true, output_kind: 'json' },
         ],
-        edges: [{ from: 'research', to: 'post' }],
+        edges: [{ from: 'trigger', to: 'research' }, { from: 'research', to: 'post' }],
       },
     })))
 
     expect(patch?.name).toBe('Repurpose')
     expect(patch?.inputs).toEqual([{ id: 'brief', label: 'Brief', kind: 'text', required: true }])
-    expect(patch?.graph?.nodes).toHaveLength(2)
-    expect(patch?.graph?.nodes[0]).toMatchObject({ expected_output: 'Five bullets', rules: 'Cite each', type: 'agent' })
-    expect(patch?.graph?.nodes[1]).toMatchObject({ review_required: true, output_kind: 'json' })
-    expect(patch?.graph?.edges).toEqual([{ from: 'research', to: 'post' }])
+    expect(patch?.graph?.nodes).toHaveLength(3)
+    expect(patch?.graph?.nodes[0]).toMatchObject({ type: 'trigger', inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }] })
+    expect(patch?.graph?.nodes[1]).toMatchObject({ expected_output: 'Five bullets', rules: 'Cite each', type: 'agent' })
+    expect(patch?.graph?.nodes[2]).toMatchObject({ review_required: true, output_kind: 'json' })
+    expect(patch?.graph?.edges).toEqual([{ from: 'trigger', to: 'research' }, { from: 'research', to: 'post' }])
   })
 
   it('drops what the server would reject rather than losing the whole reply', () => {
@@ -135,10 +139,9 @@ describe('authoring → runnable workflow (happy path)', () => {
         name: 'Content pipeline',
         description: 'Research then draft posts in parallel',
         category: 'content',
-        inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }],
         graph: {
           nodes: [
-            { id: 'trigger', type: 'trigger', name: 'When I run it', instruction: '', output_kind: 'json' },
+            { id: 'trigger', type: 'trigger', name: 'When I run it', instruction: '', output_kind: 'json', inputs: [{ id: 'brief', label: 'Brief', kind: 'text', required: true }] },
             { id: 'research', type: 'agent', name: 'Research', instruction: 'Collect facts for {{brief}}', output_kind: 'text' },
             { id: 'post-x', type: 'agent', name: 'Post X', instruction: 'Write the X post from research', output_kind: 'text' },
             { id: 'post-li', type: 'agent', name: 'Post LI', instruction: 'Write the LinkedIn post from research', output_kind: 'text' },

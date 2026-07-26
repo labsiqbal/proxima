@@ -14,44 +14,41 @@ export function WorkflowInputsEditor({ inputs, disabled = false, onChange }: {
     onChange(inputs.map((item, i) => i === index ? { ...item, ...next } : item))
 
   return <div className="wf-inputs">
-    {inputs.length > 0 && <div className="wf-input-row wf-input-head">
-      <span>Label</span><span>ID</span><span>Kind</span><span>Required</span><span />
-    </div>}
     {inputs.map((item, index) => <div className="wf-input-row" key={index}>
-      <input className="wf-input-cell" value={item.label} disabled={disabled} placeholder="e.g. Topic"
-        onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} />
-      <input className="wf-input-cell" value={item.id} disabled={disabled} placeholder="topic"
-        onChange={event => patch(index, { id: slugifyId(event.target.value) })} />
-      <select className="wf-input-cell" value={item.kind} disabled={disabled}
+      <label><span>Label</span><input className="wf-input-cell" value={item.label} disabled={disabled} placeholder="e.g. Topic"
+        aria-label={`Input ${index + 1} label`}
+        onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} /></label>
+      <label><span>ID</span><span className="wf-input-id"><span>{'{{'}</span><input className="wf-input-cell" value={item.id} disabled={disabled} placeholder="topic"
+        aria-label={`Input ${index + 1} ID`}
+        onChange={event => patch(index, { id: slugifyId(event.target.value) })} /><span>{'}}'}</span></span></label>
+      <label><span>Type</span><select className="wf-input-cell" value={item.kind} disabled={disabled}
+        aria-label={`Input ${index + 1} type`}
         onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
         {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
-      </select>
-      <label className="wf-input-req"><input type="checkbox" checked={item.required} disabled={disabled}
-        onChange={event => patch(index, { required: event.target.checked })} /> required</label>
+      </select></label>
+      <label className="wf-input-req"><span>Required</span><input type="checkbox" checked={item.required} disabled={disabled}
+        aria-label={`Input ${index + 1} required`}
+        onChange={event => patch(index, { required: event.target.checked })} /></label>
       <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={disabled}
         onClick={() => onChange(inputs.filter((_, i) => i !== index))}>×</button>
     </div>)}
     <button className="ghost-button wf-add-step" disabled={disabled}
-      onClick={() => onChange([...inputs, { id: '', label: '', kind: 'text', required: false }])}>+ Add input</button>
+      onClick={() => onChange([...inputs, { id: '', label: '', kind: 'text', required: false }])}>+ Add field</button>
   </div>
 }
 
-// Saving a plan as a Workflow is the moment its reusable contract is defined, so it is
-// also where {{inputs}} are declared: a Workflow is what a fresh run and a schedule are
-// both built from, and each needs to know what to ask for. (Extracted from GraphScreen
-// in slice 3 — the Tasks screen promotes plans through the same modal.)
+// Legacy Tasks-row promotion still uses this lightweight metadata dialog. The reusable
+// input contract is never edited here: it already lives on the graph's trigger node.
 export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
   title: string
-  /** What the authoring chat proposed — a starting point, still fully editable here. */
-  initial?: { description?: string; category?: string; inputs?: WorkflowInput[] }
+  initial?: { description?: string; category?: string }
   busy: boolean
   onCancel: () => void
-  onSave: (meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) => void
+  onSave: (meta: { name: string; description: string; category: string }) => void
 }) {
   const [name, setName] = React.useState(title)
   const [description, setDescription] = React.useState(initial?.description ?? '')
   const [category, setCategory] = React.useState(initial?.category ?? '')
-  const [inputs, setInputs] = React.useState<WorkflowInput[]>(initial?.inputs ?? [])
 
   const close = () => { if (!busy) onCancel() }
 
@@ -61,20 +58,12 @@ export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
     <label>Category <span className="muted">(optional)</span><input value={category} disabled={busy} placeholder="e.g. content" onChange={event => setCategory(event.target.value)} /></label>
     <label>Description <span className="muted">(optional)</span><textarea rows={2} value={description} disabled={busy} placeholder="What this workflow does" onChange={event => setDescription(event.target.value)} /></label>
 
-    <p className="eyebrow">Inputs <span className="muted">(optional)</span></p>
-    <p className="muted graph-field-note">
-      What each run should be asked for. Refer to one from any node with <code>{'{{id}}'}</code>.
-    </p>
-    <WorkflowInputsEditor inputs={inputs} disabled={busy} onChange={setInputs} />
-
     <div className="modal-actions">
       <button className="ghost-button" onClick={close} disabled={busy}>Cancel</button>
       <button className="primary-button" disabled={busy || !name.trim()} onClick={() => onSave({
         name: name.trim(),
         description: description.trim(),
         category: category.trim() || 'other',
-        // A half-typed row is noise, not a declaration.
-        inputs: inputs.filter(item => item.id.trim() && item.label.trim()),
       })}>{busy ? 'Saving…' : 'Save as Workflow'}</button>
     </div>
   </div></div>

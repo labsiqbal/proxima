@@ -215,9 +215,14 @@ export type GraphOutputKind = "text" | "json" | "artifact-ref";
 // "script" (slice 6, T6) is a deterministic step: it runs a saved script from the
 // project's scripts/ library — no LLM, no agent — under the same node state machine.
 export type GraphNodeType = "agent" | "trigger" | "script";
-// Only manual entry exists today; schedule/webhook/event become further kinds of
-// this same node rather than a separate execution path.
-export type GraphTriggerKind = "manual";
+// Entry mode stays on the trigger node rather than creating a separate execution path.
+export type GraphTriggerKind = "manual" | "scheduled";
+
+export type GraphScheduleConfig = {
+	cron: string;
+	overlap_policy: "skip" | "allow";
+	enabled: boolean;
+};
 
 export type GraphNodeDefinition = {
 	id: string;
@@ -247,6 +252,9 @@ export type GraphNodeDefinition = {
 	output_schema?: Record<string, unknown>;
 	review_required?: boolean;
 	trigger_kind?: GraphTriggerKind;
+	// Trigger nodes own the manual intake contract and scheduled cadence.
+	inputs?: WorkflowInput[];
+	schedule?: GraphScheduleConfig;
 	// Script nodes only: the library script this step runs (a path inside the
 	// project's scripts/ folder) plus its CLI args. First run — or any run after
 	// the script's bytes changed — needs a one-time approval (hash-bound trust).
@@ -323,8 +331,7 @@ export type GraphTemplate = {
 	category?: string;
 	status: string;
 	graph: WorkflowGraph;
-	// Declared {{inputs}}, same shape as a linear recipe's. A run fills these in and
-	// the values reach each node's {{var}} through the job input.
+	// Compatibility projection of graph.trigger.inputs for RunModal and old clients.
 	inputs?: WorkflowInput[];
 };
 

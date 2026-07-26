@@ -10,7 +10,16 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 
-from .. import artifact_registry, features, repo_remote, satpam, scripts_library, state, worktrees
+from .. import (
+    artifact_registry,
+    features,
+    repo_remote,
+    satpam,
+    scripts_library,
+    state,
+    workflows as wf,
+    worktrees,
+)
 from ..graph import (
     GraphValidationError,
     descendant_node_ids,
@@ -60,6 +69,74 @@ def _graph_node(graph: Mapping[str, Any], node_id: str) -> dict[str, Any]:
         if node.get("id") == node_id:
             return dict(node)
     raise HTTPException(status_code=404, detail="graph node not found")
+
+
+def _hydrate_trigger_contract(
+    graph: Mapping[str, Any],
+    legacy_inputs: list[dict[str, Any]],
+    schedule: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project legacy workflow metadata onto the trigger node.
+
+    New graphs store the intake form and mode directly on their trigger. Existing
+    workflow rows keep ``inputs`` and schedules in their original columns/tables,
+    so the API adds the node fields on read. A legacy graph with declared inputs
+    but no trigger gets a no-op trigger connected to every former root. This keeps
+    its execution order and makes the intake contract editable in the node inspector.
+    """
+    hydrated = {
+        "nodes": [dict(node) for node in graph.get("nodes", [])],
+        "edges": [dict(edge) for edge in graph.get("edges", [])],
+    }
+    trigger = next(
+        (node for node in hydrated["nodes"] if node.get("type") == "trigger"),
+        None,
+    )
+    if trigger is None and (legacy_inputs or schedule is not None):
+        node_ids = {str(node.get("id")) for node in hydrated["nodes"]}
+        trigger_id = "trigger"
+        suffix = 2
+        while trigger_id in node_ids:
+            trigger_id = f"trigger-{suffix}"
+            suffix += 1
+        incoming = {str(edge.get("to")) for edge in hydrated["edges"]}
+        roots = [
+            str(node["id"])
+            for node in hydrated["nodes"]
+            if str(node.get("id")) not in incoming
+        ]
+        trigger = {
+            "id": trigger_id,
+            "type": "trigger",
+            "trigger_kind": "manual",
+            "name": "When I run it",
+            "instruction": "",
+            "output_kind": "json",
+        }
+        hydrated["nodes"].insert(0, trigger)
+        hydrated["edges"] = [
+            {"from": trigger_id, "to": root}
+            for root in roots
+        ] + hydrated["edges"]
+    if trigger is None:
+        return normalize_graph(hydrated)
+    if "inputs" not in trigger:
+        trigger["inputs"] = legacy_inputs
+    if schedule is not None:
+        trigger["trigger_kind"] = "scheduled"
+        trigger["schedule"] = {
+            "cron": schedule["cron"],
+            "overlap_policy": schedule["overlap_policy"],
+            "enabled": bool(schedule["enabled"]),
+        }
+    return normalize_graph(hydrated)
+
+
+def _trigger_node(graph: Mapping[str, Any]) -> dict[str, Any] | None:
+    return next(
+        (dict(node) for node in graph.get("nodes", []) if node.get("type") == "trigger"),
+        None,
+    )
 
 
 def register(app, deps):
@@ -118,9 +195,20 @@ def register(app, deps):
 
     def graph_template_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         payload = dict(row)
-        payload["graph"] = normalize_graph(payload.get("graph") or "")
         payload["steps"] = []
         payload["inputs"] = _decode_json(payload.get("inputs"), [])
+        latest_schedule = db().execute(
+            "SELECT * FROM schedules WHERE workflow_id = ? ORDER BY id DESC LIMIT 1",
+            (payload["id"],),
+        ).fetchone()
+        payload["graph"] = _hydrate_trigger_contract(
+            normalize_graph(payload.get("graph") or ""),
+            payload["inputs"],
+            dict(latest_schedule) if latest_schedule else None,
+        )
+        trigger = _trigger_node(payload["graph"])
+        if trigger is not None and "inputs" in trigger:
+            payload["inputs"] = trigger["inputs"]
         if payload.get("project_id"):
             project = db().execute(
                 "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
@@ -397,6 +485,26 @@ def register(app, deps):
         require_graph()
         job = graph_job_or_404(job_id, user)
         graph = normalize_graph(job["graph"] or "")
+        trigger = _trigger_node(graph)
+        # Old clients declared inputs in this request. Keep accepting that shape
+        # only for pre-migration graphs whose trigger has no canonical field.
+        declared_inputs = (
+            trigger["inputs"]
+            if trigger is not None and "inputs" in trigger
+            else payload.inputs or []
+        )
+        graph = _hydrate_trigger_contract(graph, declared_inputs)
+        trigger = _trigger_node(graph)
+        schedule_config = (
+            trigger.get("schedule")
+            if trigger is not None and trigger.get("trigger_kind") == "scheduled"
+            else None
+        )
+        if schedule_config is not None and not wf.cron_valid(schedule_config["cron"]):
+            raise HTTPException(
+                status_code=422,
+                detail="invalid trigger schedule cron; expected five valid fields",
+            )
         name = (payload.name or str(job["title"] or "Graph workflow")).strip()
         if not name:
             raise HTTPException(status_code=422, detail="template name must not be blank")
@@ -417,13 +525,30 @@ def register(app, deps):
                         payload.description,
                         payload.category,
                         json.dumps(graph, ensure_ascii=False),
-                        # Stored as declared, exactly as the linear route does it: a
-                        # graph-only validator would let the two surfaces disagree.
-                        json.dumps(payload.inputs or [], ensure_ascii=False),
+                        # Compatibility projection for RunModal and old clients.
+                        # The trigger node is the canonical authoring location.
+                        json.dumps(declared_inputs, ensure_ascii=False),
                         user["id"],
                     ),
                 )
                 workflow_id = _as_int(cur.lastrowid)
+                if schedule_config is not None:
+                    conn.execute(
+                        """
+                        INSERT INTO schedules(
+                          workflow_id, project_id, cron, input, overlap_policy,
+                          enabled, created_by
+                        ) VALUES (?, ?, ?, '{}', ?, ?, ?)
+                        """,
+                        (
+                            workflow_id,
+                            job["project_id"],
+                            schedule_config["cron"],
+                            schedule_config["overlap_policy"],
+                            1 if schedule_config["enabled"] else 0,
+                            user["id"],
+                        ),
+                    )
                 conn.execute(
                     "UPDATE jobs SET workflow_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (workflow_id, job_id),
@@ -441,7 +566,7 @@ def register(app, deps):
             "status": "active",
             "steps": [],
             "graph": graph,
-            "inputs": payload.inputs or [],
+            "inputs": declared_inputs,
         }
 
     @app.patch("/api/graph/jobs/{job_id}/graph")

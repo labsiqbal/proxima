@@ -148,6 +148,38 @@ def test_invalid_graph_shapes_are_rejected():
             "trigger_kind must be one of",
         ),
         (
+            {"nodes": [{"id": "a", "type": "trigger", "inputs": {}}]},
+            "inputs must be an array",
+        ),
+        (
+            {
+                "nodes": [
+                    {
+                        "id": "a",
+                        "type": "trigger",
+                        "inputs": [
+                            {"id": "topic", "label": "Topic"},
+                            {"id": "topic", "label": "Again"},
+                        ],
+                    }
+                ]
+            },
+            "duplicate input id",
+        ),
+        (
+            {
+                "nodes": [
+                    {
+                        "id": "a",
+                        "type": "trigger",
+                        "trigger_kind": "scheduled",
+                        "schedule": {"cron": "0 9 * * *", "overlap_policy": "sometimes"},
+                    }
+                ]
+            },
+            "overlap_policy",
+        ),
+        (
             {
                 "nodes": [
                     {"id": "start", "type": "trigger"},
@@ -194,6 +226,44 @@ def test_canvas_and_agent_fields_survive_normalization():
     assert work["profile_id"] == 7
     # Positions are optional: a node the owner never dragged stays auto-laid-out.
     assert "x" not in work
+
+
+def test_trigger_intake_and_schedule_survive_normalization():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "trigger",
+                    "trigger_kind": "scheduled",
+                    "inputs": [
+                        {
+                            "id": "topic",
+                            "label": " Topic ",
+                            "kind": "url",
+                            "required": True,
+                        }
+                    ],
+                    "schedule": {
+                        "cron": " 0 7 * * 1-5 ",
+                        "overlap_policy": "allow",
+                        "enabled": False,
+                    },
+                }
+            ]
+        }
+    )
+
+    trigger = graph["nodes"][0]
+    assert trigger["trigger_kind"] == "scheduled"
+    assert trigger["inputs"] == [
+        {"id": "topic", "label": "Topic", "kind": "url", "required": True}
+    ]
+    assert trigger["schedule"] == {
+        "cron": "0 7 * * 1-5",
+        "overlap_policy": "allow",
+        "enabled": False,
+    }
 
 
 def test_step_detail_survives_normalization_and_blanks_are_dropped():

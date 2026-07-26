@@ -399,13 +399,18 @@ retained only for existing data.
 per-node agents and review gates, not just a straight line. A saved template (Workflow)
 is the **optional promotion of a plan** (run-first, workflow-later): plans run without
 one, and "Save as Workflow" works in one click before or after the run from the canvas,
-or from a Tasks plan row. Category, description, and declared inputs stay optional
-secondary metadata and never gate promotion. **One workflow = one project** - open plans/templates use the owned
+or from a Tasks plan row. Category and description stay optional secondary metadata
+and never gate promotion. **One workflow = one project** - open plans/templates use the owned
 `project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
-edges carry dependencies; `{{inputs}}` declared on the saved template are asked for at
-run time and substituted into node text. An **authoring chat** (Plan Chat) beside the
+edges carry dependencies. The trigger node owns **Manual / Scheduled** mode. Manual
+triggers declare their intake fields (`text`, `url`, `number`, or `file`) in the node
+inspector; each field's `{{id}}` is asked for at run time and substituted into node
+text. Scheduled triggers own cron, overlap, and enabled settings instead and start with
+no human intake prompt. Existing graph workflows keep the compatibility
+`workflows.inputs` projection, which is migrated and hydrated onto the trigger so old
+templates and `{{id}}` references continue to work. An **authoring chat** (Plan Chat) beside the
 canvas emits `<workflow-graph>` blocks that are applied to the plan on screen, never
 the database. The panel **reflows** within its drag width (240–620px,
 `proxima.graph.chatWidth`) so long prose and tool chips wrap without a horizontal
@@ -422,11 +427,11 @@ reachable from an old session carrying `workflow_id`, but no new linear workflow
 authored.
 The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
 and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
-**Scheduled** groups from real schedule rows, with category and trigger
-badges plus actions appropriate to each row. Scheduling is a per-workflow dialog that
-retains create, edit, enable, overlap, input, Run now, and delete capability; manual
-rows expose it too so a first schedule can be created. There is no separate Scheduled
-mode.
+**Scheduled** groups from the trigger mode, with legacy schedule rows as a compatibility
+fallback. Manual rows expose Run and ask for the trigger's intake fields. Scheduled rows
+show cadence and pause/resume controls, with Run now and schedule maintenance available
+in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
+plan is promoted; it never carries manual intake values.
 The library has separate active and archived views. Archiving stops schedules and
 removes the workflow from the active library without changing its owned project or
 past runs, and records the pre-archive status in `workflows.pre_archive_status`.
