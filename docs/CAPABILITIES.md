@@ -382,8 +382,10 @@ carries the project's registered code areas, and every job is tagged with one `t
 marked ambiguous with a question for the owner instead of a guess. The slicer is
 explicitly instructed to size each job to complete within ONE turn quota (T5 slice 5:
 continuation is the safety net, not the plan). The draft lands as
-a queued plan the owner reviews/edits and starts directly; saving it as a reusable
-Recipe is an optional, separate action (before or after the run). Slice-into-plan is
+a queued plan the owner reviews/edits and starts directly. Its graph and click-to-edit
+title autosave through a debounced queued-plan PATCH, including a flush before leaving
+the screen or starting, so there is no manual Save gate. Saving it as a reusable
+Workflow is an optional, separate one-click action (before or after the run). Slice-into-plan is
 single-flight on the button (double-click cannot start two promote runs), and the
 Recipes editor creates at most one graph job per draft object — React Strict Mode
 remounts reuse the in-flight create so Tasks does not list two identical queued plans.
@@ -396,8 +398,9 @@ retained only for existing data.
 **Why:** Codify a repeatable multi-step process the agent can execute — with branches,
 per-node agents and review gates, not just a straight line. A saved template (Workflow)
 is the **optional promotion of a plan** (run-first, workflow-later): plans run without
-one, and "Save as Workflow" works before or after the run, from the canvas or from a
-Tasks plan row. **One workflow = one project** — open plans/templates use the owned
+one, and "Save as Workflow" works in one click before or after the run from the canvas,
+or from a Tasks plan row. Category, description, and declared inputs stay optional
+secondary metadata and never gate promotion. **One workflow = one project** - open plans/templates use the owned
 `project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;

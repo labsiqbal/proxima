@@ -100,7 +100,8 @@ class GraphJobCreateRequest(BaseModel):
 
 
 class GraphDefinitionUpdateRequest(BaseModel):
-    graph: dict[str, Any]
+    graph: dict[str, Any] | None = None
+    title: str | None = Field(default=None, max_length=200)
 
 
 class GraphTemplateSaveRequest(BaseModel):

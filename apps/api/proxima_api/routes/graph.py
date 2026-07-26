@@ -452,27 +452,53 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
-        if job["status"] != "queued":
+        if payload.graph is None and payload.title is None:
+            raise HTTPException(status_code=422, detail="graph or title is required")
+        title = payload.title.strip() if payload.title is not None else None
+        if payload.title is not None and not title:
+            raise HTTPException(status_code=422, detail="plan title must not be blank")
+        if payload.graph is not None and job["status"] != "queued":
             raise HTTPException(status_code=409, detail="only queued graph plans are editable")
-        try:
-            graph = normalize_graph(payload.graph)
-        except GraphValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        require_valid_targets(graph, job["project_id"])
+        graph = None
+        if payload.graph is not None:
+            try:
+                graph = normalize_graph(payload.graph)
+            except GraphValidationError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            require_valid_targets(graph, job["project_id"])
         conn = db()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                claimed = conn.execute(
-                    "UPDATE jobs SET graph = ?, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ? AND status = 'queued' AND engine = 'graph'",
-                    (json.dumps(graph, ensure_ascii=False), job_id),
-                )
-                if claimed.rowcount == 0:
-                    conn.execute("ROLLBACK")
-                    raise HTTPException(status_code=409, detail="graph plan is no longer editable")
-                conn.execute("DELETE FROM node_states WHERE job_id = ?", (job_id,))
-                insert_node_states(conn, job_id, graph)
+                if graph is not None:
+                    claimed = conn.execute(
+                        "UPDATE jobs SET graph = ?, title = COALESCE(?, title), "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'queued' AND engine = 'graph'",
+                        (json.dumps(graph, ensure_ascii=False), title, job_id),
+                    )
+                    if claimed.rowcount == 0:
+                        conn.execute("ROLLBACK")
+                        raise HTTPException(
+                            status_code=409,
+                            detail="graph plan is no longer editable",
+                        )
+                    conn.execute("DELETE FROM node_states WHERE job_id = ?", (job_id,))
+                    insert_node_states(conn, job_id, graph)
+                else:
+                    conn.execute(
+                        "UPDATE jobs SET title = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND engine = 'graph'",
+                        (title, job_id),
+                    )
+                if title is not None and job["session_id"] is not None:
+                    # The plan's authoring thread shares its identity. Mark this as a
+                    # deliberate title so the chat auto-title path can never replace it.
+                    conn.execute(
+                        "UPDATE sessions SET title = ?, manual_title = 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (title, job["session_id"]),
+                    )
                 conn.execute("COMMIT")
             except Exception as exc:
                 _rollback(conn)

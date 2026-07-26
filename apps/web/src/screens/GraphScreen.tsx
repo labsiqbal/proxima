@@ -24,11 +24,11 @@ import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
 import { runnerCapabilities } from '../api/profiles'
 import { listProjectAreas } from '../api/projects'
-import { IconArtifacts, IconLock, IconPlus, IconSearch, IconTrash } from '../components/shell/icons'
+import { IconArtifacts, IconLock, IconPencil, IconPlus, IconSearch, IconTrash } from '../components/shell/icons'
 import { GraphCanvas, stateFor, statusLabel } from '../components/workflows/GraphCanvas'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { ScriptApprovalCard } from '../components/workflows/ScriptApprovalCard'
-import { SaveTemplateModal } from '../components/workflows/SaveTemplateModal'
+import { SaveTemplateModal, WorkflowInputsEditor } from '../components/workflows/SaveTemplateModal'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { confirmDialog } from '../components/ui/Dialog'
 import { RunModal } from '../components/workflows/RunModal'
@@ -57,6 +57,30 @@ import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
 const HOME_TAB_KEY = 'proxima.graph.homeTab'
+const DRAFT_META_KEY_PREFIX = 'proxima.graph.draftMeta.'
+const AUTOSAVE_DELAY_MS = 700
+
+function normalizedPlanTitle(value: string): string {
+  return value.trim() || 'Untitled plan'
+}
+
+type DraftTemplateMeta = {
+  name?: string
+  description?: string
+  category?: string
+  inputs?: WorkflowInput[]
+}
+
+function readDraftMeta(jobId: number): DraftTemplateMeta {
+  try {
+    const raw = localStorage.getItem(`${DRAFT_META_KEY_PREFIX}${jobId}`)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as DraftTemplateMeta
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
 
 type WorkflowHomeTab = 'drafts' | 'workflows' | 'runs'
 
@@ -255,12 +279,13 @@ export function GraphScreen({
   const [savingTemplate, setSavingTemplate] = React.useState(false)
   // A template whose declared inputs must be answered before its run is created.
   const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
-  // Template metadata the authoring chat proposed (name, declared inputs, …). A job has
-  // nowhere to persist these — only a saved template does — so they ride along here and
-  // pre-fill the Save-template modal instead of being silently dropped.
-  const [draftMeta, setDraftMeta] = React.useState<{ name?: string; description?: string; category?: string; inputs?: WorkflowInput[] }>({})
+  // Template metadata the authoring chat proposed. It stays secondary to the canvas,
+  // and one-click promotion carries it into the reusable workflow record.
+  const [draftMeta, setDraftMeta] = React.useState<DraftTemplateMeta>({})
   const [plan, setPlan] = React.useState<WorkflowGraph | null>(null)
-  const [dirty, setDirty] = React.useState(false)
+  const [draftTitle, setDraftTitle] = React.useState('Untitled plan')
+  const [renamingTitle, setRenamingTitle] = React.useState(false)
+  const [saveState, setSaveState] = React.useState<'saved' | 'saving' | 'error'>('saved')
   const [outputEdit, setOutputEdit] = React.useState('')
   const [answerText, setAnswerText] = React.useState('')
   const [error, setError] = React.useState('')
@@ -269,18 +294,145 @@ export function GraphScreen({
   const mounted = React.useRef(true)
   const loadSeq = React.useRef(0)
   const draftSeq = React.useRef(0)
+  const saveTimer = React.useRef<number | undefined>(undefined)
+  const saveInFlight = React.useRef<Promise<void> | null>(null)
+  const pendingSave = React.useRef<{
+    jobId: number
+    title: string
+    graph?: WorkflowGraph
+    graphBody?: string
+  } | null>(null)
+  const lastSavedTitle = React.useRef('')
+  const lastSavedGraph = React.useRef('')
+  const autosaveJobId = React.useRef<number | null>(null)
+  const latestDraft = React.useRef<{
+    jobId: number
+    status: GraphJob['status']
+    title: string
+    graph: WorkflowGraph
+  } | null>(null)
   // Plan Chat open preference is per job; only re-read storage when the job id changes
   // (loadJob also runs on the live poll, which must not clobber a mid-session toggle).
   const chatJobRef = React.useRef<number | null>(null)
 
+  if (job && plan) {
+    latestDraft.current = {
+      jobId: job.id,
+      status: job.status,
+      title: normalizedPlanTitle(draftTitle),
+      graph: plan,
+    }
+  } else {
+    latestDraft.current = null
+  }
+
+  function primeAutosave(next: GraphJob, meta: DraftTemplateMeta = readDraftMeta(next.id)) {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    pendingSave.current = null
+    autosaveJobId.current = next.id
+    lastSavedTitle.current = next.title
+    lastSavedGraph.current = JSON.stringify(next.graph)
+    setDraftTitle(next.title || 'Untitled plan')
+    setDraftMeta(meta)
+    setSaveState('saved')
+  }
+
+  const drainAutosave = React.useCallback((): Promise<void> => {
+    if (saveInFlight.current) return saveInFlight.current
+    const work = (async () => {
+      while (pendingSave.current) {
+        const snapshot = pendingSave.current
+        pendingSave.current = null
+        let next: GraphJob
+        try {
+          next = await updateGraphPlan(token, snapshot.jobId, {
+            title: snapshot.title,
+            ...(snapshot.graph ? { graph: snapshot.graph } : {}),
+          })
+        } catch (cause) {
+          if (!pendingSave.current) pendingSave.current = snapshot
+          if (mounted.current) {
+            setSaveState('error')
+            setError(String(cause))
+          }
+          throw cause
+        }
+        if (autosaveJobId.current === snapshot.jobId) {
+          lastSavedTitle.current = next.title
+          if (snapshot.graph) lastSavedGraph.current = JSON.stringify(next.graph)
+        }
+        const latest = latestDraft.current
+        const isLatest = latest?.jobId === snapshot.jobId
+          && latest.title === snapshot.title
+          && (!snapshot.graphBody || JSON.stringify(latest.graph) === snapshot.graphBody)
+        if (mounted.current && isLatest) {
+          setJob(next)
+          if (snapshot.graph) setPlan(next.graph)
+          setDraftTitle(next.title)
+          setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
+          if (!pendingSave.current) setSaveState('saved')
+        }
+      }
+    })()
+    saveInFlight.current = work
+    void work.finally(() => {
+      if (saveInFlight.current === work) saveInFlight.current = null
+    }).catch(() => undefined)
+    return work
+  }, [token])
+
+  const queueLatestAutosave = React.useCallback((announce = true) => {
+    const latest = latestDraft.current
+    if (!latest || autosaveJobId.current !== latest.jobId) return false
+    const graphBody = JSON.stringify(latest.graph)
+    const graphChanged = latest.status === 'queued' && graphBody !== lastSavedGraph.current
+    const titleChanged = latest.title !== lastSavedTitle.current
+    if (!graphChanged && !titleChanged) return false
+    pendingSave.current = {
+      jobId: latest.jobId,
+      title: latest.title,
+      ...(graphChanged ? { graph: latest.graph, graphBody } : {}),
+    }
+    if (announce) setSaveState('saving')
+    return true
+  }, [])
+
+  const flushAutosave = React.useCallback(async () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    queueLatestAutosave()
+    while (pendingSave.current || saveInFlight.current) {
+      if (pendingSave.current) await drainAutosave()
+      else if (saveInFlight.current) await saveInFlight.current
+    }
+  }, [drainAutosave, queueLatestAutosave])
+
   React.useEffect(() => {
     mounted.current = true
     return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current)
       mounted.current = false
+      queueLatestAutosave(false)
+      void drainAutosave().catch(() => undefined)
       loadSeq.current += 1
       draftSeq.current += 1
     }
-  }, [])
+  }, [drainAutosave, queueLatestAutosave])
+
+  React.useEffect(() => {
+    if (!job || !plan || autosaveJobId.current !== job.id) return
+    if (!queueLatestAutosave()) {
+      if (!saveInFlight.current && !pendingSave.current) setSaveState('saved')
+      return
+    }
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = undefined
+      void drainAutosave().catch(() => undefined)
+    }, AUTOSAVE_DELAY_MS)
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    }
+  }, [job?.id, job?.status, plan, draftTitle, drainAutosave, queueLatestAutosave])
 
   const refreshList = React.useCallback(async () => {
     const seq = ++loadSeq.current
@@ -306,9 +458,24 @@ export function GraphScreen({
     try {
       const next = await getGraphJob(token, jobId)
       if (!mounted.current || seq !== loadSeq.current) return
+      const latest = latestDraft.current
+      const titleHasLocalEdit = autosaveJobId.current === next.id
+        && latest?.jobId === next.id
+        && latest.title !== lastSavedTitle.current
+      if (autosaveJobId.current === next.id && ['running', 'review'].includes(next.status)) {
+        // Live execution polling refreshes node state, but an in-progress inline
+        // rename still belongs to the owner. Do not let a GET erase it before its
+        // debounced title-only PATCH lands.
+        lastSavedGraph.current = JSON.stringify(next.graph)
+        if (!titleHasLocalEdit) {
+          lastSavedTitle.current = next.title
+          setDraftTitle(next.title)
+        }
+      } else {
+        primeAutosave(next)
+      }
       setJob(next)
       setPlan(next.graph)
-      setDirty(false)
       // Open on the graph, not on a node nobody asked about. Keeps the live poll
       // from clearing a selection, but drops one whose node is gone.
       setSelectedId(current => current && next.graph.nodes.some(node => node.id === current) ? current : null)
@@ -342,6 +509,16 @@ export function GraphScreen({
   React.useEffect(() => {
     if (job?.id != null) writeChatOpen(job.id, chatOpen)
   }, [job?.id, chatOpen])
+
+  React.useEffect(() => {
+    if (!job || job.status !== 'queued') return
+    try {
+      localStorage.setItem(`${DRAFT_META_KEY_PREFIX}${job.id}`, JSON.stringify(draftMeta))
+    } catch {
+      // Storage is a convenience for optional pre-promotion metadata. The graph and
+      // title still save through the server when browser storage is unavailable.
+    }
+  }, [job?.id, job?.status, draftMeta])
 
   React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
   React.useEffect(() => {
@@ -397,6 +574,11 @@ export function GraphScreen({
     })).then(created => {
       if (!mounted.current || seq !== draftSeq.current) return
       onDraftConsumed?.()
+      primeAutosave(created, {
+        name: draft.name,
+        description: draft.description,
+        category: draft.category,
+      })
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -431,7 +613,6 @@ export function GraphScreen({
   function updateSelected(patch: Partial<GraphNodeDefinition>) {
     if (!definition || !plan) return
     setPlan({ ...plan, nodes: plan.nodes.map(node => node.id === definition.id ? { ...node, ...patch } : node) })
-    setDirty(true)
   }
 
   function toggleDependency(dependencyId: string) {
@@ -453,7 +634,6 @@ export function GraphScreen({
     }
     setError('')
     setPlan({ ...plan, edges: [...plan.edges, { from, to }] })
-    setDirty(true)
   }
 
   function disconnect(from: string, to: string) {
@@ -462,7 +642,6 @@ export function GraphScreen({
       ...plan,
       edges: plan.edges.filter(edge => !(edge.from === from && edge.to === to)),
     })
-    setDirty(true)
   }
 
   /** Fold an agent-authored graph into the plan on screen — never the database: the plan
@@ -482,7 +661,6 @@ export function GraphScreen({
         }),
       }
     })
-    setDirty(true)
     setSelectedId(current => current && next.nodes.some(node => node.id === current) ? current : null)
   }
 
@@ -491,7 +669,6 @@ export function GraphScreen({
       ...current,
       nodes: current.nodes.map(node => node.id === nodeId ? { ...node, x, y } : node),
     })
-    setDirty(true)
   }
 
   /** Drop a new node clear of the ones already placed, so it never lands hidden. */
@@ -516,7 +693,6 @@ export function GraphScreen({
     }
     setPlan({ ...plan, nodes: [...plan.nodes, node] })
     setSelectedId(node.id)
-    setDirty(true)
   }
 
   const mentionSlug = job?.project_slug ?? activeProject?.slug ?? undefined
@@ -663,6 +839,7 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
+      primeAutosave(created, { ...draftMeta, name: draftTitle })
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -696,6 +873,7 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
+      primeAutosave(created, {})
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -728,7 +906,6 @@ export function GraphScreen({
     }
     setPlan({ ...plan, nodes: [...plan.nodes, node] })
     setSelectedId(node.id)
-    setDirty(true)
   }
 
   function addTrigger() {
@@ -746,7 +923,6 @@ export function GraphScreen({
     }
     setPlan({ ...plan, nodes: [node, ...plan.nodes] })
     setSelectedId(node.id)
-    setDirty(true)
   }
 
   function removeNode() {
@@ -757,7 +933,6 @@ export function GraphScreen({
       edges: plan.edges.filter(edge => edge.from !== definition.id && edge.to !== definition.id),
     })
     setSelectedId(nodes[0]?.id ?? null)
-    setDirty(true)
   }
 
   async function act(label: string, action: () => Promise<GraphJob>, message?: string) {
@@ -768,9 +943,9 @@ export function GraphScreen({
     try {
       const next = await action()
       if (!mounted.current) return
+      primeAutosave(next)
       setJob(next)
       setPlan(next.graph)
-      setDirty(false)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
       if (message) setNotice(message)
     } catch (cause) {
@@ -778,11 +953,6 @@ export function GraphScreen({
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }
-
-  async function savePlan() {
-    if (!job || !plan) return
-    await act('save-plan', () => updateGraphPlan(token, job.id, plan), 'Plan changes saved.')
   }
 
   async function saveOutput() {
@@ -804,12 +974,46 @@ export function GraphScreen({
     setBusy('save-template')
     setError('')
     try {
+      await flushAutosave()
       const template = await saveGraphTemplate(token, job.id, meta)
       if (mounted.current) {
         setSavingTemplate(false)
+        setJob(current => current?.id === job.id ? { ...current, workflow_id: template.id } : current)
+        setJobs(current => current.map(item => item.id === job.id ? { ...item, workflow_id: template.id } : item))
         setTemplates(current => [template, ...current.filter(item => item.id !== template.id)])
         setNotice(`Saved reusable workflow “${template.name}”.`)
       }
+    } catch (cause) {
+      if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current) setBusy(null)
+    }
+  }
+
+  function promotePlan() {
+    if (!job || job.workflow_id || busy) return
+    void saveTemplate({
+      name: normalizedPlanTitle(draftTitle),
+      description: draftMeta.description?.trim() ?? '',
+      category: draftMeta.category?.trim() || 'other',
+      inputs: (draftMeta.inputs ?? []).filter(item => item.id.trim() && item.label.trim()),
+    })
+  }
+
+  async function runCurrentPlan() {
+    if (!job || busy) return
+    setBusy('start')
+    setError('')
+    setNotice('')
+    try {
+      await flushAutosave()
+      const next = await startGraphJob(token, job.id)
+      if (!mounted.current) return
+      primeAutosave(next)
+      setJob(next)
+      setPlan(next.graph)
+      setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
+      setNotice('Execution started.')
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
@@ -833,6 +1037,12 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
+      primeAutosave(created, {
+        name: template.name,
+        description: template.description,
+        category: template.category,
+        inputs: template.inputs,
+      })
       setRunningTemplate(null)
       setStage('editor')
       setJob(created)
@@ -860,6 +1070,12 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
+      primeAutosave(created, {
+        name: template.name,
+        description: template.description,
+        category: template.category,
+        inputs: template.inputs,
+      })
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -880,12 +1096,13 @@ export function GraphScreen({
     try {
       const next = await startGraphJob(token, item.id)
       if (!mounted.current) return
+      primeAutosave(next)
       setStage('editor')
       setJob(next)
       setPlan(next.graph)
       setSelectedId(null)
       setJobs(current => current.map(row => row.id === next.id ? next : row))
-      setNotice('Plan approved. Execution started.')
+      setNotice('Execution started.')
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
@@ -894,9 +1111,9 @@ export function GraphScreen({
   }
 
   function prepareDraftTemplate(item: GraphJob) {
+    primeAutosave(item)
     setJob(item)
     setPlan(item.graph)
-    setDraftMeta({})
     setSavingTemplate(true)
   }
 
@@ -1206,28 +1423,58 @@ export function GraphScreen({
           <IconLock size={12} />
         </span>
       )}
-      <h1>{job?.title ?? 'Workflows'}</h1>
+      <h1 className="graph-title" aria-label={job ? draftTitle : undefined}>
+        {job
+          ? renamingTitle
+            ? <input
+                className="graph-title-input"
+                aria-label="Workflow name"
+                autoFocus
+                maxLength={200}
+                value={draftTitle}
+                onFocus={event => event.currentTarget.select()}
+                onChange={event => setDraftTitle(event.target.value)}
+                onBlur={() => {
+                  setDraftTitle(current => normalizedPlanTitle(current))
+                  setRenamingTitle(false)
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                  if (event.key === 'Escape') {
+                    setDraftTitle(lastSavedTitle.current || job.title)
+                    setRenamingTitle(false)
+                  }
+                }}
+              />
+            : <button
+                className="graph-title-button"
+                onClick={() => setRenamingTitle(true)}
+                aria-label={`Rename workflow ${draftTitle}`}
+                title="Rename workflow"
+              >
+                <span>{draftTitle}</span>
+                <IconPencil size={13} />
+              </button>
+          : 'Workflows'}
+      </h1>
       {job && <>
         <span className={`graph-status st-${planStatusTone(job)}`} title={job.status !== 'queued' ? 'Structure is frozen after start — use Duplicate to edit' : undefined}>{planStatusLabel(job)}</span>
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
       </>}
-      {dirty && <span className="graph-dirty">Unsaved edits</span>}
+      {job?.status === 'queued' && <span
+        className={`graph-save-status is-${saveState}`}
+        role="status"
+        aria-live="polite"
+      >
+        {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Not saved' : 'Saved ✓'}
+      </span>}
       <div className="graph-header-actions">
         {job && plan && job.status !== 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy}>Save as Workflow</button>
+          <button className="ghost-button" onClick={promotePlan} disabled={!!busy || !!job.workflow_id}>
+            {job.workflow_id ? '★ Saved as Workflow' : '★ Save as Workflow'}
+          </button>
           <button className="ghost-button" onClick={() => void duplicatePlan()} disabled={!!busy}>
             {busy === 'duplicate' ? 'Copying…' : 'Duplicate to edit'}
-          </button>
-        </>}
-        {job?.status === 'queued' && <>
-          <button className="ghost-button" onClick={() => setSavingTemplate(true)} disabled={!!busy || dirty}>Save as Workflow</button>
-          {/* Plan-level actions belong to the plan, not to whichever node happens
-              to be selected — which is also what lets the inspector close. */}
-          <button className="ghost-button" onClick={() => void savePlan()} disabled={!dirty || !!busy}>
-            {busy === 'save-plan' ? 'Saving…' : 'Save plan'}
-          </button>
-          <button className="primary-button" onClick={() => void act('start', () => startGraphJob(token, job.id), 'Plan approved. Execution started.')} disabled={!!busy || dirty}>
-            {busy === 'start' ? 'Starting…' : 'Approve plan & start'}
           </button>
         </>}
         {job?.status === 'review' && allDone && <button className="primary-button" onClick={() => void act(
@@ -1254,6 +1501,32 @@ export function GraphScreen({
 
     {error && <div className="error-bar">{error}</div>}
     {notice && <div className="graph-notice">{notice}</div>}
+    {job?.status === 'queued' && <details className="graph-workflow-meta">
+      <summary>Workflow metadata <span>optional</span></summary>
+      <div className="graph-workflow-meta-fields">
+        <label>Category<input
+          value={draftMeta.category ?? ''}
+          placeholder="e.g. content"
+          onChange={event => setDraftMeta(current => ({ ...current, category: event.target.value }))}
+        /></label>
+        <label>Description<textarea
+          rows={2}
+          value={draftMeta.description ?? ''}
+          placeholder="What this workflow does"
+          onChange={event => setDraftMeta(current => ({ ...current, description: event.target.value }))}
+        /></label>
+      </div>
+      <div className="graph-workflow-inputs">
+        <p className="graph-eyebrow">Inputs <span className="muted">(optional)</span></p>
+        <p className="muted graph-field-note">
+          Each run asks for these values. Nodes can use them as <code>{'{{id}}'}</code>.
+        </p>
+        <WorkflowInputsEditor
+          inputs={draftMeta.inputs ?? []}
+          onChange={inputs => setDraftMeta(current => ({ ...current, inputs }))}
+        />
+      </div>
+    </details>}
     {/* Durable merge/push outcome so a reopened Done plan still shows where the
         changes landed - the header Approve button disappears after the merge. */}
     {job?.worktree?.status === 'merged' && <p className="changes-note is-merged graph-merge-note">
@@ -1576,13 +1849,19 @@ export function GraphScreen({
       </aside>}
     </div>
 
-    {savingTemplate && job && <SaveTemplateModal
-      title={draftMeta.name ?? job.title}
-      initial={draftMeta}
-      busy={busy === 'save-template'}
-      onCancel={() => setSavingTemplate(false)}
-      onSave={meta => void saveTemplate(meta)}
-    />}
+    {job?.status === 'queued' && <footer className="graph-editor-footer">
+      <button
+        className="ghost-button graph-promote-button"
+        onClick={promotePlan}
+        disabled={!!busy || !!job.workflow_id}
+        title={job.workflow_id ? 'This plan is already a reusable workflow' : 'Create a reusable workflow from this plan'}
+      >
+        {busy === 'save-template' ? 'Saving…' : '★ Simpan sbg Workflow'}
+      </button>
+      <button className="primary-button" onClick={() => void runCurrentPlan()} disabled={!!busy}>
+        {busy === 'start' ? 'Starting…' : '▶ Jalankan'}
+      </button>
+    </footer>}
     {runningTemplate && <RunModal
       title={runningTemplate.name}
       inputs={runningTemplate.inputs}

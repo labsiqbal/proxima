@@ -497,21 +497,25 @@ The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attem
 `node_states`, dispatches every ready node concurrently (bounded by
 `graph_node_concurrency`, then by `run_worker_concurrency`) in a fresh hidden ACP
 session per attempt, and passes only explicit typed upstream outputs. Each node may run
-as its own agent. Plan edits are allowed only while queued; execution therefore always
-starts behind a human approval action. Review/correction can edit or rerun a node and
+as its own agent. Plan graph edits are allowed only while queued and autosave through a
+debounced PATCH that flushes before navigation, promotion, or Run. The inline title can
+be renamed at any stage. Run remains an explicit owner action without reusing approval
+language; final result approval remains the review gate. Review/correction can edit or rerun a node and
 marks every transitive descendant stale before redispatch.
 
 `GraphScreen.tsx` is the gated control plane for this sibling engine. It is a canvas-first,
 n8n-style surface — drag nodes, pan/zoom, drag-to-connect, click-to-remove a connection —
-built on native SVG, so no graph library is required. One slim bar holds the plan-list
-toggle, title, live status and the plan-level actions; the plan list collapses; and the
+built on native SVG, so no graph library is required. One slim bar holds the inline
+title, live plan status, and passive save status; the draft footer contains exactly Run
+and one-click Save as Workflow actions; and the
 node inspector is rendered only while a node is selected, so no unused panel holds canvas
 width. The workspace is flex rather than grid precisely because those two panels come and
 go. `graphLayout.ts` supplies deterministic
 topological columns as a *fallback*: a node's hand-placed `x`/`y` wins, and the layout
 reports a real bounding box because the canvas is infinite and positions may be
 negative. Node positions are part of the graph and are persisted by the same explicit
-**Save plan** action as every other plan edit, never written behind the owner's back.
+autosave as every other queued plan edit. Pending debounce work is flushed on editor
+exit so switching views cannot restore a stale graph.
 Drag-to-connect is pointer-only, so the inspector's dependency checkboxes remain the
 keyboard path to the same edges. The screen allows node/dependency/layout edits only
 while queued, and exposes the correction and approval protocol once execution begins.
