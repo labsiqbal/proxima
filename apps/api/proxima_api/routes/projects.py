@@ -31,12 +31,12 @@ def register(app, deps):
 
     @app.get("/api/projects")
     def list_projects(user: dict[str, Any] = Depends(current_user)):
-        rows = db().execute(
-            "SELECT p.id, p.slug, p.name, p.path, p.visibility, u.username AS owner, 'owner' AS role "
-            "FROM projects p JOIN users u ON u.id = p.owner_user_id "
-            "WHERE p.archived_at IS NULL ORDER BY p.created_at DESC, p.id DESC"
-        ).fetchall()
-        return {"projects": [project_payload(dict(row)) for row in rows]}
+        return {
+            "projects": container_registry.list_compatibility_projects(
+                db(),
+                int(user["id"]),
+            )
+        }
 
     def _link_roots() -> list[Path]:
         return [Path(p).expanduser().resolve() for p in (cfg.get("link_roots") or [os.path.expanduser("~")])]

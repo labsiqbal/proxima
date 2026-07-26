@@ -15,7 +15,7 @@ import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from .. import fsapi
+from .. import container_registry, fsapi
 from .. import app_settings
 from .. import auth_health
 from .. import higgsfield
@@ -125,6 +125,15 @@ def register(app, deps):
             fsapi.write_file(root, path, payload.content)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        normalized = path.replace("\\", "/").strip("/")
+        if normalized in {
+            container_registry.CONTAINER_DOC,
+            f"{container_registry.OPS_RELPATH}/{container_registry.CONTAINER_DOC}",
+        }:
+            container_registry.refresh_registry_projection(
+                db(),
+                visible_project(slug, user),
+            )
         _audit_fs(user, "file.write", slug, path)
         return {"ok": True, "path": path}
 

@@ -220,8 +220,12 @@ A project row is the compatibility persistence record for a **Container**.
 override, where `.` means repo-at-root) and exactly one active Ops Area. Fresh
 Containers use the physical `ops/` folder and an Ops row with `rel_path='ops'`.
 `container_registry` stores a bounded projection of identity and summary from
-`ops/container.md`; `container_ops_migrations` stores the versioned, hash-bound,
-resumable migration marker for legacy root-level Ops data.
+`ops/container.md`, its full source hash, the projection timestamp, and last known
+activity. Identity is free text, not a Container type enum. The file API refreshes
+the projection immediately when it writes `container.md`; a five-second background
+cycle catches direct owner edits without adding filesystem work to Fleet requests.
+`container_ops_migrations` stores the versioned, hash-bound, resumable migration
+marker for legacy root-level Ops data.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -255,6 +259,23 @@ per-Container migration failures are isolated so one unhealthy Container (missin
 drive, deleted Area folder) never aborts control-plane startup.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
 file API all resolve through the active Ops row.
+
+The authenticated public Fleet boundary uses Container terminology:
+`GET /api/containers`, `GET /api/containers/{slug}`, and
+`GET /api/containers/{slug}/areas`. List and detail read registry metadata plus
+running and queued Task counts, open Attention counts, last activity, Area
+inventory, and the health indicators available before graph delivery. Graph
+freshness is explicitly `null` until its later slice. A single SQLite statement
+aggregates every Fleet list row through grouped CTEs, so the statement count stays
+constant as the Fleet grows and no graph or per-Container file is read. Container
+detail uses the same owner-scoped query. The Areas route then applies the canonical
+realpath and overlap validation before returning targetable Areas.
+
+The existing `/api/projects` readers remain a one-release compatibility surface.
+They render the historical `projects`, `code_areas`, and `ops_area` payload from the
+same registry and Area query functions. Persistence and foreign keys retain
+`projects` and `project_id`, avoiding a table rename cascade while public schemas
+and routes use Container names.
 Deliverables are durable records (Phase-1 slice 8, T4): `artifact_records` holds one
 row per deliverable **version** - identity (project, type, path), lineage
 (session → job/node → run), the single approval status (`draft/review/approved/

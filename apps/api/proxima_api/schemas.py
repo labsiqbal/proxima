@@ -153,23 +153,58 @@ class ContainerArea(BaseModel):
     id: int
     kind: str = Field(pattern="^(code|ops)$")
     rel_path: str
-    source: str | None = Field(
-        default=None,
-        pattern="^(auto|manual|excluded)$",
-    )
+    source: str = Field(pattern="^(auto|manual)$")
+    push_on_merge: bool = False
+    push_remote_url: str | None = None
+    remote: dict[str, Any] | None = None
+
+
+class ContainerLiveState(BaseModel):
+    running_tasks: int = Field(ge=0)
+    queued_tasks: int = Field(ge=0)
+    open_attention: int = Field(ge=0)
+
+
+class ContainerAreaInventory(BaseModel):
+    total: int = Field(ge=0)
+    code: int = Field(ge=0)
+    ops: int = Field(ge=0)
+
+
+class ContainerHealth(BaseModel):
+    registry: str = Field(pattern="^(ready|unavailable)$")
+    areas: str = Field(pattern="^(ready|pending|attention)$")
+    ops_migration: str
+    graph_freshness: None = None
 
 
 class Container(BaseModel):
-    """Public Container shape for the Master foundation.
+    """Canonical public Container contract backed by the projects table."""
 
-    Current routes keep their ``/api/projects`` compatibility names. The
-    Fleet route will consume this schema in its own slice.
-    """
-
+    id: int
     slug: str
     name: str
     path: str
-    code_areas: list[ContainerArea] = Field(default_factory=list)
+    owner: str
+    visibility: str
+    identity_label: str | None = None
+    summary: str | None = None
+    source_hash: str | None = None
+    indexed_at: str | None = None
+    last_activity_at: str | None = None
+    live: ContainerLiveState
+    area_inventory: ContainerAreaInventory
+    health: ContainerHealth
+
+
+class ContainerListResponse(BaseModel):
+    containers: list[Container]
+
+
+class ContainerAreas(BaseModel):
+    container_id: int
+    container_slug: str
+    code_areas: list[ContainerArea]
     ops_area: ContainerArea
 
 

@@ -19,6 +19,7 @@ from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
 from .container_registry import (
     ContainerBoundaryError,
+    compatibility_project_payload,
     container_root,
     ops_root,
     root_for_virtual_path,
@@ -280,10 +281,10 @@ def build_route_deps(
             raise http_exception(status_code=500, detail=detail) from exc
 
     def project_payload(row: dict[str, Any]) -> dict[str, Any]:
-        payload = {"slug": row["slug"], "name": row["name"], "path": row["path"], "owner": row.get("owner"), "role": row.get("role"), "visibility": row.get("visibility", "private")}
-        # Container areas (T1): every project row the routes select carries p.id.
-        payload.update(areas_payload(db(), row["id"]))
-        return payload
+        return compatibility_project_payload(
+            row,
+            areas_payload(db(), row["id"]),
+        )
 
     def profile_payload(row: dict[str, Any]) -> dict[str, Any]:
         return {

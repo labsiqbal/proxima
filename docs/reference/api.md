@@ -1,28 +1,29 @@
 # API Reference
 
-> **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
+> **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-173 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+176 endpoints across 16 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
 
-- [`routes/admin.py`](#routes-admin-py) — 3 endpoints
-- [`routes/alpha.py`](#routes-alpha-py) — 12 endpoints
-- [`routes/archive.py`](#routes-archive-py) — 3 endpoints
-- [`routes/auth.py`](#routes-auth-py) — 9 endpoints
-- [`routes/chat.py`](#routes-chat-py) — 25 endpoints
-- [`routes/design.py`](#routes-design-py) — 8 endpoints
-- [`routes/files.py`](#routes-files-py) — 32 endpoints
-- [`routes/graph.py`](#routes-graph-py) — 14 endpoints
-- [`routes/profiles.py`](#routes-profiles-py) — 12 endpoints
-- [`routes/projects.py`](#routes-projects-py) — 12 endpoints
-- [`routes/reviews.py`](#routes-reviews-py) — 6 endpoints
-- [`routes/update.py`](#routes-update-py) — 3 endpoints
-- [`routes/wiki.py`](#routes-wiki-py) — 8 endpoints
-- [`routes/work.py`](#routes-work-py) — 23 endpoints
-- [`main.py (app-level)`](#main-py-app-level) — 3 endpoints
+- [`routes/admin.py`](#routes-admin-py) - 3 endpoints
+- [`routes/alpha.py`](#routes-alpha-py) - 12 endpoints
+- [`routes/archive.py`](#routes-archive-py) - 3 endpoints
+- [`routes/auth.py`](#routes-auth-py) - 9 endpoints
+- [`routes/chat.py`](#routes-chat-py) - 25 endpoints
+- [`routes/containers.py`](#routes-containers-py) - 3 endpoints
+- [`routes/design.py`](#routes-design-py) - 8 endpoints
+- [`routes/files.py`](#routes-files-py) - 32 endpoints
+- [`routes/graph.py`](#routes-graph-py) - 14 endpoints
+- [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
+- [`routes/projects.py`](#routes-projects-py) - 12 endpoints
+- [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
+- [`routes/update.py`](#routes-update-py) - 3 endpoints
+- [`routes/wiki.py`](#routes-wiki-py) - 8 endpoints
+- [`routes/work.py`](#routes-work-py) - 23 endpoints
+- [`main.py (app-level)`](#main-py-app-level) - 3 endpoints
 
 
 ## routes/admin.py
@@ -105,6 +106,15 @@
 | POST | `/api/sessions/{session_id}/wiki-note/draft` | `wiki_note_draft` |  |
 | WS | `/api/ws/sessions/{session_id}` | `ws_events` |  |
 | WS | `/api/ws/terminal` | `ws_terminal` | In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the |
+
+
+## routes/containers.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/containers` | `list_containers` | List the owner's Fleet registry with directly aggregated Live state. |
+| GET | `/api/containers/{slug}` | `get_container` | Read one owner-scoped Container and its current Fleet indicators. |
+| GET | `/api/containers/{slug}/areas` | `list_container_areas` | List targetable Areas after canonical Container-boundary validation. |
 
 
 ## routes/design.py
@@ -289,4 +299,4 @@
 
 
 ---
-_Generated 2026-07-26 21:50 UTC._
+_Generated 2026-07-26 22:47 UTC._

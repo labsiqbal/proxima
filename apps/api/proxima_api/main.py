@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import connect, init_db
 from .migrations import run_migrations
-from .container_registry import migrate_legacy_ops_containers
+from .container_registry import migrate_legacy_ops_containers, refresh_registry_projections
 from .acp import AcpManager
 from .apprunner import AppManager
 from .preview_proxy import (
@@ -48,6 +48,7 @@ from .routes import (
     archive as routes_archive,
     auth as routes_auth,
     chat as routes_chat,
+    containers as routes_containers,
     design as routes_design,
     files as routes_files,
     profiles as routes_profiles,
@@ -101,6 +102,30 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         worker.start()
     scheduler_task: asyncio.Task | None = None
     alpha_task: asyncio.Task | None = None
+    registry_task: asyncio.Task | None = None
+    registry_interval = max(
+        0,
+        _as_int(cfg.get("container_registry_refresh_seconds", 5)),
+    )
+    if registry_interval:
+        def _refresh_registry() -> None:
+            conn = connect(cfg["database_path"])
+            try:
+                refresh_registry_projections(conn)
+            finally:
+                conn.close()
+
+        async def _registry_loop() -> None:
+            while True:
+                await asyncio.sleep(registry_interval)
+                try:
+                    await asyncio.to_thread(_refresh_registry)
+                except Exception:
+                    logging.getLogger("proxima.container_registry").exception(
+                        "Container registry refresh failed"
+                    )
+
+        registry_task = asyncio.create_task(_registry_loop())
     if cfg.get("start_worker", True):
         async def _alpha_loop() -> None:
             while True:
@@ -138,6 +163,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
         update_task = asyncio.create_task(_update_check_loop())
     yield
+    if registry_task:
+        registry_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await registry_task
     if scheduler_task:
         scheduler_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -232,6 +261,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_graph.register(app, _route_deps)
     routes_alpha.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
+    routes_containers.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)
     routes_archive.register(app, _route_deps)
@@ -323,6 +353,10 @@ def _config_from_env() -> dict[str, Any]:
         "run_continuation_limit": env_int("PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])),
         "run_worker_concurrency": env_int("PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])),
         "graph_node_concurrency": env_int("PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])),
+        "container_registry_refresh_seconds": env_int(
+            "PROXIMA_CONTAINER_REGISTRY_REFRESH_SECONDS",
+            int(DEFAULT_CONFIG["container_registry_refresh_seconds"]),
+        ),
         # Proxima is single-user by design: one owner and no team management. The
         # network gate remains primary; the owner password/session is defense-in-depth.
         "single_user": True,
