@@ -18,6 +18,7 @@ import json as _json
 from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
 from .container_registry import (
+    ContainerBoundaryError,
     container_root,
     ops_root,
     root_for_virtual_path,
@@ -341,17 +342,31 @@ def build_route_deps(
             return visible_project(project_slug, user)["id"]
         return project_id
 
+    def _boundary_http(exc: ContainerBoundaryError) -> Any:
+        """Client-facing 400 for a fail-closed Container/Area boundary refusal,
+        matching the filesystem routes' fsapi.FsError response shape."""
+        return http_exception(status_code=400, detail=str(exc))
+
     def _project_root(slug: str, user: dict[str, Any]) -> Path:
         project = visible_project(slug, user)
-        return container_root(project)
+        try:
+            return container_root(project)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
 
     def _ops_root(slug: str, user: dict[str, Any]) -> Path:
         project = visible_project(slug, user)
-        return ops_root(db(), project)
+        try:
+            return ops_root(db(), project)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
 
     def _virtual_root(slug: str, path: str, user: dict[str, Any]) -> Path:
         project = visible_project(slug, user)
-        return root_for_virtual_path(db(), project, path)
+        try:
+            return root_for_virtual_path(db(), project, path)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
 
     def user_from_token_query(token: str) -> dict[str, Any]:
         with app.state.db_lock:

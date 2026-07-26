@@ -306,11 +306,14 @@ def create_physical_ops_root(
         raise ContainerBoundaryError("physical Ops root must be a directory")
     physical.mkdir(parents=True, exist_ok=True)
     for dirname in starter_dirs:
-        if dirname not in KNOWN_OPS_DIRS:
-            raise ContainerBoundaryError(f"unsupported Ops starter directory: {dirname}")
-        target = physical / dirname
-        if target.is_symlink() or (target.exists() and not target.is_dir()):
-            raise ContainerBoundaryError(f"Ops starter path is unsafe: {dirname}")
+        rel = _safe_rel_path(dirname)
+        if not rel.parts:
+            raise ContainerBoundaryError(f"Ops starter path is unsafe: {dirname!r}")
+        target = physical
+        for part in rel.parts:
+            target = target / part
+            if target.is_symlink() or (target.exists() and not target.is_dir()):
+                raise ContainerBoundaryError(f"Ops starter path is unsafe: {dirname}")
         target.mkdir(parents=True, exist_ok=True)
     _atomic_write_if_missing(physical / CONTAINER_DOC, _container_doc_text(name))
     _reject_symlinks(physical)

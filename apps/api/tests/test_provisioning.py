@@ -43,6 +43,27 @@ def test_scaffold_project_dir_creates_folders_and_readme(tmp_path):
     assert (path / "README.md").read_text().startswith("# demo")
 
 
+def test_scaffold_honors_custom_starter_dirs(tmp_path):
+    """provision_starter_dirs may name safe directories outside the fixed Ops set."""
+    cfg = make_cfg(tmp_path)
+    cfg["provision_starter_dirs"] = ["docs", "notes"]
+    path = provisioning.scaffold_project_dir(cfg, "demo")
+    assert (path / "ops" / "docs").is_dir()
+    assert (path / "ops" / "notes").is_dir()
+    assert (path / "ops" / "container.md").is_file()
+
+
+def test_scaffold_rejects_unsafe_starter_dirs(tmp_path):
+    import pytest
+    from proxima_api.container_registry import ContainerBoundaryError
+
+    for index, unsafe in enumerate(("../evil", "/abs", ".", "")):
+        cfg = make_cfg(tmp_path)
+        cfg["provision_starter_dirs"] = [unsafe]
+        with pytest.raises(ContainerBoundaryError):
+            provisioning.scaffold_project_dir(cfg, f"demo-{index}")
+
+
 def test_scaffold_is_idempotent(tmp_path):
     cfg = make_cfg(tmp_path)
     provisioning.scaffold_project_dir(cfg, "demo")

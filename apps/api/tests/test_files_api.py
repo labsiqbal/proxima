@@ -324,3 +324,27 @@ def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
     calls.clear()
     res3 = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "fresh image"})
     assert res3.status_code == 200 and calls == ["codex"]
+
+
+def test_missing_container_root_maps_to_400_not_500(tmp_path):
+    """A DB-present but disk-missing Container is a fail-closed boundary refusal;
+    Files/Wiki/Design routes must surface it as a clean 400, never a 500."""
+    import shutil
+
+    c = client(tmp_path)
+    headers = setup_project(c, tmp_path)
+    root = _project_path(c, headers)
+    shutil.rmtree(root)  # Container row still exists; its disk root is gone.
+
+    for path in (
+        "/api/projects/demo/tree",
+        "/api/projects/demo/file?path=notes/a.txt",
+        "/api/projects/demo/reference-files",
+        "/api/projects/demo/wiki/all",
+        "/api/projects/demo/design/moodboard",
+    ):
+        res = c.get(path, headers=headers)
+        assert res.status_code == 400, f"{path} -> {res.status_code}: {res.text}"
+
+    res = c.post("/api/projects/demo/fs/mkdir", headers=headers, json={"path": "x"})
+    assert res.status_code == 400, res.text
