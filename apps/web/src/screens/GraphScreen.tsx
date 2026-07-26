@@ -326,7 +326,8 @@ export function GraphScreen({
     latestDraft.current = null
   }
 
-  function primeAutosave(next: GraphJob, meta: DraftTemplateMeta = readDraftMeta(next.id)) {
+  async function primeAutosave(next: GraphJob, meta: DraftTemplateMeta = readDraftMeta(next.id)) {
+    await flushAutosave()
     if (saveTimer.current) window.clearTimeout(saveTimer.current)
     pendingSave.current = null
     autosaveJobId.current = next.id
@@ -472,7 +473,8 @@ export function GraphScreen({
           setDraftTitle(next.title)
         }
       } else {
-        primeAutosave(next)
+        await primeAutosave(next)
+        if (!mounted.current || seq !== loadSeq.current) return
       }
       setJob(next)
       setPlan(next.graph)
@@ -571,14 +573,15 @@ export function GraphScreen({
       graph: draft.graph,
       project_slug: activeProject?.slug,
       profile_id: profileId,
-    })).then(created => {
+    })).then(async created => {
       if (!mounted.current || seq !== draftSeq.current) return
       onDraftConsumed?.()
-      primeAutosave(created, {
+      await primeAutosave(created, {
         name: draft.name,
         description: draft.description,
         category: draft.category,
       })
+      if (!mounted.current || seq !== draftSeq.current) return
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -839,7 +842,8 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      primeAutosave(created, { ...draftMeta, name: draftTitle })
+      await primeAutosave(created, { ...draftMeta, name: draftTitle })
+      if (!mounted.current) return
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -873,7 +877,8 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      primeAutosave(created, {})
+      await primeAutosave(created, {})
+      if (!mounted.current) return
       setJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -941,9 +946,11 @@ export function GraphScreen({
     setError('')
     setNotice('')
     try {
+      await flushAutosave()
       const next = await action()
       if (!mounted.current) return
-      primeAutosave(next)
+      await primeAutosave(next)
+      if (!mounted.current) return
       setJob(next)
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
@@ -1009,7 +1016,8 @@ export function GraphScreen({
       await flushAutosave()
       const next = await startGraphJob(token, job.id)
       if (!mounted.current) return
-      primeAutosave(next)
+      await primeAutosave(next)
+      if (!mounted.current) return
       setJob(next)
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
@@ -1037,12 +1045,13 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      primeAutosave(created, {
+      await primeAutosave(created, {
         name: template.name,
         description: template.description,
         category: template.category,
         inputs: template.inputs,
       })
+      if (!mounted.current) return
       setRunningTemplate(null)
       setStage('editor')
       setJob(created)
@@ -1070,12 +1079,13 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      primeAutosave(created, {
+      await primeAutosave(created, {
         name: template.name,
         description: template.description,
         category: template.category,
         inputs: template.inputs,
       })
+      if (!mounted.current) return
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -1094,9 +1104,11 @@ export function GraphScreen({
     setBusy('start')
     setError('')
     try {
+      await flushAutosave()
       const next = await startGraphJob(token, item.id)
       if (!mounted.current) return
-      primeAutosave(next)
+      await primeAutosave(next)
+      if (!mounted.current) return
       setStage('editor')
       setJob(next)
       setPlan(next.graph)
@@ -1110,8 +1122,9 @@ export function GraphScreen({
     }
   }
 
-  function prepareDraftTemplate(item: GraphJob) {
-    primeAutosave(item)
+  async function prepareDraftTemplate(item: GraphJob) {
+    await primeAutosave(item)
+    if (!mounted.current) return
     setJob(item)
     setPlan(item.graph)
     setSavingTemplate(true)
@@ -1281,7 +1294,7 @@ export function GraphScreen({
                     <div className="workflow-home-actions" role="cell" data-label="Actions">
                       <button className="ghost-button" disabled={!!busy} onClick={() => openJob(item.id)}>Edit</button>
                       <button className="primary-button" disabled={!!busy} onClick={() => void runDraft(item)}>Run</button>
-                      <button className="ghost-button workflow-home-star" disabled={!!busy} onClick={() => prepareDraftTemplate(item)}>★ Save as template</button>
+                      <button className="ghost-button workflow-home-star" disabled={!!busy} onClick={() => void prepareDraftTemplate(item)}>★ Save as template</button>
                       <button className="row-action danger" title="Delete draft" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
                     </div>
                   </div>)}

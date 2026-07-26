@@ -2,12 +2,14 @@ import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  approveGraphNode,
   getGraphJob,
   saveGraphTemplate,
   startGraphJob,
   updateGraphPlan,
 } from '../api/graph'
-import type { GraphJob, WorkflowGraph } from '../types'
+import { stateFor } from '../components/workflows/GraphCanvas'
+import type { GraphJob, GraphNodeState, WorkflowGraph } from '../types'
 import { GraphScreen } from './GraphScreen'
 
 vi.mock('../api/graph', () => ({
@@ -45,9 +47,14 @@ vi.mock('../hooks/useProjectMentionItems', () => ({
   useProjectMentionItems: () => [],
 }))
 vi.mock('../components/workflows/GraphCanvas', () => ({
-  GraphCanvas: ({ onMoveNode }: { onMoveNode: (nodeId: string, x: number, y: number) => void }) =>
-    <button onClick={() => onMoveNode('step', 120, 80)}>Move node</button>,
-  stateFor: () => undefined,
+  GraphCanvas: ({ onMoveNode, onSelect }: {
+    onMoveNode: (nodeId: string, x: number, y: number) => void
+    onSelect: (nodeId: string) => void
+  }) => <>
+    <button onClick={() => onMoveNode('step', 120, 80)}>Move node</button>
+    <button onClick={() => onSelect('step')}>Select node</button>
+  </>,
+  stateFor: vi.fn(() => undefined),
   statusLabel: (status: string) => status,
 }))
 
@@ -89,6 +96,23 @@ const queuedJob: GraphJob = {
   project_slug: project.slug,
 }
 
+const reviewNodeState: GraphNodeState = {
+  id: 1,
+  job_id: 55,
+  node_id: 'step',
+  status: 'review',
+  output_kind: 'text',
+  version: 0,
+}
+
+const reviewJob: GraphJob = {
+  ...structuredClone(queuedJob),
+  id: 55,
+  title: 'Review plan',
+  status: 'review',
+  node_states: [reviewNodeState],
+}
+
 const props = {
   token: 't',
   projects: [project],
@@ -105,6 +129,7 @@ describe('GraphScreen editor autosave actions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    vi.mocked(stateFor).mockReturnValue(undefined)
     vi.mocked(getGraphJob).mockResolvedValue(structuredClone(queuedJob))
     vi.mocked(updateGraphPlan).mockImplementation(async (_token, _jobId, body) => ({
       ...structuredClone(queuedJob),
@@ -189,5 +214,49 @@ describe('GraphScreen editor autosave actions', () => {
       inputs: [],
     }))
     expect(screen.queryByRole('dialog', { name: /Save as Workflow/i })).not.toBeInTheDocument()
+  })
+
+  it('flushes the outgoing draft edit when switching drafts inside the debounce window', async () => {
+    const jobB: GraphJob = { ...structuredClone(queuedJob), id: 99, title: 'Second plan' }
+    vi.mocked(getGraphJob)
+      .mockResolvedValueOnce(structuredClone(queuedJob))
+      .mockResolvedValueOnce(jobB)
+
+    const { rerender } = render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Untitled plan' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Daily research' } })
+    expect(screen.getByText('Saving…')).toBeInTheDocument()
+
+    // Leave draft 42 for draft 99 before the 700ms autosave timer fires: the queued
+    // title edit must reach the server rather than be silently dropped.
+    rerender(<GraphScreen {...props} pendingJobId={99} />)
+
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith('t', 42, { title: 'Daily research' }))
+    await screen.findByRole('heading', { name: 'Second plan' })
+  })
+
+  it('flushes an inline rename before a review-stage node action', async () => {
+    vi.mocked(getGraphJob).mockResolvedValue(structuredClone(reviewJob))
+    vi.mocked(stateFor).mockReturnValue(reviewNodeState)
+    vi.mocked(approveGraphNode).mockResolvedValue({
+      ...structuredClone(reviewJob),
+      title: 'Renamed review',
+    })
+
+    render(<GraphScreen {...props} pendingJobId={55} />)
+    await screen.findByRole('heading', { name: 'Review plan' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Review plan' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Renamed review' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select node' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve node' }))
+
+    await waitFor(() => expect(approveGraphNode).toHaveBeenCalledWith('t', 55, 'step'))
+    expect(updateGraphPlan).toHaveBeenCalledWith('t', 55, { title: 'Renamed review' })
+    expect(vi.mocked(updateGraphPlan).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(approveGraphNode).mock.invocationCallOrder[0])
   })
 })
