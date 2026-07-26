@@ -33,7 +33,7 @@ API_PKG = REPO / "apps" / "api"
 PKG_DIR = API_PKG / "proxima_api"
 OUT_DIR = REPO / "docs" / "reference"
 
-STAMP = "> **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.\n"
+STAMP = "> **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.\n"
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
@@ -107,14 +107,14 @@ def _render_api(endpoints: dict[str, list[dict]]) -> str:
     o = ["# API Reference\n", STAMP,
          f"\n{total} endpoints across {len(endpoints)} route modules. "
          "All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). "
-         "Auth: single-user — first run uses `POST /auth/auto` only until the owner "
+         "Auth: single-user - first run uses `POST /auth/auto` only until the owner "
          "sets a password; later sessions use `POST /auth/login`. Requests carry the "
          "HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.\n"]
     # Quick index
     o.append("\n## Modules\n")
     for label in endpoints:
         anchor = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
-        o.append(f"- [`{label}`](#{anchor}) — {len(endpoints[label])} endpoints")
+        o.append(f"- [`{label}`](#{anchor}) - {len(endpoints[label])} endpoints")
     o.append("")
     for label, rows in endpoints.items():
         o.append(f"\n## {label}\n")

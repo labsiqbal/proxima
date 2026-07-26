@@ -25,13 +25,41 @@ export type RunnerCapabilities = {
 	warnings?: string[];
 	roots?: string[];
 };
-export type Project = {
+export type ContainerIdentity = {
 	slug: string;
 	name: string;
 	path: string;
 	owner: string;
-	role: string;
 	visibility: "private" | "shared";
+};
+// One-release compatibility name for the current /api/projects readers and UI.
+export type Project = ContainerIdentity & { role: string };
+export type ContainerLiveState = {
+	running_tasks: number;
+	queued_tasks: number;
+	open_attention: number;
+};
+export type ContainerAreaInventory = {
+	total: number;
+	code: number;
+	ops: number;
+};
+export type ContainerHealth = {
+	registry: "ready" | "unavailable";
+	areas: "ready" | "pending" | "attention";
+	ops_migration: string;
+	graph_freshness: null;
+};
+export type Container = ContainerIdentity & {
+	id: number;
+	identity_label: string | null;
+	summary: string | null;
+	source_hash: string | null;
+	indexed_at: string | null;
+	last_activity_at: string | null;
+	live: ContainerLiveState;
+	area_inventory: ContainerAreaInventory;
+	health: ContainerHealth;
 };
 // A code area's detected git remote (T9, slice 11). Only present on the
 // dedicated areas endpoints; web_url + gh_authenticated are GitHub-only
@@ -50,6 +78,21 @@ export type AreaRemote = {
 export type ProjectAreas = {
 	code_areas: { id: number; rel_path: string; source: string; push_on_merge?: boolean; remote?: AreaRemote | null }[];
 	ops_area: { id: number; rel_path: string } | null;
+};
+export type ContainerArea = {
+	id: number;
+	kind: "code" | "ops";
+	rel_path: string;
+	source: "auto" | "manual";
+	push_on_merge: boolean;
+	push_remote_url: string | null;
+	remote: AreaRemote | null;
+};
+export type ContainerAreas = {
+	container_id: number;
+	container_slug: string;
+	code_areas: ContainerArea[];
+	ops_area: ContainerArea;
 };
 export type Runner = {
 	id: string;

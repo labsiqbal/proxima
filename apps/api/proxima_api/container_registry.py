@@ -36,6 +36,8 @@ KNOWN_OPS_FILES = ("design.md",)
 OPS_VIRTUAL_NAMES = frozenset((*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES, CONTAINER_DOC))
 DEFAULT_STARTER_DIRS = ("wiki", "tasks", "artifacts")
 MAX_CONTAINER_DOC_BYTES = 64 * 1024
+MAX_IDENTITY_LABEL_CHARS = 120
+MAX_SUMMARY_CHARS = 500
 
 
 class ContainerBoundaryError(ValueError):
@@ -573,11 +575,11 @@ def _apply_manifest(manifest: Mapping[str, Any]) -> Path:
 def _parse_container_doc(path: Path) -> tuple[str | None, str | None, str | None]:
     if not path.is_file() or path.is_symlink():
         return None, None, None
-    data = path.read_bytes()
-    if len(data) > MAX_CONTAINER_DOC_BYTES:
-        data = data[:MAX_CONTAINER_DOC_BYTES]
-    source_hash = hashlib.sha256(data).hexdigest()
+    source_hash = _hash_file(path)
+    with path.open("rb") as handle:
+        data = handle.read(MAX_CONTAINER_DOC_BYTES)
     text = data.decode("utf-8", errors="replace")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     identity: str | None = None
     summary: str | None = None
     if text.startswith("---\n"):
@@ -588,14 +590,14 @@ def _parse_container_doc(path: Path) -> tuple[str | None, str | None, str | None
                 if not separator:
                     continue
                 if key.strip() == "identity":
-                    identity = value.strip()[:120] or None
+                    identity = value.strip()[:MAX_IDENTITY_LABEL_CHARS] or None
                 elif key.strip() == "summary":
-                    summary = value.strip()[:500] or None
+                    summary = value.strip()[:MAX_SUMMARY_CHARS] or None
     if summary is None:
         body = text.split("\n---\n", 1)[-1] if text.startswith("---\n") else text
         summary = next(
             (
-                line.strip()[:500]
+                line.strip()[:MAX_SUMMARY_CHARS]
                 for line in body.splitlines()
                 if line.strip() and not line.lstrip().startswith("#")
             ),
@@ -618,13 +620,34 @@ def refresh_registry_projection(
           last_activity_at
         ) VALUES (
           ?, ?, ?, ?, ?,
-          (SELECT MAX(updated_at) FROM sessions WHERE project_id = ?)
+          (
+            SELECT MAX(activity_at)
+            FROM (
+              SELECT created_at AS activity_at FROM projects WHERE id = ?
+              UNION ALL
+              SELECT MAX(updated_at) FROM sessions WHERE project_id = ?
+              UNION ALL
+              SELECT MAX(updated_at) FROM jobs WHERE project_id = ?
+            )
+          )
         )
         ON CONFLICT(container_id) DO UPDATE SET
-          identity_label = excluded.identity_label,
-          summary = excluded.summary,
+          identity_label = CASE
+            WHEN excluded.source_hash IS NOT container_registry.source_hash
+              THEN excluded.identity_label
+            ELSE container_registry.identity_label
+          END,
+          summary = CASE
+            WHEN excluded.source_hash IS NOT container_registry.source_hash
+              THEN excluded.summary
+            ELSE container_registry.summary
+          END,
           source_hash = excluded.source_hash,
-          indexed_at = excluded.indexed_at,
+          indexed_at = CASE
+            WHEN excluded.source_hash IS NOT container_registry.source_hash
+              THEN excluded.indexed_at
+            ELSE container_registry.indexed_at
+          END,
           last_activity_at = excluded.last_activity_at
         """,
         (
@@ -634,8 +657,321 @@ def refresh_registry_projection(
             source_hash,
             iso_now(),
             data["id"],
+            data["id"],
+            data["id"],
         ),
     )
+
+
+def refresh_registry_projections(conn: sqlite3.Connection) -> dict[str, int]:
+    """Refresh every active Container projection outside request hot paths."""
+    result = {"refreshed": 0, "unchanged": 0, "unavailable": 0}
+    rows = conn.execute(
+        """
+        SELECT p.id, p.slug, p.name, p.path, cr.source_hash
+        FROM projects p
+        LEFT JOIN container_registry cr ON cr.container_id = p.id
+        WHERE p.archived_at IS NULL
+        ORDER BY p.id
+        """
+    ).fetchall()
+    for row in rows:
+        before = row["source_hash"]
+        try:
+            refresh_registry_projection(conn, row)
+        except (ContainerBoundaryError, OSError, sqlite3.Error):
+            result["unavailable"] += 1
+            continue
+        after = conn.execute(
+            "SELECT source_hash FROM container_registry WHERE container_id = ?",
+            (row["id"],),
+        ).fetchone()
+        if after is not None and after["source_hash"] != before:
+            result["refreshed"] += 1
+        else:
+            result["unchanged"] += 1
+    return result
+
+
+_FLEET_QUERY = """
+WITH
+job_live AS (
+  SELECT
+    project_id AS container_id,
+    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_tasks,
+    SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_tasks
+  FROM jobs
+  WHERE archived_at IS NULL AND status IN ('running', 'queued')
+  GROUP BY project_id
+),
+session_activity AS (
+  SELECT project_id AS container_id, MAX(updated_at) AS activity_at
+  FROM sessions
+  WHERE project_id IS NOT NULL
+  GROUP BY project_id
+),
+job_activity AS (
+  SELECT project_id AS container_id, MAX(updated_at) AS activity_at
+  FROM jobs
+  WHERE project_id IS NOT NULL
+  GROUP BY project_id
+),
+area_inventory AS (
+  SELECT
+    project_id AS container_id,
+    COUNT(*) AS area_count,
+    SUM(CASE WHEN kind = 'code' THEN 1 ELSE 0 END) AS code_area_count,
+    SUM(CASE WHEN kind = 'ops' THEN 1 ELSE 0 END) AS ops_area_count,
+    SUM(
+      CASE WHEN kind = 'ops' AND rel_path = 'ops' THEN 1 ELSE 0 END
+    ) AS physical_ops_area_count
+  FROM project_areas
+  WHERE source != 'excluded'
+  GROUP BY project_id
+),
+attention_parsed AS (
+  SELECT
+    id,
+    created_at,
+    CASE WHEN json_valid(target_json)
+      THEN CAST(json_extract(target_json, '$.container_id') AS INTEGER)
+    END AS direct_container_id,
+    CASE WHEN json_valid(target_json)
+      THEN CAST(json_extract(target_json, '$.project_id') AS INTEGER)
+    END AS legacy_project_id,
+    CASE WHEN json_valid(target_json)
+      THEN CAST(json_extract(target_json, '$.job_id') AS INTEGER)
+    END AS job_id,
+    CASE WHEN json_valid(target_json)
+      THEN json_extract(target_json, '$.container_slug')
+    END AS container_slug,
+    CASE WHEN json_valid(target_json)
+      THEN json_extract(target_json, '$.project_slug')
+    END AS legacy_project_slug
+  FROM attention_items
+  WHERE status = 'open'
+),
+attention_scoped AS (
+  SELECT
+    ap.id,
+    ap.created_at,
+    COALESCE(
+      ap.direct_container_id,
+      ap.legacy_project_id,
+      j.project_id,
+      container_slug.id,
+      project_slug.id
+    ) AS container_id
+  FROM attention_parsed ap
+  LEFT JOIN jobs j ON j.id = ap.job_id
+  LEFT JOIN projects container_slug ON container_slug.slug = ap.container_slug
+  LEFT JOIN projects project_slug ON project_slug.slug = ap.legacy_project_slug
+),
+attention_live AS (
+  SELECT container_id, COUNT(*) AS open_attention, MAX(created_at) AS activity_at
+  FROM attention_scoped
+  WHERE container_id IS NOT NULL
+  GROUP BY container_id
+)
+SELECT
+  p.id,
+  p.slug,
+  p.name,
+  p.path,
+  p.visibility,
+  p.owner_user_id,
+  p.created_at,
+  u.username AS owner,
+  cr.identity_label,
+  cr.summary,
+  cr.source_hash,
+  cr.indexed_at,
+  cr.last_activity_at AS projected_last_activity_at,
+  COALESCE(jl.running_tasks, 0) AS running_tasks,
+  COALESCE(jl.queued_tasks, 0) AS queued_tasks,
+  COALESCE(al.open_attention, 0) AS open_attention,
+  COALESCE(ai.area_count, 0) AS area_count,
+  COALESCE(ai.code_area_count, 0) AS code_area_count,
+  COALESCE(ai.ops_area_count, 0) AS ops_area_count,
+  COALESCE(ai.physical_ops_area_count, 0) AS physical_ops_area_count,
+  com.status AS ops_migration_status,
+  MAX(
+    p.created_at,
+    COALESCE(cr.last_activity_at, p.created_at),
+    COALESCE(sa.activity_at, p.created_at),
+    COALESCE(ja.activity_at, p.created_at),
+    COALESCE(al.activity_at, p.created_at)
+  ) AS live_last_activity_at
+FROM projects p
+JOIN users u ON u.id = p.owner_user_id
+LEFT JOIN container_registry cr ON cr.container_id = p.id
+LEFT JOIN container_ops_migrations com ON com.container_id = p.id
+LEFT JOIN job_live jl ON jl.container_id = p.id
+LEFT JOIN session_activity sa ON sa.container_id = p.id
+LEFT JOIN job_activity ja ON ja.container_id = p.id
+LEFT JOIN area_inventory ai ON ai.container_id = p.id
+LEFT JOIN attention_live al ON al.container_id = p.id
+WHERE p.archived_at IS NULL
+  AND p.owner_user_id = ?
+  {slug_filter}
+ORDER BY live_last_activity_at DESC, p.id DESC
+"""
+
+
+def _fleet_rows(
+    conn: sqlite3.Connection,
+    owner_user_id: int,
+    slug: str | None = None,
+) -> list[dict[str, Any]]:
+    slug_filter = "AND p.slug = ?" if slug is not None else ""
+    query = _FLEET_QUERY.format(slug_filter=slug_filter)
+    params: tuple[Any, ...] = (
+        (owner_user_id, slug) if slug is not None else (owner_user_id,)
+    )
+    return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def _fleet_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    data = _as_dict(row)
+    ops_count = int(data.get("ops_area_count") or 0)
+    physical_ops_count = int(data.get("physical_ops_area_count") or 0)
+    migration = data.get("ops_migration_status")
+    if migration == "attention" or ops_count != 1:
+        area_health = "attention"
+    elif migration == "complete" or physical_ops_count == 1:
+        area_health = "ready"
+    else:
+        area_health = "pending"
+    migration_health = migration or (
+        "not_required" if physical_ops_count == 1 else "pending"
+    )
+    return {
+        "id": int(data["id"]),
+        "slug": data["slug"],
+        "name": data["name"],
+        "path": data["path"],
+        "owner": data["owner"],
+        "visibility": data.get("visibility") or "private",
+        "identity_label": data.get("identity_label"),
+        "summary": data.get("summary"),
+        "source_hash": data.get("source_hash"),
+        "indexed_at": data.get("indexed_at"),
+        "last_activity_at": data.get("live_last_activity_at"),
+        "live": {
+            "running_tasks": int(data.get("running_tasks") or 0),
+            "queued_tasks": int(data.get("queued_tasks") or 0),
+            "open_attention": int(data.get("open_attention") or 0),
+        },
+        "area_inventory": {
+            "total": int(data.get("area_count") or 0),
+            "code": int(data.get("code_area_count") or 0),
+            "ops": ops_count,
+        },
+        "health": {
+            "registry": "ready" if data.get("source_hash") else "unavailable",
+            "areas": area_health,
+            "ops_migration": migration_health,
+            "graph_freshness": None,
+        },
+    }
+
+
+def list_fleet_containers(
+    conn: sqlite3.Connection,
+    owner_user_id: int,
+) -> list[dict[str, Any]]:
+    """Return the Fleet from one bounded SQLite statement and no file reads."""
+    return [_fleet_payload(row) for row in _fleet_rows(conn, owner_user_id)]
+
+
+def get_fleet_container(
+    conn: sqlite3.Connection,
+    owner_user_id: int,
+    slug: str,
+) -> dict[str, Any] | None:
+    """Return one owner-scoped Container with directly aggregated Live state."""
+    rows = _fleet_rows(conn, owner_user_id, slug)
+    return _fleet_payload(rows[0]) if rows else None
+
+
+def compatibility_project_payload(
+    container: Mapping[str, Any],
+    areas: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Render the one-release Project reader alias from Container truth."""
+    data = _as_dict(container)
+    return {
+        "slug": data["slug"],
+        "name": data["name"],
+        "path": data["path"],
+        "owner": data.get("owner"),
+        "role": data.get("role") or "owner",
+        "visibility": data.get("visibility") or "private",
+        "code_areas": list(areas.get("code_areas") or []),
+        "ops_area": areas.get("ops_area"),
+    }
+
+
+def list_compatibility_projects(
+    conn: sqlite3.Connection,
+    owner_user_id: int,
+) -> list[dict[str, Any]]:
+    """Render legacy Project readers from the same Fleet and Area queries."""
+    rows = _fleet_rows(conn, owner_user_id)
+    rows.sort(
+        key=lambda row: (str(row.get("created_at") or ""), int(row["id"])),
+        reverse=True,
+    )
+    containers = [_fleet_payload(row) for row in rows]
+    areas_by_container: dict[int, dict[str, Any]] = {
+        int(container["id"]): {"code_areas": [], "ops_area": None}
+        for container in containers
+    }
+    rows = conn.execute(
+        """
+        SELECT
+          pa.id,
+          pa.project_id,
+          pa.kind,
+          pa.rel_path,
+          pa.source,
+          pa.push_on_merge,
+          pa.push_remote_url
+        FROM project_areas pa
+        JOIN projects p ON p.id = pa.project_id
+        WHERE p.owner_user_id = ?
+          AND p.archived_at IS NULL
+          AND pa.source != 'excluded'
+        ORDER BY pa.project_id, pa.kind, pa.rel_path, pa.id
+        """,
+        (owner_user_id,),
+    ).fetchall()
+    for row in rows:
+        areas = areas_by_container.get(int(row["project_id"]))
+        if areas is None:
+            continue
+        if row["kind"] == "code":
+            areas["code_areas"].append(
+                {
+                    "id": int(row["id"]),
+                    "rel_path": row["rel_path"],
+                    "source": row["source"],
+                    "push_on_merge": bool(row["push_on_merge"]),
+                    "push_remote_url": row["push_remote_url"],
+                }
+            )
+        elif row["kind"] == "ops":
+            areas["ops_area"] = {
+                "id": int(row["id"]),
+                "rel_path": row["rel_path"],
+            }
+    return [
+        compatibility_project_payload(
+            container,
+            areas_by_container[int(container["id"])],
+        )
+        for container in containers
+    ]
 
 
 def migrate_container_ops(

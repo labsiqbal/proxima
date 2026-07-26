@@ -773,13 +773,33 @@ Container, opens an owner-visible Attention item, and leaves the legacy row acti
 All Ops consumers resolve through the row, so Archive, Wiki, artifacts, Designs,
 scripts, reports, exports, and uploads continue to use root-level legacy paths until
 that Container migrates cleanly. `container_registry` caches the bounded identity and
-summary projection from `ops/container.md`; live task and attention state is not
-copied into it.
+summary projection from `ops/container.md`, together with its full source hash,
+indexed timestamp, and last known activity. Identity is deliberately free text and
+summary is capped at 500 characters. A file API write refreshes the row immediately;
+a five-second background cycle deterministically catches direct edits. Refresh work
+is outside the request path.
 
 Repo identification remains hybrid: `project_areas.py` auto-detects `.git` folders
 at bounded depth and supports manual overrides and excluded tombstones. Project
 payloads retain the compatibility `code_areas` and `ops_area` fields.
-**Endpoints:** `GET/POST /api/projects/{slug}/areas`,
+
+The Container-facing Fleet API joins the registry with Live state directly in
+SQLite: running and queued Task counts, open Attention count, last activity, Area
+inventory, and current registry, Area, and Ops migration health. Graph freshness is
+`null` until the graph slice and no graph files are read. The Fleet list uses one
+SQLite statement for any Fleet size and performs no per-Container filesystem scan.
+Container detail is owner-scoped, and its Areas endpoint applies the canonical
+Container boundary validation before returning target choices.
+
+Existing `/api/projects` readers are a one-release compatibility alias. They reuse
+the Fleet and Area query functions while preserving the historical payload consumed
+by current Alpha and frontend surfaces. Internal tables and foreign keys keep
+`projects` and `project_id`; public schemas, new routes, and frontend boundary types
+use Container terminology.
+
+**Endpoints:** `GET /api/containers`, `GET /api/containers/{slug}`,
+`GET /api/containers/{slug}/areas`, compatibility `GET /api/projects` and
+`GET /api/projects/{slug}`, plus `GET/POST /api/projects/{slug}/areas`,
 `DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
 
 ## 11. Files & uploads (APIs)
