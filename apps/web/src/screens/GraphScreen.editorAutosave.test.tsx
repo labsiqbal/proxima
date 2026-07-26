@@ -53,6 +53,7 @@ vi.mock('../components/workflows/GraphCanvas', () => ({
   }) => <>
     <button onClick={() => onMoveNode('step', 120, 80)}>Move node</button>
     <button onClick={() => onSelect('step')}>Select node</button>
+    <button onClick={() => onSelect('trigger')}>Select trigger</button>
   </>,
   stateFor: vi.fn(() => undefined),
   statusLabel: (status: string) => status,
@@ -211,9 +212,81 @@ describe('GraphScreen editor autosave actions', () => {
       name: 'Untitled plan',
       description: 'Daily brief',
       category: 'research',
-      inputs: [],
     }))
     expect(screen.queryByRole('dialog', { name: /Save as Workflow/i })).not.toBeInTheDocument()
+  })
+
+  it('edits manual intake fields on the trigger and swaps them for schedule settings', async () => {
+    const triggerGraph: WorkflowGraph = {
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          instruction: '',
+          output_kind: 'json',
+          inputs: [],
+        },
+        ...structuredClone(graph.nodes),
+      ],
+      edges: [{ from: 'trigger', to: 'step' }],
+    }
+    const triggerJob: GraphJob = {
+      ...structuredClone(queuedJob),
+      graph: triggerGraph,
+      node_states: [
+        {
+          id: 2,
+          job_id: 42,
+          node_id: 'trigger',
+          status: 'pending',
+          output_kind: 'json',
+          version: 0,
+        },
+        ...structuredClone(queuedJob.node_states),
+      ],
+    }
+    vi.mocked(getGraphJob).mockResolvedValue(triggerJob)
+    vi.mocked(updateGraphPlan).mockImplementation(async (_token, _jobId, body) => ({
+      ...structuredClone(triggerJob),
+      title: body.title ?? triggerJob.title,
+      graph: body.graph ?? structuredClone(triggerGraph),
+    }))
+
+    render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+    fireEvent.click(screen.getByRole('button', { name: 'Select trigger' }))
+
+    expect(screen.getByRole('group', { name: 'Trigger mode' })).toBeInTheDocument()
+    expect(screen.getByText('Intake form')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '+ Add field' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 label' }), {
+      target: { value: 'Topic' },
+    })
+    expect(screen.getByRole('textbox', { name: 'Input 1 ID' })).toHaveValue('topic')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Input 1 required' }))
+
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
+      't',
+      42,
+      expect.objectContaining({
+        graph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'trigger',
+              inputs: [{ id: 'topic', label: 'Topic', kind: 'text', required: true }],
+            }),
+          ]),
+        }),
+      }),
+    ), { timeout: 2000 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }))
+    expect(screen.queryByText('Intake form')).not.toBeInTheDocument()
+    expect(screen.getByText('Schedule settings')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Cron' })).toHaveValue('0 9 * * *')
+    expect(screen.getByText(/without asking for manual input/i)).toBeInTheDocument()
   })
 
   it('flushes the outgoing draft edit when switching drafts inside the debounce window', async () => {

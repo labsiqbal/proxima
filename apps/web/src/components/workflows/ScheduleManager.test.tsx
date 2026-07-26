@@ -17,17 +17,19 @@ describe('ScheduleManager', () => {
     expect(isValidCron('*/15 0-23 1,15 * 0-7')).toBe(true)
     for (const cron of ['0 9 * *', '*/0 * * * *', '60 * * * *', '0 24 * * *', '0 9 0 * *', '0 9 * 13 *', '0 9 * * 8', '0 9 * * MON', '0 9 * * 5-1', '0 9 * * 1,,2']) expect(isValidCron(cron)).toBe(false)
   })
-  it('renders declared inputs, validates required values, and sends declared ids', async () => {
+  it('does not ask for manual intake values when creating a schedule', async () => {
     const user = userEvent.setup()
     render(<ScheduleManager token="token" workflows={[declaredWorkflow]} workflowId={7} />)
     await screen.findByText('No schedules yet.')
-    expect(screen.queryByLabelText(/Input brief/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Topic/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Source URL/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Add schedule' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('"Topic" is required.')
-    await user.type(screen.getByLabelText(/Topic/), 'Release notes')
-    await user.type(screen.getByLabelText(/Source URL/), 'https://example.test/source')
-    await user.click(screen.getByRole('button', { name: 'Add schedule' }))
-    expect(createSchedule).toHaveBeenCalledWith('token', expect.objectContaining({ input: { topic: 'Release notes', source_url: 'https://example.test/source' } }))
+    expect(createSchedule).toHaveBeenCalledWith('token', {
+      workflow_id: 7,
+      cron: '0 9 * * *',
+      overlap_policy: 'skip',
+      enabled: true,
+    })
   })
 
   it('creates an existing workflow schedule through the schedules API', async () => {

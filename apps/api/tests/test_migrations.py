@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from proxima_api.db import SCHEMA, connect, init_db
@@ -325,3 +326,48 @@ def test_v19_adds_job_target_binding_and_worktrees(tmp_path: Path):
     assert conn.execute("SELECT status FROM job_worktrees WHERE job_id = ?", (job_id,)).fetchone()["status"] == "active"
     conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     assert conn.execute("SELECT COUNT(*) FROM job_worktrees").fetchone()[0] == 0
+
+
+def test_v27_moves_workflow_inputs_onto_trigger_node(tmp_path: Path):
+    db_path = tmp_path / "m.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("INSERT INTO users(username, os_user) VALUES ('owner', 'owner')")
+    owner_id = conn.execute("SELECT id FROM users").fetchone()["id"]
+    graph = {
+        "nodes": [
+            {
+                "id": "work",
+                "type": "task",
+                "name": "Draft",
+                "instruction": "Draft {{topic}}",
+            }
+        ],
+        "edges": [],
+    }
+    declared_inputs = [
+        {
+            "id": "topic",
+            "label": "Topic",
+            "type": "text",
+            "required": True,
+        }
+    ]
+    workflow_id = conn.execute(
+        "INSERT INTO workflows(name, graph, inputs, created_by) VALUES (?, ?, ?, ?)",
+        ("Legacy graph workflow", json.dumps(graph), json.dumps(declared_inputs), owner_id),
+    ).lastrowid
+
+    applied = run_migrations(conn, str(db_path))
+
+    assert 27 in applied
+    stored = conn.execute(
+        "SELECT graph, inputs FROM workflows WHERE id = ?", (workflow_id,)
+    ).fetchone()
+    migrated_graph = json.loads(stored["graph"])
+    trigger = migrated_graph["nodes"][0]
+    assert trigger["type"] == "trigger"
+    assert trigger["trigger_kind"] == "manual"
+    assert trigger["inputs"] == declared_inputs
+    assert migrated_graph["edges"] == [{"from": trigger["id"], "to": "work"}]
+    assert json.loads(stored["inputs"]) == declared_inputs

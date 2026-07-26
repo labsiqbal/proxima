@@ -210,7 +210,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
     return next
   })
 
-  async function saveRecipe(meta: { name: string; description: string; category: string; inputs: import('../types').WorkflowInput[] }) {
+  async function saveRecipe(meta: { name: string; description: string; category: string }) {
     if (!savingPlan || savingBusy) return
     setSavingBusy(true)
     setError('')

@@ -24,12 +24,10 @@ NodeType: TypeAlias = Literal["agent", "trigger", "script"]
 Graph: TypeAlias = dict[str, Any]
 
 _OUTPUT_KINDS: frozenset[str] = frozenset({"text", "json", "artifact-ref"})
+_INPUT_KINDS: frozenset[str] = frozenset({"text", "url", "number", "file"})
 _RUNNABLE_STATUSES: frozenset[str] = frozenset({"pending", "stale"})
 _NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger", "script"})
-# Only manual entry exists today. Schedule/webhook/event arrive as further kinds
-# on this node, which is the whole point of modelling the entry point as a node:
-# adding one is a new kind here, not a new execution path.
-_TRIGGER_KINDS: frozenset[str] = frozenset({"manual"})
+_TRIGGER_KINDS: frozenset[str] = frozenset({"manual", "scheduled"})
 TRIGGER_OUTPUT_KIND: OutputKind = "json"
 # The sentinel target for work that does not touch a repo: the project's ops
 # area (T1). Every other target names a registered code area's rel_path.
@@ -92,6 +90,92 @@ def _parse_trigger_kind(raw: Mapping[str, Any], node_id: str) -> str:
             f"node '{node_id}' trigger_kind must be one of: {allowed}"
         )
     return kind
+
+
+def _parse_trigger_inputs(raw: Mapping[str, Any], node_id: str) -> list[dict[str, Any]] | None:
+    """Validate the manual intake form owned by a trigger node.
+
+    ``None`` means the field was absent on a pre-migration graph. That distinction
+    lets the template route fall back to the legacy ``workflows.inputs`` column
+    without treating an intentionally empty intake form as missing data.
+    """
+    if "inputs" not in raw:
+        return None
+    value = raw.get("inputs")
+    if not isinstance(value, list):
+        raise GraphValidationError(f"node '{node_id}' inputs must be an array")
+    inputs: list[dict[str, Any]] = []
+    ids: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise GraphValidationError(
+                f"node '{node_id}' input at index {index} must be an object"
+            )
+        input_id = item.get("id")
+        label = item.get("label")
+        kind = item.get("kind", "text")
+        required = item.get("required", False)
+        if not isinstance(input_id, str) or not input_id.strip():
+            raise GraphValidationError(
+                f"node '{node_id}' input at index {index} must have a non-empty id"
+            )
+        input_id = input_id.strip()
+        if input_id in ids:
+            raise GraphValidationError(
+                f"node '{node_id}' has duplicate input id: {input_id}"
+            )
+        ids.add(input_id)
+        if not isinstance(label, str) or not label.strip():
+            raise GraphValidationError(
+                f"node '{node_id}' input '{input_id}' must have a non-empty label"
+            )
+        if not isinstance(kind, str) or kind not in _INPUT_KINDS:
+            allowed = ", ".join(sorted(_INPUT_KINDS))
+            raise GraphValidationError(
+                f"node '{node_id}' input '{input_id}' kind must be one of: {allowed}"
+            )
+        if not isinstance(required, bool):
+            raise GraphValidationError(
+                f"node '{node_id}' input '{input_id}' required must be a boolean"
+            )
+        inputs.append(
+            {
+                "id": input_id,
+                "label": label.strip(),
+                "kind": kind,
+                "required": required,
+            }
+        )
+    return inputs
+
+
+def _parse_trigger_schedule(
+    raw: Mapping[str, Any], node_id: str
+) -> dict[str, Any] | None:
+    """Validate cadence metadata before it becomes a real schedule on promotion."""
+    if "schedule" not in raw:
+        return None
+    value = raw.get("schedule")
+    if not isinstance(value, Mapping):
+        raise GraphValidationError(f"node '{node_id}' schedule must be an object")
+    cron = value.get("cron")
+    overlap = value.get("overlap_policy", "skip")
+    enabled = value.get("enabled", True)
+    if not isinstance(cron, str) or not cron.strip():
+        raise GraphValidationError(f"node '{node_id}' schedule cron must not be blank")
+    if overlap not in {"skip", "allow"}:
+        raise GraphValidationError(
+            f"node '{node_id}' schedule overlap_policy must be one of: allow, skip"
+        )
+    if not isinstance(enabled, bool):
+        raise GraphValidationError(
+            f"node '{node_id}' schedule enabled must be a boolean"
+        )
+    return {
+        "cron": cron.strip(),
+        "overlap_policy": overlap,
+        "enabled": enabled,
+    }
 
 
 def _parse_script_command(raw: Mapping[str, Any], node_id: str) -> str:
@@ -311,6 +395,16 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             # typed the same way whether the graph starts at a trigger or not.
             node["trigger_kind"] = _parse_trigger_kind(raw_node, node_id)
             node["output_kind"] = TRIGGER_OUTPUT_KIND
+            inputs = _parse_trigger_inputs(raw_node, node_id)
+            if inputs is not None:
+                node["inputs"] = inputs
+            else:
+                node.pop("inputs", None)
+            schedule = _parse_trigger_schedule(raw_node, node_id)
+            if schedule is not None:
+                node["schedule"] = schedule
+            else:
+                node.pop("schedule", None)
             node.pop("output_schema", None)
             node.pop("profile_id", None)
             node.pop("review_required", None)
@@ -342,6 +436,8 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             # Agent-only fields are forced off, the trigger's precedent: no
             # later stage should have to ask whether they mean anything here.
             node.pop("trigger_kind", None)
+            node.pop("inputs", None)
+            node.pop("schedule", None)
             node.pop("profile_id", None)
             node.pop("expected_output", None)
             node.pop("rules", None)
@@ -354,6 +450,8 @@ def normalize_graph(raw: Mapping[str, Any] | str) -> Graph:
             contract = parse_output_contract(raw_node)
             node["output_kind"] = contract.kind
             node.pop("trigger_kind", None)
+            node.pop("inputs", None)
+            node.pop("schedule", None)
             if contract.schema is not None:
                 node["output_schema"] = contract.schema
             else:

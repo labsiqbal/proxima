@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -281,16 +282,25 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
         json={"title": "Wrong engine", "workflow_id": linear["id"], "graph": _chain_graph()},
     )
     assert rejected.status_code == 404
-    job = _create(client)
-
     declared = [{"id": "brief", "label": "Brief", "kind": "text", "required": True}]
+    graph = _chain_graph()
+    graph["nodes"].insert(
+        0,
+        {
+            "id": "trigger",
+            "type": "trigger",
+            "name": "When I run it",
+            "inputs": declared,
+        },
+    )
+    graph["nodes"][1]["depends_on"] = ["trigger"]
+    job = _create(client, graph)
     saved = client.post(
         f"/api/graph/jobs/{job['id']}/save-template",
         json={
             "name": "Research and publish",
             "description": "Reusable reviewed DAG",
             "category": "research",
-            "inputs": declared,
         },
     )
 
@@ -299,8 +309,8 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
     assert template["name"] == "Research and publish"
     assert template["steps"] == []
     assert template["graph"] == job["graph"]
-    # Declared inputs survive: a schedule renders its form from these, so a template
-    # that could not carry them could never be scheduled.
+    assert template["graph"]["nodes"][0]["inputs"] == declared
+    # The old column remains a compatibility projection for RunModal and old clients.
     assert template["inputs"] == declared
     assert client.get("/api/graph/templates").json()["items"][0]["inputs"] == declared
     stored = app.state.db.execute(
@@ -332,6 +342,77 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
     )
     assert reused.status_code == 201, reused.text
     assert reused.json()["workflow_id"] == template["id"]
+
+
+def test_legacy_template_inputs_and_schedule_hydrate_onto_trigger(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = _create(client)
+    template = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={"name": "Legacy workflow"},
+    ).json()
+    declared = [{"id": "topic", "label": "Topic", "kind": "text", "required": True}]
+    # Simulate a row saved before trigger-owned inputs existed.
+    app.state.db.execute(
+        "UPDATE workflows SET graph = ?, inputs = ? WHERE id = ?",
+        (json.dumps(job["graph"]), json.dumps(declared), template["id"]),
+    )
+    client.post(
+        "/api/schedules",
+        json={"workflow_id": template["id"], "cron": "0 6 * * *"},
+    )
+
+    migrated = client.get("/api/graph/templates").json()["items"][0]
+    trigger = migrated["graph"]["nodes"][0]
+
+    assert trigger["type"] == "trigger"
+    assert trigger["trigger_kind"] == "scheduled"
+    assert trigger["inputs"] == declared
+    assert trigger["schedule"] == {
+        "cron": "0 6 * * *",
+        "overlap_policy": "skip",
+        "enabled": True,
+    }
+    assert migrated["graph"]["edges"][0]["from"] == trigger["id"]
+    assert migrated["inputs"] == declared
+
+
+def test_scheduled_trigger_creates_real_schedule_without_manual_input(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = _chain_graph()
+    graph["nodes"].insert(
+        0,
+        {
+            "id": "trigger",
+            "type": "trigger",
+            "name": "Every morning",
+            "trigger_kind": "scheduled",
+            "inputs": [
+                {"id": "legacy", "label": "Legacy", "kind": "text", "required": True}
+            ],
+            "schedule": {
+                "cron": "30 8 * * 1-5",
+                "overlap_policy": "allow",
+                "enabled": True,
+            },
+        },
+    )
+    graph["nodes"][1]["depends_on"] = ["trigger"]
+    job = _create(client, graph)
+
+    response = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={"name": "Weekday report"},
+    )
+
+    assert response.status_code == 201, response.text
+    schedule = client.get("/api/schedules").json()[0]
+    assert schedule["workflow_id"] == response.json()["id"]
+    assert schedule["cron"] == "30 8 * * 1-5"
+    assert schedule["overlap_policy"] == "allow"
+    assert schedule["input"] == {}
 
 
 def test_graph_routes_are_inert_while_feature_is_off(tmp_path):

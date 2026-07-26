@@ -15,7 +15,6 @@ export type GraphSnapshot = {
   name: string
   description: string
   category: string
-  inputs: WorkflowInput[]
   graph: WorkflowGraph
 }
 
@@ -29,14 +28,14 @@ const INPUT_KINDS = ['text', 'number', 'url', 'file']
 export function buildGraphPrompt(snapshot: GraphSnapshot, instruction: string, codeAreas: string[] = []): string {
   return [
     '⟦MODE: WORKFLOW GRAPH AUTHORING⟧ You are editing a Proxima workflow *graph*, not running it. A graph is nodes plus edges: each node is one instruction handed to an AI agent, and an edge means the target node depends on the source node\'s output. Nodes with no edge between them are independent and run AT THE SAME TIME, so use branches wherever work is genuinely parallel — that is the point of a graph over a list.',
-    'A graph is JSON: {name, description, category, inputs[], graph:{nodes[], edges[]}}. inputs are typed placeholders any node can reference with {{id}}: {id, label, kind("text"|"number"|"url"|"file"), required(bool)}.',
-    'A node is {id(short slug, unique), type("agent"|"trigger"|"script"), name, instruction, expected_output?(what a good result is), rules?(hard constraints), skill_ids?(string[] — skill/tool hints for the runner), review_required?(bool — pause for human approval after this node), output_kind?("text"|"json"|"artifact-ref"), output_schema?(JSON Schema, only when output_kind is "json"), target?(where the job works), target_ambiguous?(bool), target_question?(string), command?(script nodes: path in scripts/), args?(script nodes: string[])}.',
+    'A graph is JSON: {name, description, category, graph:{nodes[], edges[]}}.',
+    'A node is {id(short slug, unique), type("agent"|"trigger"|"script"), name, instruction, expected_output?(what a good result is), rules?(hard constraints), skill_ids?(string[]), review_required?(bool), output_kind?("text"|"json"|"artifact-ref"), output_schema?(JSON Schema, only when output_kind is "json"), target?(where the job works), target_ambiguous?(bool), target_question?(string), command?(script nodes: path in scripts/), args?(script nodes: string[])}.',
     'A node may be type:"script" — a deterministic step that runs a saved script from the project\'s scripts/ folder with no AI (free, repeatable). Use it only for steps needing no judgment, and only name a script the user says exists (never invent one). Its command is the script path, args its CLI arguments; it receives upstream outputs as JSON on stdin and its stdout is the step\'s output. Script nodes take no expected_output/rules/skills/target/agent.',
     codeAreas.length
       ? `A node's target is the ONE work area it binds to: a code area of this project (${codeAreas.map(area => `"${area}"`).join(', ')}; "." means the project root repo) when the job edits that repo, or "ops" for everything else. If it is genuinely unclear, do NOT guess: leave target null, set target_ambiguous true and put the owner's question in target_question. Keep every node's existing target unless the user asks to change it.`
       : 'This project has no registered code areas, so a node\'s target is "ops" (or omitted). Keep every node\'s existing target unless the user asks to change it.',
     'An edge is {from, to} — from the node that produces to the node that consumes. The graph must be acyclic. Prefer a few strong nodes over many thin ones, but size each node to finish comfortably within one agent turn (about 15 minutes of focused work).',
-    'A node may be type:"trigger" — the workflow\'s entry point, at most one, with no incoming edges, and no instruction. Include one only if the user asks for it.',
+    'A node may be type:"trigger", the workflow entry point, at most one, with no incoming edges and no instruction. It owns trigger_kind ("manual" or "scheduled"). A manual trigger owns inputs[], typed placeholders any node can reference with {{id}}: {id, label, kind("text"|"number"|"url"|"file"), required(bool)}. A scheduled trigger owns schedule:{cron(five fields), overlap_policy("skip"|"allow"), enabled(bool)} and has no human intake. Keep existing trigger settings unless the user asks to change them.',
     'Downstream nodes receive upstream output as explicit typed data, not shared chat history, so each instruction must be self-contained: say what to do with the upstream result rather than assuming the agent remembers it.',
     'Keep whatever the user did not ask you to change: keep existing node ids stable so their positions and agents survive, and do not rewrite a node they did not mention. Reference inputs with {{id}} rather than hardcoding values declared as inputs.',
     '',
@@ -49,7 +48,7 @@ export function buildGraphPrompt(snapshot: GraphSnapshot, instruction: string, c
     '',
     'Reply with a one-sentence summary of what you changed, then the COMPLETE updated graph (every node and edge, not a diff) as:',
     '<workflow-graph>',
-    '{ "name": "...", "description": "...", "category": "...", "inputs": [...], "graph": { "nodes": [...], "edges": [...] } }',
+    '{ "name": "...", "description": "...", "category": "...", "graph": { "nodes": [...], "edges": [...] } }',
     '</workflow-graph>',
   ].join('\n')
 }
@@ -93,9 +92,27 @@ function parseNodes(raw: unknown): GraphNodeDefinition[] {
         : 'text',
     }
     if (type === 'trigger') {
-      parsed.trigger_kind = 'manual'
+      parsed.trigger_kind = node.trigger_kind === 'scheduled' ? 'scheduled' : 'manual'
       parsed.output_kind = 'json'
       parsed.instruction = ''
+      if (Array.isArray(node.inputs)) {
+        parsed.inputs = node.inputs
+          .filter((x: any) => x && typeof x === 'object' && (x.id || x.label))
+          .map((x: any) => ({
+            id: String(x.id || x.label || '').trim(),
+            label: String(x.label || x.id || '').trim(),
+            kind: INPUT_KINDS.includes(x.kind) ? x.kind : 'text',
+            required: !!x.required,
+          }))
+      }
+      if (node.schedule && typeof node.schedule === 'object') {
+        const schedule = node.schedule as Record<string, unknown>
+        parsed.schedule = {
+          cron: typeof schedule.cron === 'string' ? schedule.cron : '0 9 * * *',
+          overlap_policy: schedule.overlap_policy === 'allow' ? 'allow' : 'skip',
+          enabled: schedule.enabled !== false,
+        }
+      }
     } else if (type === 'script') {
       // Deterministic step: only what the server keeps — command, args, the
       // output contract, and an optional review gate. Agent-only fields are
@@ -244,6 +261,12 @@ export function parseGraphDraft(text: string): GraphPatch | null {
   const nodes = parseNodes(source.nodes)
   // An empty graph is not an edit — treat the reply as conversational and leave the plan.
   if (nodes.length) patch.graph = { nodes, edges: parseEdges(source.edges, nodes) }
+  // Older authoring replies may still put inputs at the document root. Migrate
+  // them into the trigger node before the patch reaches the canvas.
+  if (patch.graph && patch.inputs) {
+    patch.graph.nodes = patch.graph.nodes.map(node =>
+      node.type === 'trigger' ? { ...node, inputs: patch.inputs } : node)
+  }
 
   return (patch.name || patch.description || patch.category || patch.inputs || patch.graph) ? patch : null
 }
@@ -366,6 +389,7 @@ export function buildNodeTestPrompt(
   const chain = testChainFor(snapshot.graph, nodeId)
   const target = chain[chain.length - 1]
   const inputEntries = Object.entries(jobInput ?? {}).filter(([, v]) => v != null && v !== '')
+  const declaredInputs = snapshot.graph.nodes.find(node => node.type === 'trigger')?.inputs ?? []
   const lines = [
     '⟦MODE: WORKFLOW TEST RUN⟧ This is a dry run of ONE node of a workflow graph, so I can judge its instruction before approving the plan. Execute the steps below in order — each later step uses the earlier steps\' output — then show me the result of the LAST step in full (and briefly note what each earlier step produced). Do the actual work; do not describe what you would do.',
     'This is a REHEARSAL, but produce the REAL end result — the point is judging the actual output, not a description of it. If a step produces a file, design, or artifact, actually create it, under these hard rules: (1) NEVER modify or overwrite any existing project file — a rehearsal must not touch real deliverables, and such changes cannot be undone; (2) every file you create must be clearly named as a test: insert "-test" before the extension or into the artifact name (e.g. design-test, post-x-test.md); (3) end your reply with a list of every file you created, so they are easy to find and delete.',
@@ -375,9 +399,9 @@ export function buildNodeTestPrompt(
       'Workflow input (use these values where a step references {{id}}):',
       ...inputEntries.map(([key, value]) => `- {{${key}}} = ${typeof value === 'string' ? value : JSON.stringify(value)}`),
       '',
-    ] : snapshot.inputs.length ? [
+    ] : declaredInputs.length ? [
       'Declared inputs (use sensible sample values where a step references {{id}}):',
-      ...snapshot.inputs.map(x => `- {{${x.id}}} — ${x.label}${x.required ? ' (required)' : ''}`),
+      ...declaredInputs.map(x => `- {{${x.id}}}: ${x.label}${x.required ? ' (required)' : ''}`),
       '',
     ] : []),
     'Steps:',

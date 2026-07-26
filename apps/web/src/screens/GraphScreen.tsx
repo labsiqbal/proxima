@@ -18,7 +18,12 @@ import {
   updateGraphPlan,
 } from '../api/graph'
 import { listSchedules } from '../api/schedules'
-import { cronHint, ScheduleManager } from '../components/workflows/ScheduleManager'
+import {
+  cronHint,
+  DEFAULT_GRAPH_SCHEDULE,
+  ScheduleManager,
+  ScheduleSettingsEditor,
+} from '../components/workflows/ScheduleManager'
 import { cronLabelsByWorkflow } from '../lib/scheduleBadges'
 import { activeRuns } from '../api/runs'
 import { getJobDiff } from '../api/jobs'
@@ -68,7 +73,6 @@ type DraftTemplateMeta = {
   name?: string
   description?: string
   category?: string
-  inputs?: WorkflowInput[]
 }
 
 function readDraftMeta(jobId: number): DraftTemplateMeta {
@@ -80,6 +84,18 @@ function readDraftMeta(jobId: number): DraftTemplateMeta {
   } catch {
     return {}
   }
+}
+
+function graphTrigger(graph: WorkflowGraph | null | undefined): GraphNodeDefinition | undefined {
+  return graph?.nodes.find(node => node.type === 'trigger')
+}
+
+function triggerInputs(graph: WorkflowGraph | null | undefined): WorkflowInput[] {
+  return graphTrigger(graph)?.inputs ?? []
+}
+
+function templateIsScheduled(template: GraphTemplate): boolean {
+  return graphTrigger(template.graph)?.trigger_kind === 'scheduled'
 }
 
 type WorkflowHomeTab = 'drafts' | 'workflows' | 'runs'
@@ -868,7 +884,7 @@ export function GraphScreen({
         title: 'Untitled plan',
         graph: {
           nodes: [
-            { id: 'trigger', type: 'trigger', trigger_kind: 'manual', name: 'When I run it', instruction: '', output_kind: 'json' },
+            { id: 'trigger', type: 'trigger', trigger_kind: 'manual', name: 'When I run it', instruction: '', output_kind: 'json', inputs: [] },
             { id: 'step-1', type: 'agent', name: 'Step 1', instruction: '', output_kind: 'text' },
           ],
           edges: [{ from: 'trigger', to: 'step-1' }],
@@ -925,6 +941,7 @@ export function GraphScreen({
       name: 'When I run it',
       instruction: '',
       output_kind: 'json',
+      inputs: [],
     }
     setPlan({ ...plan, nodes: [node, ...plan.nodes] })
     setSelectedId(node.id)
@@ -976,7 +993,7 @@ export function GraphScreen({
     await act('save-output', () => editGraphNodeOutput(token, job.id, definition.id, value), 'Output corrected; dependent nodes were marked stale.')
   }
 
-  async function saveTemplate(meta: { name: string; description: string; category: string; inputs: WorkflowInput[] }) {
+  async function saveTemplate(meta: { name: string; description: string; category: string }) {
     if (!job || busy) return
     setBusy('save-template')
     setError('')
@@ -1003,7 +1020,6 @@ export function GraphScreen({
       name: normalizedPlanTitle(draftTitle),
       description: draftMeta.description?.trim() ?? '',
       category: draftMeta.category?.trim() || 'other',
-      inputs: (draftMeta.inputs ?? []).filter(item => item.id.trim() && item.label.trim()),
     })
   }
 
@@ -1049,7 +1065,6 @@ export function GraphScreen({
         name: template.name,
         description: template.description,
         category: template.category,
-        inputs: template.inputs,
       })
       if (!mounted.current) return
       setRunningTemplate(null)
@@ -1083,7 +1098,6 @@ export function GraphScreen({
         name: template.name,
         description: template.description,
         category: template.category,
-        inputs: template.inputs,
       })
       if (!mounted.current) return
       setStage('editor')
@@ -1161,15 +1175,20 @@ export function GraphScreen({
     const visibleRuns = runs.filter(item => matches(item.title, item.status))
     const searchedTemplates = (showArchived ? archivedTemplates : activeTemplates)
       .filter(item => matches(item.name, item.description, item.category, ...(scheduleCronByWorkflow.get(item.id) || [])))
-    const manualTemplates = searchedTemplates.filter(item => !scheduledWorkflowIds.has(item.id))
-    const automaticTemplates = searchedTemplates.filter(item => scheduledWorkflowIds.has(item.id))
+    const automaticTemplates = searchedTemplates.filter(item =>
+      templateIsScheduled(item) || scheduledWorkflowIds.has(item.id))
+    const automaticIds = new Set(automaticTemplates.map(item => item.id))
+    const manualTemplates = searchedTemplates.filter(item => !automaticIds.has(item.id))
     const searchPlaceholder = `Search ${homeTab}`
     const setTab = (tab: WorkflowHomeTab) => {
       setHomeTab(tab)
       if (tab !== 'workflows') setShowArchived(false)
     }
     const runTemplate = (template: GraphTemplate) => {
-      if (template.inputs?.length) setRunningTemplate(template)
+      const inputs = triggerInputs(template.graph)
+      if (inputs.length || template.inputs?.length) {
+        setRunningTemplate({ ...template, inputs: inputs.length ? inputs : template.inputs })
+      }
       else void createFromTemplate(template)
     }
     const category = (template: GraphTemplate) => template.category?.trim() || 'other'
@@ -1201,7 +1220,6 @@ export function GraphScreen({
             onClick={() => void toggleTemplatePaused(template)}
           >{template.status === 'active' ? '⏸' : '▶'}</button>
         </> : <>
-          <button className="ghost-button workflow-home-schedule-create" disabled={!!busy} onClick={() => setSchedulingTemplate(template)}>Schedule</button>
           <button className="primary-button" disabled={!!busy} onClick={() => runTemplate(template)}>Run</button>
           {template.status !== 'active' && <button
             className="row-action"
@@ -1529,16 +1547,6 @@ export function GraphScreen({
           onChange={event => setDraftMeta(current => ({ ...current, description: event.target.value }))}
         /></label>
       </div>
-      <div className="graph-workflow-inputs">
-        <p className="graph-eyebrow">Inputs <span className="muted">(optional)</span></p>
-        <p className="muted graph-field-note">
-          Each run asks for these values. Nodes can use them as <code>{'{{id}}'}</code>.
-        </p>
-        <WorkflowInputsEditor
-          inputs={draftMeta.inputs ?? []}
-          onChange={inputs => setDraftMeta(current => ({ ...current, inputs }))}
-        />
-      </div>
     </details>}
     {/* Durable merge/push outcome so a reopened Done plan still shows where the
         changes landed - the header Approve button disappears after the merge. */}
@@ -1584,24 +1592,29 @@ export function GraphScreen({
             name: job.title,
             description: '',
             category: '',
-            inputs: [],
             graph: plan,
           }, text, codeAreas)}
           applyReply={raw => {
             const patch = parseGraphDraft(raw)
             if (!patch?.graph) return false
             applyGraphPatch(patch.graph)
+            if (patch.inputs) {
+              setPlan(current => current && ({
+                ...current,
+                nodes: current.nodes.map(node =>
+                  node.type === 'trigger' ? { ...node, inputs: patch.inputs } : node),
+              }))
+            }
             setDraftMeta(current => ({
               name: patch.name ?? current.name,
               description: patch.description ?? current.description,
               category: patch.category ?? current.category,
-              inputs: patch.inputs ?? current.inputs,
             }))
             return true
           }}
           stripBlock={stripGraphBlock}
           buildTestPrompt={index => buildNodeTestPrompt(
-            { name: job.title, description: '', category: '', inputs: draftMeta.inputs ?? [], graph: plan },
+            { name: job.title, description: '', category: '', graph: plan },
             plan.nodes[index]?.id ?? '',
             job.input as Record<string, unknown> | undefined,
           )}
@@ -1649,13 +1662,45 @@ export function GraphScreen({
             {job.status === 'queued' ? <div className="graph-plan-form">
               <label>Name<input value={definition.name} onChange={event => updateSelected({ name: event.target.value })} /></label>
               {definition.type === 'trigger' ? <>
-                <label>Starts on<select value={definition.trigger_kind ?? 'manual'} disabled onChange={() => undefined}>
-                  <option value="manual">Manual — I press start</option>
-                </select></label>
-                <p className="muted graph-field-note">
-                  The trigger hands the workflow input to whatever it connects to. Schedules and
-                  webhooks become further options here.
-                </p>
+                <div className="graph-trigger-mode">
+                  <p className="graph-eyebrow">Trigger node</p>
+                  <div className="seg graph-trigger-seg" role="group" aria-label="Trigger mode">
+                    <button
+                      type="button"
+                      className={(definition.trigger_kind ?? 'manual') === 'manual' ? 'active' : ''}
+                      aria-pressed={(definition.trigger_kind ?? 'manual') === 'manual'}
+                      onClick={() => updateSelected({ trigger_kind: 'manual' })}
+                    >Manual</button>
+                    <button
+                      type="button"
+                      className={definition.trigger_kind === 'scheduled' ? 'active' : ''}
+                      aria-pressed={definition.trigger_kind === 'scheduled'}
+                      onClick={() => updateSelected({
+                        trigger_kind: 'scheduled',
+                        schedule: definition.schedule ?? DEFAULT_GRAPH_SCHEDULE,
+                      })}
+                    >Schedule</button>
+                  </div>
+                </div>
+                {(definition.trigger_kind ?? 'manual') === 'manual' ? <div className="graph-trigger-panel">
+                  <p className="graph-eyebrow">Intake form</p>
+                  <WorkflowInputsEditor
+                    inputs={definition.inputs ?? []}
+                    onChange={inputs => updateSelected({ inputs })}
+                  />
+                  <p className="muted graph-field-note">
+                    These are the questions each manual run asks. Nodes reference them with <code>{'{{id}}'}</code>.
+                  </p>
+                </div> : <div className="graph-trigger-panel">
+                  <p className="graph-eyebrow">Schedule settings</p>
+                  <ScheduleSettingsEditor
+                    value={definition.schedule ?? DEFAULT_GRAPH_SCHEDULE}
+                    onChange={schedule => updateSelected({ schedule })}
+                  />
+                  <p className="muted graph-field-note">
+                    Scheduled runs start on this cadence without asking for manual input. Source nodes provide the run data.
+                  </p>
+                </div>}
               </> : definition.type === 'script' ? <>
                 <label>Script<input
                   value={definition.command ?? ''}

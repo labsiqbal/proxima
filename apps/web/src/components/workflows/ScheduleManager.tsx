@@ -1,5 +1,5 @@
 import React from 'react'
-import type { Schedule, WorkflowInput } from '../../types'
+import type { GraphScheduleConfig, Schedule } from '../../types'
 import { createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule } from '../../api/schedules'
 import { confirmDialog } from '../ui/Dialog'
 import { Dropdown } from '../ui/Dropdown'
@@ -11,6 +11,12 @@ export const CRON_PRESETS = [
   { value: 'mon9', label: 'Every Monday at 9am', cron: '0 9 * * 1' },
   { value: 'custom', label: 'Custom…', cron: '' },
 ] as const
+
+export const DEFAULT_GRAPH_SCHEDULE: GraphScheduleConfig = {
+  cron: '0 9 * * *',
+  overlap_policy: 'skip',
+  enabled: true,
+}
 
 export const cronHint = (cron: string) => CRON_PRESETS.find(p => p.cron && p.cron === cron.trim())?.label || cron
 
@@ -43,13 +49,57 @@ export const isValidCron = (cron: string) => {
   })
 }
 
-// All a schedule needs to know about a workflow: which one, what to call it, and what
-// its runs must be asked for. Narrower than the full Workflow so graph templates — the
-// only authoring surface now — qualify without pretending to have steps.
+export function ScheduleSettingsEditor({ value, disabled = false, onChange }: {
+  value: GraphScheduleConfig
+  disabled?: boolean
+  onChange: (value: GraphScheduleConfig) => void
+}) {
+  const matchedPreset = CRON_PRESETS.find(p => p.cron && p.cron === value.cron.trim())
+  const [preset, setPreset] = React.useState<string>(matchedPreset?.value ?? 'custom')
+
+  React.useEffect(() => {
+    const match = CRON_PRESETS.find(p => p.cron && p.cron === value.cron.trim())
+    setPreset(match?.value ?? 'custom')
+  }, [value.cron])
+
+  const pickPreset = (nextPreset: string) => {
+    setPreset(nextPreset)
+    const hit = CRON_PRESETS.find(p => p.value === nextPreset)
+    if (hit?.cron) onChange({ ...value, cron: hit.cron })
+  }
+
+  return <div className="schedule-trigger-settings">
+    <label>Cadence<Dropdown
+      value={preset}
+      onChange={pickPreset}
+      options={CRON_PRESETS.map(p => ({ value: p.value, label: p.label }))}
+      disabled={disabled}
+    /></label>
+    <label>Cron<input
+      value={value.cron}
+      disabled={disabled}
+      onChange={event => onChange({ ...value, cron: event.target.value })}
+      placeholder="0 9 * * *"
+      spellCheck={false}
+    /></label>
+    <label>Overlap<div className="seg sched-seg">
+      <button type="button" disabled={disabled} className={value.overlap_policy === 'skip' ? 'active' : ''} onClick={() => onChange({ ...value, overlap_policy: 'skip' })}>Skip</button>
+      <button type="button" disabled={disabled} className={value.overlap_policy === 'allow' ? 'active' : ''} onClick={() => onChange({ ...value, overlap_policy: 'allow' })}>Allow</button>
+    </div></label>
+    <label className="wf-step-check"><input
+      type="checkbox"
+      checked={value.enabled}
+      disabled={disabled}
+      onChange={event => onChange({ ...value, enabled: event.target.checked })}
+    /> Enabled</label>
+  </div>
+}
+
+// All a schedule needs to know about a workflow is which one to run and what to call it.
+// Scheduled graph runs deliberately carry no manual intake payload.
 export type SchedulableWorkflow = {
   id: number
   name: string
-  inputs?: WorkflowInput[] | null
   /** Owning project — schedules inherit this; never pick a different project here. */
   project_slug?: string | null
 }
@@ -69,12 +119,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   const available = workflowId ? workflows.filter(w => w.id === workflowId) : workflows
   const [selectedId, setSelectedId] = React.useState(workflowId || available[0]?.id || 0)
   const selected = available.find(w => w.id === selectedId) || available[0] || null
-  const [preset, setPreset] = React.useState('daily9')
-  const [cron, setCron] = React.useState('0 9 * * *')
-  const [overlap, setOverlap] = React.useState<'skip' | 'allow'>('skip')
-  const [enabled, setEnabled] = React.useState(true)
-  const [brief, setBrief] = React.useState('')
-  const [values, setValues] = React.useState<Record<string, string>>({})
+  const [settings, setSettings] = React.useState<GraphScheduleConfig>(DEFAULT_GRAPH_SCHEDULE)
   const [schedules, setSchedules] = React.useState<Schedule[]>([])
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -114,18 +159,12 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
 
   const add = () => {
     if (!selected) { setError('Choose a workflow first.'); return }
-    if (!isValidCron(cron)) { setError('Enter a valid five-field cron using numbers, *, steps, ranges, or comma-separated parts.'); return }
-    const declared = selected.inputs || []
-    const missing = declared.find(input => input.required && !(values[input.id] || '').trim())
-    if (missing) { setError(`"${missing.label}" is required.`); return }
-    const declaredInput = Object.fromEntries(declared.map(input => [input.id, (values[input.id] || '').trim()]).filter(([, value]) => value))
-    const input = declared.length > 0 ? (Object.keys(declaredInput).length ? declaredInput : undefined) : (brief.trim() ? { brief: brief.trim() } : undefined)
+    if (!isValidCron(settings.cron)) { setError('Enter a valid five-field cron using numbers, *, steps, ranges, or comma-separated parts.'); return }
     void act(() => createSchedule(token, {
       workflow_id: selected.id,
-      cron: cron.trim(),
-      input,
-      overlap_policy: overlap,
-      enabled,
+      cron: settings.cron.trim(),
+      overlap_policy: settings.overlap_policy,
+      enabled: settings.enabled,
     }))
   }
   const toggle = (schedule: Schedule) => void act(() => updateSchedule(token, schedule.id, { enabled: !schedule.enabled }))
@@ -140,12 +179,6 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     if (!(await confirmDialog({ title: 'Delete schedule?', message: `Stop running “${name}” on ${cronHint(schedule.cron)}.`, confirmLabel: 'Delete', danger: true }))) return
     void act(() => deleteSchedule(token, schedule.id))
   }
-  const pickPreset = (value: string) => {
-    setPreset(value)
-    const hit = CRON_PRESETS.find(p => p.value === value)
-    if (hit?.cron) setCron(hit.cron)
-  }
-
   return <section className={`schedule-manager ${compact ? 'compact' : ''}`} aria-labelledby="schedule-manager-title">
     <header className="schedule-manager-head">
       <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedule ${selected?.name || 'workflow'}` : 'Scheduled'}</h1><p className="muted">Run saved workflows on a five-field cron cadence.</p></div>
@@ -160,13 +193,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     </div>}
     <div className="schedule-create-card">
       {!workflowId && <label>Workflow<Dropdown value={selected?.id ? String(selected.id) : ''} onChange={v => setSelectedId(Number(v))} options={available.map(w => ({ value: String(w.id), label: w.name }))} /></label>}
-      <label>Cadence<Dropdown value={preset} onChange={pickPreset} options={CRON_PRESETS.map(p => ({ value: p.value, label: p.label }))} /></label>
-      <label>Cron<input value={cron} onChange={e => { setCron(e.target.value); setPreset('custom') }} placeholder="0 9 * * *" spellCheck={false} /></label>
-      <label>Overlap<div className="seg sched-seg"><button type="button" className={overlap === 'skip' ? 'active' : ''} onClick={() => setOverlap('skip')}>Skip</button><button type="button" className={overlap === 'allow' ? 'active' : ''} onClick={() => setOverlap('allow')}>Allow</button></div></label>
-      {(selected?.inputs || []).length > 0
-        ? (selected?.inputs || []).map(input => <label className="schedule-brief" key={input.id}>{input.label}{input.required && <span className="muted"> (required)</span>}<input type={input.kind === 'number' ? 'number' : input.kind === 'url' ? 'url' : 'text'} value={values[input.id] || ''} onChange={event => setValues(current => ({ ...current, [input.id]: event.target.value }))} placeholder={input.kind === 'file' ? 'Path or URL' : input.label} /></label>)
-        : <label className="schedule-brief">Input brief <span className="muted">(optional)</span><textarea rows={2} value={brief} onChange={e => setBrief(e.target.value)} placeholder="Context supplied to every run" /></label>}
-      <label className="wf-step-check"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> Enabled</label>
+      <ScheduleSettingsEditor value={settings} disabled={busy} onChange={setSettings} />
       <button className="primary-button" disabled={busy || !selected} onClick={add}>{busy ? 'Saving…' : 'Add schedule'}</button>
     </div>
     <div className="schedule-list" aria-live="polite">
