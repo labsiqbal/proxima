@@ -859,7 +859,14 @@ agent replies with a `<design-scene>` block the Konva canvas applies live. The s
 (text, fonts, fills/gradients, artboard presets), Layers/Assets panels, a
 selection-aware chat, undo/redo + version history, multi-image reference inputs, an
 eyedropper, a per-project brand guide (`design.md`, generatable from reference
-URLs/images), and Export (PNG/JPG/PDF/HTML). On desktop the left rail (Chat /
+URLs/images), a per-project Moodboard for curated URL previews and screenshots,
+and Export (PNG/JPG/PDF/HTML). Moodboard cards support notes, tags, search,
+tag filtering, edit/delete/open actions, paste/drag/upload input, and a
+**Use as reference** selection. Selected card metadata enters the existing
+design-run preamble and local cached OG images/screenshots are attached as vision;
+preview-fetch failures save graceful fallback cards instead of breaking the board.
+Moodboard data lives under `artifacts/moodboard/` and is isolated by project. On
+desktop the left rail (Chat /
 Assets / Layers) and the right inspector are drag-resizable (same `useDragWidth`
 pattern as Workflows Plan Chat / node inspector); widths persist in
 `localStorage` (`proxima.design.leftWidth`, `proxima.design.inspectorWidth`) and

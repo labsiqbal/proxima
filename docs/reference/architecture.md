@@ -814,6 +814,15 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 `AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Alpha, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Alpha's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
+Design Studio owns a Canvas / Brand Guide / Moodboard section menu. Moodboard reads and
+writes a project-local `artifacts/moodboard/items.json` store through gated routes in
+`routes/design.py`; cached OG images and owner-uploaded screenshots live beside it under
+`artifacts/moodboard/images/`. `moodboard.py` bounds link HTML/image downloads, blocks
+private/local targets, and turns network failures into fallback card metadata. When the
+owner marks a card **Use as reference**, `run_prompting.py` reuses the
+`wiki_memory.build_run_preamble()` context seam and merges local Moodboard images into
+the established vision attachment marker for design sessions.
+
 Generic frontend refresh loops use one non-overlapping polling hook. It pauses while
 the document is hidden and refreshes once when the tab becomes visible, avoiding
 background request churn without making active run status stale. Home artifact recents

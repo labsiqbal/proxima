@@ -51,8 +51,11 @@ def markdown_image_paths(text: str, limit: int = _VISION_MAX_COUNT) -> list[str]
 
 def append_vision_references(text: str, paths: Iterable[str]) -> str:
     """Append the worker's private vision marker for explicit local references."""
+    marker = _VISION_MARKER.search(text or "")
+    existing = marker.group(1).split("|") if marker else []
+    base = text[: marker.start()].rstrip() if marker else text.rstrip()
     safe: list[str] = []
-    for raw in paths:
+    for raw in [*existing, *paths]:
         rel = str(raw).strip()
         if (
             not rel
@@ -68,7 +71,7 @@ def append_vision_references(text: str, paths: Iterable[str]) -> str:
             break
     if not safe:
         return text
-    return f"{text.rstrip()}\n\n⟦VISION:{'|'.join(safe)}⟧"
+    return f"{base}\n\n⟦VISION:{'|'.join(safe)}⟧"
 
 
 def load_project_images(
@@ -260,6 +263,7 @@ class RunPrompting:
         cfg = self.app.state.config
         include_design_studio = features.enabled(cfg, features.DESIGN_STUDIO)
         prompt_text = run["prompt"]
+        moodboard_references: list[dict[str, Any]] = []
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
             try:
                 # Per-profile instructions (the profile's "soul"/AGENTS.md): prepend
@@ -281,12 +285,18 @@ class RunPrompting:
                     if (include_design_studio and project_wiki is not None)
                     else None
                 )
+                moodboard_references = (
+                    wiki_memory.read_moodboard_references(project_wiki.parent)
+                    if (include_design_studio and project_wiki is not None)
+                    else []
+                )
                 preamble = wiki_memory.build_run_preamble(
                     project_name,
                     project_slug,
                     project_wiki,
                     include_design_studio=include_design_studio,
                     design_guidelines=design_guidelines,
+                    moodboard_references=moodboard_references,
                     # T8 detect-and-advertise: probe PATH for the bundle's
                     # recommended tools (cheap, first turn only) so present ones
                     # are advertised to the agent. Missing ones stay silent here.
@@ -334,7 +344,24 @@ class RunPrompting:
         # what the client sent — keeps the agent editing the scene, never launching
         # workflows or unrelated tasks.
         if session_mode == "design":
+            if not moodboard_references and include_design_studio and project_wiki is not None:
+                try:
+                    moodboard_references = wiki_memory.read_moodboard_references(project_wiki.parent)
+                except Exception:
+                    logger.exception("moodboard context read failed (non-fatal)")
+            if not is_fresh_session:
+                moodboard_context = wiki_memory.moodboard_reference_context(moodboard_references)
+                if moodboard_context:
+                    prompt_text = moodboard_context + "\n\n---\n\n" + prompt_text
             prompt_text = wiki_memory.DESIGN_SESSION_GUARDRAIL + "\n\n---\n\n" + prompt_text
+            prompt_text = append_vision_references(
+                prompt_text,
+                [
+                    str(item.get("imagePath"))
+                    for item in moodboard_references
+                    if item.get("imagePath")
+                ],
+            )
         return prompt_text
 
     async def reset_agent_session(

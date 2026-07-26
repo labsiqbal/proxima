@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import secrets
 import time
 from typing import Any
 
@@ -21,6 +22,7 @@ from .. import fsapi
 from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
+from .. import moodboard
 from ..schemas import ImageGenRequest
 
 
@@ -37,6 +39,115 @@ def register(app, deps):
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
             (user["id"], action, slug, json.dumps({"path": path})),
         )
+
+    @app.get("/api/projects/{slug}/design/moodboard")
+    def list_moodboard(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """List this project's curated visual references."""
+        features.require(cfg, features.DESIGN_STUDIO)
+        root = _project_root(slug, user)
+        return {"items": moodboard.read_items(root)}
+
+    @app.post("/api/projects/{slug}/design/moodboard")
+    def add_moodboard_item(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+        """Add a URL preview or an already-uploaded screenshot to the Moodboard.
+
+        URL preview fetches are best-effort. A reachable page without usable OG
+        metadata, or a transient network failure, still produces a fallback card.
+        """
+        features.require(cfg, features.DESIGN_STUDIO)
+        data = payload or {}
+        root = _project_root(slug, user)
+        raw_url = str(data.get("url") or "").strip()
+        image_path = str(data.get("imagePath") or "").strip()
+        if not raw_url and not image_path:
+            raise HTTPException(status_code=400, detail="Give a URL or an uploaded screenshot.")
+        item_id = f"mb-{int(time.time() * 1000)}-{secrets.token_hex(3)}"
+        warning = ""
+        title = str(data.get("title") or "").strip()[:240]
+        site_name = str(data.get("siteName") or "").strip()[:120]
+        favicon_url = ""
+        url = ""
+        if raw_url:
+            try:
+                preview = moodboard.fetch_link_preview(raw_url)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            url = preview["url"]
+            title = title or preview["title"]
+            site_name = site_name or preview["siteName"]
+            favicon_url = preview["faviconUrl"]
+            warning = preview["warning"]
+            image_path = moodboard.cache_preview_image(
+                root,
+                item_id,
+                preview.get("imageBytes"),
+                str(preview.get("imageMime") or ""),
+            ) or ""
+        else:
+            try:
+                source = moodboard.validate_local_image(root, image_path)
+            except (ValueError, fsapi.FsError, OSError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            title = title or source.stem
+            site_name = site_name or "Uploaded screenshot"
+        created = moodboard.now_iso()
+        item = {
+            "id": item_id,
+            "kind": "link" if url else "upload",
+            "url": url or None,
+            "imagePath": image_path or None,
+            "title": title,
+            "siteName": site_name or "Reference",
+            "faviconUrl": favicon_url or None,
+            "note": str(data.get("note") or "").strip()[:2000],
+            "tags": moodboard.normalize_tags(data.get("tags")),
+            "useAsReference": bool(data.get("useAsReference", False)),
+            "createdAt": created,
+            "updatedAt": created,
+        }
+        try:
+            moodboard.append_item(root, item)
+        except ValueError as exc:
+            if image_path and image_path.startswith(f"{moodboard.IMAGE_DIR}/") and raw_url:
+                try:
+                    fsapi.resolve_in_project(root, image_path).unlink(missing_ok=True)
+                except (OSError, fsapi.FsError):
+                    pass
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
+        return {"item": item, "warning": warning or None}
+
+    @app.patch("/api/projects/{slug}/design/moodboard/{item_id}")
+    def update_moodboard_item(slug: str, item_id: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+        """Edit a Moodboard note/tags or select it for design-run context."""
+        features.require(cfg, features.DESIGN_STUDIO)
+        data = payload or {}
+        patch: dict[str, Any] = {}
+        if "note" in data:
+            patch["note"] = str(data.get("note") or "").strip()[:2000]
+        if "tags" in data:
+            patch["tags"] = moodboard.normalize_tags(data.get("tags"))
+        if "useAsReference" in data:
+            patch["useAsReference"] = bool(data.get("useAsReference"))
+        if not patch:
+            raise HTTPException(status_code=400, detail="No editable Moodboard fields were provided.")
+        root = _project_root(slug, user)
+        item = moodboard.patch_item(root, item_id, patch)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Moodboard item not found.")
+        _audit_fs(user, "design.moodboard.update", slug, moodboard.STORE_PATH)
+        return {"item": item}
+
+    @app.delete("/api/projects/{slug}/design/moodboard/{item_id}")
+    def remove_moodboard_item(slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)):
+        """Delete a Moodboard card and its private cached/uploaded image."""
+        features.require(cfg, features.DESIGN_STUDIO)
+        root = _project_root(slug, user)
+        item = moodboard.delete_item(root, item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Moodboard item not found.")
+        _audit_fs(user, "design.moodboard.delete", slug, moodboard.STORE_PATH)
+        return {"ok": True, "id": item_id}
 
     @app.post("/api/projects/{slug}/design/brand-guide")
     def generate_brand_guide(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):

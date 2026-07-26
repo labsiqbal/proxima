@@ -3,7 +3,7 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-169 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+173 endpoints across 15 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user — first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -13,7 +13,7 @@
 - [`routes/archive.py`](#routes-archive-py) — 3 endpoints
 - [`routes/auth.py`](#routes-auth-py) — 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) — 25 endpoints
-- [`routes/design.py`](#routes-design-py) — 4 endpoints
+- [`routes/design.py`](#routes-design-py) — 8 endpoints
 - [`routes/files.py`](#routes-files-py) — 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) — 14 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) — 12 endpoints
@@ -114,6 +114,10 @@
 | POST | `/api/projects/{slug}/design/brand-guide` | `generate_brand_guide` | Kick off an agent run that synthesises a project's brand guideline into |
 | POST | `/api/projects/{slug}/design/image` | `design_image` | Generate (text→image) or edit (image+prompt→image) via the configured |
 | GET | `/api/projects/{slug}/design/image-models` | `design_image_models` | For the codex provider there's no static model list (login-based); for |
+| GET | `/api/projects/{slug}/design/moodboard` | `list_moodboard` | List this project's curated visual references. |
+| POST | `/api/projects/{slug}/design/moodboard` | `add_moodboard_item` | Add a URL preview or an already-uploaded screenshot to the Moodboard. |
+| DELETE | `/api/projects/{slug}/design/moodboard/{item_id}` | `remove_moodboard_item` | Delete a Moodboard card and its private cached/uploaded image. |
+| PATCH | `/api/projects/{slug}/design/moodboard/{item_id}` | `update_moodboard_item` | Edit a Moodboard note/tags or select it for design-run context. |
 | POST | `/api/projects/{slug}/designs/from-image` | `design_from_image` | Seed a new Design Studio scene containing an existing project image as a |
 
 
@@ -285,4 +289,4 @@
 
 
 ---
-_Generated 2026-07-26 04:08 UTC._
+_Generated 2026-07-26 05:09 UTC._

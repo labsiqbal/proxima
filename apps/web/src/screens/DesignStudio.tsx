@@ -21,6 +21,7 @@ import { getImageGenSettings } from '../api/settings'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import { MiniPreview, cssTextShadow } from '../components/design/MiniPreview'
 import { ColorInput } from '../components/design/ColorInput'
+import { DesignStudioMenu, Moodboard } from '../components/design/Moodboard'
 import {
   DESIGN_COMPONENTS_FILE,
   DESIGN_INSPECTOR_WIDTH_KEY,
@@ -523,12 +524,12 @@ export function DesignStartTeaching() {
       helpLead="Design Studio drafts editable visual scenes for this project. Describe a brief and the AI lays out layers - or start from a template. Leave mid-edit and return: the canvas scene stays mounted for this session. Scenes save to the active project (shell switcher)."
       capabilities={DS_START_CAPS}
       steps={DS_START_STEPS}
-      helpBtnTitle="Brief, templates, layers, export, brand guide, and the Generate → canvas path"
+      helpBtnTitle="Brief, templates, layers, export, brand guide, Moodboard, and the Generate → canvas path"
     />
   )
 }
 
-function StartScreen({ onCreate, onShowGallery, designCount, onBrandGuide, mentionItems }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; onBrandGuide?: () => void; mentionItems: MentionItem[] }) {
+function StartScreen({ onCreate, onShowGallery, designCount, mentionItems }: { onCreate: (t: Template, brief: string) => void; onShowGallery: () => void; designCount: number; mentionItems: MentionItem[] }) {
   const [surface, setSurface] = React.useState<Surface>('graphic')
   const [brief, setBrief] = React.useState('')
   const tpls = surfaceTemplates(surface)
@@ -542,7 +543,6 @@ function StartScreen({ onCreate, onShowGallery, designCount, onBrandGuide, menti
       <div className="ds-prompt-bar">
         <div className="ds-surface-pills">
           {SURFACES.map(s => <button key={s.key} className={surface === s.key ? 'active' : ''} onClick={() => setSurface(s.key)}>{s.label}</button>)}
-          {onBrandGuide && <button type="button" className="ds-brand-pill" title="Generate design.md brand guide from references" onClick={onBrandGuide}>✦ Brand guide</button>}
         </div>
         <button className="primary-button" disabled={!brief.trim()} onClick={generate}>Generate →</button>
       </div>
@@ -602,7 +602,7 @@ const chatFromMessages = (msgs: { role: string; content: string }[]): { role: 'u
   .filter(m => (m.role === 'user' || m.role === 'assistant') && !!m.content && !m.content.startsWith('Agent produced no output'))
   .map(m => ({ role: m.role as 'user' | 'assistant', content: m.role === 'assistant' ? (stripDesignScene(m.content) || 'Updated the design.') : m.content }))
 
-export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery') => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
+export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery' | 'moodboard') => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
   const isMobile = useIsMobile()
   const mentionItems = useProjectMentionItems(token, project?.slug)
   const [mSheet, setMSheet] = React.useState<'panel' | 'inspector' | 'add' | null>(null)
@@ -612,7 +612,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [spacePan, setSpacePan] = React.useState(false)
   const [middlePan, setMiddlePan] = React.useState(false)
   const [multiMode, setMultiMode] = React.useState(false) // touch multi-select: tapping layer rows toggles selection
-  const [stage, setStage] = React.useState<'start' | 'studio' | 'gallery'>('start')
+  const [stage, setStage] = React.useState<'start' | 'studio' | 'gallery' | 'moodboard'>('start')
   React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
   const [brandGuideOpen, setBrandGuideOpen] = React.useState(false)
   const [scene, setScene] = React.useState<Scene | null>(null)
@@ -1332,8 +1332,19 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     loadDesigns()
   }
   if (!project) return <section className="design-studio"><div className="ds-start"><div className="ds-start-inner center"><h1>Pick a project first</h1><p className="muted ds-sub">Design Studio saves your work into the active project's <code>artifacts/design</code>. Choose a project from the sidebar.</p></div></div></section>
-  if (stage === 'gallery') return <section className="design-studio"><GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} /></section>
-  if (stage === 'start' || !scene) return <section className="design-studio"><StartScreen mentionItems={mentionItems} designCount={designs.length} onShowGallery={() => setStage('gallery')} onBrandGuide={() => setBrandGuideOpen(true)} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
+  const designMenu = <DesignStudioMenu
+    active={brandGuideOpen ? 'brand-guide' : stage === 'moodboard' ? 'moodboard' : 'canvas'}
+    onCanvas={() => { setBrandGuideOpen(false); setStage(scene ? 'studio' : 'start') }}
+    onBrandGuide={() => setBrandGuideOpen(true)}
+    onMoodboard={() => { flushSaveRef.current(); setBrandGuideOpen(false); setStage('moodboard') }}
+  />
+  if (stage === 'moodboard') return <section className="design-studio">{designMenu}<Moodboard token={token} slug={project.slug} />
+    {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
+  </section>
+  if (stage === 'gallery') return <section className="design-studio">{designMenu}<GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} />
+    {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
+  </section>
+  if (stage === 'start' || !scene) return <section className="design-studio">{designMenu}<StartScreen mentionItems={mentionItems} designCount={designs.length} onShowGallery={() => setStage('gallery')} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
     {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
 
@@ -2095,6 +2106,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
 
   // Chrome Back owns return-to-origin while the canvas is open (deep surface).
   return <section className={`design-studio ${isMobile ? 'is-mobile' : ''} ${panMode ? 'is-panning' : ''}`}>
+    {designMenu}
     <div className="ds-toolbar">
       <strong className="ds-title">{scene.title}</strong>
       <span className="muted ds-project-tag">· {cleanProjectName(project.name)}</span>
@@ -2613,5 +2625,6 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         <button onClick={fit}>⤢<small>Fit</small></button>
       </nav>
     </>}
+    {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
 }

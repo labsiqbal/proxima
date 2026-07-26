@@ -125,7 +125,8 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
 
 - **Design Studio** — the agent drafts **editable layered designs** (text stays
   real text) from a brief; refine them on a Konva canvas with a full inspector,
-  selection-aware chat, per-project brand guide, and PNG/JPG/PDF/HTML export.
+  selection-aware chat, per-project brand guide, a per-project moodboard, and
+  PNG/JPG/PDF/HTML export.
 
   ![Design Studio home](docs/screenshots/design-home.png)
 - **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,

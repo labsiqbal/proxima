@@ -60,6 +60,33 @@ export const genDesignImage = (token: string, slug: string, body: { prompt: stri
 export const generateBrandGuide = (token: string, slug: string, body: { urls?: string[]; imagePaths?: string[]; notes?: string }) =>
   api<{ run_id: number; session_id: number; urls: { url: string; ok: boolean }[] }>(`/api/projects/${slug}/design/brand-guide`, token, { method: 'POST', body: JSON.stringify(body) })
 
+export type MoodboardItem = {
+  id: string
+  kind: 'link' | 'upload'
+  url: string | null
+  imagePath: string | null
+  title: string
+  siteName: string
+  faviconUrl: string | null
+  note: string
+  tags: string[]
+  useAsReference: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export const listMoodboard = (token: string, slug: string) =>
+  api<{ items: MoodboardItem[] }>(`/api/projects/${q(slug)}/design/moodboard`, token)
+
+export const addMoodboardItem = (token: string, slug: string, body: { url?: string; imagePath?: string; title?: string; siteName?: string; note?: string; tags?: string[]; useAsReference?: boolean }) =>
+  api<{ item: MoodboardItem; warning: string | null }>(`/api/projects/${q(slug)}/design/moodboard`, token, { method: 'POST', body: JSON.stringify(body) })
+
+export const updateMoodboardItem = (token: string, slug: string, itemId: string, body: { note?: string; tags?: string[]; useAsReference?: boolean }) =>
+  api<{ item: MoodboardItem }>(`/api/projects/${q(slug)}/design/moodboard/${q(itemId)}`, token, { method: 'PATCH', body: JSON.stringify(body) })
+
+export const deleteMoodboardItem = (token: string, slug: string, itemId: string) =>
+  api<{ ok: boolean; id: string }>(`/api/projects/${q(slug)}/design/moodboard/${q(itemId)}`, token, { method: 'DELETE' })
+
 // URL for inline preview/download of a project file (<img>/<a>); cookie-authed.
 export const fileUrl = (slug: string, path: string) =>
   `/api/preview/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`

@@ -146,6 +146,28 @@ agent to write `design.md` at the project root. The client polls `design.md` unt
 lands and previews it. JS-rendered pages (Instagram) yield thin HTML — the digest says so
 and points the user to uploading a screenshot instead.
 
+## Per-project Moodboard
+
+Design Studio also has a **Moodboard** next to Canvas and Brand Guide. Brand Guide is
+the project's own visual rules; Moodboard is a curated gallery of external inspiration.
+Each card may come from a URL or an uploaded/pasted/dropped screenshot and carries a
+source, optional note, and tags. Search and tag filters stay client-side.
+
+- Storage: `artifacts/moodboard/items.json`, with cached OG images and uploaded
+  screenshots under `artifacts/moodboard/images/`.
+- API: the gated `/api/projects/{slug}/design/moodboard` list/add route plus item
+  patch/delete routes in `routes/design.py`.
+- Link add: `moodboard.fetch_link_preview()` reads bounded HTML metadata and caches the
+  page's OG image. It rejects local/private network targets. A network, metadata, or
+  image failure still saves a fallback card and returns a warning.
+- **Use as reference:** selected cards are rendered by
+  `wiki_memory.moodboard_reference_context()` into the existing design-run preamble
+  path. Local card images are merged into the run's existing `VISION` attachment marker,
+  so the design agent receives the source URL/note/tags and can see the cached preview or
+  screenshot. The selection is refreshed on later turns in an existing design session.
+
+The whole surface and all Moodboard routes use the Design Studio feature gate.
+
 ## `/design` from the main chat
 
 Typing `/design <brief>` in the main chat (`routes/chat.py`) seeds a shell scene, creates
