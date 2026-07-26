@@ -1325,7 +1325,7 @@ export function GraphScreen({
                   </div>
                   <div className="workflow-home-group">
                     <div className="workflow-home-group-head is-scheduled">
-                      <div><strong>⏰ Otomatis / Scheduled</strong><small>These run themselves on a saved cadence.</small></div>
+                      <div><strong>⏰ Scheduled</strong><small>These run themselves on a saved cadence.</small></div>
                       <span>{automaticTemplates.length}</span>
                     </div>
                     {automaticTemplates.length === 0
@@ -1856,10 +1856,10 @@ export function GraphScreen({
         disabled={!!busy || !!job.workflow_id}
         title={job.workflow_id ? 'This plan is already a reusable workflow' : 'Create a reusable workflow from this plan'}
       >
-        {busy === 'save-template' ? 'Saving…' : '★ Simpan sbg Workflow'}
+        {busy === 'save-template' ? 'Saving…' : '★ Save as Workflow'}
       </button>
       <button className="primary-button" onClick={() => void runCurrentPlan()} disabled={!!busy}>
-        {busy === 'start' ? 'Starting…' : '▶ Jalankan'}
+        {busy === 'start' ? 'Starting…' : '▶ Run'}
       </button>
     </footer>}
     {runningTemplate && <RunModal

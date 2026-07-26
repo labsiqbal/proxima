@@ -133,8 +133,8 @@ describe('GraphScreen editor autosave actions', () => {
     const footer = document.querySelector('.graph-editor-footer') as HTMLElement
     expect(footer).toBeTruthy()
     expect(within(footer).getAllByRole('button')).toHaveLength(2)
-    expect(within(footer).getByRole('button', { name: '★ Simpan sbg Workflow' })).toBeEnabled()
-    expect(within(footer).getByRole('button', { name: '▶ Jalankan' })).toBeEnabled()
+    expect(within(footer).getByRole('button', { name: '★ Save as Workflow' })).toBeEnabled()
+    expect(within(footer).getByRole('button', { name: '▶ Run' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Save plan' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Approve plan/i })).not.toBeInTheDocument()
     expect(screen.getByText('Saved ✓')).toBeInTheDocument()
@@ -157,7 +157,7 @@ describe('GraphScreen editor autosave actions', () => {
     await screen.findByRole('heading', { name: 'Untitled plan' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Move node' }))
-    const run = screen.getByRole('button', { name: '▶ Jalankan' })
+    const run = screen.getByRole('button', { name: '▶ Run' })
     expect(run).toBeEnabled()
     fireEvent.click(run)
 
@@ -180,7 +180,7 @@ describe('GraphScreen editor autosave actions', () => {
     fireEvent.click(screen.getByText('Workflow metadata'))
     fireEvent.change(screen.getByPlaceholderText('e.g. content'), { target: { value: 'research' } })
     fireEvent.change(screen.getByPlaceholderText('What this workflow does'), { target: { value: 'Daily brief' } })
-    fireEvent.click(screen.getByRole('button', { name: '★ Simpan sbg Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: '★ Save as Workflow' }))
 
     await waitFor(() => expect(saveGraphTemplate).toHaveBeenCalledWith('t', 42, {
       name: 'Untitled plan',
