@@ -405,7 +405,7 @@ focused **editor** - browsing and editing are different modes of work. Home reme
 the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
 a saved workflow. Workflow rows are split into **Manual (on-demand)** and
-**Otomatis / Scheduled** groups by the presence of schedule rows, with category and
+**Scheduled** groups by the presence of schedule rows, with category and
 trigger badges plus row actions. Scheduled rows open the complete schedule manager in
 a dialog and can be paused or resumed; manual rows retain a Schedule action so the
 first schedule can be created. Run rows show recency, status, duration, and a View
