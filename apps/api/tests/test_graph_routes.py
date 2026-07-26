@@ -131,6 +131,65 @@ def test_create_edit_plan_start_and_inspect_graph_job(tmp_path):
     assert job_id not in linear_ids
 
 
+def test_plan_patch_autosaves_graph_and_title_then_keeps_title_renameable(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = _create(client)
+    revised = {
+        "nodes": [
+            {"id": "research", "name": "Research"},
+            {"id": "publish", "name": "Publish", "depends_on": ["research"]},
+        ]
+    }
+
+    saved = client.patch(
+        f"/api/graph/jobs/{job['id']}/graph",
+        json={"graph": revised, "title": "Daily research"},
+    )
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["title"] == "Daily research"
+    assert [node["node_id"] for node in saved.json()["node_states"]] == [
+        "research",
+        "publish",
+    ]
+    session = app.state.db.execute(
+        "SELECT title, manual_title FROM sessions WHERE id = ?",
+        (job["session_id"],),
+    ).fetchone()
+    assert dict(session) == {"title": "Daily research", "manual_title": 1}
+
+    assert client.post(f"/api/graph/jobs/{job['id']}/start").status_code == 200
+    frozen = client.patch(
+        f"/api/graph/jobs/{job['id']}/graph",
+        json={"graph": _chain_graph(), "title": "Should not partially save"},
+    )
+    assert frozen.status_code == 409
+    assert client.get(f"/api/graph/jobs/{job['id']}").json()["title"] == "Daily research"
+
+    renamed = client.patch(
+        f"/api/graph/jobs/{job['id']}/graph",
+        json={"title": "Daily research run"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "Daily research run"
+
+
+def test_plan_patch_rejects_blank_title_and_empty_payload(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = _create(client)
+    endpoint = f"/api/graph/jobs/{job['id']}/graph"
+
+    blank = client.patch(endpoint, json={"title": "   "})
+    empty = client.patch(endpoint, json={})
+
+    assert blank.status_code == 422
+    assert "title" in blank.json()["detail"]
+    assert empty.status_code == 422
+    assert "graph or title" in empty.json()["detail"]
+
+
 def test_edit_upstream_output_marks_descendants_stale_and_reruns(tmp_path):
     app = _app(tmp_path, enabled=True)
     client = _client(app)

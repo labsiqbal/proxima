@@ -93,6 +93,7 @@
 	--tour-progress-height: 0.2rem;
 	--ui-spinner-size: 1rem;
 	--ui-spinner-stroke: 0.125rem;
+	--focus-ring-width: 3px;
 
 	color-scheme: light;
 	--font-sans:
@@ -101,6 +102,7 @@
 	--font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 	--theme-primary: #0053fd;
 	--ui-accent: var(--theme-primary);
+	--ui-focus-ring: color-mix(in srgb, var(--ui-accent) 24%, transparent);
 	--ui-bg-sidebar: #f7f9fc;
 	--ui-bg-editor: #ffffff;
 	--ui-chat-surface-background: #fbfcfe;
@@ -5733,6 +5735,51 @@ div.result-media {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.graph-title {
+	min-width: 0;
+	flex: 0 1 auto;
+}
+.graph-title-button {
+	display: inline-flex;
+	max-width: 100%;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1);
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: text;
+}
+.graph-title-button span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.graph-title-button svg {
+	flex: none;
+	color: var(--ui-text-tertiary);
+}
+.graph-title-button:hover,
+.graph-title-button:focus-visible {
+	background: var(--ui-row-hover-background);
+	outline: none;
+}
+.graph-title-input {
+	min-width: 0;
+	width: 100%;
+	padding: var(--space-1) var(--space-2);
+	border: 1px solid var(--ui-accent);
+	border-radius: var(--radius-sm);
+	background: var(--ui-bg-editor);
+	color: var(--ui-text-primary);
+	font: inherit;
+}
+.graph-title-input:focus {
+	outline: none;
+	box-shadow: 0 0 0 var(--focus-ring-width) var(--ui-focus-ring);
+}
 /* The node name is a panel title, so it matches the screen title rather than
    towering over it — it used to be --text-xl back when the header was a block. */
 .graph-inspector h2 {
@@ -5820,8 +5867,7 @@ div.result-media {
 	min-width: 0;
 	min-height: 0;
 }
-.graph-status,
-.graph-dirty {
+.graph-status {
 	display: inline-flex;
 	padding: var(--space-1) var(--space-2);
 	border-radius: var(--radius-full);
@@ -5837,8 +5883,7 @@ div.result-media {
 	color: var(--ui-accent);
 	background: var(--ui-row-active-background);
 }
-.graph-status.st-review,
-.graph-dirty {
+.graph-status.st-review {
 	color: var(--ui-warning);
 	background: var(--ui-warning-bg);
 }
@@ -5849,6 +5894,91 @@ div.result-media {
 .graph-status.st-failed {
 	color: var(--ui-danger);
 	background: var(--ui-danger-bg);
+}
+.graph-save-status {
+	display: inline-flex;
+	align-items: center;
+	padding: var(--space-1) var(--space-2);
+	border: 1px solid transparent;
+	border-radius: var(--radius-full);
+	font-size: var(--text-xs);
+	font-weight: 600;
+	white-space: nowrap;
+}
+.graph-save-status.is-saved {
+	border-color: color-mix(in srgb, var(--ui-success-strong) 28%, transparent);
+	background: var(--ui-success-bg);
+	color: var(--ui-success-strong);
+}
+.graph-save-status.is-saving {
+	background: var(--ui-surface-subtle);
+	color: var(--ui-text-secondary);
+}
+.graph-save-status.is-error {
+	border-color: color-mix(in srgb, var(--ui-danger) 28%, transparent);
+	background: var(--ui-danger-bg);
+	color: var(--ui-danger);
+}
+.graph-workflow-meta {
+	flex: none;
+	padding: var(--space-3) var(--space-5);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+	background: var(--ui-surface-subtle);
+}
+.graph-workflow-meta summary {
+	width: fit-content;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	font-weight: 600;
+	cursor: pointer;
+}
+.graph-workflow-meta summary span {
+	color: var(--ui-text-tertiary);
+	font-weight: 400;
+}
+.graph-workflow-meta-fields {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-3);
+	margin-top: var(--space-3);
+}
+.graph-workflow-meta-fields label {
+	display: grid;
+	gap: var(--space-1);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	font-weight: 600;
+}
+.graph-workflow-meta-fields input,
+.graph-workflow-meta-fields textarea {
+	width: 100%;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--ui-stroke-primary);
+	border-radius: var(--radius-sm);
+	background: var(--ui-bg-editor);
+	color: var(--ui-text-primary);
+	font: inherit;
+}
+.graph-workflow-inputs {
+	display: grid;
+	gap: var(--space-2);
+	margin-top: var(--space-4);
+}
+.graph-workflow-inputs p {
+	margin: 0;
+}
+.graph-editor-footer {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-5);
+	border-top: 1px solid var(--ui-stroke-primary);
+	background: var(--ui-surface);
+}
+.graph-promote-button {
+	color: var(--ui-text-secondary);
 }
 /* The canvas pans and zooms in place, so it never scrolls: the transform is the
    viewport. overflow:hidden keeps a dragged node from growing the layout. */
@@ -6704,6 +6834,13 @@ div.result-media {
 	}
 	.graph-header {
 		flex-wrap: wrap;
+	}
+	.graph-workflow-meta-fields {
+		grid-template-columns: 1fr;
+	}
+	.graph-editor-footer > button {
+		flex: 1;
+		justify-content: center;
 	}
 }
 

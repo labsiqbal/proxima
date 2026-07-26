@@ -5,6 +5,37 @@ const INPUT_KINDS: WorkflowInput['kind'][] = ['text', 'url', 'number', 'file']
 const slugifyId = (value: string) =>
   value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
 
+export function WorkflowInputsEditor({ inputs, disabled = false, onChange }: {
+  inputs: WorkflowInput[]
+  disabled?: boolean
+  onChange: (inputs: WorkflowInput[]) => void
+}) {
+  const patch = (index: number, next: Partial<WorkflowInput>) =>
+    onChange(inputs.map((item, i) => i === index ? { ...item, ...next } : item))
+
+  return <div className="wf-inputs">
+    {inputs.length > 0 && <div className="wf-input-row wf-input-head">
+      <span>Label</span><span>ID</span><span>Kind</span><span>Required</span><span />
+    </div>}
+    {inputs.map((item, index) => <div className="wf-input-row" key={index}>
+      <input className="wf-input-cell" value={item.label} disabled={disabled} placeholder="e.g. Topic"
+        onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} />
+      <input className="wf-input-cell" value={item.id} disabled={disabled} placeholder="topic"
+        onChange={event => patch(index, { id: slugifyId(event.target.value) })} />
+      <select className="wf-input-cell" value={item.kind} disabled={disabled}
+        onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
+        {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+      </select>
+      <label className="wf-input-req"><input type="checkbox" checked={item.required} disabled={disabled}
+        onChange={event => patch(index, { required: event.target.checked })} /> required</label>
+      <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={disabled}
+        onClick={() => onChange(inputs.filter((_, i) => i !== index))}>×</button>
+    </div>)}
+    <button className="ghost-button wf-add-step" disabled={disabled}
+      onClick={() => onChange([...inputs, { id: '', label: '', kind: 'text', required: false }])}>+ Add input</button>
+  </div>
+}
+
 // Saving a plan as a Workflow is the moment its reusable contract is defined, so it is
 // also where {{inputs}} are declared: a Workflow is what a fresh run and a schedule are
 // both built from, and each needs to know what to ask for. (Extracted from GraphScreen
@@ -22,8 +53,6 @@ export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
   const [category, setCategory] = React.useState(initial?.category ?? '')
   const [inputs, setInputs] = React.useState<WorkflowInput[]>(initial?.inputs ?? [])
 
-  const patch = (index: number, next: Partial<WorkflowInput>) =>
-    setInputs(current => current.map((item, i) => i === index ? { ...item, ...next } : item))
   const close = () => { if (!busy) onCancel() }
 
   return <div className="modal-scrim" onClick={close}><div className="modal-card graph-template-card" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true">
@@ -36,27 +65,7 @@ export function SaveTemplateModal({ title, initial, busy, onCancel, onSave }: {
     <p className="muted graph-field-note">
       What each run should be asked for. Refer to one from any node with <code>{'{{id}}'}</code>.
     </p>
-    <div className="wf-inputs">
-      {inputs.length > 0 && <div className="wf-input-row wf-input-head">
-        <span>Label</span><span>ID</span><span>Kind</span><span>Required</span><span />
-      </div>}
-      {inputs.map((item, index) => <div className="wf-input-row" key={index}>
-        <input className="wf-input-cell" value={item.label} disabled={busy} placeholder="e.g. Topic"
-          onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} />
-        <input className="wf-input-cell" value={item.id} disabled={busy} placeholder="topic"
-          onChange={event => patch(index, { id: slugifyId(event.target.value) })} />
-        <select className="wf-input-cell" value={item.kind} disabled={busy}
-          onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
-          {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
-        </select>
-        <label className="wf-input-req"><input type="checkbox" checked={item.required} disabled={busy}
-          onChange={event => patch(index, { required: event.target.checked })} /> required</label>
-        <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={busy}
-          onClick={() => setInputs(current => current.filter((_, i) => i !== index))}>×</button>
-      </div>)}
-      <button className="ghost-button wf-add-step" disabled={busy}
-        onClick={() => setInputs(current => [...current, { id: '', label: '', kind: 'text', required: false }])}>+ Add input</button>
-    </div>
+    <WorkflowInputsEditor inputs={inputs} disabled={busy} onChange={setInputs} />
 
     <div className="modal-actions">
       <button className="ghost-button" onClick={close} disabled={busy}>Cancel</button>

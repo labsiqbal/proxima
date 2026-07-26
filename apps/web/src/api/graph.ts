@@ -30,10 +30,14 @@ export const listGraphTemplates = (token: string, projectSlug?: string | null, i
 export const getGraphJob = (token: string, jobId: number) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}`, token)
 
-export const updateGraphPlan = (token: string, jobId: number, graph: WorkflowGraph) =>
+export const updateGraphPlan = (
+  token: string,
+  jobId: number,
+  body: { graph?: WorkflowGraph; title?: string },
+) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/graph`, token, {
     method: 'PATCH',
-    body: JSON.stringify({ graph }),
+    body: JSON.stringify(body),
   })
 
 export const startGraphJob = (token: string, jobId: number) =>

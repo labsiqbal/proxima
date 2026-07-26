@@ -55,7 +55,7 @@ Workflows is the template library for repeatable work. One workflow owns one pro
 
 - **Home** remembers the last selected **Drafts**, **Workflows**, or **Runs** tab and
   renders each collection as a table so long libraries remain scannable. Workflow rows
-  are split into **Manual (on-demand)** and **Otomatis / Scheduled** groups derived from
+  are split into **Manual (on-demand)** and **Scheduled** groups derived from
   real schedule rows. Manual workflows can be edited or run; scheduled workflows can
   be edited, rescheduled, paused, or resumed. The per-row Schedule action opens the
   complete schedule form in a dialog, including create, enable, overlap, input, Run now,

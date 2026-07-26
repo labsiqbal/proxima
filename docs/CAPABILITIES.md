@@ -382,8 +382,10 @@ carries the project's registered code areas, and every job is tagged with one `t
 marked ambiguous with a question for the owner instead of a guess. The slicer is
 explicitly instructed to size each job to complete within ONE turn quota (T5 slice 5:
 continuation is the safety net, not the plan). The draft lands as
-a queued plan the owner reviews/edits and starts directly; saving it as a reusable
-Recipe is an optional, separate action (before or after the run). Slice-into-plan is
+a queued plan the owner reviews/edits and starts directly. Its graph and click-to-edit
+title autosave through a debounced queued-plan PATCH, including a flush before leaving
+the screen or starting, so there is no manual Save gate. Saving it as a reusable
+Workflow is an optional, separate one-click action (before or after the run). Slice-into-plan is
 single-flight on the button (double-click cannot start two promote runs), and the
 Recipes editor creates at most one graph job per draft object — React Strict Mode
 remounts reuse the in-flight create so Tasks does not list two identical queued plans.
@@ -396,8 +398,9 @@ retained only for existing data.
 **Why:** Codify a repeatable multi-step process the agent can execute — with branches,
 per-node agents and review gates, not just a straight line. A saved template (Workflow)
 is the **optional promotion of a plan** (run-first, workflow-later): plans run without
-one, and "Save as Workflow" works before or after the run, from the canvas or from a
-Tasks plan row. **One workflow = one project** — open plans/templates use the owned
+one, and "Save as Workflow" works in one click before or after the run from the canvas,
+or from a Tasks plan row. Category, description, and declared inputs stay optional
+secondary metadata and never gate promotion. **One workflow = one project** - open plans/templates use the owned
 `project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
@@ -419,7 +422,7 @@ reachable from an old session carrying `workflow_id`, but no new linear workflow
 authored.
 The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
 and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
-**Otomatis / Scheduled** groups from real schedule rows, with category and trigger
+**Scheduled** groups from real schedule rows, with category and trigger
 badges plus actions appropriate to each row. Scheduling is a per-workflow dialog that
 retains create, edit, enable, overlap, input, Run now, and delete capability; manual
 rows expose it too so a first schedule can be created. There is no separate Scheduled
@@ -1081,7 +1084,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
-+ The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Otomatis / Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
++ The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 

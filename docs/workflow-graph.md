@@ -286,8 +286,8 @@ demands a one-line reason, then `POST /api/jobs/{id}/reject` fails the plan with
 ```text
 chat promotion
   → architect DAG draft
-  → queued graph job (human plan edit + layout gate)
-  → Approve plan & start
+  → queued graph job (autosaved human plan edit + layout)
+  → Run
   → trigger (if any) → done immediately, output = job input, no run
   → every ready node, up to the concurrency budget, in parallel:
       pending → ready → running → done
@@ -331,9 +331,10 @@ attempt cannot overwrite a corrected or rerun node.
 3. Inspect each node. While queued, edit its name, instruction, **Works in** target
    (the T1 binding; an open target question shows here and is answered by picking),
    **agent**, output contract, review gate, or dependencies; add/remove nodes; add a
-   trigger; drag nodes and connections; then choose **Save plan**.
-4. Optionally choose **Save template**.
-5. Choose **Approve plan & start**. This is the mandatory human execution gate.
+   trigger; and drag nodes and connections. The draft autosaves, including layout.
+4. Optionally choose **Save as Workflow**. Promotion is one click because the inline
+   plan name already exists; category, description, and inputs are optional metadata.
+5. Choose **Run**. The latest pending autosave flushes before execution starts.
 6. Inspect live node state and validated outputs on the canvas.
 7. When paused in review, choose **Approve node**, **Save correction**, or
    **Rerun node**. Complete the final **Approve final result** action.
@@ -404,7 +405,7 @@ focused **editor** - browsing and editing are different modes of work. Home reme
 the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
 a saved workflow. Workflow rows are split into **Manual (on-demand)** and
-**Otomatis / Scheduled** groups by the presence of schedule rows, with category and
+**Scheduled** groups by the presence of schedule rows, with category and
 trigger badges plus row actions. Scheduled rows open the complete schedule manager in
 a dialog and can be paused or resumed; manual rows retain a Schedule action so the
 first schedule can be created. Run rows show recency, status, duration, and a View
@@ -429,10 +430,10 @@ The canvas is the workspace; the chrome yields to it.
 - **Header bar**: one shared `.tasks-head, .graph-header` rule (inherited from the
   retired Sequential mode, kept so list-shell surfaces cannot drift apart). Left to
   right: plan-list toggle, the project picker (the shared `Dropdown`), plan title, job
-  status, node count, unsaved marker; then the **plan-level** actions — Save template, Save
-  plan, Approve plan & start. Plan actions live here rather than in the node form because
-  they act on the plan, which is also what allows the inspector to close. The mode tab
-  already names the screen, so the bar does not repeat it in a title block.
+  status, node count, and passive **Saving… / Saved ✓** state. The title renames inline
+  like a file. The draft footer owns exactly two plan-level actions: one-click
+  **Save as Workflow** and **Run**. They live outside the node form because they act on
+  the whole plan, which is also what allows the inspector to close.
 - **Plan list** (plans, templates): collapsible from the header. It is navigation between
   plans, not something needed while authoring one. The project picker is deliberately *not*
   here — it belongs in the header bar with the other plan-level controls.
@@ -506,7 +507,8 @@ the inspector wraps under the canvas; below 52rem everything stacks.
 
 Editing gestures are live only while the job is `queued` — the same window in which
 `PATCH /graph` accepts a plan. Positions are part of the graph, so they are saved by
-**Save plan** along with everything else, not written behind the owner's back.
+the debounced autosave along with every other canvas edit. Pending work flushes before
+leaving the editor, promoting the plan, or running it.
 
 A connection that would make the graph loop back on itself is refused on the canvas
 with an explanation, rather than being sent to the server for a 422.
@@ -531,8 +533,8 @@ are:
 - `POST/GET /api/graph/jobs` — create/list;
 - `GET /api/graph/templates` — list reusable graph-backed workflows;
 - `GET /api/graph/jobs/{id}` — inspect graph and node state;
-- `PATCH /api/graph/jobs/{id}/graph` — queued-plan edit;
-- `POST /api/graph/jobs/{id}/start` — explicit execution approval;
+- `PATCH /api/graph/jobs/{id}/graph` - queued graph autosave plus inline title rename;
+- `POST /api/graph/jobs/{id}/start` - explicit Run action;
 - node output, rerun, and approval routes under `/nodes/{node_id}` (including the
   one-time script approval, `POST .../nodes/{node_id}/approve-script`);
 - `POST /api/graph/jobs/{id}/approve` — final approval;
