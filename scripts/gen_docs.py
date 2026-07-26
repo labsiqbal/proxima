@@ -188,7 +188,7 @@ def _render_db(conn: sqlite3.Connection) -> str:
                 continue
             icols = [r[2] for r in conn.execute(f"PRAGMA index_info({iname})").fetchall()]
             uniq = "UNIQUE " if row[2] else ""
-            listed.append(f"`{iname}` — {uniq}({', '.join(icols)})")
+            listed.append(f"`{iname}` - {uniq}({', '.join(icols)})")
         if listed:
             o.append("\n**Indexes:** " + "; ".join(listed) + "\n")
         else:

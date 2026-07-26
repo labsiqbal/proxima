@@ -30,6 +30,7 @@ from ..terminal import TerminalSession
 from .. import fsapi
 from .. import app_settings
 from .. import auth_health as auth_health_mod
+from .. import container_registry
 from .. import design_scenes
 from .. import features
 from .. import kinds
@@ -118,6 +119,7 @@ def register(app, deps):
     profile_for_user = deps["profile_for_user"]
     session_payload = deps["session_payload"]
     _project_root = deps["_project_root"]
+    _ops_root = deps["_ops_root"]
     user_from_token_query = deps["user_from_token_query"]
 
     def _websocket_user(websocket: WebSocket, token: str) -> dict[str, Any] | None:
@@ -536,7 +538,7 @@ def register(app, deps):
         if not session["project_id"]:
             return None
         prow = db().execute("SELECT slug FROM projects WHERE id = ?", (session["project_id"],)).fetchone()
-        return _project_root(prow["slug"], user) / "wiki" if prow else None
+        return _ops_root(prow["slug"], user) / "wiki" if prow else None
 
     @app.post("/api/sessions/{session_id}/wiki-note/draft", status_code=202)
     def wiki_note_draft(session_id: int, payload: WikiDraftRequest, user: dict[str, Any] = Depends(current_user)):
@@ -591,10 +593,12 @@ def register(app, deps):
                 ).fetchall()
             ]
             prow = db().execute(
-                "SELECT path FROM projects WHERE id = ?", (session["project_id"],)
+                "SELECT id, path FROM projects WHERE id = ?", (session["project_id"],)
             ).fetchone()
             if prow and prow["path"]:
-                scripts_catalog = scripts_library.scan_catalog(Path(prow["path"]))
+                scripts_catalog = scripts_library.scan_catalog(
+                    container_registry.ops_root(db(), prow)
+                )
         prompt = (
             wf.architect_system(
                 graph=graph_planning, code_areas=code_areas, scripts=scripts_catalog
@@ -887,7 +891,7 @@ def register(app, deps):
         slug = _project_slug_for_session(session) or payload.project_slug
         if not slug:
             return None
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         kind, prompt = media
         # Thin brief → clarify in THIS (main) chat with a compact form instead of
         # generating something generic. Answering re-issues the command (submit-as)
@@ -908,7 +912,11 @@ def register(app, deps):
             clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
             sources: list[tuple[bytes, str | None]] = []
             if ref_paths and caps.get("imageEdit"):
-                sources = load_project_images(root, ref_paths)
+                sources = load_project_images(
+                    root,
+                    ref_paths,
+                    fallback_root=_project_root(slug, user),
+                )
                 if len(sources) > 1 and not caps.get("referenceImages"):
                     sources = sources[:1]
             image_bytes = sources[0][0] if sources else None
@@ -1034,7 +1042,7 @@ def register(app, deps):
             stale_params(stale_seconds),
         ).fetchall()]
         projects = [dict(r) for r in d.execute(
-            "SELECT p.slug, p.name, p.path, p.visibility, "
+            "SELECT p.id, p.slug, p.name, p.path, p.visibility, "
             "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS chats, "
             "(SELECT MAX(updated_at) FROM sessions s WHERE s.project_id = p.id) AS last_activity "
             "FROM projects p ORDER BY last_activity DESC").fetchall()]
@@ -1063,8 +1071,8 @@ def register(app, deps):
 
         recent_artifacts: list[dict[str, Any]] = []
         for p in projects[:12]:
-            root = Path(p["path"])
-            if not root.is_dir():
+            root = container_registry.try_ops_root(d, p)
+            if root is None or not root.is_dir():
                 continue
             # Reuse the bounded/pruned artifact scanner used by run results. The
             # old dashboard rglob walked every descendant on every Home poll and
@@ -1182,7 +1190,7 @@ def register(app, deps):
             if not p.get("path"):
                 await websocket.close(code=4404)
                 return
-            cwd = p["path"]
+            cwd = str(_project_root(project, user))
         Path(cwd).mkdir(parents=True, exist_ok=True)
         await websocket.accept()
         term = TerminalSession(cwd)

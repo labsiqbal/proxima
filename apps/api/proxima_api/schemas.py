@@ -149,11 +149,39 @@ class PromoteWorkflowRequest(BaseModel):
     engine: str = Field(default="auto", pattern="^(auto|linear|graph)$")
 
 
-class ProjectUpdateRequest(BaseModel):
+class ContainerArea(BaseModel):
+    id: int
+    kind: str = Field(pattern="^(code|ops)$")
+    rel_path: str
+    source: str | None = Field(
+        default=None,
+        pattern="^(auto|manual|excluded)$",
+    )
+
+
+class Container(BaseModel):
+    """Public Container shape for the Master foundation.
+
+    Current routes keep their ``/api/projects`` compatibility names. The
+    Fleet route will consume this schema in its own slice.
+    """
+
+    slug: str
+    name: str
+    path: str
+    code_areas: list[ContainerArea] = Field(default_factory=list)
+    ops_area: ContainerArea
+
+
+class ContainerUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
-class ProjectCreateRequest(BaseModel):
+class ProjectUpdateRequest(ContainerUpdateRequest):
+    """Compatibility request name for existing project routes."""
+
+
+class ContainerCreateRequest(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$")
     name: str = Field(min_length=1, max_length=120)
 
@@ -166,13 +194,21 @@ class ProjectCreateRequest(BaseModel):
         return v
 
 
-class ProjectLinkRequest(BaseModel):
+class ProjectCreateRequest(ContainerCreateRequest):
+    """Compatibility request name for existing project routes."""
+
+
+class ContainerLinkRequest(BaseModel):
     path: str = Field(min_length=1)
     name: str | None = Field(default=None, max_length=120)
     slug: str | None = None
     # When true, create `path` as a new empty directory under an existing parent
     # (inside link roots) and then register it. Never deletes or moves content.
     mkdir: bool = False
+
+
+class ProjectLinkRequest(ContainerLinkRequest):
+    """Compatibility request name for existing project routes."""
 
 
 class ProjectAreaAddRequest(BaseModel):

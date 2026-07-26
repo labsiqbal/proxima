@@ -516,9 +516,9 @@ rejection, `rejected_reason`.
 
 **Graph plans (slice 3):** the same machinery wired per job-in-plan. With the flag on,
 starting a plan with repo jobs pins their single code-area target to the job row and
-cuts the worktree before the plan claims running (multi-area plans refuse to start —
+cuts the worktree before the plan claims running (multi-area plans refuse to start -
 Phase-1 is one worktree per plan); the worker runs each node in the worktree **only if
-that node touches the repo** (ops jobs run at the project root), and the plan's final
+that node touches the repo** (Ops jobs run at the physical Ops Area), and the plan's final
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
 
@@ -627,9 +627,9 @@ agent turn every time. A plan step that needs no judgment can be a saved script 
 free, and exactly reproducible (T6; ADR-0001's Phase-3 deterministic nodes pulled
 forward in minimal form).
 **How:** one new node kind, `script`, on the graph engine (not an n8n palette): the
-node names a script inside the project container's **`scripts/` folder** plus CLI args,
+node names a script inside the Container's physical **`ops/scripts/` folder** plus CLI args,
 and executes as a **subprocess** - exec array, never a shell string - with the
-container root as cwd and a minimal environment (no server env). I/O contract: args
+Ops Area as cwd and a minimal environment (no server env). I/O contract: args
 (`{{var}}` fills from the workflow input) + one JSON object on stdin
 (`{"job_input": …, "upstream": […]}` - the graph engine's existing typed hand-off);
 stdout is the node output, validated against the node's `output_kind`/`output_schema`
@@ -746,24 +746,39 @@ or skip (starter project under the data dir).
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
-### Work-container areas (Phase-1 slice 1 - data layer only)
+### Container Areas and physical Ops storage
 
-**Why:** A project is a *work container*, not "a repo": it holds zero-or-more **code
-areas** (subfolders that are git repos; `.` = repo at root) plus one **ops area** (the
-non-code output space - the conventional `artifacts/ reports/ exports/ wiki/` subdirs
-belong to it). Slice 2's worktree machinery (above, flag-gated) cuts its safe copy from
-a job's target code area; the slicer that binds each job to exactly one area at slice
-time is slice 3 (T1's explicit job→target decision).
-**How:** `project_areas` table (row per area; `source` = `auto`/`manual`/`excluded`).
-Identification is **hybrid** (T1): `project_areas.py` auto-detects `.git` subfolders
-(bounded depth, skips node_modules/.venv/dist-style dirs, never descends into a
-detected repo) at project create/link and on demand; the owner can manually add,
-correct, or remove areas. Manual rows are never clobbered by re-detection, and removal
-leaves an `excluded` tombstone so re-detection cannot resurrect the area. Existing
-projects were wrapped in place by migration 18: root itself a repo → sole code area
-`.`; no repo → zero code areas; no file moves. Artifact scanning still ignores areas;
-execution reads them only through slice 2's flag-gated repo-job path (`jobs.target_area_id`
-→ worktree cwd). Project payloads include `code_areas` + `ops_area`.
+**Why:** A Container is not a repo. It holds zero or more **repo Areas** plus exactly
+one **Ops Area** for durable non-code work. A repo Area may be a nested folder or `.`
+when the Container root is itself a repo. The Ops Area is physically rooted at
+`ops/`, so Ops-owned files cannot be confused with a sibling repo.
+
+**How:** The compatibility `projects` and `project_areas` tables remain the storage
+and foreign-key truth. New Containers create `ops/`, `ops/container.md`, and exactly
+one active Ops row with `rel_path='ops'`. `container_registry.py` is the canonical
+resolver for Container, Area, and Ops roots. It validates realpath containment and
+rejects path traversal, duplicate roots, unsafe overlaps, and Container-or-Ops-root
+symlinks on every resolution; the recursive scan that rejects every symlink under the
+physical Ops root is opt-in (`deep_ops_scan`) and enforced fail-closed at Ops
+creation, migration, Area mutation, and Area-sensitive execution, keeping project
+lists and Home O(1) while per-access realpath jailing still blocks symlink escapes.
+A repo at `.` is the one intentional containment case; its local git exclude keeps
+`/ops/` out of that repo.
+
+Existing Containers whose Ops row is `.` migrate at startup. The migration first
+builds and hashes a dry-run manifest, then uses atomic same-filesystem moves for only
+known Ops-owned paths. Its durable marker resumes safely after interruption. Any
+collision, changed content, unsupported file type, or ambiguity stops only that
+Container, opens an owner-visible Attention item, and leaves the legacy row active.
+All Ops consumers resolve through the row, so Archive, Wiki, artifacts, Designs,
+scripts, reports, exports, and uploads continue to use root-level legacy paths until
+that Container migrates cleanly. `container_registry` caches the bounded identity and
+summary projection from `ops/container.md`; live task and attention state is not
+copied into it.
+
+Repo identification remains hybrid: `project_areas.py` auto-detects `.git` folders
+at bounded depth and supports manual overrides and excluded tombstones. Project
+payloads retain the compatibility `code_areas` and `ops_area` fields.
 **Endpoints:** `GET/POST /api/projects/{slug}/areas`,
 `DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
 
@@ -776,6 +791,9 @@ limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents; produced artifacts from the
 project artifact scan are merged into the same picker on the client.
+Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
+`uploads/...` remain stable at the API boundary. The server maps those paths to the
+canonical Ops root, while repo files continue to resolve from the Container root.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`

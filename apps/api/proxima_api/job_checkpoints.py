@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .container_registry import resolve_area_root
+
 
 class CheckpointError(RuntimeError):
     pass
@@ -54,12 +56,11 @@ def _git_refs(conn, job: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     repo_path = Path(project["path"])
     if job.get("target_area_id"):
-        area = conn.execute(
-            "SELECT rel_path FROM project_areas WHERE id = ?",
-            (job["target_area_id"],),
-        ).fetchone()
-        if area and area["rel_path"] not in (None, "."):
-            repo_path = repo_path / area["rel_path"]
+        repo_path = resolve_area_root(
+            conn,
+            project,
+            int(job["target_area_id"]),
+        )
     worktree = conn.execute(
         "SELECT id, worktree_path, branch, base_commit, status FROM job_worktrees WHERE job_id = ?",
         (job["id"],),

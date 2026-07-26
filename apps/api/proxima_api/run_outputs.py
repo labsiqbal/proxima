@@ -4,10 +4,10 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from . import artifact_registry
+from .container_registry import ops_root
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
 from .prompt_collaborations import strip_runner_preamble
 
@@ -24,10 +24,12 @@ class RunOutputs:
             return []
         db = self.app.state.worker_db
         try:
-            prow = db.execute("SELECT path, slug FROM projects WHERE id = ?", (project_id,)).fetchone()
+            prow = db.execute(
+                "SELECT id, path, slug FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
             if not prow:
                 return []
-            fresh = scan_project_artifacts(Path(prow["path"]), run_start_ts - 5)
+            fresh = scan_project_artifacts(ops_root(db, prow), run_start_ts - 5)
             return artifacts_for_output_links(fresh, prow["slug"])
         except Exception:
             logging.getLogger("proxima.worker").exception("chat artifact scan failed (non-fatal)")

@@ -371,3 +371,82 @@ def test_v27_moves_workflow_inputs_onto_trigger_node(tmp_path: Path):
     assert trigger["inputs"] == declared_inputs
     assert migrated_graph["edges"] == [{"from": trigger["id"], "to": "work"}]
     assert json.loads(stored["inputs"]) == declared_inputs
+
+
+def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
+    tmp_path: Path,
+):
+    from proxima_api.container_registry import migrate_legacy_ops_containers
+
+    db_path = tmp_path / "schema-27.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("DROP TABLE container_ops_migrations")
+    conn.execute("DROP TABLE container_registry")
+    current_version(conn)
+    conn.executemany(
+        "INSERT INTO schema_migrations(version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [(version, f"schema {version}") for version in range(1, 28)],
+    )
+
+    root = tmp_path / "alpha-container"
+    (root / "wiki").mkdir(parents=True)
+    (root / "wiki" / "alpha.md").write_bytes(b"alpha history bytes")
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('owner', 'owner')"
+    ).lastrowid
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) "
+        "VALUES ('alpha-container', 'Alpha Container', ?, ?)",
+        (str(root), owner_id),
+    ).lastrowid
+    ops_area_id = conn.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'ops', '.', 'auto')",
+        (container_id,),
+    ).lastrowid
+    profile_id = conn.execute(
+        "INSERT INTO profiles(user_id, slug, name, hermes_home, system_kind) "
+        "VALUES (?, 'alpha', 'Alpha', '/tmp/alpha-home', 'alpha')",
+        (owner_id,),
+    ).lastrowid
+    session_id = conn.execute(
+        "INSERT INTO sessions(title, owner_user_id, profile_id, mode) "
+        "VALUES ('Alpha', ?, ?, 'alpha')",
+        (owner_id, profile_id),
+    ).lastrowid
+    job_id = conn.execute(
+        "INSERT INTO jobs(title, project_id, created_by, alpha_session_id, target_area_id) "
+        "VALUES ('Alpha task', ?, ?, ?, ?)",
+        (container_id, owner_id, session_id, ops_area_id),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO attention_items(kind, title, source_key) "
+        "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
+    )
+
+    assert run_migrations(conn, str(db_path)) == [28]
+    assert current_version(conn) == 28
+    assert migrate_legacy_ops_containers(conn) == {
+        "complete": 1,
+        "attention": 0,
+    }
+
+    assert conn.execute(
+        "SELECT slug, path FROM projects WHERE id = ?", (container_id,)
+    ).fetchone()["slug"] == "alpha-container"
+    assert conn.execute(
+        "SELECT alpha_session_id, target_area_id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["alpha_session_id"] == session_id
+    assert conn.execute(
+        "SELECT mode FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()["mode"] == "alpha"
+    assert conn.execute(
+        "SELECT status FROM attention_items WHERE source_key = 'alpha-existing'"
+    ).fetchone()["status"] == "open"
+    assert conn.execute(
+        "SELECT rel_path FROM project_areas WHERE id = ?", (ops_area_id,)
+    ).fetchone()["rel_path"] == "ops"
+    assert (root / "ops" / "wiki" / "alpha.md").read_bytes() == b"alpha history bytes"
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

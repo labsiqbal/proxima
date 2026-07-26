@@ -3,12 +3,12 @@
 > **GENERATED FILE — do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 29 tables. Applied migration version: **28**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -53,7 +53,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_artifact_records_job` — (job_id); `idx_artifact_records_identity` — (project_id, path); `idx_artifact_records_project` — (project_id, produced_at)
+**Indexes:** `idx_artifact_records_job` - (job_id); `idx_artifact_records_identity` - (project_id, path); `idx_artifact_records_project` - (project_id, produced_at)
 
 
 ### attention_items
@@ -71,7 +71,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `resolved_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_attention_status` — (status, created_at)
+**Indexes:** `idx_attention_status` - (status, created_at)
 
 
 ### audit_log
@@ -98,6 +98,37 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `revoked_at` | TEXT | yes |  |  |
 
 
+### container_ops_migrations
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `container_id` | INTEGER | yes |  | PK → `projects.id` (ON DELETE CASCADE) |
+| `migration_version` | INTEGER | NO |  |  |
+| `status` | TEXT | NO | `'pending'` |  |
+| `manifest_json` | TEXT | yes |  |  |
+| `manifest_hash` | TEXT | yes |  |  |
+| `last_error` | TEXT | yes |  |  |
+| `started_at` | TEXT | yes |  |  |
+| `completed_at` | TEXT | yes |  |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_container_ops_migrations_status` - (status, updated_at)
+
+
+### container_registry
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `container_id` | INTEGER | yes |  | PK → `projects.id` (ON DELETE CASCADE) |
+| `identity_label` | TEXT | yes |  |  |
+| `summary` | TEXT | yes |  |  |
+| `source_hash` | TEXT | yes |  |  |
+| `indexed_at` | TEXT | yes |  |  |
+| `last_activity_at` | TEXT | yes |  |  |
+
+**Indexes:** `idx_container_registry_activity` - (last_activity_at, container_id)
+
+
 ### events
 
 | Column | Type | Null | Default | Key / FK |
@@ -111,7 +142,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `payload` | TEXT | NO | `'{}'` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_events_run_seq` — (run_id, seq); `idx_events_session` — (session_id, id)
+**Indexes:** `idx_events_run_seq` - (run_id, seq); `idx_events_session` - (session_id, id)
 
 
 ### job_checkpoints
@@ -125,7 +156,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `pinned` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_job_checkpoints_job` — (job_id, created_at)
+**Indexes:** `idx_job_checkpoints_job` - (job_id, created_at)
 
 
 ### job_worktrees
@@ -150,7 +181,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_job_worktrees_status` — (status)
+**Indexes:** `idx_job_worktrees_status` - (status)
 
 
 ### jobs
@@ -179,7 +210,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `finished_at` | TEXT | yes |  |  |
 | `archived_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_jobs_alpha` — (alpha_session_id, status, created_at); `idx_jobs_archived` — (archived_at); `idx_jobs_workflow` — (workflow_id); `idx_jobs_project_status` — (project_id, status, created_at)
+**Indexes:** `idx_jobs_alpha` - (alpha_session_id, status, created_at); `idx_jobs_archived` - (archived_at); `idx_jobs_workflow` - (workflow_id); `idx_jobs_project_status` - (project_id, status, created_at)
 
 
 ### message_reviews
@@ -209,7 +240,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_message_reviews_run` — (run_id); `idx_message_reviews_session` — (session_id, id); `idx_message_reviews_source` — (source_message_id, id)
+**Indexes:** `idx_message_reviews_run` - (run_id); `idx_message_reviews_session` - (session_id, id); `idx_message_reviews_source` - (source_message_id, id)
 
 
 ### messages
@@ -249,7 +280,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_node_states_job` — (job_id, status)
+**Indexes:** `idx_node_states_job` - (job_id, status)
 
 
 ### profiles
@@ -285,7 +316,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_project_areas_one_ops` — UNIQUE (project_id); `idx_project_areas_project` — (project_id, kind)
+**Indexes:** `idx_project_areas_one_ops` - UNIQUE (project_id); `idx_project_areas_project` - (project_id, kind)
 
 
 ### projects
@@ -323,7 +354,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_prompt_collaborations_synthesis` — (synthesis_run_id); `idx_prompt_collaborations_parent` — (parent_run_id); `idx_prompt_collaborations_session` — (session_id, id)
+**Indexes:** `idx_prompt_collaborations_synthesis` - (synthesis_run_id); `idx_prompt_collaborations_parent` - (parent_run_id); `idx_prompt_collaborations_session` - (session_id, id)
 
 
 ### runs
@@ -352,7 +383,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `continuation_count` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_runs_session` — (session_id, id); `idx_runs_status` — (status, id)
+**Indexes:** `idx_runs_session` - (session_id, id); `idx_runs_status` - (status, id)
 
 
 ### satpam_interventions
@@ -369,7 +400,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `resolved_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_satpam_interventions_job` — (job_id, id)
+**Indexes:** `idx_satpam_interventions_job` - (job_id, id)
 
 
 ### satpam_watch
@@ -408,7 +439,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_schedules_enabled` — (enabled)
+**Indexes:** `idx_schedules_enabled` - (enabled)
 
 
 ### schema_migrations
@@ -457,7 +488,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `goal_iteration` | INTEGER | NO | `0` |  |
 | `goal_max` | INTEGER | NO | `20` |  |
 
-**Indexes:** `idx_sessions_project` — (project_id, updated_at); `idx_sessions_owner` — (owner_user_id, updated_at)
+**Indexes:** `idx_sessions_project` - (project_id, updated_at); `idx_sessions_owner` - (owner_user_id, updated_at)
 
 
 ### turn_file_journals
@@ -470,7 +501,7 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `entries_json` | TEXT | NO |  |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_turn_file_journals_session` — (session_id, id)
+**Indexes:** `idx_turn_file_journals_session` - (session_id, id)
 
 
 ### users
@@ -504,8 +535,8 @@ SQLite (WAL mode). 27 tables. Applied migration version: **27**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_workflows_project` — (project_id, status)
+**Indexes:** `idx_workflows_project` - (project_id, status)
 
 
 ---
-_Generated 2026-07-26 05:09 UTC._
+_Generated 2026-07-26 21:50 UTC._

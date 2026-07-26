@@ -161,8 +161,8 @@ def test_higgsfield_image_settings_remain_available_without_exposing_video_contr
 
 def test_disabled_features_do_not_block_ordinary_artifact_reads(tmp_path):
     _app_obj, client, headers, root = _client_with_project(tmp_path)
-    video = root / "artifacts" / "media" / "videos" / "existing.mp4"
-    scene = root / "artifacts" / "design" / "existing" / "scene.json"
+    video = root / "ops" / "artifacts" / "media" / "videos" / "existing.mp4"
+    scene = root / "ops" / "artifacts" / "design" / "existing" / "scene.json"
     video.parent.mkdir(parents=True, exist_ok=True)
     scene.parent.mkdir(parents=True, exist_ok=True)
     video.write_bytes(b"mp4")

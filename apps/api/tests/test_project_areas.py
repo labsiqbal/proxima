@@ -104,7 +104,8 @@ def test_link_detects_repo_at_root_and_ops_area(tmp_path: Path):
     p = _link(api, h, folder, "myrepo")
     assert [a["rel_path"] for a in p["code_areas"]] == ["."]
     assert p["code_areas"][0]["source"] == "auto"
-    assert p["ops_area"]["rel_path"] == "."
+    assert p["ops_area"]["rel_path"] == "ops"
+    assert (folder / "ops" / "container.md").is_file()
 
 
 def test_link_detects_multiple_sub_repos(tmp_path: Path):
@@ -125,7 +126,14 @@ def test_created_project_has_ops_area_and_zero_code_areas(tmp_path: Path):
     assert res.status_code == 201, res.text
     p = res.json()
     assert p["code_areas"] == []
-    assert p["ops_area"]["rel_path"] == "."
+    assert p["ops_area"]["rel_path"] == "ops"
+    root = Path(p["path"])
+    assert (root / "ops").is_dir()
+    assert (root / "ops" / "container.md").is_file()
+    assert (root / "ops" / "wiki").is_dir()
+    assert (root / "ops" / "artifacts").is_dir()
+    assert not (root / "wiki").exists()
+    assert not (root / "artifacts").exists()
 
 
 def test_areas_surface_on_get_and_list(tmp_path: Path):
@@ -140,7 +148,7 @@ def test_areas_surface_on_get_and_list(tmp_path: Path):
     assert [a["rel_path"] for a in mine["code_areas"]] == ["."]
     areas = api.get("/api/projects/repo/areas", headers=h).json()
     assert [a["rel_path"] for a in areas["code_areas"]] == ["."]
-    assert areas["ops_area"]["rel_path"] == "."
+    assert areas["ops_area"]["rel_path"] == "ops"
 
 
 def test_manual_add_of_non_repo_folder(tmp_path: Path):

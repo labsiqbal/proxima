@@ -77,6 +77,7 @@ def append_vision_references(text: str, paths: Iterable[str]) -> str:
 def load_project_images(
     project_root: str | Path,
     paths: Iterable[str],
+    fallback_root: str | Path | None = None,
 ) -> list[tuple[bytes, str]]:
     """Load bounded, jailed image references from a project.
 
@@ -92,6 +93,8 @@ def load_project_images(
             continue
         try:
             path = fsapi.resolve_in_project(root, rel)
+            if not path.is_file() and fallback_root is not None:
+                path = fsapi.resolve_in_project(Path(fallback_root), rel)
             mime = mimetypes.guess_type(path.name)[0] or ""
             size = path.stat().st_size if path.is_file() else 0
             if (
@@ -116,7 +119,11 @@ def load_project_images(
     return images
 
 
-def extract_vision_images(text: str, project_root: str) -> tuple[str, list[tuple[bytes, str]]]:
+def extract_vision_images(
+    text: str,
+    project_root: str,
+    fallback_root: str | Path | None = None,
+) -> tuple[str, list[tuple[bytes, str]]]:
     """Pull the ⟦VISION:...⟧ marker off a prompt, returning the cleaned text and the
     referenced images as (bytes, mime). Paths are jailed to the project root; anything
     missing/oversized is skipped so vision is best-effort and never breaks the run."""
@@ -124,7 +131,11 @@ def extract_vision_images(text: str, project_root: str) -> tuple[str, list[tuple
     if not m:
         return text, []
     clean = text[: m.start()].rstrip()
-    images = load_project_images(project_root, m.group(1).split("|"))
+    images = load_project_images(
+        project_root,
+        m.group(1).split("|"),
+        fallback_root=fallback_root,
+    )
     return clean, images
 from . import workflows as wf
 from . import features

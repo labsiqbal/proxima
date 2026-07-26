@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .container_registry import create_physical_ops_root, refresh_registry_projection
 from .project_areas import ensure_ops_area, sync_code_areas
 
 logger = logging.getLogger("proxima.provisioning")
@@ -14,15 +15,19 @@ def _projects_root(cfg: dict[str, Any]) -> Path:
     return Path(cfg["workspace_root"]) / "projects"
 
 
-def scaffold_project_dir(cfg: dict[str, Any], slug: str) -> Path:
+def scaffold_project_dir(
+    cfg: dict[str, Any],
+    slug: str,
+    name: str | None = None,
+) -> Path:
     """Create projects/<slug>/ with starter subdirs + README. Idempotent, no ACL."""
     # Belt-and-suspenders: reject slugs that could escape the projects root.
     if "/" in slug or "\\" in slug or ".." in slug or slug.startswith("."):
         raise ValueError(f"unsafe slug: {slug!r}")
     path = _projects_root(cfg) / slug
     path.mkdir(parents=True, exist_ok=True)
-    for sub in cfg.get("provision_starter_dirs") or ["wiki", "tasks", "artifacts"]:
-        (path / sub).mkdir(parents=True, exist_ok=True)
+    starters = tuple(cfg.get("provision_starter_dirs") or ["wiki", "tasks", "artifacts"])
+    create_physical_ops_root(path, name or slug, starters)
     readme = path / "README.md"
     if not readme.exists():
         readme.write_text(f"# {slug}\n\nProxima project workspace.\n", encoding="utf-8")
@@ -61,10 +66,11 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
     slug, existing = _resolve_private_slug(conn, user)
     if existing:
         # Only ever reached when the row is verified as this user's own private project.
-        scaffold_project_dir(cfg, slug)
+        scaffold_project_dir(cfg, slug, str(existing["name"]))
         ensure_ops_area(conn, existing["id"])
+        refresh_registry_projection(conn, existing["id"])
         return existing
-    path = str(scaffold_project_dir(cfg, slug))
+    path = str(scaffold_project_dir(cfg, slug, str(user["username"])))
     cur = conn.execute(
         "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
         # Display name is the username alone — slug is already unique. Older rows may
@@ -75,6 +81,7 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
     # Container areas (T1): ops area + code-area auto-detect at creation.
     ensure_ops_area(conn, project_id)
     sync_code_areas(conn, project_id, path)
+    refresh_registry_projection(conn, project_id)
     _audit(conn, user["id"], "workspace.provision.private", slug)
     return dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
 

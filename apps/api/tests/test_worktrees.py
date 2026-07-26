@@ -706,8 +706,8 @@ def test_repo_job_live_e2e_worktree_diff_approve_merge_lands_on_main(tmp_path: P
     ACP subprocess whose edit happens in the isolated worktree, shows up in
     the review diff, and lands on the scratch repo's main line when the
     review is approved. The repo is a SUBFOLDER code area (the canonical T1
-    container shape) so ops-side writes (e.g. the auto wiki log) land at the
-    container root and never race the repo's cleanliness."""
+    container shape) so Ops-side writes land in the physical Ops Area and
+    never race the repo's cleanliness."""
     script = tmp_path / "fake_acp_edit.py"
     script.write_text(FAKE_EDIT_ACP_SCRIPT)
     container = tmp_path / "container"
@@ -760,10 +760,10 @@ def test_repo_job_live_e2e_worktree_diff_approve_merge_lands_on_main(tmp_path: P
         _restore_fake_runner(*saved)
 
 
-def test_graph_repo_node_runs_in_worktree_and_ops_node_in_project(tmp_path: Path):
+def test_graph_repo_node_runs_in_worktree_and_ops_node_in_ops_area(tmp_path: Path):
     """Slice 3's per-job binding, end-to-end on the LIVE worker: in one plan,
     the touches-repo node executes inside the plan's isolated worktree while
-    its ops sibling executes at the project root (where its outputs belong).
+    its Ops sibling executes in the physical Ops Area (where its outputs belong).
     The fake ACP agent reports its real cwd as each node's output."""
     script = tmp_path / "fake_acp.py"
     script.write_text(FAKE_CWD_ACP_SCRIPT)
@@ -809,6 +809,6 @@ def test_graph_repo_node_runs_in_worktree_and_ops_node_in_project(tmp_path: Path
             report_cwd = str(states["report"]["output"]).split("ran-in:", 1)[1].strip()
             wt_path = str(Path(payload["worktree"]["worktree_path"]).resolve())
             assert str(Path(fix_cwd).resolve()) == wt_path
-            assert str(Path(report_cwd).resolve()) == str(repo.resolve())
+            assert str(Path(report_cwd).resolve()) == str((repo / "ops").resolve())
     finally:
         _restore_fake_runner(*saved)

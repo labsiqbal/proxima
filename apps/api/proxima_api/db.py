@@ -78,6 +78,29 @@ CREATE TABLE IF NOT EXISTS project_areas (
 );
 CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops';
+CREATE TABLE IF NOT EXISTS container_registry (
+  container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  identity_label TEXT,
+  summary TEXT,
+  source_hash TEXT,
+  indexed_at TEXT,
+  last_activity_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_container_registry_activity
+  ON container_registry(last_activity_at DESC, container_id);
+CREATE TABLE IF NOT EXISTS container_ops_migrations (
+  container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  migration_version INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  manifest_json TEXT,
+  manifest_hash TEXT,
+  last_error TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_container_ops_migrations_status
+  ON container_ops_migrations(status, updated_at);
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,

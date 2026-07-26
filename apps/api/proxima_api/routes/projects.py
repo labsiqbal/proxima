@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import fsapi, repo_remote
+from .. import container_registry, fsapi, repo_remote
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
@@ -148,7 +148,8 @@ def register(app, deps):
             made_dir = created_dir is not None
             created_dir = None
             # Container areas (T1): register the ops area + auto-detect code areas.
-            ensure_ops_area(db(), pid)
+            ensure_ops_area(db(), pid, rel_path=".")
+            container_registry.migrate_container_ops(db(), pid)
             sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
@@ -167,7 +168,7 @@ def register(app, deps):
             raise HTTPException(status_code=409, detail="project slug already exists")
         path = str(Path(cfg["workspace_root"]) / "projects" / payload.slug)
         run_projectctl("create-project", payload.slug, "--owner", user["os_user"])
-        scaffold_project_dir(cfg, payload.slug)
+        scaffold_project_dir(cfg, payload.slug, payload.name)
         cur = db().execute(
             "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
             (payload.slug, payload.name, path, user["id"]),
@@ -175,6 +176,7 @@ def register(app, deps):
         project_id = cur.lastrowid
         ensure_ops_area(db(), project_id)
         sync_code_areas(db(), project_id, path)
+        container_registry.refresh_registry_projection(db(), project_id)
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.create', 'project', ?)", (user["id"], payload.slug))
         row = dict(db().execute("SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?", (user["username"], project_id)).fetchone())
         return project_payload(row)
@@ -209,9 +211,13 @@ def register(app, deps):
         the settings UI knows whether to offer the push-after-merge toggle -
         no remote, no toggle. Only the dedicated areas endpoints pay for this
         (it shells out to the host's git); project list payloads never do."""
-        root = Path(project["path"])
         for area in payload["code_areas"]:
-            repo = root if area["rel_path"] == "." else root / area["rel_path"]
+            try:
+                repo = container_registry.resolve_area_root(
+                    db(), project, int(area["id"])
+                )
+            except container_registry.ContainerBoundaryError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             area["remote"] = repo_remote.detect_remote(repo)
         return payload
 
@@ -230,8 +236,9 @@ def register(app, deps):
         (not-yet-`git init`'d code is a valid code area). A manual row is never
         clobbered by re-detection; re-adding a removed area revives it."""
         project = visible_project(slug, user)
-        root = Path(project["path"]).resolve()
-        if not root.is_dir():
+        try:
+            root = container_registry.container_root(project)
+        except container_registry.ContainerBoundaryError:
             raise HTTPException(status_code=400, detail="project folder is missing on disk")
         try:
             target = fsapi.resolve_in_project(root, payload.rel_path)
@@ -244,15 +251,32 @@ def register(app, deps):
             "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
             (project["id"], rel),
         ).fetchone()
-        if existing:
-            area_id = existing["id"]
-            db().execute("UPDATE project_areas SET source = 'manual', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
-        else:
-            area_id = db().execute(
-                "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
-                (project["id"], rel),
-            ).lastrowid
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.add', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": rel})))
+        db().execute("BEGIN")
+        try:
+            if existing:
+                area_id = existing["id"]
+                db().execute(
+                    "UPDATE project_areas SET source = 'manual', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (area_id,),
+                )
+            else:
+                area_id = db().execute(
+                    "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
+                    (project["id"], rel),
+                ).lastrowid
+            container_registry.validated_area_roots(db(), project, deep_ops_scan=True)
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+                "VALUES (?, 'project.area.add', 'project', ?, ?)",
+                (user["id"], slug, json.dumps({"rel_path": rel})),
+            )
+            db().execute("COMMIT")
+        except container_registry.ContainerBoundaryError as exc:
+            db().execute("ROLLBACK")
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception:
+            db().execute("ROLLBACK")
+            raise
         return {"id": area_id, "rel_path": rel, "source": "manual"}
 
     @app.patch("/api/projects/{slug}/areas/{area_id}")
@@ -271,8 +295,12 @@ def register(app, deps):
             raise HTTPException(status_code=404, detail="code area not found")
         remote = None
         if payload.push_on_merge:
-            root = Path(project["path"])
-            repo = root if row["rel_path"] == "." else root / row["rel_path"]
+            try:
+                repo = container_registry.resolve_area_root(
+                    db(), project, int(row["id"])
+                )
+            except container_registry.ContainerBoundaryError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             remote = repo_remote.detect_remote(repo)
             if remote is None:
                 raise HTTPException(

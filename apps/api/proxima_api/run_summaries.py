@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from . import wiki_memory
+from .container_registry import ops_root
 
 
 class RunSummaries:
@@ -27,9 +28,11 @@ class RunSummaries:
         if not run["project_id"]:
             return None
         db = self.app.state.worker_db
-        row = db.execute("SELECT path FROM projects WHERE id = ?", (run["project_id"],)).fetchone()
+        row = db.execute(
+            "SELECT id, path FROM projects WHERE id = ?", (run["project_id"],)
+        ).fetchone()
         if row and row["path"]:
-            return Path(row["path"]) / "wiki"
+            return ops_root(db, row) / "wiki"
         return None
 
     def autolog_enabled(self, project_id: int | None) -> bool:

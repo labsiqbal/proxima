@@ -17,6 +17,12 @@ import json as _json
 
 from .auth import expiry, hash_token, iso_now, new_token
 from .capabilities import apply_capabilities, parse_selection
+from .container_registry import (
+    ContainerBoundaryError,
+    container_root,
+    ops_root,
+    root_for_virtual_path,
+)
 from .profile_seed import seed_agent_home
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
@@ -336,9 +342,31 @@ def build_route_deps(
             return visible_project(project_slug, user)["id"]
         return project_id
 
+    def _boundary_http(exc: ContainerBoundaryError) -> Any:
+        """Client-facing 400 for a fail-closed Container/Area boundary refusal,
+        matching the filesystem routes' fsapi.FsError response shape."""
+        return http_exception(status_code=400, detail=str(exc))
+
     def _project_root(slug: str, user: dict[str, Any]) -> Path:
         project = visible_project(slug, user)
-        return Path(project["path"])
+        try:
+            return container_root(project)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
+
+    def _ops_root(slug: str, user: dict[str, Any]) -> Path:
+        project = visible_project(slug, user)
+        try:
+            return ops_root(db(), project)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
+
+    def _virtual_root(slug: str, path: str, user: dict[str, Any]) -> Path:
+        project = visible_project(slug, user)
+        try:
+            return root_for_virtual_path(db(), project, path)
+        except ContainerBoundaryError as exc:
+            raise _boundary_http(exc) from exc
 
     def user_from_token_query(token: str) -> dict[str, Any]:
         with app.state.db_lock:
@@ -371,6 +399,8 @@ def build_route_deps(
         "run_projectctl": run_projectctl,
         "_purge_project": _purge_project,
         "_project_root": _project_root,
+        "_ops_root": _ops_root,
+        "_virtual_root": _virtual_root,
         "user_from_token_query": user_from_token_query,
         "create_token": create_token,
         "public_user": public_user,

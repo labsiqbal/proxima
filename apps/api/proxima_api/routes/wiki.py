@@ -19,11 +19,11 @@ def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
     current_user = deps["current_user"]
-    _project_root = deps["_project_root"]
+    _ops_root = deps["_ops_root"]
 
     @app.get("/api/projects/{slug}/wiki/all")
     def project_wiki_all(slug: str, user: dict[str, Any] = Depends(current_user)):
-        root = _project_root(slug, user)
+        root = _ops_root(slug, user)
         return {"notes": fsapi.walk_files(root, "wiki")}
 
     # ── Personal per-user wiki (workspace_root/users/<username>/wiki) ──
