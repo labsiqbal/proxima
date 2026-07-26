@@ -152,7 +152,7 @@ export function App() {
   const [graphStage, setGraphStage] = React.useState<'home' | 'editor'>('home')
   const [graphBackNonce, setGraphBackNonce] = React.useState(0)
   // Design Studio stage (canvas open = deep / project-locked).
-  const [designStage, setDesignStage] = React.useState<'start' | 'studio' | 'gallery'>('start')
+  const [designStage, setDesignStage] = React.useState<'start' | 'studio' | 'gallery' | 'moodboard'>('start')
   const [designExitNonce, setDesignExitNonce] = React.useState(0)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
@@ -298,7 +298,7 @@ export function App() {
       setNavStack(stack => stack.filter(e => e.kind !== 'workflow-editor'))
     }
   }, [])
-  const handleDesignStageChange = React.useCallback((stage: 'start' | 'studio' | 'gallery') => {
+  const handleDesignStageChange = React.useCallback((stage: 'start' | 'studio' | 'gallery' | 'moodboard') => {
     setDesignStage(stage)
     if (stage === 'studio') {
       setNavStack(stack => {
