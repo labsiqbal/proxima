@@ -522,6 +522,7 @@ export function Composer({
 			)}
 			<textarea
 				ref={taRef}
+				name="agent-message"
 				rows={1}
 				aria-label={textareaLabel}
 				placeholder={placeholder}
@@ -629,6 +630,7 @@ export function Composer({
 				<input
 					ref={fileRef}
 					type="file"
+					name="attachments"
 					multiple
 					hidden
 					onChange={(e) => void handleFiles(e.target.files)}

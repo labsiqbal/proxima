@@ -22,7 +22,11 @@ ledgers exist.
 Checkpoint and job-input payloads are rewritten only for known ownership keys:
 `alpha_session_id` becomes `origin_master_session_id` and
 `alpha_dispatched` becomes `master_dispatched`. User message and prompt text are
-not rewritten.
+not rewritten. Job and checkpoint payload rewrites are limited to Master-owned
+jobs, attention rewrites to legacy orchestrator kinds and sources, event rewrites
+to the Master session or its owned jobs, and audit rewrites to `alpha.*` actions.
+Unrelated business data containing words or identifiers such as `Alpha` or
+`alpha` is preserved byte-for-byte.
 
 ## Startup invariants
 
@@ -76,5 +80,6 @@ the canonical routes.
 | Dual identities, wrong profile link, or project-bound system session | refuse and roll back |
 
 Feature-off startup still migrates and validates persistence, but does not start
-the Master supervisor or claim Master and Master-owned Task runs. Enabling the
-flag later resumes the same queued rows and identity.
+the Master supervisor, resume committed Master delegation start intents, or claim
+Master and Master-owned Task runs. Enabling the flag later resumes the same
+queued rows and identity.

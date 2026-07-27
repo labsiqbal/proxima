@@ -798,6 +798,16 @@ class TaskDelegationService:
             raise TaskDelegationError(
                 "task_not_found", f"Task {job_id} was not found", 404
             )
+        if job["origin_master_session_id"] is not None and not features.enabled(
+            self.app.state.config,
+            features.MASTER_ORCHESTRATOR,
+        ):
+            return DelegatedTask(
+                job=self._job_payload(conn, job_id),
+                created=created,
+                started=False,
+                blocked_reason=job["blocked_reason"],
+            )
         user_id = int(job["created_by"])
         if user is not None and int(user.get("id") or 0) != user_id:
             owned = conn.execute(

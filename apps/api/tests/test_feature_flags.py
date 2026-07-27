@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,6 +84,37 @@ def test_workflow_graph_environment_flag_reaches_asgi_config(monkeypatch):
     assert _config_from_env()["feature_workflow_graph"]
 
 
+def test_master_environment_flag_reaches_production_serve_entrypoint(tmp_path):
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROXIMA_DB_PATH": str(tmp_path / "serve.db"),
+            "PROXIMA_WORKSPACE_ROOT": str(tmp_path / "workspace"),
+            "PROXIMA_WEB_DIST": str(tmp_path / "web-dist"),
+            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
+            "PROXIMA_UPDATE_CHECK": "0",
+        }
+    )
+    serve_path = Path(__file__).parents[1] / "scripts" / "serve.py"
+    code = (
+        "import runpy, sys; "
+        "from fastapi.testclient import TestClient; "
+        "namespace = runpy.run_path(sys.argv[1]); "
+        "response = TestClient(namespace['app']).get('/api/config'); "
+        "print(response.json()['features']['master_orchestrator'])"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(serve_path)],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "True"
+
+
 def test_programmatic_zero_values_do_not_enable_features():
     config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0", "feature_repo_worktrees": "0"})
     assert features.public_flags(config) == {
@@ -106,20 +140,48 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
     master_session = app.state.worker_db.execute(
         "SELECT id FROM sessions WHERE mode = 'master'"
     ).fetchone()
+    container_root = tmp_path / "feature-off-container"
+    container_root.mkdir()
+    container_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO projects(slug, name, path, owner_user_id) "
+            "VALUES ('feature-off', 'Feature off', ?, ?)",
+            (str(container_root), owner["id"]),
+        ).lastrowid
+    )
+    target_area_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+            "VALUES (?, 'ops', '.', 'manual')",
+            (container_id,),
+        ).lastrowid
+    )
     worker_session_id = int(
         app.state.worker_db.execute(
             "INSERT INTO sessions("
-            "title, owner_user_id, profile_id, runner_id, mode"
-            ") VALUES ('Master-owned Task', ?, ?, ?, 'chat')",
-            (owner["id"], profile["id"], profile["runner_id"]),
+            "title, project_id, owner_user_id, profile_id, runner_id, mode"
+            ") VALUES ('Master-owned Task', ?, ?, ?, ?, 'chat')",
+            (
+                container_id,
+                owner["id"],
+                profile["id"],
+                profile["runner_id"],
+            ),
         ).lastrowid
     )
     job_id = int(
         app.state.worker_db.execute(
             "INSERT INTO jobs("
-            "session_id, title, status, origin_master_session_id, created_by"
-            ") VALUES (?, 'Master-owned Task', 'queued', ?, ?)",
-            (worker_session_id, master_session["id"], owner["id"]),
+            "project_id, session_id, title, status, target_area_id, "
+            "origin_master_session_id, created_by"
+            ") VALUES (?, ?, 'Master-owned Task', 'queued', ?, ?, ?)",
+            (
+                container_id,
+                worker_session_id,
+                target_area_id,
+                master_session["id"],
+                owner["id"],
+            ),
         ).lastrowid
     )
     app.state.worker_db.execute(
@@ -139,11 +201,38 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
             ),
         ).lastrowid
     )
+    app.state.worker_db.execute(
+        "INSERT INTO task_delegations("
+        "origin_session_id, container_id, target_area_id, job_id, routing_mode, "
+        "created_by, idempotency_key, idempotency_identity, request_fingerprint, "
+        "start_requested, start_state"
+        ") VALUES (?, ?, ?, ?, 'explicit', ?, 'feature-off', "
+        "'feature-off-identity', 'feature-off-fingerprint', 1, 'pending')",
+        (
+            master_session["id"],
+            container_id,
+            target_area_id,
+            job_id,
+            owner["id"],
+        ),
+    )
 
+    assert app.state.task_delegation.resume_committed() == []
     assert app.state.worker.claim_run() is None
     assert app.state.worker_db.execute(
         "SELECT status FROM runs WHERE id = ?", (run_id,)
     ).fetchone()["status"] == "queued"
+    assert app.state.worker_db.execute(
+        "SELECT status, started_at FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "queued"
+    delegation = app.state.worker_db.execute(
+        "SELECT start_state, start_attempts FROM task_delegations WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(delegation) == {
+        "start_state": "pending",
+        "start_attempts": 0,
+    }
 
     app.state.config["feature_master_orchestrator"] = True
     claimed = app.state.worker.claim_run()

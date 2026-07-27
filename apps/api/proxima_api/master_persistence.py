@@ -251,6 +251,12 @@ def _migrate_job_origin(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_jobs_origin_master "
             f"ON jobs({ORIGIN_MASTER_COLUMN}, status, created_at)"
         )
+    _assert_job_origin_integrity(conn)
+
+
+def _assert_job_origin_integrity(conn: sqlite3.Connection) -> None:
+    if ORIGIN_MASTER_COLUMN not in _columns(conn, "jobs"):
+        return
     origin_fks = [
         row
         for row in conn.execute("PRAGMA foreign_key_list(jobs)").fetchall()
@@ -264,6 +270,17 @@ def _migrate_job_origin(conn: sqlite3.Connection) -> None:
         raise MasterPersistenceError(
             "jobs Master origin foreign key is missing or inconsistent"
         )
+    if {"status", "created_at"}.issubset(_columns(conn, "jobs")):
+        index_columns = [
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA index_info(idx_jobs_origin_master)"
+            ).fetchall()
+        ]
+        if index_columns != [ORIGIN_MASTER_COLUMN, "status", "created_at"]:
+            raise MasterPersistenceError(
+                "jobs Master origin index is missing or inconsistent"
+            )
     if "mode" in _columns(conn, "sessions"):
         invalid = conn.execute(
             f"SELECT j.id FROM jobs j JOIN sessions s ON s.id = j.{ORIGIN_MASTER_COLUMN} "
@@ -317,6 +334,15 @@ def _migrate_attention(conn: sqlite3.Connection) -> None:
         "SELECT id, kind, title, target_json, source_key FROM attention_items"
     ).fetchall()
     for row in rows:
+        kind_value = str(row["kind"])
+        source_key = row["source_key"]
+        source_value = source_key if isinstance(source_key, str) else ""
+        if kind_value not in {"alpha", "alpha_budget", "alpha_decision"} and not (
+            source_value.startswith("alpha-budget:")
+            or source_value.startswith("alpha-start:")
+            or source_value.startswith("alpha:")
+        ):
+            continue
         target = _decode_object(
             row["target_json"], label=f"attention item {row['id']} target"
         )
@@ -325,8 +351,7 @@ def _migrate_attention(conn: sqlite3.Connection) -> None:
             "alpha": "master",
             "alpha_budget": "master_budget",
             "alpha_decision": "master_decision",
-        }.get(str(row["kind"]), str(row["kind"]))
-        source_key = row["source_key"]
+        }.get(kind_value, kind_value)
         if isinstance(source_key, str):
             if source_key.startswith("alpha-budget:"):
                 source_key = "master-budget:" + source_key.removeprefix(
@@ -360,8 +385,11 @@ def _migrate_attention(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_owned_json_payloads(conn: sqlite3.Connection) -> None:
-    if _table_exists(conn, "jobs") and "input" in _columns(conn, "jobs"):
-        for row in conn.execute("SELECT id, input FROM jobs").fetchall():
+    job_columns = _columns(conn, "jobs")
+    if {"input", ORIGIN_MASTER_COLUMN}.issubset(job_columns):
+        for row in conn.execute(
+            f"SELECT id, input FROM jobs WHERE {ORIGIN_MASTER_COLUMN} IS NOT NULL"
+        ).fetchall():
             payload = _decode_object(row["input"], label=f"job {row['id']} input")
             normalized = canonicalize_master_payload(payload)
             if normalized != payload:
@@ -369,9 +397,11 @@ def _migrate_owned_json_payloads(conn: sqlite3.Connection) -> None:
                     "UPDATE jobs SET input = ? WHERE id = ?",
                     (json.dumps(normalized, ensure_ascii=False), row["id"]),
                 )
-    if _table_exists(conn, "job_checkpoints"):
+    if _table_exists(conn, "job_checkpoints") and ORIGIN_MASTER_COLUMN in job_columns:
         for row in conn.execute(
-            "SELECT id, payload_json FROM job_checkpoints"
+            "SELECT cp.id, cp.payload_json FROM job_checkpoints cp "
+            "JOIN jobs j ON j.id = cp.job_id "
+            f"WHERE j.{ORIGIN_MASTER_COLUMN} IS NOT NULL"
         ).fetchall():
             payload = _decode_object(
                 row["payload_json"], label=f"checkpoint {row['id']} payload"
@@ -393,8 +423,22 @@ def _migrate_runs_events_and_audit(conn: sqlite3.Connection) -> None:
             "UPDATE runs SET kind = 'master_tool_' || substr(kind, 12) "
             "WHERE kind GLOB 'alpha_tool_[0-9]*'"
         )
-    if _table_exists(conn, "events"):
-        for row in conn.execute("SELECT id, payload FROM events").fetchall():
+    event_columns = _columns(conn, "events")
+    if {"id", "payload", "session_id", "run_id"}.issubset(event_columns):
+        for row in conn.execute(
+            "SELECT e.id, e.payload FROM events e WHERE "
+            "EXISTS ("
+            "  SELECT 1 FROM sessions s LEFT JOIN jobs j ON j.id = s.job_id "
+            "  WHERE s.id = e.session_id "
+            f"    AND (s.mode = ? OR j.{ORIGIN_MASTER_COLUMN} IS NOT NULL)"
+            ") OR EXISTS ("
+            "  SELECT 1 FROM runs r JOIN sessions s ON s.id = r.session_id "
+            "  LEFT JOIN jobs j ON j.id = s.job_id "
+            "  WHERE r.id = e.run_id "
+            f"    AND (s.mode = ? OR j.{ORIGIN_MASTER_COLUMN} IS NOT NULL)"
+            ")",
+            (MASTER_SESSION_MODE, MASTER_SESSION_MODE),
+        ).fetchall():
             payload = _decode_object(
                 row["payload"], label=f"event {row['id']} payload"
             )
@@ -417,9 +461,10 @@ def _migrate_runs_events_and_audit(conn: sqlite3.Connection) -> None:
         ).fetchall()
         for row in rows:
             action = str(row["action"])
+            if not action.startswith("alpha."):
+                continue
             target_id = str(row["target_id"])
-            if action.startswith("alpha."):
-                action = "master." + action.removeprefix("alpha.")
+            action = "master." + action.removeprefix("alpha.")
             if target_id == "alpha":
                 target_id = "master"
             elif target_id.startswith("alpha."):
@@ -482,6 +527,13 @@ def assert_master_persistence(conn: sqlite3.Connection) -> None:
     if legacy_profile or legacy_session:
         raise MasterPersistenceError("Alpha identity migration is incomplete")
     _migrate_identity_rows(conn)
+    _assert_job_origin_integrity(conn)
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise MasterPersistenceError(
+            "Master persistence validation found foreign-key violations: "
+            f"{[tuple(row) for row in violations]}"
+        )
 
 
 def master_identity_rows(
@@ -513,4 +565,25 @@ def master_identity_rows(
 
 
 def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    return canonicalize_master_payload(dict(payload))
+    """Normalize only the durable ownership surface of one job payload.
+
+    Job input is user-extensible domain data. Its legacy ownership keys are
+    canonicalized only when the job is known to be Master-owned.
+    """
+    normalized = dict(payload)
+    legacy_origin = normalized.pop(LEGACY_ORIGIN_COLUMN, None)
+    master_origin = normalized.get(ORIGIN_MASTER_COLUMN)
+    if (
+        legacy_origin is not None
+        and master_origin is not None
+        and legacy_origin != master_origin
+    ):
+        raise MasterPersistenceError(
+            "legacy and canonical job origins conflict"
+        )
+    if master_origin is None and legacy_origin is not None:
+        normalized[ORIGIN_MASTER_COLUMN] = legacy_origin
+        master_origin = legacy_origin
+    if master_origin is not None and isinstance(normalized.get("input"), dict):
+        normalized["input"] = canonicalize_master_payload(normalized["input"])
+    return normalized

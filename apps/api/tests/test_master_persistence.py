@@ -10,6 +10,7 @@ from proxima_api.db import connect, init_db
 from proxima_api.main import create_app
 from proxima_api.master_persistence import (
     MasterPersistenceError,
+    canonical_job_payload,
     migrate_master_persistence,
 )
 from proxima_api.migrations import current_version, run_migrations
@@ -627,3 +628,187 @@ def test_transactional_migration_refusal_rolls_back_identity_and_version(
     assert "alpha_session_id" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
+
+
+def test_migration_preserves_unrelated_alpha_named_domain_data(tmp_path: Path):
+    conn = connect(tmp_path / "unrelated.db")
+    init_db(conn)
+    run_migrations(conn)
+    owner_id = int(
+        conn.execute(
+            "INSERT INTO users(username, os_user) VALUES ('owner', 'owner')"
+        ).lastrowid
+    )
+    ordinary_job_id = int(
+        conn.execute(
+            "INSERT INTO jobs(title, input, created_by) VALUES ('ordinary', ?, ?)",
+            (
+                json.dumps(
+                    {
+                        "customer": {"alpha_session_id": "external-id"},
+                        "alpha_dispatched": False,
+                    }
+                ),
+                owner_id,
+            ),
+        ).lastrowid
+    )
+    malformed_job_id = int(
+        conn.execute(
+            "INSERT INTO jobs(title, input, created_by) "
+            "VALUES ('ordinary malformed input', 'not-json', ?)",
+            (owner_id,),
+        ).lastrowid
+    )
+    attention_id = int(
+        conn.execute(
+            "INSERT INTO attention_items(kind, title, target_json, source_key) "
+            "VALUES ('permission', 'Review Project Alpha', ?, 'ordinary:alpha')",
+            (
+                json.dumps(
+                    {
+                        "view": "task",
+                        "alpha_session_id": "external-id",
+                    }
+                ),
+            ),
+        ).lastrowid
+    )
+    event_id = int(
+        conn.execute(
+            "INSERT INTO events(seq, type, payload) "
+            "VALUES (1, 'business.metric', ?)",
+            (
+                json.dumps(
+                    {
+                        "alpha": 0.5,
+                        "alpha_session_id": "metric-name",
+                    }
+                ),
+            ),
+        ).lastrowid
+    )
+    audit_id = int(
+        conn.execute(
+            "INSERT INTO audit_log(action, target_type, target_id, metadata) "
+            "VALUES ('project.rename', 'project', 'alpha', ?)",
+            (json.dumps({"alpha_session_id": "business-field"}),),
+        ).lastrowid
+    )
+
+    migrate_master_persistence(conn)
+
+    assert json.loads(
+        conn.execute(
+            "SELECT input FROM jobs WHERE id = ?", (ordinary_job_id,)
+        ).fetchone()["input"]
+    ) == {
+        "customer": {"alpha_session_id": "external-id"},
+        "alpha_dispatched": False,
+    }
+    assert conn.execute(
+        "SELECT input FROM jobs WHERE id = ?", (malformed_job_id,)
+    ).fetchone()["input"] == "not-json"
+    attention = conn.execute(
+        "SELECT title, target_json, source_key FROM attention_items WHERE id = ?",
+        (attention_id,),
+    ).fetchone()
+    assert dict(attention) == {
+        "title": "Review Project Alpha",
+        "target_json": json.dumps(
+            {"view": "task", "alpha_session_id": "external-id"}
+        ),
+        "source_key": "ordinary:alpha",
+    }
+    assert json.loads(
+        conn.execute(
+            "SELECT payload FROM events WHERE id = ?", (event_id,)
+        ).fetchone()["payload"]
+    ) == {"alpha": 0.5, "alpha_session_id": "metric-name"}
+    audit = conn.execute(
+        "SELECT action, target_id, metadata FROM audit_log WHERE id = ?",
+        (audit_id,),
+    ).fetchone()
+    assert dict(audit) == {
+        "action": "project.rename",
+        "target_id": "alpha",
+        "metadata": json.dumps({"alpha_session_id": "business-field"}),
+    }
+    assert canonical_job_payload(
+        {
+            "id": ordinary_job_id,
+            "origin_master_session_id": None,
+            "input": {"alpha_session_id": "external-id"},
+        }
+    )["input"] == {"alpha_session_id": "external-id"}
+
+
+def test_owned_malformed_payload_refuses_and_rolls_back_migration_31(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "malformed-owned.db"
+    workspace = tmp_path / "workspace"
+    ids = _alpha_v30_database(db_path, workspace)
+    conn = connect(db_path)
+    conn.execute(
+        "UPDATE jobs SET input = 'not-json' WHERE id = ?", (ids["job_id"],)
+    )
+    conn.commit()
+
+    with pytest.raises(
+        MasterPersistenceError, match=f"job {ids['job_id']} input contains invalid JSON"
+    ):
+        run_migrations(conn, str(db_path))
+
+    assert current_version(conn) == 30
+    assert conn.execute(
+        "SELECT system_kind FROM profiles WHERE id = ?", (ids["profile_id"],)
+    ).fetchone()["system_kind"] == "alpha"
+    assert conn.execute(
+        "SELECT mode FROM sessions WHERE id = ?", (ids["session_id"],)
+    ).fetchone()["mode"] == "alpha"
+    assert "alpha_session_id" in {
+        row[1] for row in conn.execute("PRAGMA table_info(jobs)")
+    }
+
+
+def test_current_schema_startup_refuses_non_master_job_origin(tmp_path: Path):
+    db_path = tmp_path / "invalid-current.db"
+    workspace = tmp_path / "workspace"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    owner_id = int(
+        conn.execute(
+            "INSERT INTO users(username, os_user) VALUES ('owner', 'owner')"
+        ).lastrowid
+    )
+    profile_id = int(
+        conn.execute(
+            "INSERT INTO profiles("
+            "user_id, slug, name, hermes_home, runner_id, is_default"
+            ") VALUES (?, 'default', 'Default', '/tmp/default', 'hermes', 1)",
+            (owner_id,),
+        ).lastrowid
+    )
+    ordinary_session_id = int(
+        conn.execute(
+            "INSERT INTO sessions("
+            "title, owner_user_id, profile_id, runner_id, mode"
+            ") VALUES ('ordinary', ?, ?, 'hermes', 'chat')",
+            (owner_id, profile_id),
+        ).lastrowid
+    )
+    conn.execute(
+        "INSERT INTO jobs(title, origin_master_session_id, created_by) "
+        "VALUES ('invalid origin', ?, ?)",
+        (ordinary_session_id, owner_id),
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(
+        MasterPersistenceError,
+        match="points at a non-Master origin session",
+    ):
+        _app(db_path, workspace)

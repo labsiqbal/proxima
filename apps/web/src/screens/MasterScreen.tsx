@@ -296,7 +296,7 @@ export function MasterScreen({
       <div><p className="eyebrow">Orchestration</p><strong>Master</strong></div>
       <div className="master-controls code-context">
         <label className="master-runner-label"><span className="sr-only">Backing runner</span>
-          <select className="ui-select" value={desk.backing_runner} disabled={settingBusy} aria-label="Backing runner" onChange={event => void changeRunner(event.target.value)}>{availableRunners.map(runner => <option value={runner.id} key={runner.id}>{runner.displayName}</option>)}</select>
+          <select className="ui-select" name="master-backing-runner" value={desk.backing_runner} disabled={settingBusy} aria-label="Backing runner" onChange={event => void changeRunner(event.target.value)}>{availableRunners.map(runner => <option value={runner.id} key={runner.id}>{runner.displayName}</option>)}</select>
         </label>
         <button type="button" className={`toggle-pill ${desk.unattended ? 'on' : ''}`} aria-pressed={desk.unattended} disabled={settingBusy} onClick={() => void toggleUnattended()}><span className="toggle-knob" aria-hidden="true" />{settingBusy ? 'Saving…' : desk.unattended ? 'Unattended on' : 'Unattended off'}</button>
         <button

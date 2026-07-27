@@ -29,6 +29,7 @@ import remoteAccessGuide from '../content/remote-access-guide.md?raw'
 import type { AppFeatures, Profile, Project, Runner, User } from '../types'
 import { getMasterSettings, saveMasterSettings, type MasterSettings } from '../api/master'
 import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
+import { LOCAL_CORE_TOUR_DONE } from '../components/shell/CoreTour'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
 import { ProjectsScreen } from './ProjectsScreen'
@@ -673,6 +674,7 @@ function HelpToursPanel({ token, features }: { token: string; features: AppFeatu
   const [busy, setBusy] = React.useState(false)
   const replayCore = async () => {
     setBusy(true)
+    localStorage.removeItem(LOCAL_CORE_TOUR_DONE)
     try {
       if (features.masterOrchestrator) {
         await saveMasterSettings(token, { tour_core_done: false } as Partial<MasterSettings>)
@@ -765,7 +767,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid" role="group" aria-label="Theme">{THEMES.map(t => {
     const selected = theme === t.key
     return <button key={t.key} className={`theme-swatch ${selected ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button" aria-pressed={selected} aria-label={themeSwatchAriaLabel(t.label, selected)}><span className="swatch-pv" style={{ background: t.surface }} aria-hidden="true"><i style={{ background: t.accent }} /></span><small aria-hidden="true">{t.label}</small></button>
-  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
+  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" name="font-size" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
   const notifBlocked = notifyBlocked()
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <>
     <button

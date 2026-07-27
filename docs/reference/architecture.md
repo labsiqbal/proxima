@@ -312,7 +312,9 @@ and refuses ambiguous dual identities or conflicting old/new origin columns. The
 migration is transactional and idempotent, runs regardless of the runtime feature
 flag, and preserves messages, runs, events, checkpoints, budgets, attention,
 delegations, and Task ownership. Deprecated Alpha routes and legacy payload readers
-project the same rows for one compatibility release.
+project the same rows for one compatibility release. Stored payload normalization
+is ownership-scoped: unrelated Alpha-named business fields in ordinary jobs,
+attention, events, and audit records are never rewritten.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the
@@ -357,7 +359,8 @@ Durable identity provisioning and migration always run. The runtime, supervisor,
 routes, navigation, and settings surface require
 `feature_master_orchestrator`, which defaults off until the restricted Master
 runtime lands and integrated acceptance passes. With the flag off, queued Master
-turns and Master-owned Task runs remain queued without mutation.
+turns, committed delegation start intents, and Master-owned Task runs remain queued
+without mutation.
 
 ```text
 Master nav -> GET /api/master/desk -> ensure hidden Master profile + mode='master' session

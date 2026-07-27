@@ -9,7 +9,7 @@ const STEPS = [
   { eyebrow: 'Deliverables', title: 'Archive', body: 'Durable deliverables land in Archive with lineage and status. Open supported files with the same in-app viewer used from Chat and Tasks.' },
 ]
 
-const LOCAL_CORE_TOUR_DONE = 'proxima.tour.coreDone'
+export const LOCAL_CORE_TOUR_DONE = 'proxima.tour.coreDone'
 
 export function CoreTour({ token, masterEnabled }: { token: string; masterEnabled: boolean }) {
   const [open, setOpen] = React.useState(false)
@@ -26,7 +26,16 @@ export function CoreTour({ token, masterEnabled }: { token: string; masterEnable
     const replay = () => { setStep(0); setOpen(true) }
     if (masterEnabled) {
       getMasterSettings(token).then(settings => {
-        if (alive && !settings.tour_core_done) setOpen(true)
+        if (!alive) return
+        if (localStorage.getItem(LOCAL_CORE_TOUR_DONE) === '1') {
+          if (!settings.tour_core_done) {
+            void saveMasterSettings(token, { tour_core_done: true }).catch(() => undefined)
+          }
+        } else if (settings.tour_core_done) {
+          localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
+        } else {
+          setOpen(true)
+        }
       }).catch(() => undefined)
     } else if (localStorage.getItem(LOCAL_CORE_TOUR_DONE) !== '1') {
       setOpen(true)
@@ -38,11 +47,11 @@ export function CoreTour({ token, masterEnabled }: { token: string; masterEnable
     if (busy) return
     setBusy(true)
     setOpen(false)
+    localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
     try {
       if (masterEnabled) await saveMasterSettings(token, { tour_core_done: true })
-      else localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
     }
-    catch { /* A failed write replays the tour next time, but never traps the owner now. */ }
+    catch { /* Local completion prevents a replay; the next enabled load retries server reconciliation. */ }
     finally { setBusy(false) }
   }, [busy, masterEnabled, token])
   React.useEffect(() => {

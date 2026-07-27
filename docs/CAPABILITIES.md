@@ -348,10 +348,12 @@ mode off cleanly and creates an `master_budget` Attention row. Unattended jobs r
 scoped ACP auto-approval and normal BYO push/PR capability; destructive product admin
 is not in its handler set. Satpam remains the sole steer/restart authority.
 
-**Tours:** after setup, the first main-UI visit opens a keyboard-trapped four-step core
-tour (Chat, Master, Tasks/Attention/safety), saved server-side and permanently
-skippable. Settings → Help & Tours can replay it and launch chapters for Workflows,
-Projects/tools, Archive, feature-aware Design, Agents, remote/safety, and Settings.
+**Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
+with five chapters when Master is enabled and four when it is disabled. Completion
+is reconciled between the feature-off browser marker and Master settings so enabling
+Master does not replay a tour the owner already completed. Settings → Help & Tours
+can replay it and launch chapters for Workflows, Projects/tools, Archive,
+feature-aware Design, Agents, remote/safety, and Settings.
 
 **Endpoints:** `GET /api/master/desk`, `POST /api/master/messages`,
 `GET/PUT /api/settings/master`, `GET /api/attention`,
