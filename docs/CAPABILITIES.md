@@ -281,10 +281,29 @@ Chat history; Settings/desk runner selection creates or reuses the matching syst
 home while the UI counterpart stays named Master. The desk reuses Chat's shared
 composer for delegation (attach + `@` project mentions; submit still hits
 `/api/master/messages`), and the work side panel is collapsible with a persisted
-preference. The desk polls its thread, active /
-queued Master jobs, needs-you subset, job-scoped checkpoint timeline, and honest
-capacity (`running / configured max`, free slots, queued). Loading, empty, error/retry, populated,
-and busy states are explicit on desktop and mobile. The empty desk is sparse by
+preference. One authenticated `MasterStateProvider` above `AppShell` owns the
+canonical desk/session, ordered thread, active turn, durable event cursor, one SSE
+connection, reconnect reconciliation, unread count, composer draft and selection,
+and stable scroll/panel state. The full-page Master home and future presentation
+surfaces consume that same interface without shadow stores or duplicate composers.
+Logout, owner/token transition, onboarding, feature-off, and update application
+abort stale work, close the old stream, and clear owner-scoped state.
+
+The existing Master-session SSE stream is the only live path. It resumes from the
+durable cursor, deduplicates replay, ignores raw delta events, and applies typed
+Task/review/Attention/Satpam projections to the thread and work panel once. A
+low-frequency authoritative desk/messages/events reconciliation runs only after a
+disconnect, reconnect, detected sequence gap, terminal turn, or explicit retry. It
+does not restore the former five-second Master desk poll. The SSE generator flushes
+an initial comment so an idle healthy connection becomes Live immediately while
+retaining the same cursor and event contract.
+
+The home renders queued, running, review/attention, completed, and failed
+Master-owned Tasks, the needs-you subset, job-scoped checkpoint timeline, and honest
+capacity (`running / configured max`, free slots, queued). Loading, empty,
+disconnected/retrying, error, populated, sending/thinking, and multi-Task states are
+explicit on desktop and mobile. A compact New Task control seeds the one shared
+composer rather than starting a parallel launcher flow. The empty home is sparse by
 default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
 so the Delegate composer stays the primary CTA.
 

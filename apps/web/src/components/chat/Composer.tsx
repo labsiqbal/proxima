@@ -117,6 +117,12 @@ export function Composer({
 	submittingLabel = "Sending…",
 	textareaLabel,
 	mentionItems,
+	draftValue,
+	onDraftChange,
+	selectionValue,
+	onSelectionChange,
+	focusRequest,
+	clearOnSubmitStart = true,
 	draftSeed,
 	draftSeedNonce,
 	onDraftSeedConsumed,
@@ -143,6 +149,13 @@ export function Composer({
 	textareaLabel?: string;
 	/** Files the owner can @-mention; typing @ offers them and inserts the path. */
 	mentionItems?: MentionItem[];
+	/** Optional controlled draft. Master uses this so one provider owns every surface. */
+	draftValue?: string;
+	onDraftChange?: (draft: string) => void;
+	selectionValue?: { start: number; end: number };
+	onSelectionChange?: (selection: { start: number; end: number }) => void;
+	focusRequest?: number;
+	clearOnSubmitStart?: boolean;
 	draftSeed?: string;
 	draftSeedNonce?: number;
 	onDraftSeedConsumed?: () => void;
@@ -150,7 +163,18 @@ export function Composer({
 	/** Optional: parent uses skill slash names to route agent-turn commands. */
 	onCatalog?: (commands: CatalogCommand[]) => void;
 }) {
-	const [draft, setDraft] = React.useState("");
+	const [internalDraft, setInternalDraft] = React.useState("");
+	const controlledDraft = draftValue !== undefined;
+	const draft = controlledDraft ? draftValue : internalDraft;
+	const setDraft = React.useCallback((update: React.SetStateAction<string>) => {
+		if (!controlledDraft) {
+			setInternalDraft(update);
+			return;
+		}
+		const current = draftValue ?? "";
+		const next = typeof update === "function" ? update(current) : update;
+		onDraftChange?.(next);
+	}, [controlledDraft, draftValue, onDraftChange]);
 	const [mode, setMode] = React.useState<PromptMode>("chat");
 	const [genOpen, setGenOpen] = React.useState(false);
 	const mediaKinds = generateKinds ?? (promptModes ? ["image", "design"] as const : []);
@@ -191,6 +215,7 @@ export function Composer({
 	const mentionListId = React.useId();
 	const slashListId = React.useId();
 	const fileRef = React.useRef<HTMLInputElement>(null);
+	const handledFocusRequest = React.useRef(0);
 	const catalogSeq = React.useRef(0);
 	const uploadSeq = React.useRef(0);
 	const submitSeq = React.useRef(0);
@@ -321,6 +346,25 @@ export function Composer({
 		el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
 	}, [draft]);
 
+	React.useLayoutEffect(() => {
+		const element = taRef.current;
+		if (!element || !selectionValue || document.activeElement === element) return;
+		const start = Math.min(selectionValue.start, draft.length);
+		const end = Math.min(selectionValue.end, draft.length);
+		element.setSelectionRange(start, end);
+	}, [draft, selectionValue]);
+
+	React.useEffect(() => {
+		if (!focusRequest || handledFocusRequest.current === focusRequest) return;
+		handledFocusRequest.current = focusRequest;
+		const element = taRef.current;
+		if (!element) return;
+		element.focus();
+		const start = Math.min(selectionValue?.start ?? draft.length, draft.length);
+		const end = Math.min(selectionValue?.end ?? start, draft.length);
+		element.setSelectionRange(start, end);
+	}, [draft, focusRequest, selectionValue]);
+
 	async function handleFiles(list: FileList | File[] | null) {
 		if (!slug || !list || list.length === 0) return;
 		const uploadSlug = slug;
@@ -396,14 +440,14 @@ export function Composer({
 		const content = [text, ...refs].filter(Boolean).join("\n\n");
 		const submitMode = mode;
 		setSubmitting(true);
-		setDraft("");
+		if (clearOnSubmitStart) setDraft("");
 		setMention(null);
 		setAtts([]);
 		setMode("chat");
 		try {
 			await onSubmit(content, submitMode);
 		} catch {
-			if (mountedRef.current && seq === submitSeq.current) {
+			if (clearOnSubmitStart && mountedRef.current && seq === submitSeq.current) {
 				setDraft(text);
 				setAtts(atts);
 			}
@@ -533,6 +577,12 @@ export function Composer({
 				}}
 				onClick={(e) => syncMention(e.currentTarget)}
 				onSelect={(e) => syncMention(e.currentTarget)}
+				onSelectCapture={(e) => {
+					onSelectionChange?.({
+						start: e.currentTarget.selectionStart ?? 0,
+						end: e.currentTarget.selectionEnd ?? 0,
+					});
+				}}
 				onBlur={() => window.setTimeout(() => setMention(null), 120)}
 				disabled={disabled || submitting}
 				aria-autocomplete="list"

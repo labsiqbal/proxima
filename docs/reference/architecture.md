@@ -382,7 +382,9 @@ owner message -> queued Master chat-only run
       -> atomic jobs + delegation audits + dependency edges
       -> isolated worktree cut when needed -> job-scoped checkpoint -> runs queue
       -> RunWorker claims at most 3 Master runs; every excess worker run stays visibly queued
-      -> MasterScreen polls desk/messages; global Attention deep-links owner decisions
+      -> MasterProjectionService appends concise thread messages + typed session events
+      -> one authenticated MasterStateProvider resumes the durable cursor
+      -> Master home updates thread + work panel; global Attention deep-links owner decisions
 ```
 
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
@@ -442,6 +444,20 @@ are never projected. Server-owned summaries omit Task titles, runner errors,
 permission commands, Attention text, Satpam reasons, paths, and credentials. The
 existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
 [master-supervision.md](../master-supervision.md).
+
+The authenticated application mounts exactly one `MasterStateProvider` above
+`AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
+resume cursor, one `EventSource`, reconnect reconciliation, unread state, composer
+draft/selection, and stable scroll/panel state. Screens are view-only consumers.
+Lifecycle generations plus abort controllers reject late owner/token/session
+responses, close replaced streams, and keep React StrictMode from creating two live
+connections or duplicate UI submissions. Projection and final-message events are
+deduplicated by durable ids and ordered by the server cursor. Raw message,
+reasoning, and tool deltas advance cursor/sequence tracking only and are never
+rendered. Desk/messages/events reconciliation is recovery-only after reconnect,
+cursor gap, terminal turn, or explicit retry, not a primary poll. The SSE stream
+emits an immediate comment on an idle connection so browser `EventSource.onopen`
+reports the healthy transport without waiting for the keepalive interval.
 
 ### 1. Chat turn (the core loop)
 
@@ -972,7 +988,22 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes intake fields and feeds the Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node. The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly. The shell header ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session for coherence) and **stays on the current view**; only intentional open paths (Search project pick, etc.) call `selectProject` to open Chat.
+`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes intake fields and feeds the Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node.
+
+When Master is enabled, Tasks → `+ New task` opens the full Master home through the
+compatibility `home` view and seeds the shared Master composer. The explicit
+`master` view opens the same mounted surface and provider state. When Master is off,
+the legacy Task Composer remains behind view id `home`; it creates then starts an
+ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration.
+`execution_policy=guarded` preserves final review; `autonomous` completes the final
+step without an approval stop. Normal legacy-launcher tasks queue the selected
+profile; `/image` and `/design` reuse the proven media run path and link that run to
+the job so worker completion advances it to review. Start failure triggers
+queued-task cleanup; a media link failure preserves and exposes the task ID.
+Launcher project selection updates context directly. The shell header
+ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session
+for coherence) and **stays on the current view**; only intentional open paths
+(Search project pick, etc.) call `selectProject` to open Chat.
 
 `AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
@@ -989,6 +1020,8 @@ Generic frontend refresh loops use one non-overlapping polling hook. It pauses w
 the document is hidden and refreshes once when the tab becomes visible, avoiding
 background request churn without making active run status stale. Home artifact recents
 reuse the bounded project-artifact scanner instead of recursively classifying the whole
-tree with a second implementation.
+tree with a second implementation. Master is deliberately outside this generic
+polling path: its provider uses the existing session SSE stream plus recovery-only
+reconciliation.
 
 Authentication boot checks setup state, requires set-password or login, and resumes from the HttpOnly `proxima_session` cookie into an in-memory bearer token.

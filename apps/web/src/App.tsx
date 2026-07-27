@@ -22,6 +22,7 @@ import { useUpdateStatus } from './hooks/useUpdateStatus'
 import { usePolling } from './hooks/usePolling'
 import { UpdateModal, UpdateOverlay } from './components/shell/UpdateModal'
 import { ProximaMark } from './components/brand/ProximaMark'
+import { MasterStateProvider } from './master/MasterStateProvider'
 import {
   canGoBack,
   chromeBackLabel,
@@ -779,8 +780,9 @@ export function App() {
     if (linked) { setActiveProject(linked); setView('chat') }
   }
   const handleLogout = async () => {
-    try { await logout(token) } catch { /* best-effort; cookie is cleared server-side */ }
+    const currentToken = token
     setToken(''); setUser(null); setAuthGate('login')
+    try { await logout(currentToken) } catch { /* best-effort; the local app is already inert */ }
   }
 
   if (booting) return <div className="center-screen"><ProximaMark className="proxima-mark-boot" label="Proxima" /><p>Starting Proxima…</p></div>
@@ -794,12 +796,18 @@ export function App() {
   const keep = (id: View) => aliveViews.has(id) || view === id
   const chatActive = view === 'chat'
   const masterActive = view === 'master'
+  const masterHomeActive = masterActive || view === 'home'
   const activityActive = view === 'activity'
   const workflowsActive = view === 'workflows'
   const artifactsActive = view === 'artifacts'
   const designActive = view === 'design'
 
   return (
+    <MasterStateProvider
+      token={token}
+      ownerId={user.id}
+      enabled={features.masterOrchestrator && !updates.applying}
+    >
     <AppShell
       activeProfile={activeProfile}
       activeProject={activeProject}
@@ -847,9 +855,9 @@ export function App() {
     >
       {error && <div className="error-bar">{error}</div>}
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
-      {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
+      {view === 'home' && !features.masterOrchestrator && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {features.masterOrchestrator && keep('master') && pane('master', masterActive, <React.Suspense fallback={<ViewFallback label="Loading Master desk..." />}><MasterScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'master')} /></React.Suspense>)}
+      {features.masterOrchestrator && pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} /></React.Suspense>)}
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
@@ -883,5 +891,6 @@ export function App() {
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />
     </AppShell>
+    </MasterStateProvider>
   )
 }

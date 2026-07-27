@@ -100,6 +100,7 @@ async def _stream_session_events(
     hub = app.state.hub
     event_signal = hub.subscribe(session_id)
     last_id = after_id
+    handshake_sent = False
     try:
         while not await request.is_disconnected():
             event_signal.clear()
@@ -113,6 +114,9 @@ async def _stream_session_events(
                     f"id: {row['id']}\nevent: {row['type']}\n"
                     f"data: {json.dumps(_event_payload(row))}\n\n"
                 )
+            if not handshake_sent:
+                handshake_sent = True
+                yield ": connected\n\n"
             try:
                 await asyncio.wait_for(event_signal.wait(), timeout=15)
             except asyncio.TimeoutError as _exc:

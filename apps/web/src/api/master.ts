@@ -90,13 +90,21 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
   }
 }
 
-export const getMasterDesk = async (token: string): Promise<MasterDesk> =>
-  normalizeMasterDesk(await api<LegacyMasterDesk>('/api/master/desk', token))
-export const sendMasterMessage = (token: string, content: string) =>
-  api<{ run_id: number; session_id: number; status: string }>('/api/master/messages', token, { method: 'POST', body: JSON.stringify({ content }) })
+export const getMasterDesk = async (token: string, signal?: AbortSignal): Promise<MasterDesk> =>
+  normalizeMasterDesk(await api<LegacyMasterDesk>('/api/master/desk', token, { signal }))
+export const sendMasterMessage = (token: string, content: string, signal?: AbortSignal) =>
+  api<{ run_id: number; session_id: number; status: string }>('/api/master/messages', token, { method: 'POST', body: JSON.stringify({ content }), signal })
 export const getMasterSettings = (token: string) => api<MasterSettings>('/api/settings/master', token)
-export const saveMasterSettings = (token: string, body: Partial<MasterSettings>) =>
-  api<MasterSettings>('/api/settings/master', token, { method: 'PUT', body: JSON.stringify(body) })
+export const saveMasterSettings = (
+  token: string,
+  body: Partial<MasterSettings>,
+  signal?: AbortSignal,
+) =>
+  api<MasterSettings>('/api/settings/master', token, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+    signal,
+  })
 export const getAttention = (token: string) => api<{ items: AttentionItem[]; count: number }>('/api/attention', token)
 export const actAttention = (token: string, id: string, action: string) =>
   api<{ ok: boolean; id: string; action: string }>(`/api/attention/${encodeURIComponent(id)}/act`, token, { method: 'POST', body: JSON.stringify({ action }) })

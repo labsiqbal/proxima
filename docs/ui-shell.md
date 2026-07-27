@@ -33,15 +33,27 @@ Master is a first-class destination, not a Chat tab or Tasks filter. Its header 
 the built-in system orchestrator and lets the owner choose the backing runner; the desk
 itself keeps the counterpart label **Master** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
-saved unattended budgets. The main column is the Master thread plus the shared **Chat
-composer** stack (attach + `@` project file/artifact mentions) wired to Master's send
-API rather than a normal chat run; project context follows the shell active project
-(or an active Master job's project). The side column holds active/queued/needs-you jobs
-and a job-scoped checkpoint timeline and is **collapsible** (header toggle + reopen
+saved unattended budgets. One authenticated provider owns the Master session, durable
+thread, live SSE cursor, reconnect state, unread count, composer draft/selection,
+scroll anchor, and work-panel state across navigation. The main column is the Master
+thread plus one shared **Chat composer** stack (attach + `@` project file/artifact
+mentions) wired to Master's send API rather than a normal chat run; project context
+follows the shell active project (or an active Master job's project). The side column
+groups queued, running, review/attention, completed, and failed Master-owned Tasks,
+then owner decisions and a job-scoped checkpoint timeline. It is **collapsible**
+(header toggle + reopen
 edge control; preference in `localStorage` as `proxima.master.sideCollapsed`; mobile
 defaults collapsed). Idle, loading, failure/retry, populated, and in-flight states all
 retain the same geometry. On narrow screens the side column stacks after the thread
 with no horizontal scroll.
+
+The provider uses the existing Master session SSE stream as its only live path.
+Reconnect or a detected cursor gap triggers one authoritative reconciliation; there
+is no five-second Master polling loop. Its draft, selection, and scroll anchor survive
+route changes. The header New Task control and Tasks → New task entry both seed this
+same composer while Master is enabled. The legacy standalone Task launcher remains a
+feature-off compatibility path only. Changing the shell Container affects attachment
+and mention context but never silently changes Master Focus.
 
 **Unattended** is a quick pressed toggle on the desk. Off means Master never starts work
 without an owner turn. On means the server may start already-queued Master jobs until the

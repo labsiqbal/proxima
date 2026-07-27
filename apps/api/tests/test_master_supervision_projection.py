@@ -110,6 +110,23 @@ async def _next_sse_event(app, session_id: int, after_id: int) -> str:
         await stream.aclose()
 
 
+def test_idle_sse_flushes_a_connection_comment_without_waiting_for_keepalive(
+    tmp_path: Path,
+):
+    app, client, _project = _app_and_client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+
+    comment = asyncio.run(
+        _next_sse_event(
+            app,
+            desk["session"]["id"],
+            0,
+        )
+    )
+
+    assert comment == ": connected\n\n"
+
+
 def _advance_chain(app, session_id: int, *, salvage: str) -> None:
     previous = app.state.db.execute(
         "SELECT * FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",

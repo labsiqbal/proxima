@@ -93,8 +93,8 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
 | Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx`, `GraphScreen.tsx`, `graphLayout.ts` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
-| Master desk + restricted product tools | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_runtime.py`, `master_tool_broker.py`, `codex_master_proxy.py`, `codex_appserver.py`, `routes/master.py`, `worker.py` | `MasterScreen.tsx`, `api/master.ts`, Sidebar | `master_tool_calls`, `jobs.origin_master_session_id`, `app_settings`, `audit_log` | Codex 0.145+ chat-only adapter; other runners fail closed; Task execution and landing policies remain separate |
-| Master queue supervision + durable Task/Satpam projection | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_supervisor.py`, `master_projection.py`, `event_types.py`, `task_delegation.py`, `satpam.py`, `worker.py` | session SSE registry only; shared provider/toast/board consumers land in later groups | `master_projections` links to authoritative `jobs`, `job_checkpoints`, `attention_items`, `satpam_interventions`, `messages`, `events` | Master starts eligible queued work within configured capacity; Satpam alone detects/steers/restarts/escalates |
+| Master desk + restricted product tools | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_runtime.py`, `master_tool_broker.py`, `codex_master_proxy.py`, `codex_appserver.py`, `routes/master.py`, `worker.py` | `MasterStateProvider.tsx`, shared `components/master/*`, `MasterScreen.tsx`, `api/master.ts`, Sidebar | `master_tool_calls`, `jobs.origin_master_session_id`, `app_settings`, `audit_log` | one authenticated provider owns the durable session/thread/composer/SSE cursor; Codex 0.145+ chat-only adapter; other runners fail closed |
+| Master queue supervision + durable Task/Satpam projection | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_supervisor.py`, `master_projection.py`, `event_types.py`, `task_delegation.py`, `satpam.py`, `worker.py` | `MasterStateProvider.tsx` consumes typed session SSE; `MasterConversation.tsx` + `MasterWorkPanel.tsx` project thread and work once; popup/toast remain later work | `master_projections` links to authoritative `jobs`, `job_checkpoints`, `attention_items`, `satpam_interventions`, `messages`, `events` | recovery-only reconciliation after reconnect/gap; Master starts eligible queued work; Satpam alone detects/steers/restarts/escalates |
 | Job-scoped checkpoints | active | `job_checkpoints.py`, `routes/master.py`, `routes/work.py` | `MasterScreen.tsx` checkpoint timeline | `job_checkpoints` | Master jobs, git/worktrees; no DB/FS archive |
 | Global Attention inbox | active | `routes/master.py`, `worker.py` (permission materialization/close) | `AttentionInbox.tsx`, `AppShell.tsx` | `attention_items` + projected job/satpam rows | Tasks, Master, satpam, ACP permissions |
 | Master core/full tours | active | `routes/master.py` settings state | `CoreTour.tsx`, `SettingsScreen.tsx` Help chapters | `app_settings` | feature-aware shell education |
@@ -132,16 +132,22 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 
 ## Home & Activity cards
 
-Ops Home (`HomeScreen.tsx`) is deliberately minimal: greeting + **Task Composer**
-(`TaskComposer.tsx`) + an **attention strip** shown when `reviewCount > 0`
-(first review job + jump to Tasks). It polls `GET /api/dashboard` every 5s.
-The dashboard payload still returns more than Home renders (counts, recents,
-`authHealth`, `runsPerDay`); those fields are currently unrendered server data.
+With Master enabled, Home is the full-page durable Master thread and authoritative
+Master-owned Task work panel. Tasks → New task and the explicit Master destination
+open the same mounted surface and shared composer state. One typed session SSE stream
+provides live updates; recovery reconciliation is not a primary poll.
+
+With Master disabled, the compatibility `HomeScreen.tsx` remains a minimal greeting
+with a **Task Composer** (`TaskComposer.tsx`) and an **attention strip** shown when
+`reviewCount > 0` (first review job + jump to Tasks). That compatibility surface polls
+`GET /api/dashboard` every 5s. The dashboard payload still returns more than it renders
+(counts, recents, `authHealth`, `runsPerDay`).
 
 | Surface | Status | Data source | Renders in |
 | --- | --- | --- | --- |
-| Home · greeting + Task Composer | active | props (projects/profiles) | `HomeScreen.tsx` |
-| Home · attention strip (review jobs) | active | `/api/dashboard` (reviewJobs, reviewCount) | `HomeScreen.tsx` |
+| Home · Master thread + Task work panel | active when Master is enabled | `/api/master/desk`, messages snapshot, typed session SSE | `MasterStateProvider.tsx`, `MasterScreen.tsx` |
+| Home · greeting + Task Composer | compatibility when Master is off | props (projects/profiles) | `HomeScreen.tsx` |
+| Home · attention strip (review jobs) | compatibility when Master is off | `/api/dashboard` (reviewJobs, reviewCount) | `HomeScreen.tsx` |
 | Home · other dashboard fields | **dead** | `/api/dashboard` (counts, recents, authHealth, runsPerDay) | not rendered |
 | Tasks list (List / Board / Review) | active | `GET /api/jobs?status&include_archived` | `ActivityScreen.tsx` |
 | Task workspace (steps + review bar + artifact chips) | active | `GET /api/jobs/{id}`, `POST /api/jobs/{id}/approve` | `TaskWorkspace.tsx` |
