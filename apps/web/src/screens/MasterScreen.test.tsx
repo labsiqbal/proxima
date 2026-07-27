@@ -4,14 +4,14 @@ import { resolve } from 'node:path'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { AlphaScreen, resolveAlphaProjectSlug } from './AlphaScreen'
-import { getAlphaDesk, sendAlphaMessage } from '../api/alpha'
+import { MasterScreen, resolveMasterProjectSlug } from './MasterScreen'
+import { getMasterDesk, sendMasterMessage } from '../api/master'
 import { listMessages } from '../api/sessions'
 import { getCommandCatalog } from '../api/commands'
 import { listArtifacts, listReferenceFiles } from '../api/files'
 
-vi.mock('../api/alpha', () => ({
-  getAlphaDesk: vi.fn(), sendAlphaMessage: vi.fn(), saveAlphaSettings: vi.fn(),
+vi.mock('../api/master', () => ({
+  getMasterDesk: vi.fn(), sendMasterMessage: vi.fn(), saveMasterSettings: vi.fn(),
   previewCheckpointRestore: vi.fn(), restoreCheckpoint: vi.fn(), setCheckpointPinned: vi.fn(),
 }))
 vi.mock('../api/sessions', () => ({ listMessages: vi.fn() }))
@@ -23,8 +23,8 @@ vi.mock('../api/files', () => ({
 }))
 
 const desk = {
-  session: { id: 9, title: 'Alpha', mode: 'alpha' },
-  alpha_run: null,
+  session: { id: 9, title: 'Master', mode: 'master' },
+  master_run: null,
   backing_runner: 'pi',
   jobs: [], unattended: false,
   budgets: { unattended: false, budget_turns: 20, budget_wall_seconds: 14400, budget_tokens: null, tour_core_done: true },
@@ -33,31 +33,31 @@ const desk = {
 }
 const runners = [{ id: 'pi', displayName: 'Pi', installed: true, runnable: true }]
 
-describe('resolveAlphaProjectSlug', () => {
-  it('prefers the shell active project, then an active Alpha job project', () => {
-    expect(resolveAlphaProjectSlug({ slug: 'shell' } as never, [{ desk_status: 'running', project_slug: 'job' }])).toBe('shell')
-    expect(resolveAlphaProjectSlug(null, [{ desk_status: 'queued', project_slug: 'job' }])).toBe('job')
-    expect(resolveAlphaProjectSlug(null, [{ desk_status: 'done', project_slug: 'old' }])).toBeUndefined()
+describe('resolveMasterProjectSlug', () => {
+  it('prefers the shell active project, then an active Master job project', () => {
+    expect(resolveMasterProjectSlug({ slug: 'shell' } as never, [{ desk_status: 'running', project_slug: 'job' }])).toBe('shell')
+    expect(resolveMasterProjectSlug(null, [{ desk_status: 'queued', project_slug: 'job' }])).toBe('job')
+    expect(resolveMasterProjectSlug(null, [{ desk_status: 'done', project_slug: 'old' }])).toBeUndefined()
   })
 })
 
-describe('AlphaScreen', () => {
+describe('MasterScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
-    vi.mocked(getAlphaDesk).mockResolvedValue(desk as never)
+    vi.mocked(getMasterDesk).mockResolvedValue(desk as never)
     vi.mocked(listMessages).mockResolvedValue({ messages: [], goal: null })
-    vi.mocked(sendAlphaMessage).mockResolvedValue({ run_id: 1, session_id: 9, status: 'queued' })
+    vi.mocked(sendMasterMessage).mockResolvedValue({ run_id: 1, session_id: 9, status: 'queued' })
     vi.mocked(getCommandCatalog).mockResolvedValue({ groups: [] })
     vi.mocked(listReferenceFiles).mockResolvedValue({ files: [{ path: 'docs/brief.md' }], truncated: false })
     vi.mocked(listArtifacts).mockResolvedValue({ artifacts: [] })
   })
 
   it('renders the honest empty, capacity, safety, and delegation states', async () => {
-    const { container } = render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    const { container } = render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
     // Header matches Chat/code-header: eyebrow + strong, not a marketing h1.
-    expect(await screen.findByText('Alpha')).toBeInTheDocument()
+    expect(await screen.findByText('Master')).toBeInTheDocument()
     expect(screen.getByText('Orchestration')).toBeInTheDocument()
     expect(screen.getByText('0 running / 3 free')).toBeInTheDocument()
     expect(screen.getByText('No delegated work')).toBeInTheDocument()
@@ -65,33 +65,33 @@ describe('AlphaScreen', () => {
     expect(screen.getByText('No checkpoints yet')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Unattended off' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('combobox', { name: 'Backing runner' })).toBeInTheDocument()
-    // Chat-like composer stack (not the old alpha-only textarea chrome).
+    // Chat-like composer stack (not the old master-only textarea chrome).
     expect(screen.getByRole('textbox', { name: 'Delegate an outcome' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delegate' })).toBeInTheDocument()
     // Empty hero lives in the flat conversation column - not a shared card with the side rail.
-    expect(container.querySelector('.alpha-conversation')).toBeTruthy()
-    expect(container.querySelector('.alpha-conversation .alpha-empty')).toBeTruthy()
-    expect(container.querySelectorAll('.alpha-side-section').length).toBeGreaterThan(0)
+    expect(container.querySelector('.master-conversation')).toBeTruthy()
+    expect(container.querySelector('.master-conversation .master-empty')).toBeTruthy()
+    expect(container.querySelectorAll('.master-side-section').length).toBeGreaterThan(0)
   })
 
-  it('keeps Alpha conversation flat - no shared card chrome with side rail sections', () => {
+  it('keeps Master conversation flat - no shared card chrome with side rail sections', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
     // Regression: conversation must not share the bordered/radius/surface card rule with side sections.
-    expect(css).not.toMatch(/\.alpha-conversation\s*,\s*\n?\s*\.alpha-side-section\s*\{/)
-    const conversationBlock = css.match(/\.alpha-conversation\s*\{[^}]+\}/)
+    expect(css).not.toMatch(/\.master-conversation\s*,\s*\n?\s*\.master-side-section\s*\{/)
+    const conversationBlock = css.match(/\.master-conversation\s*\{[^}]+\}/)
     expect(conversationBlock?.[0]).toMatch(/border:\s*0/)
     expect(conversationBlock?.[0]).toMatch(/border-radius:\s*0/)
     expect(conversationBlock?.[0]).toMatch(/background:\s*transparent/)
-    const sideBlock = css.match(/\.alpha-side-section\s*\{[^}]+\}/)
+    const sideBlock = css.match(/\.master-side-section\s*\{[^}]+\}/)
     expect(sideBlock?.[0]).toMatch(/border:\s*1px solid/)
     expect(sideBlock?.[0]).toMatch(/border-radius:\s*var\(--radius-lg\)/)
     expect(sideBlock?.[0]).toMatch(/background:\s*var\(--ui-surface\)/)
   })
 
-  it('keeps Alpha composer dock free of tray chrome (transparent, no top border strip)', () => {
+  it('keeps Master composer dock free of tray chrome (transparent, no top border strip)', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
-    const dockBlock = css.match(/\.alpha-composer-dock\s*\{[^}]+\}/)
+    const dockBlock = css.match(/\.master-composer-dock\s*\{[^}]+\}/)
     expect(dockBlock?.[0]).toMatch(/background:\s*transparent/)
     expect(dockBlock?.[0]).not.toMatch(/background:\s*var\(--ui-surface-subtle\)/)
     expect(dockBlock?.[0]).toMatch(/border-top:\s*0/)
@@ -101,7 +101,7 @@ describe('AlphaScreen', () => {
 
   it('keeps shared .composer shell flat (border only, no drop shadow)', () => {
     const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
-    // Chat and Alpha both use .composer; elevation must not reappear under the capsule.
+    // Chat and Master both use .composer; elevation must not reappear under the capsule.
     const composerBlock = css.match(/^\.composer\s*\{[^}]+\}/m)
     expect(composerBlock?.[0]).toMatch(/border:\s*1px solid/)
     expect(composerBlock?.[0]).toMatch(/box-shadow:\s*none/)
@@ -111,10 +111,10 @@ describe('AlphaScreen', () => {
     expect(focusBlock?.[0]).not.toMatch(/box-shadow:\s*var\(--shadow-composer\)/)
   })
 
-  it('fills an example and guards the async delegation submit through sendAlphaMessage', async () => {
+  it('fills an example and guards the async delegation submit through sendMasterMessage', async () => {
     const user = userEvent.setup()
-    render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
-    await screen.findByText('Alpha')
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    await screen.findByText('Master')
 
     await user.click(screen.getByRole('button', { name: 'Audit & fix' }))
     await waitFor(() =>
@@ -124,49 +124,49 @@ describe('AlphaScreen', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Delegate' }))
 
-    expect(sendAlphaMessage).toHaveBeenCalledWith('token', 'Audit this project and delegate independent fixes.')
+    expect(sendMasterMessage).toHaveBeenCalledWith('token', 'Audit this project and delegate independent fixes.')
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Delegate an outcome' })).toHaveValue(''))
   })
 
   it('wires project context into the Chat composer for attach/@ mentions', async () => {
     render(
-      <AlphaScreen
+      <MasterScreen
         token="token"
         runners={runners as never}
         onOpenJob={vi.fn()}
         activeProject={{ id: 1, name: 'Demo', slug: 'demo', path: '/tmp/demo', visibility: 'private' } as never}
       />,
     )
-    await screen.findByText('Alpha')
+    await screen.findByText('Master')
     await waitFor(() => expect(listReferenceFiles).toHaveBeenCalledWith('token', 'demo'))
     expect(screen.getByRole('button', { name: 'Attach files' })).not.toBeDisabled()
   })
 
   it('collapses the work panel, persists the preference, and restores it', async () => {
     const user = userEvent.setup()
-    render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     await screen.findByText('No delegated work')
 
-    expect(screen.getByLabelText('Alpha work panel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Master work panel')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Hide work panel' }))
-    expect(screen.queryByLabelText('Alpha work panel')).not.toBeInTheDocument()
-    expect(localStorage.getItem('proxima.alpha.sideCollapsed')).toBe('1')
+    expect(screen.queryByLabelText('Master work panel')).not.toBeInTheDocument()
+    expect(localStorage.getItem('proxima.master.sideCollapsed')).toBe('1')
     expect(screen.getByRole('button', { name: 'Expand work panel' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Expand work panel' }))
-    expect(screen.getByLabelText('Alpha work panel')).toBeInTheDocument()
-    expect(localStorage.getItem('proxima.alpha.sideCollapsed')).toBe('0')
+    expect(screen.getByLabelText('Master work panel')).toBeInTheDocument()
+    expect(localStorage.getItem('proxima.master.sideCollapsed')).toBe('0')
   })
 
-  it('disables the Chat composer while Alpha is orchestrating', async () => {
-    vi.mocked(getAlphaDesk).mockResolvedValue({
+  it('disables the Chat composer while Master is orchestrating', async () => {
+    vi.mocked(getMasterDesk).mockResolvedValue({
       ...desk,
-      alpha_run: { id: 3, status: 'running' },
+      master_run: { id: 3, status: 'running' },
     } as never)
-    render(<AlphaScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
-    expect(await screen.findByText('Alpha is orchestrating…')).toBeInTheDocument()
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    expect(await screen.findByText('Master is orchestrating…')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Delegate an outcome' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Alpha is working' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Master is working' })).toBeDisabled()
   })
 
   it('renders pure tool-result rows as flat timeline text without an outer Proxima bubble', async () => {
@@ -183,13 +183,13 @@ describe('AlphaScreen', () => {
     vi.mocked(listMessages).mockResolvedValue({
       messages: [
         { id: 1, role: 'user', content: 'Audit and delegate.' },
-        { id: 2, role: 'system', content: `Alpha tool results:\n\`\`\`json\n${toolPayload}\n\`\`\`` },
+        { id: 2, role: 'system', content: `Master tool results:\n\`\`\`json\n${toolPayload}\n\`\`\`` },
         { id: 3, role: 'assistant', content: 'Dispatched the independent work.' },
         { id: 4, role: 'system', content: 'A plain system note stays a bubble.' },
       ],
       goal: null,
     })
-    const { container } = render(<AlphaScreen token="token" runners={runners as never} onOpenJob={onOpenJob} />)
+    const { container } = render(<MasterScreen token="token" runners={runners as never} onOpenJob={onOpenJob} />)
 
     expect(await screen.findByText('Capacity checked')).toBeInTheDocument()
     expect(screen.getByText('Work queue checked')).toBeInTheDocument()
@@ -198,15 +198,15 @@ describe('AlphaScreen', () => {
     expect(screen.getByText('Product action could not run')).toBeInTheDocument()
     expect(screen.getByText('Projects unavailable right now.')).toBeInTheDocument()
 
-    // Flat timeline rows - not nested inside an .alpha-message.system bubble, no card chrome classes required.
-    const toolGroup = screen.getByRole('group', { name: 'Alpha tool results' })
-    expect(toolGroup).toHaveClass('alpha-tool-results')
-    expect(toolGroup.closest('.alpha-message')).toBeNull()
+    // Flat timeline rows - not nested inside an .master-message.system bubble, no card chrome classes required.
+    const toolGroup = screen.getByRole('group', { name: 'Master tool results' })
+    expect(toolGroup).toHaveClass('master-tool-results')
+    expect(toolGroup.closest('.master-message')).toBeNull()
     const toolRows = toolGroup.querySelectorAll(':scope > div')
     expect(toolRows).toHaveLength(4)
     expect(toolRows[0]).toHaveClass('ok')
     expect(toolRows[3]).toHaveClass('failed')
-    expect(container.querySelectorAll('.alpha-message.system')).toHaveLength(1)
+    expect(container.querySelectorAll('.master-message.system')).toHaveLength(1)
     expect(screen.getByText('Proxima')).toBeInTheDocument()
     expect(screen.getByText('A plain system note stays a bubble.')).toBeInTheDocument()
 

@@ -181,14 +181,15 @@ with TestClient(serve.app) as client:
 
     config_response = client.get("/api/config")
     config_response.raise_for_status()
-    # Fresh-boot defaults: every shipped feature flag is on (Design Studio per
-    # standing decision 8; graph authoring + repo worktrees per slices 3+4).
+    # Fresh-boot defaults: shipped features are on, while the Master runtime
+    # remains off until its integrated acceptance gate passes.
     assert config_response.json()["features"] == {
         "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": True,
+        "master_orchestrator": False,
     }
-    print("config: design_studio=true, workflow_graph=true, repo_worktrees=true")
+    print("config: shipped features on, master_orchestrator=false")
 
     auth_response = client.post("/auth/auto", json={})
     auth_response.raise_for_status()
@@ -307,9 +308,14 @@ async function main() {
   console.log(`health: proxima ${health.version}, database ok`)
 
   const config = await request('/api/config')
-  // Fresh-boot defaults: all shipped feature flags on (Design Studio per standing decision 8).
-  assert.deepEqual(config.features, { design_studio: true, workflow_graph: true, repo_worktrees: true })
-  console.log('config: design_studio=true, workflow_graph=true, repo_worktrees=true')
+  // Fresh-boot defaults: shipped features on, Master runtime gated off.
+  assert.deepEqual(config.features, {
+    design_studio: true,
+    workflow_graph: true,
+    repo_worktrees: true,
+    master_orchestrator: false,
+  })
+  console.log('config: shipped features on, master_orchestrator=false')
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')

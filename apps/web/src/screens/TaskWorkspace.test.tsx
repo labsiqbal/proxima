@@ -17,7 +17,7 @@ vi.mock("../components/ui/Dialog", () => ({ confirmDialog: vi.fn() }));
 const job = {
 	id: 42,
 	project_id: 1,
-	project_slug: "alpha",
+	project_slug: "master",
 	workflow_id: null,
 	session_id: 9,
 	title: "Audit release",
@@ -80,7 +80,7 @@ describe("TaskWorkspace", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("Report completed.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: /report.md/ }));
-		expect(onOpenFile).toHaveBeenCalledWith("alpha", "artifacts/report.md");
+		expect(onOpenFile).toHaveBeenCalledWith("master", "artifacts/report.md");
 	});
 
 	it("approves final review from the task workspace", async () => {

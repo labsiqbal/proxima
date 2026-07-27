@@ -18,9 +18,9 @@ vi.mock("../api/files", () => ({
 }));
 
 const project = {
-	slug: "alpha",
-	name: "Alpha",
-	path: "/tmp/alpha",
+	slug: "master",
+	name: "Master",
+	path: "/tmp/master",
 	owner: "owner",
 	role: "owner",
 	visibility: "private" as const,
@@ -38,7 +38,7 @@ const dashboard = {
 	jobsByStatus: { queued: 0, running: 0, review: 0, done: 0 },
 	recent: [],
 	activeSessions: [],
-	projects: [{ slug: "alpha", name: "Alpha", chats: 0 }],
+	projects: [{ slug: "master", name: "Master", chats: 0 }],
 	workflows: [],
 	schedules: [],
 	reviewCount: 0,
@@ -55,7 +55,7 @@ const dashboard = {
 };
 const base = {
 	token: "token",
-	features: { designStudio: false, workflowGraph: false },
+	features: { designStudio: false, workflowGraph: false, masterOrchestrator: false },
 	projects: [project],
 	activeProject: project,
 	activeProfile: profile,
@@ -94,7 +94,7 @@ describe("HomeScreen Ops task composer", () => {
 		await waitFor(() =>
 			expect(base.onCreateTask).toHaveBeenCalledWith({
 				brief: "Audit the release",
-				projectSlug: "alpha",
+				projectSlug: "master",
 				profileId: 7,
 				executionPolicy: "guarded",
 			}),
@@ -125,7 +125,7 @@ describe("HomeScreen Ops task composer", () => {
 		await waitFor(() =>
 			expect(base.onCreateTask).toHaveBeenCalledWith({
 				brief: "Audit docs/release-brief.md for launch",
-				projectSlug: "alpha",
+				projectSlug: "master",
 				profileId: 7,
 				executionPolicy: "guarded",
 			}),
@@ -216,7 +216,7 @@ describe("HomeScreen Ops task composer", () => {
 		expect(
 			screen.queryByRole("button", { name: "Normal" }),
 		).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Master/ })).toBeInTheDocument();
 		// Agent dropdown trigger is named from the active profile (aria-label),
 		// not the visual "Agent" field label.
 		expect(screen.getByRole("button", { name: "Builder" })).toBeInTheDocument();
@@ -252,7 +252,7 @@ describe("HomeScreen Ops task composer", () => {
 				{
 					id: 88,
 					title: "Older review",
-					project_slug: "alpha",
+					project_slug: "master",
 					status: "review",
 				},
 			],

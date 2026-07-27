@@ -83,7 +83,7 @@ const props = {
   onActiveProject: vi.fn(),
   profiles: [],
   profileId: null,
-  features: { designStudio: false, workflowGraph: true },
+  features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
   activeProfile: null,
 }
 

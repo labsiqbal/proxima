@@ -33,8 +33,8 @@ export function viewOriginLabel(view: View): string {
   switch (view) {
     case 'chat':
       return 'Chat'
-    case 'alpha':
-      return 'Alpha'
+    case 'master':
+      return 'Master'
     case 'activity':
       return 'Tasks'
     case 'home':
@@ -111,7 +111,7 @@ export function chromeBackLabel(stack: NavStackEntry[]): string {
 /** Keep-alive: primary multitask surfaces that should not unmount on leave. */
 export const KEEP_ALIVE_VIEWS: readonly View[] = [
   'chat',
-  'alpha',
+  'master',
   'activity',
   'workflows',
   'artifacts',

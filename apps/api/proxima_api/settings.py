@@ -21,8 +21,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "source_hermes_home": None,
     "hermes_bin": None,
     "run_worker_poll_interval_ms": 250,
-    # Alpha's product contract exposes three parallel worker slots. The same
-    # worker remains the global executor; Alpha-specific claiming is capped at 3.
+    # Master's product contract exposes three parallel Task-agent slots. The same
+    # worker remains the global executor; Master-specific claiming is capped at 3.
     "run_worker_concurrency": 3,
     # Per-turn quota fallback. The owner-facing value is the `run_timeout_seconds`
     # app setting (Settings UI, stored in the DB); this config key is only the
@@ -57,6 +57,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # switch stays as an owner escape hatch - off = the machinery is inert and
     # job execution matches the pre-worktree behavior.
     "feature_repo_worktrees": True,
+    # Durable Master data is migrated unconditionally. Runtime behavior stays
+    # off until the integrated Master slices pass their acceptance gate.
+    "feature_master_orchestrator": False,
     # How many nodes of one graph job may be in flight at once. This is a dispatch
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
@@ -101,6 +104,9 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
     cfg["feature_repo_worktrees"] = _bool_flag(cfg.get("feature_repo_worktrees"))
+    cfg["feature_master_orchestrator"] = _bool_flag(
+        cfg.get("feature_master_orchestrator")
+    )
     raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
     cfg["service_name"] = raw_service.removesuffix(".service")
     return cfg

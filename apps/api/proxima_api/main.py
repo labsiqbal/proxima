@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import connect, init_db
 from .migrations import run_migrations
+from .master_persistence import MasterPersistenceError, assert_master_persistence
+from .master_runtime import ensure_master_identity
 from .container_registry import migrate_legacy_ops_containers, refresh_registry_projections
 from .acp import AcpManager
 from .apprunner import AppManager
@@ -40,12 +42,12 @@ from .frontend_static import register_frontend
 from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
-from .alpha_supervisor import AlphaSupervisor
+from .master_supervisor import MasterSupervisor
 from .task_delegation import TaskDelegationService
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
     admin as routes_admin,
-    alpha as routes_alpha,
+    master as routes_master,
     archive as routes_archive,
     auth as routes_auth,
     chat as routes_chat,
@@ -102,7 +104,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if cfg.get("start_worker", True):
         worker.start()
     scheduler_task: asyncio.Task | None = None
-    alpha_task: asyncio.Task | None = None
+    master_task: asyncio.Task | None = None
     registry_task: asyncio.Task | None = None
     registry_interval = max(
         0,
@@ -127,15 +129,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     )
 
         registry_task = asyncio.create_task(_registry_loop())
-    if cfg.get("start_worker", True):
-        async def _alpha_loop() -> None:
+    if cfg.get("start_worker", True) and cfg.get("feature_master_orchestrator", False):
+        async def _master_loop() -> None:
             while True:
                 await asyncio.sleep(5)
                 try:
-                    app.state.alpha_supervisor.tick()
+                    app.state.master_supervisor.tick()
                 except Exception:
-                    logging.getLogger("proxima.alpha").exception("Alpha supervisor tick failed")
-        alpha_task = asyncio.create_task(_alpha_loop())
+                    logging.getLogger("proxima.master").exception("Master supervisor tick failed")
+        master_task = asyncio.create_task(_master_loop())
     if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
         async def _scheduler_loop() -> None:
             while True:
@@ -172,10 +174,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler_task.cancel()
         with suppress(asyncio.CancelledError):
             await scheduler_task
-    if alpha_task:
-        alpha_task.cancel()
+    if master_task:
+        master_task.cancel()
         with suppress(asyncio.CancelledError):
-            await alpha_task
+            await master_task
     if update_task:
         update_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -199,10 +201,11 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     app.state.db_lock = __import__("threading").RLock()
     init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
     run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
+    assert_master_persistence(app.state.db)
     migrate_legacy_ops_containers(app.state.db)
     app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
-    app.state.alpha_supervisor = AlphaSupervisor(app)
+    app.state.master_supervisor = MasterSupervisor(app)
     app.state.acp_manager = AcpManager()
     app.state.app_manager = AppManager()
     app.state.hub = EventHub()
@@ -248,6 +251,19 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         http_exception=HTTPException,
         status_module=status,
     )
+    for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
+        owner = dict(owner_row)
+        _route_deps["ensure_default_profile"](owner)
+        try:
+            ensure_master_identity(
+                app.state.db,
+                owner,
+                create_profile_for=_route_deps["create_profile_for"],
+            )
+        except MasterPersistenceError:
+            raise
+        except Exception:
+            logger.exception("Master identity provisioning failed (non-fatal)")
     current_user = _route_deps["current_user"]
 
     @app.get("/api/health", include_in_schema=False)
@@ -268,7 +284,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     routes_work.register(app, _route_deps)
     routes_graph.register(app, _route_deps)
-    routes_alpha.register(app, _route_deps)
+    routes_master.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_containers.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
@@ -402,6 +418,9 @@ def _config_from_env() -> dict[str, Any]:
         "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "1").lower() in ("1", "true", "yes", "on"),
         "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
         "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "1").lower() in ("1", "true", "yes", "on"),
+        "feature_master_orchestrator": os.environ.get(
+            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "0"
+        ).lower() in ("1", "true", "yes", "on"),
         # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
         "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
     }

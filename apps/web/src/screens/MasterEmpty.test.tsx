@@ -2,11 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { AlphaEmpty } from "./AlphaScreen";
+import { MasterEmpty } from "./MasterScreen";
 
-describe("Alpha empty surface", () => {
+describe("Master empty surface", () => {
 	it("renders compact default without capability wall or numbered tutorial", () => {
-		render(<AlphaEmpty onExample={vi.fn()} />);
+		render(<MasterEmpty onExample={vi.fn()} />);
 
 		expect(screen.getByRole("heading", { name: "Delegate an outcome" })).toBeInTheDocument();
 		expect(screen.getByText(/Dispatch durable jobs/)).toBeInTheDocument();
@@ -18,21 +18,21 @@ describe("Alpha empty surface", () => {
 		expect(screen.getByRole("button", { name: "How it works" })).toBeInTheDocument();
 		const examples = screen.getByLabelText("Example delegations");
 		expect(examples).toBeInTheDocument();
-		expect(examples).toHaveClass("alpha-examples");
+		expect(examples).toHaveClass("master-examples");
 		expect(within(examples).getByRole("button", { name: "Audit & fix" })).toHaveClass(
-			"alpha-example-chip",
+			"master-example-chip",
 		);
 		expect(within(examples).getByRole("button", { name: "Split the release" })).toBeInTheDocument();
 		expect(
 			within(examples).getByRole("button", { name: "What needs attention" }),
 		).toBeInTheDocument();
-		expect(screen.getByTestId("alpha-empty")).toBeInTheDocument();
+		expect(screen.getByTestId("master-empty")).toBeInTheDocument();
 	});
 
 	it("example chips seed the full prompt into the composer callback", async () => {
 		const user = userEvent.setup();
 		const onExample = vi.fn();
-		render(<AlphaEmpty onExample={onExample} />);
+		render(<MasterEmpty onExample={onExample} />);
 
 		const chip = screen.getByRole("button", { name: "Audit & fix" });
 		expect(chip).toHaveAttribute(
@@ -48,12 +48,12 @@ describe("Alpha empty surface", () => {
 
 	it("opens How it works and dismisses via Got it, Esc, and scrim", async () => {
 		const user = userEvent.setup();
-		render(<AlphaEmpty onExample={vi.fn()} />);
+		render(<MasterEmpty onExample={vi.fn()} />);
 
 		const trigger = screen.getByRole("button", { name: "How it works" });
 		await user.click(trigger);
 
-		const dialog = screen.getByRole("dialog", { name: "How Alpha works" });
+		const dialog = screen.getByRole("dialog", { name: "How Master works" });
 		expect(within(dialog).getByLabelText("What you can do here")).toBeInTheDocument();
 		expect(within(dialog).getByLabelText("Getting started")).toBeInTheDocument();
 		expect(
@@ -70,7 +70,7 @@ describe("Alpha empty surface", () => {
 		await waitFor(() => expect(trigger).toHaveFocus());
 
 		await user.click(trigger);
-		fireEvent.click(screen.getByTestId("alpha-empty-help-scrim"));
+		fireEvent.click(screen.getByTestId("master-empty-help-scrim"));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 });

@@ -1,4 +1,4 @@
-"""Job-scoped checkpoints for Alpha-dispatched durable work.
+"""Job-scoped checkpoints for Master-dispatched durable work.
 
 A checkpoint contains only the owning job's state plus repository refs for that
 job's project/target. It is intentionally not a database backup or filesystem
@@ -140,17 +140,35 @@ def checkpoint_payload(row) -> dict[str, Any]:
     return data
 
 
-def list_checkpoints(conn, *, alpha_session_id: int | None = None, job_id: int | None = None) -> list[dict[str, Any]]:
+def list_checkpoints(
+    conn,
+    *,
+    origin_master_session_id: int | None = None,
+    job_id: int | None = None,
+    alpha_session_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """List checkpoints, accepting the Alpha keyword for one compatibility release."""
+    if (
+        origin_master_session_id is not None
+        and alpha_session_id is not None
+        and origin_master_session_id != alpha_session_id
+    ):
+        raise CheckpointError("conflicting Master and Alpha session ids")
+    origin_session_id = (
+        origin_master_session_id
+        if origin_master_session_id is not None
+        else alpha_session_id
+    )
     if job_id is not None:
         rows = conn.execute(
             "SELECT * FROM job_checkpoints WHERE job_id = ? ORDER BY created_at DESC, id DESC",
             (job_id,),
         ).fetchall()
-    elif alpha_session_id is not None:
+    elif origin_session_id is not None:
         rows = conn.execute(
             "SELECT cp.* FROM job_checkpoints cp JOIN jobs j ON j.id = cp.job_id "
-            "WHERE j.alpha_session_id = ? ORDER BY cp.created_at DESC, cp.id DESC",
-            (alpha_session_id,),
+            "WHERE j.origin_master_session_id = ? ORDER BY cp.created_at DESC, cp.id DESC",
+            (origin_session_id,),
         ).fetchall()
     else:
         rows = conn.execute(

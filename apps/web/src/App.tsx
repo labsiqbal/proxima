@@ -38,7 +38,7 @@ const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ 
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
-const AlphaScreen = React.lazy(() => import('./screens/AlphaScreen').then(m => ({ default: m.AlphaScreen })))
+const MasterScreen = React.lazy(() => import('./screens/MasterScreen').then(m => ({ default: m.MasterScreen })))
 const TaskWorkspace = React.lazy(() => import('./screens/TaskWorkspace').then(m => ({ default: m.TaskWorkspace })))
 const GraphScreen = React.lazy(() => import('./screens/GraphScreen').then(m => ({ default: m.GraphScreen })))
 const ProfilesScreen = React.lazy(() => import('./screens/ProfilesScreen').then(m => ({ default: m.ProfilesScreen })))
@@ -276,10 +276,15 @@ export function App() {
       openJobByEngine(target.job_id, target.engine, 'activity')
       return
     }
-    if (target.view === 'alpha') { clearPendingNavigation(); clearDeepStack(); setView('alpha'); return }
+    if (target.view === 'master' || target.view === 'alpha') {
+      clearPendingNavigation()
+      clearDeepStack()
+      if (features.masterOrchestrator) setView('master')
+      return
+    }
     if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
     if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
-  }, [clearPendingNavigation, clearDeepStack, openJobByEngine])
+  }, [clearPendingNavigation, clearDeepStack, features.masterOrchestrator, openJobByEngine])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   // When GraphScreen reports stage=editor from an in-surface open (library → plan),
   // ensure chrome Back + project lock know about the deep frame.
@@ -639,7 +644,7 @@ export function App() {
 
   // Header ProjectSwitcher: filter the shell active project (and the chat session
   // so Chat stays coherent when the owner later opens it). Do not force Chat —
-  // stay on Workflows / Alpha / Archive / Design / Tasks / Settings.
+  // stay on Workflows / Master / Archive / Design / Tasks / Settings.
   function setActiveProjectOnly(p: Project | null) {
     clearPendingNavigation()
     setActiveProject(p)
@@ -788,7 +793,7 @@ export function App() {
   )
   const keep = (id: View) => aliveViews.has(id) || view === id
   const chatActive = view === 'chat'
-  const alphaActive = view === 'alpha'
+  const masterActive = view === 'master'
   const activityActive = view === 'activity'
   const workflowsActive = view === 'workflows'
   const artifactsActive = view === 'artifacts'
@@ -844,7 +849,7 @@ export function App() {
       <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
       {view === 'home' && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {keep('alpha') && pane('alpha', alphaActive, <React.Suspense fallback={<ViewFallback label="Loading Alpha desk..." />}><AlphaScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'alpha')} /></React.Suspense>)}
+      {features.masterOrchestrator && keep('master') && pane('master', masterActive, <React.Suspense fallback={<ViewFallback label="Loading Master desk..." />}><MasterScreen token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'master')} /></React.Suspense>)}
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession

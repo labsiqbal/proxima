@@ -21,7 +21,7 @@ vi.mock("./api/runs", () => ({ createRun: vi.fn(), activeRuns: vi.fn() }));
 
 const request = {
 	brief: "  Audit release  ",
-	projectSlug: "alpha",
+	projectSlug: "master",
 	profileId: 7,
 	executionPolicy: "guarded" as const,
 };
@@ -30,24 +30,24 @@ const chatSession = (id: number, title: string): ChatSession => ({
 	id,
 	title,
 	runner_id: "claude-code",
-	project_slug: "alpha",
+	project_slug: "master",
 	visibility: "private",
 });
 
 describe("Shell project selection", () => {
 	const enabled = () => true;
-	const alpha: ChatSession = {
+	const master: ChatSession = {
 		id: 1,
-		title: "Alpha chat",
+		title: "Master chat",
 		runner_id: "claude-code",
-		project_slug: "alpha",
+		project_slug: "master",
 		visibility: "private",
 		updated_at: "2026-01-01T10:00:00Z",
 	};
-	const alphaNewer: ChatSession = {
-		...alpha,
+	const masterNewer: ChatSession = {
+		...master,
 		id: 2,
-		title: "Alpha newer",
+		title: "Master newer",
 		updated_at: "2026-01-02T10:00:00Z",
 	};
 	const beta: ChatSession = {
@@ -60,19 +60,19 @@ describe("Shell project selection", () => {
 	};
 
 	it("picks the most recent enabled session for the project", () => {
-		expect(recentSessionForProject([alpha, alphaNewer, beta], "alpha", enabled)).toEqual(alphaNewer);
-		expect(recentSessionForProject([alpha, beta], "beta", enabled)?.id).toBe(3);
+		expect(recentSessionForProject([master, masterNewer, beta], "master", enabled)).toEqual(masterNewer);
+		expect(recentSessionForProject([master, beta], "beta", enabled)?.id).toBe(3);
 	});
 
 	it("returns null when the project has no sessions or slug is empty", () => {
-		expect(recentSessionForProject([alpha], "missing", enabled)).toBeNull();
-		expect(recentSessionForProject([alpha], null, enabled)).toBeNull();
-		expect(recentSessionForProject([alpha], undefined, enabled)).toBeNull();
+		expect(recentSessionForProject([master], "missing", enabled)).toBeNull();
+		expect(recentSessionForProject([master], null, enabled)).toBeNull();
+		expect(recentSessionForProject([master], undefined, enabled)).toBeNull();
 	});
 
 	it("respects sessionEnabled so disabled kinds do not become active chat", () => {
-		const design = { ...alphaNewer, mode: "design" };
-		expect(recentSessionForProject([alpha, design], "alpha", s => s.mode !== "design")).toEqual(alpha);
+		const design = { ...masterNewer, mode: "design" };
+		expect(recentSessionForProject([master, design], "master", s => s.mode !== "design")).toEqual(master);
 	});
 
 	it("header shell-only mode does not navigate to chat; open-chat mode does", () => {
@@ -118,7 +118,7 @@ describe("Ops task API flow", () => {
 		vi.mocked(startJob).mockResolvedValue({ id: 42 } as never);
 		await expect(createAndStartOpsTask("token", request)).resolves.toBe(42);
 		expect(createJob).toHaveBeenCalledWith("token", {
-			project_slug: "alpha",
+			project_slug: "master",
 			profile_id: 7,
 			title: "Audit release",
 			input: { brief: "Audit release", task_kind: "agent", execution_policy: "guarded" },
@@ -138,7 +138,7 @@ describe("Ops task API flow", () => {
 		await expect(
 			createAndStartOpsTask("token", {
 				brief: "/image cinematic launch poster",
-				projectSlug: "alpha",
+				projectSlug: "master",
 				profileId: 7,
 				executionPolicy: "guarded",
 			}),
@@ -146,7 +146,7 @@ describe("Ops task API flow", () => {
 		expect(createRun).toHaveBeenCalledWith("token", 10, {
 			message: "/image cinematic launch poster",
 			profile_id: 7,
-			project_slug: "alpha",
+			project_slug: "master",
 		});
 		expect(linkJobRun).toHaveBeenCalledWith("token", 43, 91);
 		expect(startJob).not.toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe("Ops task API flow", () => {
 		await expect(
 			createAndStartOpsTask("token", {
 				brief: "/design poster",
-				projectSlug: "alpha",
+				projectSlug: "master",
 				profileId: 7,
 				executionPolicy: "guarded",
 			}),

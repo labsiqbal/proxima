@@ -151,7 +151,7 @@ The keep-alive flex chain (`main-pane` → `surface-pane` → `chat-stage` → `
 (`overflow-y: auto`) so long chats scroll with wheel/trackpad. Short threads
 that fit the viewport do not force a bottom jump; overflowing sessions open on
 latest and follow the bottom while the owner stays near it
-(`threadScroll` / `ChatThread`). Alpha's empty desk and Design Studio's start home use the same
+(`threadScroll` / `ChatThread`). Master's empty desk and Design Studio's start home use the same
 progressive-disclosure pattern (no capability list or numbered steps on the default
 surface; Design home does not print the project display name - the shell switcher is
 enough).
@@ -260,54 +260,60 @@ live in the composer before a prompt is submitted.
 `POST /api/message-reviews/{review_id}/restore-original`,
 `POST /api/message-reviews/{review_id}/ask-original`.
 
-## 3b. Alpha orchestration, restore safety, and Attention
+## 3b. Master orchestration, restore safety, and Attention
 
 **Why:** the owner can either work hands-on in Chat or delegate an outcome to a
 built-in orchestrator without manually composing every worker task.
 
-**Alpha identity and desk:** opening the first-class **Alpha** navigation destination
-creates one hidden `profiles.system_kind='alpha'` system identity and one
-`sessions.mode='alpha'` thread. The hidden profile never appears in Agents or ordinary
+> **Activation:** durable Master identity and compatibility migration are live.
+> The product runtime and UI are behind the server-owned
+> `feature_master_orchestrator` gate, which defaults off until the restricted
+> runner and tool-broker slices pass integrated acceptance. Migration is
+> unconditional and safe with the flag in either state.
+
+**Master identity and desk:** startup creates or reuses exactly one hidden
+`profiles.system_kind='master'` system identity and one project-unbound
+`sessions.mode='master'` thread for the owner. The hidden profile never appears in Agents or ordinary
 Chat history; Settings/desk runner selection creates or reuses the matching system
-home while the UI counterpart stays named Alpha. The desk reuses Chat's shared
+home while the UI counterpart stays named Master. The desk reuses Chat's shared
 composer for delegation (attach + `@` project mentions; submit still hits
-`/api/alpha/messages`), and the work side panel is collapsible with a persisted
+`/api/master/messages`), and the work side panel is collapsible with a persisted
 preference. The desk polls its thread, active /
-queued Alpha jobs, needs-you subset, job-scoped checkpoint timeline, and honest
+queued Master jobs, needs-you subset, job-scoped checkpoint timeline, and honest
 capacity (`running / 3`, free slots, queued). Loading, empty, error/retry, populated,
 and busy states are explicit on desktop and mobile. The empty desk is sparse by
 default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
 so the Delegate composer stays the primary CTA.
 
-**In-process tools and dispatch:** Alpha's system instructions require structured
-`<proxima-tool>{name,arguments}</proxima-tool>` calls. `alpha_runtime.py` parses them
+**In-process tools and dispatch:** Master's system instructions require structured
+`<proxima-tool>{name,arguments}</proxima-tool>` calls. `master_runtime.py` parses them
 after the ACP turn and invokes only server-owned handlers in the API process - never
 curl/HTTP to localhost and never prompt-granted tools. Reads cover projects, worker
-agents, jobs, plans, capacity, and Alpha settings; mutations cover multi-job dispatch,
-starting queued Alpha jobs, unattended/budget settings, and needs-you creation.
+agents, jobs, plans, capacity, and Master settings; mutations cover multi-job dispatch,
+starting queued Master jobs, unattended/budget settings, and needs-you creation.
 Ad-hoc dispatch and `start_plan` both call the server-owned
 `TaskDelegationService`; Recipe execution keeps the existing linear or graph engine.
-The service applies the same Alpha ownership, checkpoint, audit, and permission scope.
+The service applies the same Master ownership, checkpoint, audit, and permission scope.
 Every success/failure returns a structured
-result to the thread and back into a bounded six-round Alpha continuation, so a product
+result to the thread and back into a bounded six-round Master continuation, so a product
 read can inform the next in-process call without an HTTP control loop. Dispatch creates
 ordinary durable jobs with `execution_policy='autonomous'`,
-`jobs.alpha_session_id`, one `task_delegations` audit row, an `alpha.job.create` audit
+`jobs.origin_master_session_id`, one `task_delegations` audit row, a `master.job.create` audit
 row, and a checkpoint after any isolated worktree is cut but before a run is enqueued.
-An Alpha batch may name client-local Task keys and dependency keys; all Tasks and
+A Master batch may name client-local Task keys and dependency keys; all Tasks and
 dependency edges commit atomically, cycles fail without partial rows, and a repeated
 batch idempotency key returns the same Tasks. The global worker default is
-three slots and its claim query separately refuses a fourth running Alpha child; extra
+three slots and its claim query separately refuses a fourth running Master child; extra
 runs remain queued and capacity counts each queued worker run, including parallel graph
 branches. Existing job capabilities are
 unchanged, including commit/push/PR through the owner's BYO `git`/`gh` environment.
 
-**Three permission layers:** P1 is the in-process Alpha product-tool allowlist. P2 is
+**Three permission layers:** P1 is the in-process Master product-tool allowlist. P2 is
 the worker job's Autonomous policy (plan review gates still exist). P3 is scoped ACP
 auto-approval: the worker auto-selects an allow option only when the run's session is
-`mode='alpha'` or its job has `alpha_session_id`; ordinary Chat continues to honor the
+`mode='master'` or its job has `origin_master_session_id`; ordinary Chat continues to honor the
 install's separate Settings toggle. Auto approvals remain visible as
-`approval.auto` events. A non-Alpha job permission request becomes a durable
+`approval.auto` events. A non-Master job permission request becomes a durable
 `permission_job` Attention item and closes when its choice reaches the live ACP
 process, preventing the old hidden-session 300-second dead end.
 
@@ -319,38 +325,47 @@ is evidence only and is never reset; only an existing job worktree is restorable
 Normal project Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
-active Alpha work before confirmation. The journal cascades when its session closes.
+active Master work before confirmation. The journal cascades when its session closes.
 
 **Attention:** the shell badge calls one `/api/attention` shape spanning simple final
 job reviews, complex diff reviews, pending satpam restarts, durable tool permissions,
-and Alpha decision/budget items. Every row deep-links to its owning Task/plan/Alpha/
+and Master decision/budget items. Every row deep-links to its owning Task/plan/Master/
 Settings surface. Only rows marked `inline_ok` render actions: simple non-repo final
 review, hash-visible script trust, pending satpam restart, and live permission choices.
-Diff and open-text Alpha items navigate only. Errors persist inside the inbox until
+Diff and open-text Master items navigate only. Errors persist inside the inbox until
 retried/dismissed.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
 and running jobs, badges a count when work is in flight, and deep-links each row to
 the task workspace or chat (with a Tasks index shortcut).
 
-**Unattended:** the desk toggle is opt-in. `AlphaSupervisor` starts only already-queued
-Alpha jobs; it never dispatches work while off and never participates in stuck-run
+**Unattended:** the desk toggle is opt-in. `MasterSupervisor` starts only already-queued
+Master jobs; it never dispatches work while off and never participates in stuck-run
 recovery. Saved turn (1-200) and wall-clock (5 minutes-24 hours) budgets apply on the
 next tick. The optional token value is stored/readable, but current ACP runner events
 do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion turns the
-mode off cleanly and creates an `alpha_budget` Attention row. Unattended jobs retain
+mode off cleanly and creates an `master_budget` Attention row. Unattended jobs retain
 scoped ACP auto-approval and normal BYO push/PR capability; destructive product admin
 is not in its handler set. Satpam remains the sole steer/restart authority.
 
-**Tours:** after setup, the first main-UI visit opens a keyboard-trapped four-step core
-tour (Chat, Alpha, Tasks/Attention/safety), saved server-side and permanently
-skippable. Settings → Help & Tours can replay it and launch chapters for Workflows,
-Projects/tools, Archive, feature-aware Design, Agents, remote/safety, and Settings.
+**Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
+with five chapters when Master is enabled and four when it is disabled. Completion
+is reconciled between the feature-off browser marker and Master settings so enabling
+Master does not replay a tour the owner already completed. Settings → Help & Tours
+can replay it and launch chapters for Workflows, Projects/tools, Archive,
+feature-aware Design, Agents, remote/safety, and Settings.
 
-**Endpoints:** `GET /api/alpha/desk`, `POST /api/alpha/messages`,
-`GET/PUT /api/settings/alpha`, `GET /api/attention`,
+**Endpoints:** `GET /api/master/desk`, `POST /api/master/messages`,
+`GET/PUT /api/settings/master`, `GET /api/attention`,
 `POST /api/attention/{id}/act`, job checkpoint list/preview/restore/pin routes, and
 `GET/POST /api/chat/messages/{id}/restore-turn`.
+
+For one compatibility release, deprecated `/api/alpha/desk`,
+`/api/alpha/messages`, and `/api/settings/alpha` aliases read and mutate the
+same Master records. Legacy payload readers accept Alpha ownership keys, while
+canonical responses expose only Master naming and
+`origin_master_session_id`. See
+[Master persistence migration](master-persistence-migration.md).
 
 ## 4. Goal loop (multi-step autonomy)
 
@@ -466,7 +481,7 @@ were migrated to 1-step jobs.
 
 ### Durable Task delegation and dependency readiness
 
-**Why:** Work, Home quick Task, Alpha, and future orchestration callers must not
+**Why:** Work, Home quick Task, Master, and future orchestration callers must not
 implement slightly different session/job/start transactions. A timeout or restart must
 not create duplicate work, and cross-Area outcomes need explicit Task edges rather than
 hidden multi-Area execution.
@@ -483,7 +498,7 @@ Task-agent cannot turn a previously successful create into a false "not found."
 
 Project-scoped compatibility requests that omit `target_area_id` resolve to the
 Container's physical Ops Area. Historical project-less API jobs remain scratch jobs
-and cannot produce a scoped delegation audit. Alpha batches accept client-local Task
+and cannot produce a scoped delegation audit. Master batches accept client-local Task
 and dependency keys. Duplicate edges, self-dependencies, cycles, cross-owner Tasks,
 cross-Container Areas, and prerequisites already in a terminal failure state are
 rejected before commit. SQLite triggers also reject dependency cycles from non-service
@@ -568,10 +583,10 @@ repo worktree or physical Ops Area. The plan's final
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
 
-**Tool approvals during job/plan runs:** a non-Alpha job's hidden-session ACP
+**Tool approvals during job/plan runs:** a non-Master job's hidden-session ACP
 permission request is materialized as a global `permission_job` Attention row with
 safe inline allow/deny actions and a Task deep-link; delivering either choice closes
-the row. Alpha-spawned jobs take the separate scoped P3 path and auto-approve ACP tool
+the row. Master-spawned jobs take the separate scoped P3 path and auto-approve ACP tool
 prompts, while diff/plan review gates remain owner-controlled product decisions.
 
 **Review surface (slice 4):** the captain-facing half, following T4's ratified detail
@@ -839,7 +854,7 @@ Container boundary validation before returning target choices.
 
 Existing `/api/projects` readers are a one-release compatibility alias. They reuse
 the Fleet and Area query functions while preserving the historical payload consumed
-by current Alpha and frontend surfaces. Internal tables and foreign keys keep
+by current Master and frontend surfaces. Internal tables and foreign keys keep
 `projects` and `project_id`; public schemas, new routes, and frontend boundary types
 use Container terminology.
 
@@ -1084,7 +1099,7 @@ Chat hits include `mode` + project so a Design Studio session (excluded from the
 main chat list) opens in Studio on click instead of silently closing the modal;
 ordinary chats still open in Chat and switch project when needed. Search visibility
 is declared by the session-kind registry: user-facing Chat and Design content is
-searchable, while Alpha's hidden system thread is not. This keeps structured Alpha
+searchable, while Master's hidden system thread is not. This keeps structured Master
 product-tool calls and tool-result payloads out of the owner-facing search surface.
 The search field is labeled for assistive tech, and each result exposes a short
 spaced `aria-label` (title · project / role · snippet) so screen readers do not hear
@@ -1112,9 +1127,9 @@ pressed toggle with an explicit On/Ask label.
 
 **Why:** An activity trail of meaningful actions.
 **How:** Settings → Diagnostics → Audit log opens a filterable modal of recent
-entries (`GET /api/audit`). Alpha job creation, budget/toggle changes, and
-checkpoint/turn restores produce explicit `alpha.*` / `chat.turn.restore` entries;
-pure Alpha reads do not. File/tree/app actions stay project-scoped with a
+entries (`GET /api/audit`). Master job creation, budget/toggle changes, and
+checkpoint/turn restores produce explicit `master.*` / `chat.turn.restore` entries;
+pure Master reads do not. File/tree/app actions stay project-scoped with a
 `path` metadata field; settings tests and saves (image generation, Higgsfield)
 use `target_type=settings` and store flat JSON metadata (provider, status, …) —
 never a double-encoded string under `path`. The modal pretty-prints metadata
@@ -1176,9 +1191,9 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Alpha, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
++ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Alpha** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
++ **Master** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.

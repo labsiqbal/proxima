@@ -1,9 +1,9 @@
 import React from 'react'
-import { actAttention, getAttention, type AttentionItem } from '../../api/alpha'
+import { actAttention, getAttention, type AttentionItem } from '../../api/master'
 
 const labelForKind = (kind: string) => ({
   job_review: 'Review', job_diff: 'Changes', satpam_restart: 'Watchdog', script_trust: 'Script',
-  permission_job: 'Permission', alpha_decision: 'Alpha', alpha_budget: 'Alpha budget', settings_confirm: 'Settings',
+  permission_job: 'Permission', master_decision: 'Master', master_budget: 'Master budget', settings_confirm: 'Settings',
 }[kind] || 'Attention')
 
 export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenTarget: (target: AttentionItem['target']) => void }) {

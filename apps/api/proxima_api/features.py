@@ -12,17 +12,22 @@ WORKFLOW_GRAPH = "workflow_graph"
 # the switch stays as an owner escape hatch - while off the worktree machinery
 # is fully inert and jobs behave exactly as before it existed.
 REPO_WORKTREES = "repo_worktrees"
+# Durable Master data is migrated independently, while the runtime and product
+# surface stay fail-closed until the integrated orchestrator slices ship.
+MASTER_ORCHESTRATOR = "master_orchestrator"
 
 _CONFIG_KEYS = {
     DESIGN_STUDIO: "feature_design_studio",
     WORKFLOW_GRAPH: "feature_workflow_graph",
     REPO_WORKTREES: "feature_repo_worktrees",
+    MASTER_ORCHESTRATOR: "feature_master_orchestrator",
 }
 
 _DISPLAY_NAMES = {
     DESIGN_STUDIO: "Design Studio",
     WORKFLOW_GRAPH: "Workflow Graph",
     REPO_WORKTREES: "Repo worktrees",
+    MASTER_ORCHESTRATOR: "Master orchestrator",
 }
 
 _COMMAND_FEATURES = {
@@ -45,6 +50,7 @@ def public_flags(config: Mapping[str, Any] | None) -> dict[str, bool]:
         DESIGN_STUDIO: enabled(config, DESIGN_STUDIO),
         WORKFLOW_GRAPH: enabled(config, WORKFLOW_GRAPH),
         REPO_WORKTREES: enabled(config, REPO_WORKTREES),
+        MASTER_ORCHESTRATOR: enabled(config, MASTER_ORCHESTRATOR),
     }
 
 
@@ -78,6 +84,8 @@ def require_command(config: Mapping[str, Any] | None, message: str | None) -> No
 
 
 def queued_run_feature(run: Mapping[str, Any], session_mode: str) -> str | None:
+    if session_mode == "master":
+        return MASTER_ORCHESTRATOR
     if session_mode == "design":
         return DESIGN_STUDIO
     kind = str(run.get("kind") or "")

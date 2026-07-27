@@ -108,6 +108,7 @@ export type Runner = {
 export type AppFeatures = {
 	designStudio: boolean;
 	workflowGraph: boolean;
+	masterOrchestrator: boolean;
 };
 export type ChatSession = {
 	id: number;
@@ -461,6 +462,7 @@ export type Job = {
 	project_slug?: string | null;
 	workflow_id: number | null;
 	session_id: number;
+	origin_master_session_id?: number | null;
 	title: string;
 	status: JobStatus;
 	// 'linear' (classic steps) or 'graph' — decides which surface can act on the job,
@@ -504,7 +506,7 @@ export type Job = {
 export type View =
 	| "home"
 	| "chat"
-	| "alpha"
+	| "master"
 	| "projects"
 	| "wiki"
 	| "artifacts"

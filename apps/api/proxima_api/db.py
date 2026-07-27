@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   runner_id TEXT NOT NULL DEFAULT '__DEFAULT_RUNNER__',
   default_model TEXT,
   instructions TEXT,
-  -- Built-in product identities (Alpha) are hidden from the normal worker
+  -- Built-in product identities (Master) are hidden from the normal worker
   -- profile list. NULL remains an owner-created coding profile.
   system_kind TEXT,
   is_default INTEGER NOT NULL DEFAULT 0,
@@ -270,9 +270,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- Why the owner rejected the job at review (slice 4). Set only by the reject
   -- action (status -> 'failed'); NULL for jobs that failed on their own.
   rejected_reason TEXT,
-  -- Non-NULL only when the built-in Alpha session dispatched this job.
+  -- Non-NULL only when the built-in Master session dispatched this job.
   -- It scopes permission auto-approval, desk ownership, and concurrency.
-  alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  origin_master_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -535,7 +535,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
--- Alpha checkpoints are job-scoped JSON state + git/worktree refs. They are
+-- Master checkpoints are job-scoped JSON state + git/worktree refs. They are
 -- not SQLite backups and do not archive an entire project filesystem.
 CREATE TABLE IF NOT EXISTS job_checkpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -721,9 +721,17 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "runs", "heartbeat_at", "heartbeat_at TEXT")
     _add_column(conn, "profiles", "runner_id", f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
     _add_column(conn, "profiles", "system_kind", "system_kind TEXT")
-    _add_column(conn, "jobs", "alpha_session_id", "alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
     _add_column(conn, "jobs", "blocked_reason", "blocked_reason TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
+    job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if {
+        "origin_master_session_id",
+        "status",
+        "created_at",
+    }.issubset(job_columns):
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_origin_master "
+            "ON jobs(origin_master_session_id, status, created_at)"
+        )
     # Per-profile skill/MCP selection (JSON: {"skills":[ids],"mcp":[names]}).
     # NULL = inherit ALL detected for the runner (best default: host skills just work).
     _add_column(conn, "profiles", "capabilities", "capabilities TEXT")

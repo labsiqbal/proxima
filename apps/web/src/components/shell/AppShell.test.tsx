@@ -20,7 +20,7 @@ const base = {
   activeProject: { id: 1, name: 'Demo', slug: 'demo' } as never,
   activeSession: null,
   currentView: 'chat' as const,
-  features: { designStudio: true, workflowGraph: true },
+  features: { designStudio: true, workflowGraph: true, masterOrchestrator: false },
   onNewChat: vi.fn(),
   onRenameSession: vi.fn(),
   onDeleteSession: vi.fn(),
@@ -39,6 +39,7 @@ const base = {
 
 describe('AppShell mobile drawer + search', () => {
   beforeEach(() => {
+    localStorage.setItem('proxima.tour.coreDone', '1')
     // Force the mobile branch of toggleLeft / drawer open path.
     vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
       matches: query.includes('max-width') ? true : !query.includes('min-width: 768px'),

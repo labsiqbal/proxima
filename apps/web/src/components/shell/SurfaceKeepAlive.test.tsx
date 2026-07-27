@@ -59,19 +59,19 @@ describe('surface keep-alive (Chat leave/return)', () => {
 })
 
 describe('surface keep-alive (multi primary surfaces)', () => {
-  it('preserves Alpha and Tasks panes after leave/return', async () => {
+  it('preserves Master and Tasks panes after leave/return', async () => {
     const user = userEvent.setup()
     function MultiKeepAlive() {
-      const [view, setView] = React.useState<'alpha' | 'activity' | 'chat'>('alpha')
-      const [alphaDraft, setAlphaDraft] = React.useState('delegate me')
+      const [view, setView] = React.useState<'master' | 'activity' | 'chat'>('master')
+      const [masterDraft, setMasterDraft] = React.useState('delegate me')
       const [taskFilter, setTaskFilter] = React.useState('all')
       return (
         <div>
-          <button type="button" onClick={() => setView('alpha')}>Go Alpha</button>
+          <button type="button" onClick={() => setView('master')}>Go Master</button>
           <button type="button" onClick={() => setView('activity')}>Go Tasks</button>
           <button type="button" onClick={() => setView('chat')}>Go Chat</button>
-          <div className="surface-pane" hidden={view !== 'alpha'} aria-hidden={view !== 'alpha'}>
-            <label>Alpha draft<textarea aria-label="Alpha draft" value={alphaDraft} onChange={e => setAlphaDraft(e.target.value)} /></label>
+          <div className="surface-pane" hidden={view !== 'master'} aria-hidden={view !== 'master'}>
+            <label>Master draft<textarea aria-label="Master draft" value={masterDraft} onChange={e => setMasterDraft(e.target.value)} /></label>
           </div>
           <div className="surface-pane" hidden={view !== 'activity'} aria-hidden={view !== 'activity'}>
             <label>Filter<input aria-label="Task filter" value={taskFilter} onChange={e => setTaskFilter(e.target.value)} /></label>
@@ -81,17 +81,17 @@ describe('surface keep-alive (multi primary surfaces)', () => {
       )
     }
     render(<MultiKeepAlive />)
-    expect(screen.getByLabelText('Alpha draft')).toHaveValue('delegate me')
+    expect(screen.getByLabelText('Master draft')).toHaveValue('delegate me')
     await user.click(screen.getByRole('button', { name: 'Go Tasks' }))
     await user.clear(screen.getByLabelText('Task filter'))
     await user.type(screen.getByLabelText('Task filter'), 'review')
     await user.click(screen.getByRole('button', { name: 'Go Chat' }))
     expect(screen.getByText('Chat surface')).toBeInTheDocument()
-    expect(screen.getByLabelText('Alpha draft')).toBeInTheDocument()
+    expect(screen.getByLabelText('Master draft')).toBeInTheDocument()
     expect(screen.getByLabelText('Task filter')).toHaveValue('review')
-    await user.click(screen.getByRole('button', { name: 'Go Alpha' }))
-    expect(screen.getByLabelText('Alpha draft')).toBeVisible()
-    expect(screen.getByLabelText('Alpha draft')).toHaveValue('delegate me')
+    await user.click(screen.getByRole('button', { name: 'Go Master' }))
+    expect(screen.getByLabelText('Master draft')).toBeVisible()
+    expect(screen.getByLabelText('Master draft')).toHaveValue('delegate me')
   })
 })
 

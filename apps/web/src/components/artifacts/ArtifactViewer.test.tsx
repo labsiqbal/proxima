@@ -34,7 +34,7 @@ describe('ArtifactViewer v2 review flow', () => {
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {
     render(<ArtifactViewer
       token="token"
-      slug="alpha"
+      slug="master"
       items={[{ type: 'app', title: 'Starter app', path: 'artifacts/starter-app' }]}
       index={0}
       onIndex={() => undefined}
@@ -57,7 +57,7 @@ describe('ArtifactViewer v2 review flow', () => {
     const onSendFeedback = vi.fn()
     render(<ArtifactViewer
       token="token"
-      slug="alpha"
+      slug="master"
       items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
       index={0}
       onIndex={() => undefined}
@@ -90,7 +90,7 @@ describe('ArtifactViewer v2 review flow', () => {
     const onSendFeedback = vi.fn()
     render(<ArtifactViewer
       token="token"
-      slug="alpha"
+      slug="master"
       items={[{ type: 'doc', title: 'Flow', path: 'reports/flow.md' }]}
       index={0}
       onIndex={() => undefined}

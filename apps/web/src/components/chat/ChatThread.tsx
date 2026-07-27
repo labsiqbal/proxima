@@ -69,16 +69,16 @@ function TurnRestoreButton({ token, message }: { token?: string; message: ChatMe
 			const detail = `${impact.paths.length} path${impact.paths.length === 1 ? "" : "s"}:\n${impact.paths.join("\n")}${impact.warning ? `\n\nWarning: ${impact.warning}` : ""}`;
 			const ok = await confirmDialog({ title: "Restore files from before this turn?", message: detail, confirmLabel: "Review restore", danger: true });
 			if (!ok) return;
-			if (impact.active_alpha_jobs.length > 0) {
+			if (impact.active_master_tasks.length > 0) {
 				const acceptConflict = await confirmDialog({
-					title: "Alpha work is active in this project",
-					message: `Restoring now may overwrite work from: ${impact.active_alpha_jobs.map(job => job.title).join(", ")}`,
+					title: "Master work is active in this project",
+					message: `Restoring now may overwrite work from: ${impact.active_master_tasks.map(job => job.title).join(", ")}`,
 					confirmLabel: "Restore anyway",
 					danger: true,
 				});
 				if (!acceptConflict) return;
 			}
-			await restoreTurn(token, message.id!, impact.active_alpha_jobs.length > 0);
+			await restoreTurn(token, message.id!, impact.active_master_tasks.length > 0);
 			setRestored(true);
 			window.dispatchEvent(new CustomEvent("proxima:files-changed"));
 		} catch (err) { setError(err instanceof Error ? err.message : String(err)); }

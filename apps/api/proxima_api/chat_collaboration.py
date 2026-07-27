@@ -41,7 +41,7 @@ def make_start_collaboration(app, db, profile_for_user):
             rows = db().execute(
                 """
                 SELECT * FROM profiles
-                WHERE user_id = ?
+                WHERE user_id = ? AND COALESCE(system_kind, '') = ''
                 ORDER BY CASE WHEN runner_id = ? THEN 1 ELSE 0 END, is_default DESC, id ASC
                 """,
                 (user["id"], active_profile["runner_id"]),

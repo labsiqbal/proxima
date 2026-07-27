@@ -150,6 +150,7 @@ PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
+PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0
 PROXIMA_RUNNER_ENV_ALLOWLIST=
 PROXIMA_APP_ENV_ALLOWLIST=
 PROXIMA_RUNNER_INHERIT_ENV=0
@@ -170,6 +171,9 @@ Notes:
   available, independent of this flag.
 - Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
   only as a recovery switch; the classic linear engine is unaffected either way.
+- Master persistence migration always runs. The Master runtime and UI default to
+  off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until integrated acceptance
+  enables them for production.
 - Runner/app children receive filtered environments. Add trusted variable names to the
   corresponding comma-separated allowlist. Full inheritance is a compatibility escape
   hatch and should remain off when opening unfamiliar projects.

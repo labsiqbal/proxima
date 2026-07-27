@@ -26,11 +26,11 @@ beforeEach(() => window.localStorage.clear())
 
 describe('artifact review state', () => {
   it('persists annotations per project and artifact', () => {
-    saveArtifactReview('alpha', 'artifacts/report.md', review)
+    saveArtifactReview('master', 'artifacts/report.md', review)
 
-    expect(loadArtifactReview('alpha', 'artifacts/report.md')).toEqual(review)
+    expect(loadArtifactReview('master', 'artifacts/report.md')).toEqual(review)
     expect(loadArtifactReview('beta', 'artifacts/report.md').annotations).toEqual([])
-    expect(window.localStorage.getItem(artifactReviewStorageKey('alpha', 'artifacts/report.md'))).toContain('Move this label')
+    expect(window.localStorage.getItem(artifactReviewStorageKey('master', 'artifacts/report.md'))).toContain('Move this label')
   })
 
   it('formats actionable chat feedback with pin positions and whiteboard paths', () => {

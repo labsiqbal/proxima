@@ -23,7 +23,7 @@ const baseFlags = (over: Partial<DeepShellFlags> = {}): DeepShellFlags => ({
 
 describe('navStack deep detection', () => {
   it('treats top-level surfaces as not deep', () => {
-    for (const view of ['chat', 'alpha', 'activity', 'workflows', 'artifacts', 'design', 'settings'] as const) {
+    for (const view of ['chat', 'master', 'activity', 'workflows', 'artifacts', 'design', 'settings'] as const) {
       expect(isDeepShell(baseFlags({ view }))).toBe(false)
       expect(projectSwitcherLocked(baseFlags({ view }))).toBe(false)
     }
@@ -75,8 +75,8 @@ describe('navStack push/pop + chrome Back labels', () => {
     let stack: NavStackEntry[] = []
     stack = pushDeep(stack, {
       kind: 'task',
-      originView: 'alpha',
-      originLabel: 'Alpha',
+      originView: 'master',
+      originLabel: 'Master',
       meta: { jobId: 1 },
     })
     stack = pushDeep(stack, {
@@ -86,8 +86,8 @@ describe('navStack push/pop + chrome Back labels', () => {
       meta: { jobId: 2 },
     })
     expect(stack).toHaveLength(1)
-    expect(stack[0].originView).toBe('alpha')
-    expect(stack[0].originLabel).toBe('Alpha')
+    expect(stack[0].originView).toBe('master')
+    expect(stack[0].originLabel).toBe('Master')
     expect(stack[0].meta).toEqual({ jobId: 2 })
   })
 
@@ -122,7 +122,7 @@ describe('viewOriginLabel + keep-alive', () => {
 
   it('keeps primary multitask surfaces alive', () => {
     expect(shouldKeepAlive('chat')).toBe(true)
-    expect(shouldKeepAlive('alpha')).toBe(true)
+    expect(shouldKeepAlive('master')).toBe(true)
     expect(shouldKeepAlive('settings')).toBe(false)
   })
 })

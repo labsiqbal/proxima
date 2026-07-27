@@ -27,8 +27,9 @@ import {
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
 import type { AppFeatures, Profile, Project, Runner, User } from '../types'
-import { getAlphaSettings, saveAlphaSettings, type AlphaSettings } from '../api/alpha'
+import { getMasterSettings, saveMasterSettings, type MasterSettings } from '../api/master'
 import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
+import { LOCAL_CORE_TOUR_DONE } from '../components/shell/CoreTour'
 import { RunnersScreen } from './RunnersScreen'
 import { WikiScreen } from './WikiScreen'
 import { ProjectsScreen } from './ProjectsScreen'
@@ -255,7 +256,7 @@ export function formatAuditMeta(raw: string | null | undefined, max = 160): stri
   if (typeof value === 'string') return shortText(value, max)
   return shortText(JSON.stringify(value), max)
 }
-export type SettingsSectionKey = 'account' | 'projects' | 'alpha' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
+export type SettingsSectionKey = 'account' | 'projects' | 'master' | 'agents' | 'knowledge' | 'media' | 'remote' | 'help' | 'diagnostics'
 
 /**
  * Flat section metadata. Menu order is SETTINGS_GROUPS.
@@ -265,7 +266,7 @@ export type SettingsSectionKey = 'account' | 'projects' | 'alpha' | 'agents' | '
 export const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: string }[] = [
   { key: 'projects', label: 'Projects', hint: 'Link, create, rename, remove, and container settings' },
   { key: 'agents', label: 'Agents', hint: 'Runners, goals and prompt modes' },
-  { key: 'alpha', label: 'Alpha', hint: 'Unattended budgets and orchestration limits' },
+  { key: 'master', label: 'Master', hint: 'Unattended budgets and orchestration limits' },
   { key: 'knowledge', label: 'Knowledge', hint: 'Project notes, links, graph and search' },
   { key: 'media', label: 'Media', hint: 'Image generation backend' },
   { key: 'remote', label: 'Remote', hint: 'Tailscale and Cloudflare setup' },
@@ -276,7 +277,7 @@ export const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: 
 
 /** Work setup · Integrations · System · Help (UI Flow Q14). */
 export const SETTINGS_GROUPS: { id: string; label: string; keys: SettingsSectionKey[] }[] = [
-  { id: 'work', label: 'Work setup', keys: ['projects', 'agents', 'alpha', 'knowledge'] },
+  { id: 'work', label: 'Work setup', keys: ['projects', 'agents', 'master', 'knowledge'] },
   { id: 'integrations', label: 'Integrations', keys: ['media', 'remote'] },
   { id: 'system', label: 'System', keys: ['account', 'diagnostics'] },
   { id: 'help', label: 'Help', keys: ['help'] },
@@ -612,8 +613,8 @@ function ChangePasswordPanel({ token, onTokenChange }: { token: string; onTokenC
   </div>
 }
 
-function AlphaSettingsPanel({ token }: { token: string }) {
-  const [settings, setSettings] = React.useState<AlphaSettings | null>(null)
+function MasterSettingsPanel({ token }: { token: string }) {
+  const [settings, setSettings] = React.useState<MasterSettings | null>(null)
   const [turns, setTurns] = React.useState('20')
   const [wallMinutes, setWallMinutes] = React.useState('240')
   const [tokens, setTokens] = React.useState('')
@@ -621,7 +622,7 @@ function AlphaSettingsPanel({ token }: { token: string }) {
   const [message, setMessage] = React.useState<{ ok: boolean; text: string } | null>(null)
   React.useEffect(() => {
     let alive = true
-    getAlphaSettings(token).then(value => {
+    getMasterSettings(token).then(value => {
       if (!alive) return
       setSettings(value); setTurns(String(value.budget_turns)); setWallMinutes(String(Math.round(value.budget_wall_seconds / 60))); setTokens(value.budget_tokens == null ? '' : String(value.budget_tokens))
     }).catch(err => { if (alive) setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) }) }).finally(() => { if (alive) setBusy(null) })
@@ -636,15 +637,15 @@ function AlphaSettingsPanel({ token }: { token: string }) {
     if (tokenValue != null && (!Number.isInteger(tokenValue) || tokenValue < 1)) { setMessage({ ok: false, text: 'Token budget must be a positive whole number or left empty.' }); return }
     setBusy('save'); setMessage(null)
     try {
-      const value = await saveAlphaSettings(token, { budget_turns: turnValue, budget_wall_seconds: wallValue * 60, budget_tokens: tokenValue } as Partial<AlphaSettings>)
-      setSettings(value); setMessage({ ok: true, text: 'Alpha budgets saved. They apply on the next supervisor tick.' })
+      const value = await saveMasterSettings(token, { budget_turns: turnValue, budget_wall_seconds: wallValue * 60, budget_tokens: tokenValue } as Partial<MasterSettings>)
+      setSettings(value); setMessage({ ok: true, text: 'Master budgets saved. They apply on the next supervisor tick.' })
     } catch (err) { setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) }) }
     finally { setBusy(null) }
   }
-  if (busy === 'load' && !settings) return <div className="panel settings-loading" role="status"><span className="ui-spinner" /> Loading Alpha settings…</div>
+  if (busy === 'load' && !settings) return <div className="panel settings-loading" role="status"><span className="ui-spinner" /> Loading Master settings…</div>
   return <div className="panel"><div className="panel-head"><h3>Unattended budgets</h3><span>{settings?.unattended ? 'currently on' : 'currently off'}</span></div>
-    <p className="muted">Alpha can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
-    <form className="settings-rows alpha-settings-form" onSubmit={save}>
+    <p className="muted">Master can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
+    <form className="settings-rows master-settings-form" onSubmit={save}>
       <label><span className="srow-label">Turn limit</span><input type="number" min="1" max="200" step="1" value={turns} onChange={event => setTurns(event.target.value)} disabled={!!busy} /></label>
       <label><span className="srow-label">Wall-clock minutes</span><input type="number" min="5" max="1440" step="5" value={wallMinutes} onChange={event => setWallMinutes(event.target.value)} disabled={!!busy} /></label>
       <label><span className="srow-label">Token budget (optional)</span><input type="number" min="1" step="1000" value={tokens} onChange={event => setTokens(event.target.value)} disabled={!!busy} placeholder="No token cap when unavailable" /></label>
@@ -655,9 +656,9 @@ function AlphaSettingsPanel({ token }: { token: string }) {
 }
 
 const HELP_CHAPTERS = [
-  { id: 'core', title: 'Primary loop', summary: 'Chat → Tasks → Workflows → Archive, with Alpha as the delegate side path.' },
+  { id: 'core', title: 'Primary loop', summary: 'Chat → Tasks → Workflows → Archive, with Master as the delegate side path.' },
   { id: 'chat', title: 'Chat', summary: 'Hands-on work with one agent: send prompts, watch tools, open deliverables.' },
-  { id: 'alpha', title: 'Alpha', summary: 'Delegate outcomes; up to three workers; unattended budgets stay opt-in.' },
+  { id: 'master', title: 'Master', summary: 'Delegate outcomes; up to three workers; unattended budgets stay opt-in.' },
   { id: 'tasks', title: 'Tasks', summary: 'Watch durable jobs run, review changes, and open task workspaces.' },
   { id: 'workflows', title: 'Workflows', summary: 'Save plans as templates, schedule runs, and author on the graph canvas.' },
   { id: 'archive', title: 'Archive', summary: 'Durable deliverables, versions, lineage, and the shared ArtifactViewer.' },
@@ -673,14 +674,19 @@ function HelpToursPanel({ token, features }: { token: string; features: AppFeatu
   const [busy, setBusy] = React.useState(false)
   const replayCore = async () => {
     setBusy(true)
-    try { await saveAlphaSettings(token, { tour_core_done: false } as Partial<AlphaSettings>) }
-    catch { /* Replay still opens now; completion can be persisted when the tour closes. */ }
+    localStorage.removeItem(LOCAL_CORE_TOUR_DONE)
+    try {
+      if (features.masterOrchestrator) {
+        await saveMasterSettings(token, { tour_core_done: false } as Partial<MasterSettings>)
+      }
+    } catch { /* Replay still opens now; completion can be persisted when the tour closes. */ }
     finally { window.dispatchEvent(new CustomEvent('proxima:tour-core')); setBusy(false) }
   }
-  return <div className="panel"><div className="panel-head"><h3>Product tours</h3><span>{HELP_CHAPTERS.length} chapters</span></div>
+  const chapters = HELP_CHAPTERS.filter(item => item.id !== 'master' || features.masterOrchestrator)
+  return <div className="panel"><div className="panel-head"><h3>Product tours</h3><span>{chapters.length} chapters</span></div>
     <p className="muted">Start with the short core tour, then open any chapter when you need the full product map.</p>
     <button type="button" className="primary-button" disabled={busy} onClick={() => void replayCore()}>{busy ? 'Opening…' : 'Replay core tour'}</button>
-    <div className="help-chapters">{HELP_CHAPTERS.map(item => {
+    <div className="help-chapters">{chapters.map(item => {
       const unavailable = item.id === 'design' && !features.designStudio
       return <button type="button" key={item.id} className={chapter?.id === item.id ? 'active' : ''} disabled={unavailable} onClick={() => setChapter(item)}><strong>{item.title}</strong><span>{unavailable ? 'Unavailable in this install' : item.summary}</span></button>
     })}</div>
@@ -738,8 +744,13 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   }
 
   const goalOptions = [3, 5, 8, 12, 20]
-  const settingsSections = SETTINGS_SECTIONS
-  const activeMeta = settingsSections.find(s => s.key === activeSection) ?? settingsSections[0]
+  const settingsSections = SETTINGS_SECTIONS.filter(
+    section => section.key !== 'master' || features.masterOrchestrator,
+  )
+  const effectiveSection = settingsSections.some(section => section.key === activeSection)
+    ? activeSection
+    : 'account'
+  const activeMeta = settingsSections.find(s => s.key === effectiveSection) ?? settingsSections[0]
 
   const accountPanel = <div className="panel"><div className="panel-head"><h3>Account</h3></div><div className="settings-account"><strong>{user.username}</strong><span className="muted">{profiles.length} profile{profiles.length !== 1 ? 's' : ''} · {projects.length} project{projects.length !== 1 ? 's' : ''}</span></div></div>
   const sourceLink = <a className="ghost-button" href="https://github.com/labsiqbal/proxima" target="_blank" rel="noopener noreferrer">Source code · AGPL-3.0</a>
@@ -756,7 +767,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const appearancePanel = <div className="panel"><div className="panel-head"><h3>Appearance</h3><span>theme &amp; font</span></div><p className="eyebrow">Theme</p><div className="theme-grid" role="group" aria-label="Theme">{THEMES.map(t => {
     const selected = theme === t.key
     return <button key={t.key} className={`theme-swatch ${selected ? 'active' : ''}`} onClick={() => { applyTheme(t.key); setTheme(t.key) }} title={t.label} type="button" aria-pressed={selected} aria-label={themeSwatchAriaLabel(t.label, selected)}><span className="swatch-pv" style={{ background: t.surface }} aria-hidden="true"><i style={{ background: t.accent }} /></span><small aria-hidden="true">{t.label}</small></button>
-  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
+  })}</div><div className="settings-rows"><span className="srow-label">Font</span><Dropdown value={font} onChange={f => { applyFont(f as FontKey); setFont(f as FontKey) }} minWidth={220} options={FONTS.map(f => ({ value: f.key, label: f.label }))} /><span className="srow-label">Font size</span><div className="fontsize-slider"><input type="range" name="font-size" min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} step={0.5} value={fontSize} onChange={e => { const px = Number(e.target.value); applyFontSize(px); setFontSize(px) }} aria-label="Font size" aria-valuetext={`${fontSize} pixels`} /><span className="fontsize-value" aria-hidden="true">{fontSize}px</span></div></div></div>
   const notifBlocked = notifyBlocked()
   const notificationsPanel = <div className="panel"><div className="panel-head"><h3>Notifications</h3><span>desktop</span></div><p className="muted">Get a desktop alert when an agent finishes a chat or task while this tab is in the background.</p>{notifySupported() ? <>
     <button
@@ -771,21 +782,21 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   </> : <p className="muted">Not supported in this browser.</p>}</div>
   const goalsPanel = <><div className="panel"><div className="panel-head"><h3>Agent goals</h3><span>/goal loop</span></div><p className="muted">Maximum autonomous iterations before a goal loop stops itself.</p><div className="seg sm">{goalOptions.map(n => <button key={n} className={goalMax === n ? 'active' : ''} onClick={() => { setGoalMaxIter(n); setGoalMax(n) }}>{n}</button>)}</div></div><TurnQuotaPanel token={token} /><SatpamPanel token={token} /><PermissionsPanel token={token} /></>
 
-  const content = activeSection === 'account'
+  const content = effectiveSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
-    : activeSection === 'projects'
+    : effectiveSection === 'projects'
       ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} onRefresh={onRefresh} /></div>
-    : activeSection === 'alpha'
-      ? <AlphaSettingsPanel token={token} />
-    : activeSection === 'agents'
+    : effectiveSection === 'master'
+      ? <MasterSettingsPanel token={token} />
+    : effectiveSection === 'agents'
       ? <><RunnersScreen token={token} runners={runners} runnerReadiness={runnerReadiness} onRefresh={onRefresh} /><CustomSkillRootsPanel token={token} /><RecommendedToolsPanel token={token} />{goalsPanel}<CollaborationSettingsPanel token={token} /></>
-      : activeSection === 'knowledge'
+      : effectiveSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
-        : activeSection === 'media'
+        : effectiveSection === 'media'
         ? <ImageGenerationPanel token={token} />
-        : activeSection === 'remote'
+        : effectiveSection === 'remote'
           ? <RemoteAccessGuide />
-          : activeSection === 'help'
+          : effectiveSection === 'help'
             ? <HelpToursPanel token={token} features={features} />
             : <>{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
 
@@ -802,9 +813,9 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
             {items.map(section => <button
               key={section.key}
               type="button"
-              className={`settings-menu-item ${activeSection === section.key ? 'active' : ''}`}
+              className={`settings-menu-item ${effectiveSection === section.key ? 'active' : ''}`}
               onClick={() => setActiveSection(section.key)}
-              aria-current={activeSection === section.key ? 'page' : undefined}
+              aria-current={effectiveSection === section.key ? 'page' : undefined}
               aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
               title={section.hint}
             >
@@ -815,7 +826,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       </div>
     </aside>
     <div className="settings-content" aria-live="polite">
-      {activeSection !== 'projects' && (
+      {effectiveSection !== 'projects' && (
         <div className="settings-content-head">
           <h2>{activeMeta.label}</h2>
           <p className="muted">{activeMeta.hint}</p>

@@ -12,7 +12,7 @@ vi.mock('../files/AppRunner', () => ({
   AppRunner: ({ slug }: { slug: string }) => <div data-testid="preview-stub">preview:{slug}</div>,
 }))
 
-const project = { slug: 'alpha', name: 'Alpha', visibility: 'private' } as Project
+const project = { slug: 'master', name: 'Master', visibility: 'private' } as Project
 
 describe('ToolDock', () => {
   it('offers Terminal, Files, and Preview as rail tools plus Settings', () => {

@@ -286,9 +286,9 @@ class SessionCreateRequest(BaseModel):
     profile_id: int | None = None
     runner_id: str = Field(default_factory=default_runner)
     visibility: str = Field(default="private", pattern="^(private|project)$")
-    # Alpha sessions are server-created through the dedicated Alpha surface, but
-    # the shared model recognizes the registered mode for internal callers/tests.
-    mode: str = Field(default="chat", pattern="^(chat|design|alpha)$")
+    # Master sessions are server-created through the dedicated Master surface.
+    # Alpha remains a one-release legacy payload reader.
+    mode: str = Field(default="chat", pattern="^(chat|design|master|alpha)$")
 
 
 class SessionUpdateRequest(BaseModel):

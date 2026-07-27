@@ -302,7 +302,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                   <>
                     <h3 className="teaching-empty-title">No tasks yet</h3>
                     <p className="teaching-empty-lead">
-                      Tasks is where durable work runs and gets reviewed. Ad-hoc tasks, plans from Chat, Alpha jobs, and scheduled workflow runs all land here{activeProject ? ` for ${activeProject.name}` : ''}.
+                      Tasks is where durable work runs and gets reviewed. Ad-hoc tasks, plans from Chat, Master jobs, and scheduled workflow runs all land here{activeProject ? ` for ${activeProject.name}` : ''}.
                     </p>
                     <ul className="teaching-empty-caps" aria-label="What you can do here">
                       <li>Watch queued, running, and review work in one list or board</li>
