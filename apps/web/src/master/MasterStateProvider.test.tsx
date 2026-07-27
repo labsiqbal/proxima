@@ -91,6 +91,7 @@ function Probe() {
   return (
     <div>
       <output data-testid="connection">{state.connection.state}</output>
+      <output data-testid="conn-error">{state.connection.error}</output>
       <output data-testid="cursor">{state.connection.resumeCursor}</output>
       <output data-testid="messages">{state.messages.map(message => message.content).join('|')}</output>
       <output data-testid="jobs">{state.desk?.jobs.map(job => `${job.id}:${job.desk_status}`).join('|')}</output>
@@ -179,20 +180,18 @@ describe('MasterStateProvider', () => {
   it('creates one stream for multiple consumers and React StrictMode', async () => {
     renderProvider({ strict: true })
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    expect(getMasterDesk).toHaveBeenCalledTimes(2)
+    expect(getMasterDesk).toHaveBeenCalledTimes(1)
     expect(listMessages).toHaveBeenCalledTimes(1)
     expect(listEvents).not.toHaveBeenCalled()
     expect(FakeEventSource.instances[0].url).toContain('after_id=12')
     expect(FakeEventSource.instances[0].withCredentials).toBe(true)
   })
 
-  it('takes the durable desk cursor before the authoritative bootstrap snapshots', async () => {
-    vi.mocked(getMasterDesk)
-      .mockResolvedValueOnce(desk as never)
-      .mockResolvedValueOnce({
-        ...desk,
-        master_run: { id: 22, status: 'running' },
-      } as never)
+  it('bootstraps from a single desk snapshot and streams from its durable cursor', async () => {
+    vi.mocked(getMasterDesk).mockResolvedValue({
+      ...desk,
+      master_run: { id: 22, status: 'running' },
+    } as never)
     vi.mocked(listMessages).mockResolvedValue({
       messages: [{
         id: 55,
@@ -207,10 +206,10 @@ describe('MasterStateProvider', () => {
     renderProvider()
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(getMasterDesk).toHaveBeenCalledTimes(1)
+    expect(listMessages).toHaveBeenCalledTimes(1)
     expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Arrived during bootstrap')
-    expect(getMasterDesk.mock.invocationCallOrder[0])
-      .toBeLessThan(getMasterDesk.mock.invocationCallOrder[1])
     expect(listEvents).not.toHaveBeenCalled()
     expect(FakeEventSource.instances[0].url).toContain('after_id=12')
   })
@@ -227,7 +226,7 @@ describe('MasterStateProvider', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    expect(getMasterDesk).toHaveBeenCalledTimes(3)
+    expect(getMasterDesk).toHaveBeenCalledTimes(2)
   })
 
   it('does not present the latest terminal Master run as active work', async () => {
@@ -299,7 +298,7 @@ describe('MasterStateProvider', () => {
     act(() => source.fail())
     expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('retrying')
     act(() => source.open())
-    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(2))
     expect(FakeEventSource.instances).toHaveLength(1)
   })
 
@@ -323,7 +322,7 @@ describe('MasterStateProvider', () => {
     act(() => source.open())
     act(() => source.fail())
     act(() => source.open())
-    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(2))
 
     act(() => source.emit('run.started', liveEvent))
     expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
@@ -412,7 +411,7 @@ describe('MasterStateProvider', () => {
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('one|two|three')
   })
 
-  it('reports a disconnected state when reconnect reconciliation cannot recover', async () => {
+  it('keeps a connected label when reconciliation fails but the live stream stays open', async () => {
     renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     const source = FakeEventSource.instances[0]
@@ -420,6 +419,28 @@ describe('MasterStateProvider', () => {
     vi.mocked(getMasterDesk).mockRejectedValueOnce(new Error('server offline'))
     act(() => source.fail())
     act(() => source.open())
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('conn-error')[0])
+        .toHaveTextContent('could not be reconciled')
+    })
+    expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('connected')
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('reports disconnected when reconnect reconciliation fails after the stream closes', async () => {
+    let rejectDesk!: (reason: Error) => void
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.fail())
+    vi.mocked(getMasterDesk).mockReturnValueOnce(
+      new Promise((_, reject) => { rejectDesk = reject }) as never,
+    )
+    act(() => source.open())
+    act(() => { source.readyState = FakeEventSource.CLOSED })
+    act(() => rejectDesk(new Error('server offline')))
 
     await waitFor(() => {
       expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('disconnected')

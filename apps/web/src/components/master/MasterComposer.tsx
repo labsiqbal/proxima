@@ -29,7 +29,7 @@ export function MasterComposer({
         onSelectionChange={actions.setSelection}
         focusRequest={composer.focusRequest}
         clearOnSubmitStart={false}
-        onSubmit={() => actions.send()}
+        onSubmit={content => actions.send(content)}
       />
       <p className="master-composer-hint">
         {desk?.unattended

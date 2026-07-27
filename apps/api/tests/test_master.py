@@ -125,6 +125,25 @@ def test_master_message_acceptance_returns_canonical_durable_message(
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
 
 
+def test_master_desk_cursor_never_leads_the_snapshot(tmp_path: Path):
+    app, client = _client(tmp_path)
+    session_id = client.get("/api/master/desk").json()["session"]["id"]
+    app.state.db.execute(
+        "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) "
+        "VALUES (NULL, ?, NULL, 1, 'note', '{}')",
+        (session_id,),
+    )
+    app.state.db.commit()
+    latest = app.state.db.execute(
+        "SELECT MAX(id) AS id FROM events WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()["id"]
+
+    cursor = client.get("/api/master/desk").json()["event_cursor"]
+
+    assert cursor == latest
+
+
 def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()

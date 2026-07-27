@@ -110,6 +110,10 @@ def register(app, deps):
     def get_master_desk(user: dict[str, Any] = Depends(current_user)):
         _require_master()
         profile, session = _identity(user)
+        event_cursor = db().execute(
+            "SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE session_id = ?",
+            (session["id"],),
+        ).fetchone()["id"]
         rows = db().execute(
             "SELECT * FROM jobs WHERE origin_master_session_id = ? AND archived_at IS NULL "
             "ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'review' THEN 2 ELSE 3 END, id DESC LIMIT 100",
@@ -121,10 +125,6 @@ def register(app, deps):
             "SELECT id, status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
             (session["id"],),
         ).fetchone()
-        event_cursor = db().execute(
-            "SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE session_id = ?",
-            (session["id"],),
-        ).fetchone()["id"]
         return {
             "session": session_payload(session),
             "master_run": dict(master_run) if master_run else None,

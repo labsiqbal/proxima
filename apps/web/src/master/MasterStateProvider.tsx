@@ -365,7 +365,12 @@ function MasterStateHost({
             !controller.signal.aborted
             && generation === generationRef.current
           ) {
-            if (request.reason !== 'manual') setConnectionState('disconnected')
+            if (request.reason !== 'manual') {
+              const source = sourceRef.current
+              if (!source || source.readyState !== EventSource.OPEN) {
+                setConnectionState('disconnected')
+              }
+            }
             setConnectionError(
               request.reason === 'manual'
                 ? errorMessage(error)
@@ -468,17 +473,13 @@ function MasterStateHost({
       startTimer = 0
       void (async () => {
         try {
-          const discoveredDesk = await getMasterDesk(token, controller.signal)
-          const sessionId = discoveredDesk.session.id
-          const cursor = discoveredDesk.event_cursor
-          const [initialDesk, thread] = await Promise.all([
-            getMasterDesk(token, controller.signal),
-            listMessages(token, sessionId, controller.signal),
-          ])
+          const initialDesk = await getMasterDesk(token, controller.signal)
+          const sessionId = initialDesk.session.id
+          const cursor = initialDesk.event_cursor
+          const thread = await listMessages(token, sessionId, controller.signal)
           if (
             controller.signal.aborted
             || generation !== generationRef.current
-            || initialDesk.session.id !== sessionId
           ) return
           eventIdsRef.current = new Set()
           runSeqRef.current = new Map()
