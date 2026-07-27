@@ -522,6 +522,7 @@ def apply_capabilities(
     source_override: str | None = None,
     bundle_dir: str | Path | None = None,
     custom_roots: list[str] | None = None,
+    strict: bool = False,
 ) -> dict[str, list[str]]:
     """Make the selected skills + MCP live in a profile's seeded home.
 
@@ -530,7 +531,9 @@ def apply_capabilities(
     path under `bundled/<name>`. Symlinks not in the selection are pruned. MCP:
     rewrite the runner's config in the home to the selected subset.
 
-    Idempotent. Returns what was applied for logging/debug. Never raises.
+    Idempotent. Returns what was applied for logging/debug. Ordinary profile
+    activation is best-effort; security boundaries may set ``strict`` to fail
+    closed when an explicit empty selection cannot be applied.
     """
     home = Path(home)
     rid = getattr(spec, "id", "")
@@ -558,6 +561,8 @@ def apply_capabilities(
                 home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
     except Exception:
         log.exception("apply_capabilities failed for runner %s", rid)
+        if strict:
+            raise
     return applied
 
 

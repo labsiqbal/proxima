@@ -1124,6 +1124,57 @@ def _migrate_alpha_identity_to_master(conn: sqlite3.Connection) -> None:
     migrate_master_persistence(conn)
 
 
+def _add_master_tool_call_ledger(conn: sqlite3.Connection) -> None:
+    """Durable per-turn idempotency for schema-validated Master tools."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_tool_calls (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          turn_root_run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          envelope_hash TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'complete')),
+          result_json TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT,
+          UNIQUE(turn_root_run_id, envelope_hash)
+        )
+        """
+    )
+    expected_columns = {
+        "id",
+        "master_session_id",
+        "turn_root_run_id",
+        "envelope_hash",
+        "tool_name",
+        "status",
+        "result_json",
+        "created_at",
+        "completed_at",
+    }
+    actual_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(master_tool_calls)"
+        ).fetchall()
+    }
+    if actual_columns != expected_columns:
+        from .master_persistence import MasterPersistenceError
+
+        raise MasterPersistenceError(
+            "Master tool-call ledger schema is incomplete"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_tool_calls_session "
+        "ON master_tool_calls(master_session_id, turn_root_run_id, id)"
+    )
+    from .master_persistence import assert_master_tool_ledger
+
+    assert_master_tool_ledger(conn)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1164,6 +1215,11 @@ MIGRATIONS: list[Migration] = [
         31,
         "migrate durable Alpha identity and Task ownership links to Master",
         _migrate_alpha_identity_to_master,
+    ),
+    (
+        32,
+        "add durable per-turn Master product-tool idempotency ledger",
+        _add_master_tool_call_ledger,
     ),
 ]
 

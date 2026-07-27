@@ -267,11 +267,14 @@ built-in orchestrator without manually composing every worker task.
 
 > **Activation:** durable Master identity and compatibility migration are live.
 > The product runtime and UI are behind the server-owned
-> `feature_master_orchestrator` gate, which defaults off until the restricted
-> runner and tool-broker slices pass integrated acceptance. Migration is
-> unconditional and safe with the flag in either state.
+> `feature_master_orchestrator` gate, which defaults off. Migration is
+> unconditional and safe with the flag in either state, while feature-off
+> startup and unrelated routes do not provision a Master runner home. Codex
+> app-server 0.145.0 or newer is the one supported production Master adapter.
+> Every other adapter still fails closed before a turn starts.
 
-**Master identity and desk:** startup creates or reuses exactly one hidden
+**Master identity and desk:** when the feature is enabled, the authenticated Master
+entry point creates or reuses exactly one hidden
 `profiles.system_kind='master'` system identity and one project-unbound
 `sessions.mode='master'` thread for the owner. The hidden profile never appears in Agents or ordinary
 Chat history; Settings/desk runner selection creates or reuses the matching system
@@ -285,35 +288,60 @@ and busy states are explicit on desktop and mobile. The empty desk is sparse by
 default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
 so the Delegate composer stays the primary CTA.
 
-**In-process tools and dispatch:** Master's system instructions require structured
-`<proxima-tool>{name,arguments}</proxima-tool>` calls. `master_runtime.py` parses them
-after the ACP turn and invokes only server-owned handlers in the API process - never
-curl/HTTP to localhost and never prompt-granted tools. Reads cover projects, worker
-agents, jobs, plans, capacity, and Master settings; mutations cover multi-job dispatch,
-starting queued Master jobs, unattended/budget settings, and needs-you creation.
-Ad-hoc dispatch and `start_plan` both call the server-owned
-`TaskDelegationService`; Recipe execution keeps the existing linear or graph engine.
-The service applies the same Master ownership, checkpoint, audit, and permission scope.
-Every success/failure returns a structured
-result to the thread and back into a bounded six-round Master continuation, so a product
-read can inform the next in-process call without an HTTP control loop. Dispatch creates
-ordinary durable jobs with `execution_policy='autonomous'`,
-`jobs.origin_master_session_id`, one `task_delegations` audit row, a `master.job.create` audit
-row, and a checkpoint after any isolated worktree is cut but before a run is enqueued.
-A Master batch may name client-local Task keys and dependency keys; all Tasks and
-dependency edges commit atomically, cycles fail without partial rows, and a repeated
-batch idempotency key returns the same Tasks. The global worker default is
+**Restricted runtime and product tools:** the centralized runner contract requires
+an explicit `master_chat_only` capability. A conforming Master receives one dedicated
+managed runner home and an empty read-only non-source scratch. It receives no
+Container, Area, repo, Ops, source, runtime, config, ordinary profile home, path, or
+credential. Its stored capability selection is exactly
+`{"skills":[],"mcp":[]}` and is reapplied strictly on each run and runner switch.
+Every runner-native permission request and native tool event is rejected. Codex
+uses empty execution environments plus a private loopback provider firewall that
+replaces its complete tool carrier with exact server-owned broker schemas and
+replaces runner-generated developer context with a fixed path-free policy. The
+firewall rejects schema drift, encoded or ambiguous transport, redirects, and
+oversized responses before releasing provider bytes. Codex's carrier-free HTTP
+fallback is accepted only after exact dynamic schemas are attested on the same
+ephemeral thread. Host paths and bearer material stay out of model input. See
+[Runner conformance](runner-conformance.md) for the adapter matrix.
+
+Codex Master calls native dynamic Proxima functions; the compatibility harness
+uses structured `<proxima-tool>{name,arguments}</proxima-tool>` calls.
+`master_runtime.py` parses compatibility envelopes safely, and `MasterToolBroker`
+validates every argument against a closed JSON schema before invoking a
+server-owned handler in the API process. Supported reads are `list_containers`,
+`get_container`, `get_live_state`, `list_tasks`, `list_task_agents`, and
+`list_recipes`. Supported mutations are `delegate_tasks`, `start_tasks`, and
+`create_attention`.
+`query_context` has a stable typed `feature_unavailable` result until the later
+graph/context slice. No tool accepts or returns filesystem paths, credentials,
+runner homes, configuration, or arbitrary tool input.
+
+`delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
+or start jobs directly. A Master batch may name client-local Task keys and
+dependency keys; all Tasks and dependency edges commit atomically, cycles fail
+without partial rows, and repeated envelopes return the same Tasks. Per-turn
+`master_tool_calls` records bind an envelope hash to its root turn, so duplicates
+and crash retries stay idempotent. Requests, individual results, result rounds,
+calls per round, tool rounds, and total turn output are capped. Malformed, unknown,
+disallowed, oversized, and duplicate calls become stable visible chat errors, never
+partially truncated hidden actions.
+
+Every success or failure is written to the thread and supplied to a bounded Master
+continuation, so a product read can inform the next in-process call without an HTTP
+control loop. Fresh restricted Codex threads receive a bounded transcript rebuilt
+from durable Master messages, preserving history across restarts and runner
+switches. The global worker default is
 three slots and its claim query separately refuses a fourth running Master child; extra
 runs remain queued and capacity counts each queued worker run, including parallel graph
 branches. Existing job capabilities are
 unchanged, including commit/push/PR through the owner's BYO `git`/`gh` environment.
 
-**Three permission layers:** P1 is the in-process Master product-tool allowlist. P2 is
-the worker job's Autonomous policy (plan review gates still exist). P3 is scoped ACP
-auto-approval: the worker auto-selects an allow option only when the run's session is
-`mode='master'` or its job has `origin_master_session_id`; ordinary Chat continues to honor the
-install's separate Settings toggle. Auto approvals remain visible as
-`approval.auto` events. A non-Master job permission request becomes a durable
+**Permission separation:** a Master turn never auto-approves runner-native
+permissions. A Master-created Task-agent keeps its own guarded or autonomous
+execution policy, and repo landing review remains independent of that choice.
+Autonomous Tasks may use the existing scoped approval path; guarded Tasks do not.
+Ordinary Chat continues to honor the install's separate Settings toggle. A
+non-Master job permission request becomes a durable
 `permission_job` Attention item and closes when its choice reaches the live ACP
 process, preventing the old hidden-session 300-second dead end.
 
@@ -344,9 +372,10 @@ Master jobs; it never dispatches work while off and never participates in stuck-
 recovery. Saved turn (1-200) and wall-clock (5 minutes-24 hours) budgets apply on the
 next tick. The optional token value is stored/readable, but current ACP runner events
 do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion turns the
-mode off cleanly and creates an `master_budget` Attention row. Unattended jobs retain
-scoped ACP auto-approval and normal BYO push/PR capability; destructive product admin
-is not in its handler set. Satpam remains the sole steer/restart authority.
+mode off cleanly and creates an `master_budget` Attention row. Unattended runs only
+start already-queued Master Tasks, each following its own Guarded or Autonomous
+execution policy for ACP approval, plus normal BYO push/PR capability; destructive
+product admin is not in its handler set. Satpam remains the sole steer/restart authority.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
 with five chapters when Master is enabled and four when it is disabled. Completion
@@ -586,8 +615,9 @@ exactly as before.
 **Tool approvals during job/plan runs:** a non-Master job's hidden-session ACP
 permission request is materialized as a global `permission_job` Attention row with
 safe inline allow/deny actions and a Task deep-link; delivering either choice closes
-the row. Master-spawned jobs take the separate scoped P3 path and auto-approve ACP tool
-prompts, while diff/plan review gates remain owner-controlled product decisions.
+the row. A Master-created Task follows its stored execution policy: Autonomous may
+auto-approve ACP tool prompts, Guarded may not, and diff/plan review gates remain
+owner-controlled product decisions.
 
 **Review surface (slice 4):** the captain-facing half, following T4's ratified detail
 language - the diff opens in an **expanding row** (a plan row's expanded body on the
@@ -1193,7 +1223,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 + **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Master** is the delegation/monitoring peer to Chat: one hidden system identity, in-process product tools, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle.
++ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated path-free product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.

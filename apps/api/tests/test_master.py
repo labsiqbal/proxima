@@ -31,7 +31,9 @@ def _client(tmp_path: Path):
     return app, client
 
 
-def test_master_desk_creates_hidden_system_identity(tmp_path: Path):
+def test_master_desk_creates_hidden_system_identity(
+    tmp_path: Path, monkeypatch
+):
     app, client = _client(tmp_path)
 
     desk = client.get("/api/master/desk")
@@ -49,23 +51,19 @@ def test_master_desk_creates_hidden_system_identity(tmp_path: Path):
     origin_master_session_id = desk.json()["session"]["id"]
     assert client.patch(f"/api/sessions/{origin_master_session_id}", json={"title": "Imposter"}).status_code == 409
     assert client.delete(f"/api/sessions/{origin_master_session_id}").status_code == 409
-    master_run = client.post("/api/master/messages", json={"content": "List current work"}).json()
-    assert app.state.worker._auto_approve_on(master_run["run_id"]) is True
-    run_row = dict(app.state.db.execute("SELECT * FROM runs WHERE id=?", (master_run["run_id"],)).fetchone())
-    results = handle_master_response(
-        app,
-        app.state.db,
-        run_row,
-        '<proxima-tool>{"name":"list_projects","arguments":{}}</proxima-tool>',
+    master_run = client.post(
+        "/api/master/messages", json={"content": "List current work"}
     )
-    assert results[0]["ok"] is True
-    continuation = app.state.db.execute(
-        "SELECT kind, prompt FROM runs WHERE session_id=? ORDER BY id DESC LIMIT 1",
-        (origin_master_session_id,),
-    ).fetchone()
-    assert continuation["kind"] == "master_tool_1"
-    assert "master-project" in continuation["prompt"]
+    assert master_run.status_code == 409
+    assert (
+        master_run.json()["detail"]["code"]
+        == "master_runner_not_conforming"
+    )
     assert client.put("/api/settings/master", json={"runner_id": "not-a-runner"}).status_code == 422
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda runner_id: (runner_id == "codex", ""),
+    )
     switched = client.put("/api/settings/master", json={"runner_id": "codex"})
     assert switched.status_code == 200
     assert switched.json()["runner_id"] == "codex"
@@ -181,10 +179,20 @@ def test_master_batch_dispatch_uses_durable_idempotent_dependency_dag(
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
 
 
-def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Path):
+def test_duplicate_dispatch_envelopes_reject_the_round_before_mutation(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
+    container_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (project["slug"],)
+    ).fetchone()["id"]
+    area_id = app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    ).fetchone()["id"]
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
     run = dict(
         app.state.db.execute(
             "INSERT INTO runs(session_id, user_id, profile_id, runner_id, kind, "
@@ -200,14 +208,16 @@ def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Pat
     )
     envelope = json.dumps(
         {
-            "name": "dispatch_jobs",
+            "name": "delegate_tasks",
             "arguments": {
                 "start": False,
                 "tasks": [
                     {
                         "title": "One durable Task",
                         "brief": "Create only one",
-                        "project_slug": project["slug"],
+                        "container_id": container_id,
+                        "area_id": area_id,
+                        "profile_id": profile_id,
                     }
                 ],
             },
@@ -222,12 +232,11 @@ def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Pat
         f"<proxima-tool>{envelope}</proxima-tool>",
     )
 
-    assert [call["ok"] for call in calls] == [True, True]
-    assert calls[0]["result"]["jobs"] == calls[1]["result"]["jobs"]
+    assert calls[0]["error"]["code"] == "duplicate_tool_call"
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM jobs WHERE origin_master_session_id = ?",
         (desk["session"]["id"],),
-    ).fetchone()[0] == 1
+    ).fetchone()[0] == 0
 
 
 def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):

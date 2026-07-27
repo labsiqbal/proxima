@@ -31,6 +31,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [workflow-graph.md](workflow-graph.md) | How the default workflow graph engine plans, executes, reviews, and corrects DAGs | by hand |
 | [task-delegation.md](task-delegation.md) | Durable scoped Task creation, replay, dependencies, recovery, and caller extension contract | by hand |
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
+| [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |

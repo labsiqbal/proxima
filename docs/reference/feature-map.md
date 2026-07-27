@@ -93,7 +93,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Feature | Status | Backend | Frontend | Tables | Relates to |
 | --- | --- | --- | --- | --- | --- |
 | Workflows & Jobs | active | `routes/work.py`, `routes/graph.py`, `workflows.py`, `graph.py`, `graph_executor.py`, `graph_advancers.py`, `run_advancers.py` | `WorkflowsScreen.tsx`, `ActivityScreen.tsx`, `GraphScreen.tsx`, `graphLayout.ts` | `workflows`, `jobs`, `node_states`, `sessions`, `runs` | scheduler, run lifecycle |
-| Master desk + in-process tools | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_runtime.py`, `routes/master.py`, `worker.py` (scope + max 3), `master_supervisor.py` | `MasterScreen.tsx`, `api/master.ts`, Sidebar | `jobs.origin_master_session_id`, `app_settings`, `audit_log` | restricted runner/tool broker follows; jobs/plans, existing runners, BYO git/gh |
+| Master desk + restricted product tools | gated (`PROXIMA_FEATURE_MASTER_ORCHESTRATOR`, off by default) | `master_runtime.py`, `master_tool_broker.py`, `codex_master_proxy.py`, `codex_appserver.py`, `routes/master.py`, `worker.py` | `MasterScreen.tsx`, `api/master.ts`, Sidebar | `master_tool_calls`, `jobs.origin_master_session_id`, `app_settings`, `audit_log` | Codex 0.145+ chat-only adapter; other runners fail closed; Task execution and landing policies remain separate |
 | Job-scoped checkpoints | active | `job_checkpoints.py`, `routes/master.py`, `routes/work.py` | `MasterScreen.tsx` checkpoint timeline | `job_checkpoints` | Master jobs, git/worktrees; no DB/FS archive |
 | Global Attention inbox | active | `routes/master.py`, `worker.py` (permission materialization/close) | `AttentionInbox.tsx`, `AppShell.tsx` | `attention_items` + projected job/satpam rows | Tasks, Master, satpam, ACP permissions |
 | Master core/full tours | active | `routes/master.py` settings state | `CoreTour.tsx`, `SettingsScreen.tsx` Help chapters | `app_settings` | feature-aware shell education |
@@ -112,7 +112,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Design Studio / Image gen / Moodboard | gated `PROXIMA_FEATURE_DESIGN_STUDIO` (on in dev, opt-in when installed) | `routes/design.py`, `moodboard.py`, `image_providers.py`, `design_scenes.py`, `higgsfield.py` | `DesignStudio.tsx`, `components/design/*` | `app_settings` (+FS: `artifacts/design`, `artifacts/moodboard`) | features gate, artifacts, wiki/run preamble |
 | Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image providers |
 | Settings Store | active | `app_settings.py`, `routes/files.py`, `settings.py` | `SettingsScreen.tsx` | `app_settings` | collab, permission, providers |
-| Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `AttentionInbox`, `SettingsScreen` | `app_settings`, `events`, `attention_items` | ordinary ask; scoped Master/child auto-approve |
+| Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `AttentionInbox`, `SettingsScreen` | `app_settings`, `events`, `attention_items` | ordinary ask; Master denies every native request; Task agents retain guarded/autonomous policy |
 | Self-update | active (`update_check`) | `routes/update.py`, `updates.py`, `main.py` loop | `UpdateModal.tsx`, `useUpdateStatus` | — (marker file) | app version, health |
 | Readiness Health Dashboard | active | `auth_health.py`, `routes/chat.py` (dashboard) | `HomeScreen.tsx` (Connections) | `profiles`, `app_settings` | providers, runners |
 | Command palette / Search | active | `routes/chat.py` (search) | `SearchModal.tsx`, `api/search.ts` | `sessions`, `messages`, `projects` | visible Code sessions, projects |
@@ -149,7 +149,8 @@ The dashboard payload still returns more than Home renders (counts, recents,
 
 - Tool-permission requests raised by a non-Master job's hidden session surface in
   the global Attention inbox with Task deep-links and safe inline choices. Master
-  sessions and Master children instead use scoped ACP auto-approval; product review
+  sessions deny every runner-native request, while Master-created Task agents use
+  their own guarded or autonomous execution policy; product review
   gates remain separate.
 - Tasks list auto-refreshes while any job is `queued`/`running`; the task
   workspace polls while running.

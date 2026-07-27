@@ -28,20 +28,84 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 from collections import deque
 from contextlib import suppress
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
+from .codex_master_proxy import CodexMasterModelProxy
+from .master_tool_broker import TOOL_SCHEMAS, master_dynamic_tools
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.codex")
 
 READ_LIMIT = 16 * 1024 * 1024
 
+MASTER_APP_SERVER_CONFIG = (
+    "approval_policy=\"never\"",
+    "sandbox_mode=\"read-only\"",
+    "web_search=\"disabled\"",
+    "features.shell_tool=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.hooks=false",
+    "features.goals=false",
+    "features.browser_use=false",
+    "features.browser_use_external=false",
+    "features.browser_use_full_cdp_access=false",
+    "features.in_app_browser=false",
+    "features.image_generation=false",
+    "features.code_mode=false",
+    "features.code_mode_host=false",
+    "features.enable_mcp_apps=false",
+    "features.request_permissions_tool=false",
+    "features.skill_search=false",
+    "features.skill_mcp_dependency_install=false",
+    "features.enable_request_compression=false",
+    "features.remote_plugin=false",
+    "features.shell_snapshot=false",
+    "features.deferred_executor=false",
+    "features.token_budget=false",
+    "features.current_time_reminder=false",
+    "skills.bundled.enabled=false",
+    "tools.experimental_request_user_input.enabled=false",
+    "orchestrator.skills.enabled=false",
+    "orchestrator.mcp.enabled=false",
+    "apps._default.enabled=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+    "include_environment_context=false",
+    "project_doc_max_bytes=0",
+    "check_for_update_on_startup=false",
+)
+
+MASTER_CODEX_BASE_INSTRUCTIONS = """You are Master, Proxima's chat-only orchestrator.
+You may chat and call only the Proxima product functions provided in this turn.
+You have no shell, filesystem, browser, skill, MCP, plugin, permission, or
+runner-native tool authority. Delegate all work through Proxima product tools.
+"""
+
 # app-server item types that map onto an ACP-style tool call for the activity feed.
 _TOOL_ITEM_TYPES = {"commandExecution", "fileChange", "mcpToolCall", "webSearch"}
+_MASTER_NON_NATIVE_ITEM_TYPES = {
+    "agentMessage",
+    "dynamicToolCall",
+    "reasoning",
+    "userMessage",
+}
+_MASTER_HOST_PATH = re.compile(
+    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
+    r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
+)
+_MASTER_SECRET_TEXT = re.compile(
+    r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
+    r"""\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,})"""
+)
 
 # Backend rejection emitted when the *driving* Codex is older than the model
 # requires. With the Zed adapter this wrongly blamed the owner's CLI; here we
@@ -52,16 +116,27 @@ _VERSION_GATE_MARKERS = ("requires a newer version of Codex", "upgrade to the la
 class CodexAppServerProcess:
     """One persistent `codex app-server` per (home, cwd), hosting many threads."""
 
-    def __init__(self, spec, home: str, cwd: str):
+    def __init__(
+        self,
+        spec,
+        home: str,
+        cwd: str,
+        *,
+        master_chat_only: bool = False,
+    ):
         self.spec = spec
         self.home = home
         self.hermes_home = home  # alias kept for parity with AcpProcess
         self.cwd = cwd
+        self.master_chat_only = master_chat_only
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._handlers: dict[str, UpdateHandler] = {}          # threadId -> update handler
         self._permission_handlers: dict[str, Any] = {}         # threadId -> on_permission
+        self._dynamic_tool_handlers: dict[
+            str, Callable[[str, Any], dict[str, Any]]
+        ] = {}
         self._perm_futures: dict[str, asyncio.Future] = {}     # request_id -> user choice
         self._perm_methods: dict[str, str] = {}                # request_id -> server method
         self._turn_done: dict[str, asyncio.Future] = {}        # threadId -> (status, error)
@@ -73,43 +148,155 @@ class CodexAppServerProcess:
         self._image_capable = False  # app-server input is text-only in this driver
         self.config_sig: tuple = ()
         self._codex_path = ""
+        self._master_proxy: CodexMasterModelProxy | None = None
+        self._master_protected_values: tuple[str, ...] = ()
+        self._master_contract_threads: set[str] = set()
 
     # ---- diagnostics -----------------------------------------------------
     def recent_stderr(self, lines: int = 15, max_chars: int = 1500) -> str:
         tail = [ln for ln in self._stderr_lines if ln.strip()][-lines:]
-        return "\n".join(tail)[-max_chars:]
+        return self._redact_master_text("\n".join(tail)[-max_chars:])
+
+    def _redact_master_text(self, text: str) -> str:
+        if not self.master_chat_only:
+            return text
+        redacted = text
+        for value in sorted(
+            self._master_protected_values,
+            key=len,
+            reverse=True,
+        ):
+            redacted = redacted.replace(value, "[protected]")
+        redacted = _MASTER_HOST_PATH.sub(
+            lambda match: (
+                match.group(0)[:1] + "[protected-path]"
+                if match.group(0)[:1].isspace()
+                else "[protected-path]"
+            ),
+            redacted,
+        )
+        return _MASTER_SECRET_TEXT.sub("[protected]", redacted)
 
     # ---- lifecycle -------------------------------------------------------
     async def start(self) -> None:
         if self._started:
             return
-        env = subprocess_env(
-            provider_auth=True,
-            allowlist_env="PROXIMA_RUNNER_ENV_ALLOWLIST",
-            inherit_env="PROXIMA_RUNNER_INHERIT_ENV",
+        env = (
+            subprocess_env(provider_auth=True)
+            if self.master_chat_only
+            else subprocess_env(
+                provider_auth=True,
+                allowlist_env="PROXIMA_RUNNER_ENV_ALLOWLIST",
+                inherit_env="PROXIMA_RUNNER_INHERIT_ENV",
+            )
         )
+        if self.master_chat_only:
+            original_paths = tuple(
+                env.get(name, "")
+                for name in (
+                    "HOME",
+                    "TEMP",
+                    "TMP",
+                    "TMPDIR",
+                    "XDG_CACHE_HOME",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_RUNTIME_DIR",
+                )
+            )
+            provider_names = (
+                "ANTHROPIC_API_KEY",
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "OPENAI_API_KEY",
+                "OPENROUTER_API_KEY",
+                "XAI_API_KEY",
+            )
+            provider_values = tuple(env.get(name, "") for name in provider_names)
+            restricted_home = Path(self.home).resolve()
+            restricted_tmp = restricted_home / "tmp"
+            restricted_tmp.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for name, relative in (
+                ("XDG_CACHE_HOME", "cache"),
+                ("XDG_CONFIG_HOME", "config"),
+                ("XDG_DATA_HOME", "data"),
+                ("XDG_RUNTIME_DIR", "runtime"),
+            ):
+                target = restricted_home / relative
+                target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                env[name] = str(target)
+            env["HOME"] = str(restricted_home)
+            for name in ("TEMP", "TMP", "TMPDIR"):
+                env[name] = str(restricted_tmp)
+            for name in provider_names:
+                if name != "OPENAI_API_KEY":
+                    env.pop(name, None)
+            for name in ("LOGNAME", "USER", "USERPROFILE"):
+                env.pop(name, None)
+            protected_paths = {
+                self.home,
+                self.cwd,
+                str(Path(self.home).resolve().parent),
+                str(Path(self.cwd).resolve().parent),
+                str(Path(self.cwd).resolve().parent.parent),
+                *original_paths,
+            }
+            self._master_protected_values = tuple(
+                value
+                for value in (*protected_paths, *provider_values)
+                if value and value != "/"
+            )
         if self.home and self.spec.home_env:
             env[self.spec.home_env] = self.home
             os.makedirs(self.home, exist_ok=True)
         os.makedirs(self.cwd, exist_ok=True)
         argv = list(self.spec.spawn_argv)
+        if self.master_chat_only:
+            self._master_proxy = CodexMasterModelProxy(
+                protected_values=self._master_protected_values
+            )
+            proxy_url = await self._master_proxy.start()
+            argv.append("--strict-config")
+            for setting in MASTER_APP_SERVER_CONFIG:
+                argv.extend(("-c", setting))
+            # Keep Codex's built-in provider so app-server preserves its
+            # authenticated Responses Lite and dynamic-tool capabilities. The
+            # base URL points only at our private request firewall.
+            argv.extend(
+                ("-c", f"openai_base_url={json.dumps(proxy_url)}")
+            )
         resolved = shutil.which(argv[0], path=env["PATH"])
         if resolved:
             self._codex_path = resolved
             argv[0] = resolved
-        self.proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=env, cwd=self.cwd, limit=READ_LIMIT,
-        )
-        self._reader = asyncio.create_task(self._read_loop())
-        self._stderr_reader = asyncio.create_task(self._read_stderr())
         try:
+            self.proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=self.cwd,
+                limit=READ_LIMIT,
+            )
+            self._reader = asyncio.create_task(self._read_loop())
+            self._stderr_reader = asyncio.create_task(self._read_stderr())
             # app-server handshake: initialize, then the required `initialized`
             # notification, before any thread/turn call.
             await asyncio.wait_for(
-                self._request("initialize", {"clientInfo": {
-                    "name": "proxima", "title": "Proxima", "version": "0.1.0"}}),
+                self._request(
+                    "initialize",
+                    {
+                        "clientInfo": {
+                            "name": "proxima",
+                            "title": "Proxima",
+                            "version": "0.1.0",
+                        },
+                        "capabilities": {
+                            "experimentalApi": self.master_chat_only,
+                        },
+                    },
+                ),
                 timeout=60,
             )
             self._notify("initialized", {})
@@ -218,14 +405,30 @@ class CodexAppServerProcess:
                 self._emit(tid, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": delta}})
         elif method == "item/started":
             item = params.get("item") or {}
-            if item.get("type") in _TOOL_ITEM_TYPES:
+            item_type = item.get("type")
+            if item_type in _TOOL_ITEM_TYPES or (
+                self.master_chat_only
+                and item_type not in _MASTER_NON_NATIVE_ITEM_TYPES
+            ):
                 self._emit(tid, {"sessionUpdate": "tool_call",
                                  "toolCallId": item.get("id"),
-                                 "title": _tool_title(item), "kind": item.get("type")})
+                                 "title": _tool_title(item), "kind": item_type})
         elif method == "item/completed":
             item = params.get("item") or {}
-            if item.get("type") in _TOOL_ITEM_TYPES:
+            item_type = item.get("type")
+            if item_type in _TOOL_ITEM_TYPES or (
+                self.master_chat_only
+                and item_type not in _MASTER_NON_NATIVE_ITEM_TYPES
+            ):
                 status = "failed" if item.get("error") else "completed"
+                if (
+                    self.master_chat_only
+                    and item_type not in _TOOL_ITEM_TYPES
+                    and item_type not in _MASTER_NON_NATIVE_ITEM_TYPES
+                ):
+                    self._emit(tid, {"sessionUpdate": "tool_call",
+                                     "toolCallId": item.get("id"),
+                                     "title": _tool_title(item), "kind": item_type})
                 self._emit(tid, {"sessionUpdate": "tool_call_update",
                                  "toolCallId": item.get("id"), "status": status})
         elif method == "turn/completed":
@@ -239,12 +442,21 @@ class CodexAppServerProcess:
         method = msg.get("method") or ""
         params = msg.get("params") or {}
         tid = params.get("threadId")
+        if method == "item/tool/call":
+            handler = self._dynamic_tool_handlers.get(tid or "")
+            asyncio.create_task(
+                self._handle_dynamic_tool(msg, handler)
+            )
+            return
         handler = self._permission_handlers.get(tid or "")
         decisions = _approval_decisions(method)
         if handler and decisions:
             asyncio.create_task(self._handle_permission(msg, handler, decisions))
             return
         if decisions:
+            if self.master_chat_only:
+                self._reply(msg["id"], {"decision": decisions["reject"]})
+                return
             # No interactive handler registered: approve once (matches the
             # non-interactive fallback the ACP path uses for permission prompts).
             self._reply(msg["id"], {"decision": decisions["allow_once"]})
@@ -252,6 +464,62 @@ class CodexAppServerProcess:
         # Anything else (user-input, elicitation, granular permission profiles):
         # decline politely so the turn continues rather than wedging.
         self._reply(msg["id"], None, error={"code": -32601, "message": "unsupported"})
+
+    async def _handle_dynamic_tool(
+        self,
+        msg: dict[str, Any],
+        handler: Callable[[str, Any], dict[str, Any]] | None,
+    ) -> None:
+        params = msg.get("params") or {}
+        if handler is None:
+            self._reply(
+                msg["id"],
+                {
+                    "success": False,
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": (
+                                '{"ok":false,"tool":null,"error":'
+                                '{"code":"tool_not_allowed",'
+                                '"message":"Master tool is not registered"}}'
+                            ),
+                        }
+                    ],
+                },
+            )
+            return
+        try:
+            result = handler(
+                str(params.get("tool") or ""),
+                params.get("arguments"),
+            )
+        except Exception:
+            logger.exception("Codex dynamic Master tool failed")
+            result = {
+                "ok": False,
+                "tool": str(params.get("tool") or "") or None,
+                "error": {
+                    "code": "tool_failed",
+                    "message": "Master tool failed inside Proxima",
+                },
+            }
+        self._reply(
+            msg["id"],
+            {
+                "success": True,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                ],
+            },
+        )
 
     async def _handle_permission(self, msg: dict[str, Any], handler, decisions: dict[str, str]) -> None:
         rid = str(msg.get("id"))
@@ -283,6 +551,26 @@ class CodexAppServerProcess:
             return True
         return False
 
+    def deny_permission(
+        self, request_id: str, options: list[dict[str, Any]]
+    ) -> bool:
+        reject = next(
+            (
+                option
+                for option in options
+                if str(option.get("kind") or "").startswith(
+                    ("reject", "deny", "cancel")
+                )
+            ),
+            None,
+        )
+        return bool(
+            reject
+            and self.resolve_permission(
+                request_id, str(reject["optionId"])
+            )
+        )
+
     def _reply(self, mid: Any, result: dict[str, Any] | None, error: dict[str, Any] | None = None) -> None:
         try:
             payload = {"id": mid}
@@ -299,6 +587,53 @@ class CodexAppServerProcess:
         res = await self._request("thread/start", {"cwd": cwd})
         return (res.get("thread") or {}).get("id") or res.get("threadId")
 
+    async def new_master_session(
+        self,
+        cwd: str,
+        dynamic_tools: list[dict[str, Any]],
+    ) -> str:
+        if not self.master_chat_only:
+            raise AcpError("Codex process is not configured for chat-only Master")
+        if self._master_proxy is None:
+            raise AcpError("Codex Master request firewall is not running")
+        names = {
+            str(tool.get("name") or "")
+            for tool in dynamic_tools
+            if isinstance(tool, dict)
+        }
+        if len(names) != len(dynamic_tools):
+            raise AcpError("Codex Master product tool list is invalid")
+        if dynamic_tools != master_dynamic_tools():
+            raise AcpError(
+                "Codex Master product tool schemas do not match the broker"
+            )
+        self._master_proxy.set_product_tools(
+            dynamic_tools,
+            required_names=set(TOOL_SCHEMAS),
+        )
+        res = await self._request(
+            "thread/start",
+            {
+                "cwd": cwd,
+                "baseInstructions": MASTER_CODEX_BASE_INSTRUCTIONS,
+                "developerInstructions": (
+                    "Call only the supplied Proxima product functions."
+                ),
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "environments": [],
+                "runtimeWorkspaceRoots": [],
+                "selectedCapabilityRoots": [],
+                "dynamicTools": dynamic_tools,
+                "ephemeral": True,
+            },
+        )
+        thread_id = (res.get("thread") or {}).get("id") or res.get("threadId")
+        if not thread_id:
+            raise AcpError("Codex Master thread attestation did not return an id")
+        self._master_contract_threads.add(str(thread_id))
+        return str(thread_id)
+
     async def load_session(self, session_id: str, cwd: str) -> None:
         # Raise on failure so the caller treats it as stale and starts fresh,
         # exactly like the ACP path's load_session contract.
@@ -306,10 +641,19 @@ class CodexAppServerProcess:
 
     async def prompt(self, session_id: str, text: str, on_update: UpdateHandler,
                      on_permission=None, timeout: float = 600,
-                     images: list[tuple[bytes, str]] | None = None) -> str:
+                     images: list[tuple[bytes, str]] | None = None,
+                     on_dynamic_tool: Callable[
+                         [str, Any], dict[str, Any]
+                     ] | None = None) -> str:
+        if self.master_chat_only and session_id not in self._master_contract_threads:
+            raise AcpError(
+                "Codex Master runtime contract was not attested before the turn"
+            )
         self._handlers[session_id] = on_update
         if on_permission:
             self._permission_handlers[session_id] = on_permission
+        if on_dynamic_tool:
+            self._dynamic_tool_handlers[session_id] = on_dynamic_tool
         done: asyncio.Future = asyncio.get_event_loop().create_future()
         self._turn_done[session_id] = done
         try:
@@ -332,6 +676,8 @@ class CodexAppServerProcess:
             self._active_turn.pop(session_id, None)
             if self._permission_handlers.get(session_id) is on_permission:
                 self._permission_handlers.pop(session_id, None)
+            if self._dynamic_tool_handlers.get(session_id) is on_dynamic_tool:
+                self._dynamic_tool_handlers.pop(session_id, None)
 
     def _explain_turn_error(self, error: Any) -> str:
         """Turn `turn.error` into a surfaced message. De-mislead the model
@@ -349,11 +695,17 @@ class CodexAppServerProcess:
             message = str(error)
         if any(m in message for m in _VERSION_GATE_MARKERS):
             self._stderr_lines.append(message)
-            where = self._codex_path or "codex"
-            return (f"{message}\n\nProxima runs your system Codex CLI directly "
-                    f"({where}). This means that Codex is behind the model's "
-                    f"required version - update it (`codex update`) and retry.")
-        return message
+            where = (
+                "the verified Codex binary"
+                if self.master_chat_only
+                else self._codex_path or "codex"
+            )
+            return self._redact_master_text(
+                f"{message}\n\nProxima runs your system Codex CLI directly "
+                f"({where}). This means that Codex is behind the model's "
+                "required version - update it (`codex update`) and retry."
+            )
+        return self._redact_master_text(message)
 
     def cancel(self, session_id: str) -> None:
         turn_id = self._active_turn.get(session_id)
@@ -378,6 +730,7 @@ class CodexAppServerProcess:
         self._permission_handlers.clear()
         self._handlers.clear()
         self._active_turn.clear()
+        self._master_contract_threads.clear()
         for task in (self._reader, self._stderr_reader):
             if task:
                 task.cancel()
@@ -394,6 +747,9 @@ class CodexAppServerProcess:
             if task:
                 with suppress(asyncio.CancelledError):
                     await task
+        if self._master_proxy is not None:
+            await self._master_proxy.stop()
+            self._master_proxy = None
         self._started = False
 
 

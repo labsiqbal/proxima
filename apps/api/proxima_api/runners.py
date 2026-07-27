@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .runner_specs import RUNNER_SPECS, runner_binary_names, selectable_runner_specs
+from .runner_specs import (
+    RUNNER_SPECS,
+    runner_binary_names,
+    selectable_runner_specs,
+)
 
 
 # Keep child processes usable without handing them every secret carried by the

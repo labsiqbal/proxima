@@ -51,7 +51,8 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
-│  Master tools   in-process allowlist; dispatches jobs, never curls localhost     │
+│  MasterToolBroker  typed, schema-validated, bounded path-free product tools      │
+│  Master runtime chat-only conformance, read-only scratch, deny native tools      │
 │  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
@@ -71,7 +72,9 @@ Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
 supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
-identity + in-process tool allowlist), `master_supervisor.py` (budgeted unattended
+identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
+schema-validated, path-free product tools), `codex_master_proxy.py` (Codex loopback
+provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `job_checkpoints.py`, `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
@@ -300,8 +303,10 @@ converts that durable identity in place to Master: `profiles.system_kind='alpha'
 becomes `master`, `sessions.mode='alpha'` becomes `master`, and
 `jobs.alpha_session_id` becomes `jobs.origin_master_session_id` without changing
 primary keys or ownership links. The profile kind hides the
-system identity from worker pickers; `jobs.origin_master_session_id` scopes desk ownership,
-three-slot claiming, and ACP auto-approval; `job_checkpoints` stores job-row/node/run
+system identity from worker pickers; `jobs.origin_master_session_id` scopes desk ownership
+and three-slot claiming, while each Task's execution policy controls ACP approval;
+`master_tool_calls` is the durable per-turn product-envelope replay ledger;
+`job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
 and cascades with the session; `attention_items` stores durable Master, budget, and
@@ -355,34 +360,58 @@ ArtifactViewer render -> point notes / general note -> Add feedback to chat
 
 ### 1a. Master delegation and unattended queue
 
-Durable identity provisioning and migration always run. The runtime, supervisor,
+Durable persistence migration always runs. Identity provisioning, the runtime, supervisor,
 routes, navigation, and settings surface require
-`feature_master_orchestrator`, which defaults off until the restricted Master
-runtime lands and integrated acceptance passes. With the flag off, queued Master
-turns, committed delegation start intents, and Master-owned Task runs remain queued
-without mutation.
+`feature_master_orchestrator`, which defaults off. With the flag off, startup and
+unrelated authenticated routes do not provision a Master runner home, queued Master
+turns and Master-owned Task runs remain queued, and Master operational failures
+cannot break unrelated routes. Migration ambiguity still fails closed.
 
 ```text
 Master nav -> GET /api/master/desk -> ensure hidden Master profile + mode='master' session
-owner message -> queued Master ACP run (scoped ACP auto-approve)
-      -> assistant emits <proxima-tool>{name,arguments}</proxima-tool>
-      -> master_runtime validates + executes the allowlisted handler in process
-      -> trusted result card + queued Master continuation (bounded to 6 tool rounds)
-      -> dispatch_jobs calls TaskDelegationService
+      -> reject selected runner unless its spec proves master_chat_only
+owner message -> queued Master chat-only run
+      -> dedicated managed home + empty read-only non-source scratch
+      -> strictly reapply {"skills":[],"mcp":[]}; deny permissions/native tools
+      -> Codex firewall replaces all tools and developer context with server-owned policy
+      -> assistant calls a native dynamic Proxima product function
+      -> schema validation + per-turn call ledger
+      -> MasterToolBroker executes a bounded path-free product handler in process
+      -> trusted bounded result returns through app-server dynamic dispatch
+      -> delegate_tasks/start_tasks call TaskDelegationService
       -> atomic jobs + delegation audits + dependency edges
       -> isolated worktree cut when needed -> job-scoped checkpoint -> runs queue
       -> RunWorker claims at most 3 Master runs; every excess worker run stays visibly queued
       -> MasterScreen polls desk/messages; global Attention deep-links owner decisions
 ```
 
-There is no agent-to-localhost control plane. Tool calls are parsed from Master's
-orchestration response and executed by server-owned handlers with structured success
-or error messages written back to the Master thread and supplied to the next bounded
-Master continuation. Mutations create `audit_log` rows; pure reads do not. Master and
-every Master-spawned run are auto-approved by a durable
-scope check (`sessions.mode='master'` or `jobs.origin_master_session_id IS NOT NULL`); the
-owner's global auto-approve setting for ordinary Chat remains unchanged, and product
-review gates remain separate.
+There is no agent-to-localhost control plane. The streaming parser rejects malformed,
+nested, oversized, duplicate, unknown, and disallowed envelopes with stable errors
+written to the Master thread. The broker's closed JSON schemas admit only bounded
+product IDs and text, and its results never include paths, runner homes, bearer
+material, or configuration. Request, result, round, call, and aggregate output caps
+fail before a truncated envelope can become a hidden action. The
+`master_tool_calls` ledger binds each envelope hash to the durable root turn; mutation
+idempotency is derived from that identity.
+
+Master itself has no auto-approval path. Every runner-native permission request is
+denied, and every native tool event fails the turn. Master-created Tasks preserve
+their own Guarded or Autonomous execution policy. Autonomous may use the existing
+scoped approval path, Guarded may not, and repo Tasks always stop at landing review.
+The owner's global auto-approve setting for ordinary Chat remains unchanged.
+
+`RunnerSpec.master_chat_only` is the centralized conformance declaration. Routes
+reject an unsupported runner before creating a message or run, and the worker checks
+again before process spawn. Codex app-server 0.145.0 or newer is the one conforming
+production adapter; all other production adapters fail closed. See
+[runner-conformance.md](../runner-conformance.md).
+
+Codex conformance has two pre-turn gates: strict version parsing and a behavioral
+app-server handshake that registers the exact server-owned dynamic schemas on an
+ephemeral thread. The private loopback firewall then accepts only its secret
+Responses route, reconstructs the attested broker carrier, and fully buffers bounded
+identity-encoded provider responses. It does not release partial oversized or
+redirected responses to the runner.
 
 Interactive Master is quiet until asked. The desk can enable unattended mode; the
 `MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock

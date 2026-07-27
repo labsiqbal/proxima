@@ -4,8 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
-from typing import Any, Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Iterable
 
 from fastapi import HTTPException
 
@@ -13,6 +16,8 @@ from . import app_settings
 from .auth import iso_now
 from .job_checkpoints import create_checkpoint
 from .master_persistence import master_identity_rows
+from .master_tool_broker import MasterToolBroker, validate_master_tool_call
+from .runner_specs import master_runner_conformance, runner_spec
 from .task_delegation import (
     DependencyRequest,
     TaskDelegationError,
@@ -22,30 +27,32 @@ from .task_delegation import (
 
 MASTER_MAX_PARALLEL = 3
 MASTER_MAX_TOOL_ROUNDS = 6
+MASTER_MAX_CALLS_PER_ROUND = 8
+MASTER_MAX_TOOL_REQUEST_BYTES = 16 * 1024
+MASTER_MAX_ROUND_RESULT_BYTES = 64 * 1024
+MASTER_MAX_TURN_OUTPUT_BYTES = 128 * 1024
 MASTER_PROFILE_KIND = "master"
-MASTER_TOOL_RE = re.compile(r"<proxima-tool>\s*(\{.*?\})\s*</proxima-tool>", re.DOTALL)
+MASTER_EMPTY_CAPABILITIES = '{"skills":[],"mcp":[]}'
 MASTER_INSTRUCTIONS = """You are Master, Proxima's built-in orchestrator. You delegate outcomes to worker agents and report progress plainly. You are not a coding worker profile.
 
-Your Proxima product tools are server-owned in-process handlers. To call one, emit exactly:
+Your Proxima product tools are server-owned in-process handlers. When the runner exposes native Proxima function tools, call those functions directly and never emit XML. A compatibility harness may instead require exactly:
 <proxima-tool>{\"name\":\"tool_name\",\"arguments\":{...}}</proxima-tool>
 You may emit several calls. Never use curl, browser requests, localhost, shell commands, or project files to control Proxima.
 
 Allowed tools:
-- list_projects {}
-- list_jobs {\"status\": optional}
-- list_worker_agents {}
-- list_plans {\"project_slug\": optional}
-- get_master_settings {}
-- capacity {}
-- dispatch_jobs {\"tasks\":[{\"title\":str,\"brief\":str,\"project_slug\":str,\"profile_id\":optional int,\"target_area_id\":optional int}],\"start\":optional bool}
-- start_jobs {\"job_ids\":[int,...]}
-- start_plan {\"workflow_id\":int,\"project_slug\":optional str,\"profile_id\":optional int,\"input\":optional object,\"start\":optional bool}
-- set_unattended {\"enabled\":bool}
-- set_budgets {\"turns\":int,\"wall_seconds\":int,\"tokens\":optional int or null}
-- create_attention {\"title\":str,\"message\":str}
+- list_containers
+- get_container
+- get_live_state
+- list_tasks
+- list_task_agents
+- list_recipes
+- query_context
+- delegate_tasks
+- start_tasks
+- create_attention
 
-Default Master worker policy is Autonomous. Dispatch independent work together; Proxima runs at most three Master workers concurrently and queues the rest. Commit, push, and PR work is allowed when requested and available through the owner's existing git/gh environment. Do not restart stuck work; satpam owns stuck-run recovery. Destructive product administration is not in your allowlist.
-When a tool fails, explain the structured error and offer a safe next step. Do not claim a job exists until dispatch_jobs returns its id.
+Use only registered Container, Area, Task-agent, Recipe, and Task IDs returned by these tools. Never request or emit filesystem paths, runner homes, credentials, bearer material, configuration, shell commands, browser actions, skills, MCP calls, or runner-native tools. Every action that changes work must be a delegated Task. Guarded and Autonomous are Task-agent execution policies; repo Tasks still stop for review before landing.
+When a tool fails, explain the structured error and offer a safe next step. Do not claim a Task exists until delegate_tasks returns its id.
 """
 
 
@@ -69,11 +76,87 @@ def _system_profile_slug(runner_id: str) -> str:
     return f"master-system-{suffix}"[:63].rstrip("-")
 
 
+def prepare_master_runtime(
+    cfg: dict[str, Any],
+    *,
+    runner_id: str,
+    managed_home: str,
+) -> str:
+    """Validate the dedicated home and create one empty read-only scratch."""
+    conforming, reason = master_runner_conformance(runner_id)
+    if not conforming:
+        raise MasterToolError(
+            "master_runner_not_conforming",
+            f"Runner cannot run Master because its {reason}",
+        )
+    if not managed_home:
+        raise MasterToolError(
+            "master_home_unavailable", "Master has no dedicated managed runner home"
+        )
+    profiles_root = Path(str(cfg["hermes_profiles_root"])).resolve()
+    home = Path(managed_home).resolve()
+    try:
+        home.relative_to(profiles_root)
+    except ValueError as exc:
+        raise MasterToolError(
+            "master_home_invalid",
+            "Master runner home is outside the managed profile root",
+        ) from exc
+    if home == profiles_root:
+        raise MasterToolError(
+            "master_home_invalid", "Master runner home is not dedicated"
+        )
+    spec = runner_spec(runner_id)
+    skills = home / "skills"
+    if skills.is_symlink():
+        skills.unlink()
+    elif skills.exists():
+        shutil.rmtree(skills)
+    skills.mkdir(mode=0o700, parents=True)
+    for relative, content in spec.master_home_templates:
+        target = home / relative
+        try:
+            target.resolve().relative_to(home)
+        except ValueError as exc:
+            raise MasterToolError(
+                "master_home_invalid",
+                "Master runner template escapes its dedicated home",
+            ) from exc
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    runtime_root = Path(str(cfg["workspace_root"])) / "master-runtime"
+    scratch = runtime_root / "scratch"
+    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if runtime_root.is_symlink() or scratch.is_symlink():
+        raise MasterToolError(
+            "master_scratch_invalid", "Master scratch cannot be a symlink"
+        )
+    scratch.mkdir(mode=0o555, exist_ok=True)
+    if any(scratch.iterdir()):
+        raise MasterToolError(
+            "master_scratch_not_empty", "Master scratch is not empty"
+        )
+    try:
+        scratch.chmod(0o555)
+    except OSError as exc:
+        raise MasterToolError(
+            "master_scratch_not_read_only",
+            "Master scratch could not be made read-only",
+        ) from exc
+    if scratch.stat().st_mode & 0o222:
+        raise MasterToolError(
+            "master_scratch_not_read_only", "Master scratch is writable"
+        )
+    return str(scratch)
+
+
 def ensure_master_identity(
     conn,
     user: dict[str, Any],
     *,
     create_profile_for: Callable[..., dict[str, Any]],
+    managed_profiles_root: str | Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     profile, session = master_identity_rows(conn, int(user["id"]))
     selected_runner = app_settings.get_setting(conn, "master.runner_id")
@@ -91,7 +174,17 @@ def ensure_master_identity(
         selected_runner = default["runner_id"] if default else None
     if not selected_runner:
         raise MasterToolError("runner_unavailable", "Set up a runnable agent before opening Master")
-    if profile and profile["runner_id"] != selected_runner:
+    needs_managed_home = False
+    if profile and managed_profiles_root is not None:
+        try:
+            Path(str(profile["hermes_home"])).resolve().relative_to(
+                Path(managed_profiles_root).resolve()
+            )
+        except ValueError:
+            needs_managed_home = True
+    if profile and (
+        profile["runner_id"] != selected_runner or needs_managed_home
+    ):
         # Keep one durable Master identity. Stage the selected runner once so the
         # existing profile receives the correct managed home/credentials, then
         # remove the temporary row without exposing either in Agents.
@@ -103,13 +196,14 @@ def ensure_master_identity(
         staged = create_profile_for(
             user, staged_slug, "Master runner switch", runner_id=str(selected_runner),
             instructions=MASTER_INSTRUCTIONS,
+            force_managed_home=True,
         )
         conn.execute(
             "UPDATE profiles SET runner_id = ?, hermes_home = ?, default_model = ?, "
             "capabilities = ?, instructions = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (
                 staged["runner_id"], staged["hermes_home"], staged["default_model"],
-                staged["capabilities"], MASTER_INSTRUCTIONS, profile["id"],
+                MASTER_EMPTY_CAPABILITIES, MASTER_INSTRUCTIONS, profile["id"],
             ),
         )
         conn.execute("DELETE FROM profiles WHERE id = ?", (staged["id"],))
@@ -122,13 +216,22 @@ def ensure_master_identity(
             slug = f"master-system-{user['id']}"
         created = create_profile_for(
             user, slug, "Master", runner_id=str(selected_runner), instructions=MASTER_INSTRUCTIONS,
+            force_managed_home=True,
         )
         conn.execute(
-            "UPDATE profiles SET system_kind = ?, is_default = 0 WHERE id = ?",
-            (MASTER_PROFILE_KIND, created["id"]),
+            "UPDATE profiles SET system_kind = ?, is_default = 0, capabilities = ? "
+            "WHERE id = ?",
+            (MASTER_PROFILE_KIND, MASTER_EMPTY_CAPABILITIES, created["id"]),
         )
         profile = conn.execute("SELECT * FROM profiles WHERE id = ?", (created["id"],)).fetchone()
     profile_dict = dict(profile)
+    if profile_dict.get("capabilities") != MASTER_EMPTY_CAPABILITIES:
+        conn.execute(
+            "UPDATE profiles SET capabilities = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (MASTER_EMPTY_CAPABILITIES, profile_dict["id"]),
+        )
+        profile_dict["capabilities"] = MASTER_EMPTY_CAPABILITIES
     # Keep the orchestration contract current across upgrades without exposing a
     # fake editable Master coding persona in the Agents screen.
     if profile_dict.get("instructions") != MASTER_INSTRUCTIONS:
@@ -355,7 +458,7 @@ def _tool_list_jobs(conn, user: dict[str, Any], origin_master_session_id: int, a
     return {"jobs": [dict(row) for row in rows]}
 
 
-def execute_tool(conn, app, user: dict[str, Any], origin_master_session_id: int, name: str, args: dict[str, Any]) -> dict[str, Any]:
+def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_id: int, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         if name == "list_projects":
             data = _tool_list_projects(conn, user)
@@ -614,11 +717,352 @@ def execute_tool(conn, app, user: dict[str, Any], origin_master_session_id: int,
         return {"ok": False, "tool": name, "error": {"code": "tool_failed", "message": str(exc)}}
 
 
+def execute_tool(
+    conn,
+    app,
+    user: dict[str, Any],
+    origin_master_session_id: int,
+    name: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Compatibility function for pre-broker server callers and tests.
+
+    The model loop does not call this function. It constructs MasterToolBroker
+    directly, so these Alpha-era names are not part of Master's authority.
+    """
+    if name in {
+        "list_projects",
+        "list_jobs",
+        "list_worker_agents",
+        "list_plans",
+        "get_master_settings",
+        "get_alpha_settings",
+        "capacity",
+        "dispatch_jobs",
+        "start_jobs",
+        "start_plan",
+        "set_unattended",
+        "set_budgets",
+        "create_attention",
+    }:
+        return _execute_legacy_tool(
+            conn,
+            app,
+            user,
+            origin_master_session_id,
+            name,
+            args,
+        )
+    return MasterToolBroker(
+        conn,
+        app,
+        user,
+        origin_master_session_id,
+    ).execute(name, args)
+
+
+@dataclass(frozen=True)
+class ParsedMasterToolCall:
+    name: str
+    arguments: dict[str, Any]
+
+
+class MasterToolEnvelopeParser:
+    """Incremental parser for tool tags that may split across stream chunks."""
+
+    OPEN = "<proxima-tool>"
+    CLOSE = "</proxima-tool>"
+
+    def __init__(self, *, request_bytes: int = MASTER_MAX_TOOL_REQUEST_BYTES):
+        self.request_bytes = request_bytes
+        self._buffer = ""
+        self._inside = False
+        self._depth = 0
+        self._payload: list[str] = []
+        self._payload_bytes = 0
+        self._invalid: str | None = None
+        self.calls: list[ParsedMasterToolCall] = []
+        self.errors: list[dict[str, Any]] = []
+
+    @staticmethod
+    def _error(code: str, message: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "tool": None,
+            "error": {"code": code, "message": message},
+        }
+
+    def feed(self, chunk: str) -> None:
+        self._buffer += chunk
+        while self._buffer:
+            open_at = self._buffer.find(self.OPEN)
+            close_at = self._buffer.find(self.CLOSE)
+            positions = [
+                (position, token)
+                for position, token in (
+                    (open_at, self.OPEN),
+                    (close_at, self.CLOSE),
+                )
+                if position >= 0
+            ]
+            if not positions:
+                keep = max(len(self.OPEN), len(self.CLOSE)) - 1
+                if self._inside and len(self._buffer) > keep:
+                    self._append_payload(self._buffer[:-keep])
+                    self._buffer = self._buffer[-keep:]
+                elif not self._inside and len(self._buffer) > keep:
+                    self._buffer = self._buffer[-keep:]
+                return
+            position, token = min(positions, key=lambda item: item[0])
+            prefix = self._buffer[:position]
+            self._buffer = self._buffer[position + len(token):]
+            if self._inside:
+                self._append_payload(prefix)
+            if token == self.OPEN:
+                if not self._inside:
+                    self._inside = True
+                    self._depth = 1
+                    self._payload = []
+                    self._payload_bytes = 0
+                    self._invalid = None
+                else:
+                    self._depth += 1
+                    if self._invalid is None:
+                        self._invalid = "nested Master tool envelope"
+                continue
+            if not self._inside:
+                self.errors.append(
+                    self._error(
+                        "malformed_tool_call",
+                        "unexpected Master tool closing tag",
+                    )
+                )
+                continue
+            self._depth -= 1
+            if self._depth == 0:
+                self._finish_envelope()
+
+    def finish(self) -> tuple[list[ParsedMasterToolCall], list[dict[str, Any]]]:
+        if self._inside:
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    self._invalid or "unterminated Master tool envelope",
+                )
+            )
+            self._inside = False
+            self._buffer = ""
+        elif any(
+            token.startswith(self._buffer[-length:])
+            for token in (self.OPEN, self.CLOSE)
+            for length in range(1, min(len(token), len(self._buffer)) + 1)
+            if self._buffer[-length:].startswith("<")
+        ):
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    "partial Master tool envelope marker",
+                )
+            )
+        return self.calls, self.errors
+
+    def _append_payload(self, text: str) -> None:
+        if self._depth != 1 or self._invalid is not None:
+            return
+        self._payload_bytes += len(text.encode("utf-8"))
+        if self._payload_bytes > self.request_bytes:
+            self._invalid = (
+                f"Master tool request exceeds the {self.request_bytes}-byte limit"
+            )
+            return
+        self._payload.append(text)
+
+    def _finish_envelope(self) -> None:
+        self._inside = False
+        if self._invalid is not None:
+            code = (
+                "tool_request_too_large"
+                if "exceeds" in self._invalid
+                else "malformed_tool_call"
+            )
+            self.errors.append(self._error(code, self._invalid))
+            return
+        raw = "".join(self._payload).strip()
+        try:
+            call = json.loads(raw)
+        except json.JSONDecodeError:
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    "Master tool envelope must contain one JSON object",
+                )
+            )
+            return
+        if not isinstance(call, dict) or not isinstance(call.get("name"), str):
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    "Master tool envelope needs a string name",
+                )
+            )
+            return
+        arguments = call.get("arguments", {})
+        if not isinstance(arguments, dict):
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    "Master tool arguments must be an object",
+                )
+            )
+            return
+        self.calls.append(
+            ParsedMasterToolCall(call["name"], arguments)
+        )
+
+
+def parse_master_tool_envelopes(
+    chunks: Iterable[str],
+) -> tuple[list[ParsedMasterToolCall], list[dict[str, Any]]]:
+    parser = MasterToolEnvelopeParser()
+    for chunk in chunks:
+        parser.feed(chunk)
+    return parser.finish()
+
+
 def _tool_round(kind: Any) -> int:
     if kind == "master":
         return 0
     match = re.fullmatch(r"master_tool_(\d+)", str(kind or ""))
     return int(match.group(1)) if match else MASTER_MAX_TOOL_ROUNDS
+
+
+def _turn_root_run_id(conn, run: dict[str, Any]) -> int:
+    current = _as_int(run["id"])
+    parent = run.get("continued_from_run_id")
+    visited = {current}
+    while parent is not None:
+        parent_id = _as_int(parent)
+        if parent_id in visited:
+            raise MasterToolError(
+                "turn_chain_invalid", "Master turn continuation chain contains a cycle"
+            )
+        visited.add(parent_id)
+        current = parent_id
+        row = conn.execute(
+            "SELECT continued_from_run_id FROM runs WHERE id = ?", (parent_id,)
+        ).fetchone()
+        parent = row["continued_from_run_id"] if row else None
+    return current
+
+
+def _master_tool_digest(name: str, arguments: Any) -> tuple[str, int]:
+    canonical = json.dumps(
+        {"name": name, "arguments": arguments},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    encoded = canonical.encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), len(encoded)
+
+
+def execute_master_tool_call(
+    app,
+    conn,
+    run: dict[str, Any],
+    name: str,
+    arguments: Any,
+) -> dict[str, Any]:
+    """Execute one durable root-turn call through the typed broker."""
+    session = conn.execute(
+        "SELECT s.mode, s.owner_user_id FROM sessions s WHERE s.id = ?",
+        (run["session_id"],),
+    ).fetchone()
+    if not session or session["mode"] != "master":
+        return {
+            "ok": False,
+            "tool": name or None,
+            "error": {
+                "code": "master_session_required",
+                "message": "Master product tools require a Master session",
+            },
+        }
+    try:
+        digest, request_size = _master_tool_digest(name, arguments)
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "tool": name or None,
+            "error": {
+                "code": "invalid_tool_arguments",
+                "message": "Master tool arguments must be JSON-compatible",
+            },
+        }
+    if request_size > MASTER_MAX_TOOL_REQUEST_BYTES:
+        return {
+            "ok": False,
+            "tool": name or None,
+            "error": {
+                "code": "tool_request_too_large",
+                "message": (
+                    "Master tool request exceeds the "
+                    f"{MASTER_MAX_TOOL_REQUEST_BYTES}-byte limit"
+                ),
+            },
+        }
+    turn_root_run_id = _turn_root_run_id(conn, run)
+    origin_message = conn.execute(
+        "SELECT id FROM messages WHERE run_id = ? AND role = 'user' "
+        "ORDER BY id DESC LIMIT 1",
+        (turn_root_run_id,),
+    ).fetchone()
+    ledger = conn.execute(
+        "SELECT status FROM master_tool_calls "
+        "WHERE turn_root_run_id = ? AND envelope_hash = ?",
+        (turn_root_run_id, digest),
+    ).fetchone()
+    if ledger is not None:
+        return {
+            "ok": False,
+            "tool": name or None,
+            "error": {
+                "code": "duplicate_tool_call",
+                "message": "Duplicate Master tool call was not executed",
+            },
+        }
+    conn.execute(
+        "INSERT OR IGNORE INTO master_tool_calls("
+        "master_session_id, turn_root_run_id, envelope_hash, tool_name"
+        ") VALUES (?, ?, ?, ?)",
+        (run["session_id"], turn_root_run_id, digest, name),
+    )
+    args = dict(arguments) if isinstance(arguments, dict) else arguments
+    if (
+        isinstance(args, dict)
+        and name in {"delegate_tasks", "create_attention"}
+        and not args.get("idempotency_key")
+    ):
+        args["idempotency_key"] = f"master-turn:{turn_root_run_id}:{digest}"
+    result = MasterToolBroker(
+        conn,
+        app,
+        {"id": session["owner_user_id"]},
+        run["session_id"],
+        origin_message_id=(
+            _as_int(origin_message["id"]) if origin_message is not None else None
+        ),
+    ).execute(name, args)
+    conn.execute(
+        "UPDATE master_tool_calls SET status = 'complete', result_json = ?, "
+        "completed_at = CURRENT_TIMESTAMP WHERE turn_root_run_id = ? "
+        "AND envelope_hash = ?",
+        (
+            json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+            turn_root_run_id,
+            digest,
+        ),
+    )
+    return result
 
 
 def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[dict[str, Any]]:
@@ -627,35 +1071,120 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
     ).fetchone()
     if not session or session["mode"] != "master":
         return []
-    calls: list[dict[str, Any]] = []
-    for raw in MASTER_TOOL_RE.findall(answer):
-        try:
-            call = json.loads(raw)
-            if not isinstance(call, dict) or not isinstance(call.get("name"), str):
-                raise ValueError("tool call must contain a string name")
-            args = call.get("arguments") or {}
-            if not isinstance(args, dict):
-                raise ValueError("tool arguments must be an object")
-            if (
-                call["name"] in {"dispatch_jobs", "start_plan"}
-                and not args.get("idempotency_key")
-            ):
-                canonical = json.dumps(
-                    {"name": call["name"], "arguments": args},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                digest = hashlib.sha256(canonical.encode()).hexdigest()
-                args = {
-                    **args,
-                    "idempotency_key": f"master-run:{run['id']}:{digest}",
-                }
-            calls.append(execute_tool(conn, app, {"id": session["owner_user_id"]}, run["session_id"], call["name"], args))
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            calls.append({"ok": False, "tool": None, "error": {"code": "invalid_tool_call", "message": str(exc)}})
+    parsed, calls = parse_master_tool_envelopes([answer])
+    round_number = _tool_round(run.get("kind"))
     if calls:
-        result_json = json.dumps(calls, indent=2)
+        parsed = []
+    elif parsed:
+        validation_errors = [
+            error
+            for call in parsed
+            if (
+                error := validate_master_tool_call(
+                    call.name,
+                    call.arguments,
+                )
+            )
+            is not None
+        ]
+        digests = [
+            _master_tool_digest(call.name, call.arguments)[0]
+            for call in parsed
+        ]
+        duplicates = {
+            digest
+            for digest in digests
+            if digests.count(digest) > 1
+        }
+        turn_root_run_id = _turn_root_run_id(conn, run)
+        replayed = {
+            row["envelope_hash"]
+            for row in conn.execute(
+                "SELECT envelope_hash FROM master_tool_calls "
+                "WHERE turn_root_run_id = ?",
+                (turn_root_run_id,),
+            ).fetchall()
+        }.intersection(digests)
+        if validation_errors:
+            parsed = []
+            calls.extend(validation_errors)
+        elif duplicates or replayed:
+            parsed = []
+            calls.append(
+                {
+                    "ok": False,
+                    "tool": None,
+                    "error": {
+                        "code": "duplicate_tool_call",
+                        "message": (
+                            "Duplicate Master tool call was not executed"
+                        ),
+                    },
+                }
+            )
+    if parsed and round_number >= MASTER_MAX_TOOL_ROUNDS:
+        parsed = []
+        calls.append(
+            {
+                "ok": False,
+                "tool": None,
+                "error": {
+                    "code": "tool_round_limit",
+                    "message": (
+                        "Master reached the "
+                        f"{MASTER_MAX_TOOL_ROUNDS}-round product-tool limit"
+                    ),
+                },
+            }
+        )
+    elif len(parsed) > MASTER_MAX_CALLS_PER_ROUND:
+        parsed = []
+        calls.append(
+            {
+                "ok": False,
+                "tool": None,
+                "error": {
+                    "code": "too_many_tool_calls",
+                    "message": (
+                        "Master emitted more than "
+                        f"{MASTER_MAX_CALLS_PER_ROUND} tool calls in one round"
+                    ),
+                },
+            }
+        )
+    result_bytes = len(
+        json.dumps(calls, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+    for call in parsed:
+        result = execute_master_tool_call(
+            app,
+            conn,
+            run,
+            call.name,
+            call.arguments,
+        )
+        encoded = json.dumps(
+            result, ensure_ascii=False, separators=(",", ":")
+        ).encode()
+        if result_bytes + len(encoded) > MASTER_MAX_ROUND_RESULT_BYTES:
+            calls.append(
+                {
+                    "ok": False,
+                    "tool": call.name,
+                    "error": {
+                        "code": "round_result_too_large",
+                        "message": (
+                            "Master tool results exceed the "
+                            f"{MASTER_MAX_ROUND_RESULT_BYTES}-byte round limit"
+                        ),
+                    },
+                }
+            )
+            break
+        calls.append(result)
+        result_bytes += len(encoded)
+    if calls:
+        result_json = json.dumps(calls, ensure_ascii=False, indent=2)
         conn.execute("SAVEPOINT master_tool_result")
         try:
             conn.execute(
@@ -664,7 +1193,6 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
             )
             conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (run["session_id"],))
             next_run_id = None
-            round_number = _tool_round(run.get("kind"))
             if round_number < MASTER_MAX_TOOL_ROUNDS:
                 prompt = (
                     "Proxima executed your in-process product tools. Here are the trusted results:\n"
@@ -673,11 +1201,15 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
                     "Call another product tool only when needed; otherwise report the outcome plainly."
                 )
                 cur = conn.execute(
-                    "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, kind, status, prompt, model, hermes_home) "
-                    "VALUES (?, NULL, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+                    "INSERT INTO runs(session_id, project_id, user_id, profile_id, "
+                    "runner_id, kind, status, prompt, model, hermes_home, "
+                    "continued_from_run_id, continuation_count) "
+                    "VALUES (?, NULL, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
                     (
                         run["session_id"], run["user_id"], run["profile_id"], run["runner_id"],
-                        f"master_tool_{round_number + 1}", prompt, run.get("model"), run.get("hermes_home"),
+                        f"master_tool_{round_number + 1}", prompt, run.get("model"),
+                        run.get("hermes_home"), run["id"],
+                        _as_int(run.get("continuation_count") or 0) + 1,
                     ),
                 )
                 next_run_id = _as_int(cur.lastrowid)

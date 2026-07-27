@@ -56,9 +56,25 @@ OS sandbox.
 Master persistence is not a permission grant. Migration 31 preserves the hidden
 orchestrator session and Task ownership in SQLite, while
 `feature_master_orchestrator` defaults off. With the flag off, Master APIs reject
-use and the worker does not claim Master turns or Master-owned Task runs. Production
-activation remains blocked until the restricted runner and typed product-tool
-broker enforce the chat-only Master boundary.
+use and the worker does not claim Master turns or Master-owned Task runs. Codex
+app-server 0.145.0 or newer is the only current production adapter that proves the
+central `master_chat_only` runner contract; every other adapter fails closed.
+
+A conforming Master run receives a dedicated managed home and an empty read-only
+scratch, not a Container, repo, Ops Area, source tree, runtime/config directory, or
+ordinary profile home. Its exact empty skill/MCP selection is strictly reapplied on
+every run. Native permission requests are denied and native tool events fail the
+turn. Codex's loopback provider firewall removes every runner-native model tool and
+reconstructs the complete tool carrier from exact server-owned broker schemas. It
+rejects schema drift, discards runner-generated developer context, and installs a
+fixed path-free developer policy before provider forwarding. Its secret loopback
+route rejects ambiguous framing, encoded bodies and responses, redirects, and
+oversized input or output before Codex receives a partial response. The provider
+bearer remains only in its HTTP header. The schema-validated `MasterToolBroker` accepts only
+bounded product IDs and text and returns no paths or secret material. A streaming parser, durable root-turn
+envelope ledger, and byte/round/call caps make malformed, replayed, duplicate, and
+oversized model output visible without partial hidden actions. See
+[runner-conformance.md](runner-conformance.md).
 
 ## Path policy
 
