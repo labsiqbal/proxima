@@ -75,8 +75,9 @@ and credentials are not copied into the Master conversation or event payload.
 
 Review-ready payloads include the stable Task, Container, Area, and latest
 checkpoint ids. Attention and Satpam payloads include their source row ids and a
-stable `toast_key`, so a later shared frontend provider can update the Tasks board
-and show one transient toast without another polling endpoint.
+stable `toast_key`. The authenticated shared frontend provider now updates the
+durable thread and work panel from these events without another polling endpoint.
+Transient toast presentation remains a later UI group and is intentionally inert.
 
 ## Session event contract
 
@@ -105,10 +106,34 @@ These are named events on
 the browser-standard `Last-Event-ID` header and resumes after the greater valid
 cursor. Reconnect with the last received id delivers only later rows; replay from
 an earlier cursor returns the same one event per projection and creates no new
-durable data.
+durable data. An idle stream emits an immediate SSE comment to flush a healthy
+connection before the 15-second keepalive; comments do not alter cursor or replay
+semantics.
 
 Events and projected chat messages report state only. They do not approve review,
 landing, restart, or Attention gates and are never accepted as control input.
+
+## Frontend ownership
+
+`MasterStateProvider` mounts once around the authenticated `AppShell`. It owns the
+canonical desk and session, ordered messages, active Master turn, durable resume
+cursor, one typed `EventSource`, reconnect state, unread count, composer draft and
+selection, and stable scroll/work-panel state. `MasterConversation`,
+`MasterComposer`, and `MasterWorkPanel` are view-only shared consumers used by the
+full-page home and prepared for the later popup.
+
+The provider deduplicates event and message ids, preserves server ordering, and
+applies only safe final messages and server-owned Master projection summaries. Raw
+message, reasoning, and tool delta payloads are never surfaced. Reconciliation
+fetches desk/messages/events only after disconnect/reconnect, a sequence gap,
+malformed input, or explicit owner retry, and coalesces reconnect storms into a
+bounded number of attempts. Bootstrap reads the desk's constant-size durable
+`event_cursor` barrier before its final desk/message snapshots and does not fetch
+event history. Successful submission returns the canonical persisted user
+message, replacing the pending row with its durable id before streamed replies are
+ordered. Lifecycle generations and abort controllers ignore late responses, close
+replaced streams, and clear all owner-scoped state on token/owner change,
+feature-off, logout, onboarding, or update application.
 
 ## Compatibility
 

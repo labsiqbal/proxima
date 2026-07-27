@@ -280,11 +280,35 @@ entry point creates or reuses exactly one hidden
 Chat history; Settings/desk runner selection creates or reuses the matching system
 home while the UI counterpart stays named Master. The desk reuses Chat's shared
 composer for delegation (attach + `@` project mentions; submit still hits
-`/api/master/messages`), and the work side panel is collapsible with a persisted
-preference. The desk polls its thread, active /
-queued Master jobs, needs-you subset, job-scoped checkpoint timeline, and honest
-capacity (`running / configured max`, free slots, queued). Loading, empty, error/retry, populated,
-and busy states are explicit on desktop and mobile. The empty desk is sparse by
+`/api/master/messages`). A successful send returns the canonical persisted user
+message with its durable id, so the provider can replace the pending row without
+polling or letting the streamed reply sort ahead of its prompt. The work side panel
+is collapsible with a persisted preference. One authenticated `MasterStateProvider` above `AppShell` owns the
+canonical desk/session, ordered thread, active turn, durable event cursor, one SSE
+connection, reconnect reconciliation, unread count, composer draft and selection,
+and stable scroll/panel state. The full-page Master home and future presentation
+surfaces consume that same interface without shadow stores or duplicate composers.
+Logout, owner/token transition, onboarding, feature-off, and update application
+abort stale work, close the old stream, and clear owner-scoped state.
+
+The existing Master-session SSE stream is the only live path. It resumes from the
+durable cursor, deduplicates replay, ignores raw delta events, and applies typed
+Task/review/Attention/Satpam projections to the thread and work panel once. A
+bounded authoritative desk/messages/events reconciliation runs only after a
+disconnect, reconnect, detected sequence gap, malformed event, or explicit retry. It
+does not restore the former five-second Master desk poll. The SSE generator flushes
+an initial comment so an idle healthy connection becomes Live immediately while
+retaining the same cursor and event contract. The first desk response supplies a
+constant-size durable `event_cursor` barrier before the final desk/message snapshots;
+bootstrap opens the stream at that barrier without fetching the full event history,
+so neither a delayed first event nor an in-flight snapshot can lose state.
+
+The home renders queued, running, review/attention, completed, and failed
+Master-owned Tasks, the needs-you subset, job-scoped checkpoint timeline, and honest
+capacity (`running / configured max`, free slots, queued). Loading, empty,
+disconnected/retrying, error, populated, sending/thinking, and multi-Task states are
+explicit on desktop and mobile. A compact New Task control seeds the one shared
+composer rather than starting a parallel launcher flow. The empty home is sparse by
 default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
 so the Delegate composer stays the primary CTA.
 
@@ -1142,7 +1166,10 @@ not listed. Detection cache backs skill entries; rescan refreshes after installs
 ## 18. New task launcher + search
 
 **Why:** Delegate a one-off task, and see what needs you. The app itself lands on
-**Chat** — the launcher opens from the Tasks screen's `+ New task`.
+**Chat** — the launcher opens from the Tasks screen's `+ New task`. This standalone
+launcher is the feature-off compatibility path; when Master is enabled, `+ New task`
+seeds the shared Master composer on the full-page Master home instead (see the Shell
+data flow in [architecture.md](reference/architecture.md)).
 **How:** The launcher is deliberately minimal — a greeting, the **Task Composer**
 (project + agent + Guarded/Autonomous policy), and an **attention strip** when
 jobs are waiting in review (jump to the first, or open Tasks). **Start task**
