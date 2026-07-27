@@ -1166,7 +1166,10 @@ not listed. Detection cache backs skill entries; rescan refreshes after installs
 ## 18. New task launcher + search
 
 **Why:** Delegate a one-off task, and see what needs you. The app itself lands on
-**Chat** — the launcher opens from the Tasks screen's `+ New task`.
+**Chat** — the launcher opens from the Tasks screen's `+ New task`. This standalone
+launcher is the feature-off compatibility path; when Master is enabled, `+ New task`
+seeds the shared Master composer on the full-page Master home instead (see the Shell
+data flow in [architecture.md](reference/architecture.md)).
 **How:** The launcher is deliberately minimal — a greeting, the **Task Composer**
 (project + agent + Guarded/Autonomous policy), and an **attention strip** when
 jobs are waiting in review (jump to the first, or open Tasks). **Start task**
