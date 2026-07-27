@@ -286,10 +286,30 @@ polling or letting the streamed reply sort ahead of its prompt. The work side pa
 is collapsible with a persisted preference. One authenticated `MasterStateProvider` above `AppShell` owns the
 canonical desk/session, ordered thread, active turn, durable event cursor, one SSE
 connection, reconnect reconciliation, unread count, composer draft and selection,
-and stable scroll/panel state. The full-page Master home and future presentation
-surfaces consume that same interface without shadow stores or duplicate composers.
+Focus, per-message target, popup state, transient notifications, Fleet registry,
+and stable scroll/panel state. The full-page Master home and floating popup consume
+that same interface without shadow stores, duplicate composers, or a second live
+connection. Moving between those views preserves the draft, target, Focus, active
+run, ordered thread, and scroll anchor.
 Logout, owner/token transition, onboarding, feature-off, and update application
 abort stale work, close the old stream, and clear owner-scoped state.
+
+The popup is available from normal authenticated shell surfaces through a labeled
+floating trigger and `Ctrl`/`Command` + `Shift` + `M`. It can persist at either
+bottom corner, avoids the tool dock, drawers, mobile chrome, safe areas, and toast
+region, and becomes a full-height sheet on narrow screens. Its modal dialog traps
+keyboard focus, closes with Escape, and returns focus to the trigger. Opening the
+full Master home closes only the presentation layer.
+
+The shared composer defaults to **Let Master route**. The owner may choose an
+explicit Container and, in an advanced row, an optional Area override from the
+registered Fleet. Master home also has an independent Fleet/Container Focus picker;
+changing it never changes the shell's active Container. If an explicit message
+target differs from Focus, the UI announces the Focus change and the API records
+the new Focus before it enqueues the turn. `master_message_context` durably binds
+the Focus and target ids to the user message. The restricted prompt and
+`MasterToolBroker` then enforce explicit routing, or keep automatic routing inside
+a Container Focus. Sent messages display that durable routing metadata.
 
 The existing Master-session SSE stream is the only live path. It resumes from the
 durable cursor, deduplicates replay, ignores raw delta events, and applies typed
@@ -302,6 +322,14 @@ retaining the same cursor and event contract. The first desk response supplies a
 constant-size durable `event_cursor` barrier before the final desk/message snapshots;
 bootstrap opens the stream at that barrier without fetching the full event history,
 so neither a delayed first event nor an in-flight snapshot can lose state.
+
+Durable chat projections remain the notification source of truth. Relevant named
+projection events may also produce one short-lived shell toast. Progress is
+coalesced by stable Task source, terminal transitions are deduplicated by durable
+message id, and raw token, reasoning, and tool deltas never toast. Polite results
+use status live semantics, failures and owner-attention transitions use alert
+semantics, dismissal is keyboard reachable, and toasts never move focus. Optional
+desktop notifications for background tabs use the same bounded summaries.
 
 The home renders queued, running, review/attention, completed, and failed
 Master-owned Tasks, the needs-you subset, job-scoped checkpoint timeline, and honest

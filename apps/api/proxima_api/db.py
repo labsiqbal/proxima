@@ -126,6 +126,27 @@ CREATE TABLE IF NOT EXISTS messages (
   output_links TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS master_message_context (
+  message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  focus_mode TEXT NOT NULL CHECK(focus_mode IN ('fleet', 'container')),
+  focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  target_mode TEXT NOT NULL CHECK(target_mode IN ('auto', 'explicit')),
+  target_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK(
+    focus_mode = 'container'
+    OR (focus_mode = 'fleet' AND focus_container_id IS NULL)
+  ),
+  CHECK(
+    target_mode = 'explicit'
+    OR (target_mode = 'auto' AND target_container_id IS NULL AND target_area_id IS NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_master_message_context_focus
+  ON master_message_context(focus_container_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_master_message_context_target
+  ON master_message_context(target_container_id, target_area_id, message_id);
 CREATE TABLE IF NOT EXISTS message_reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,

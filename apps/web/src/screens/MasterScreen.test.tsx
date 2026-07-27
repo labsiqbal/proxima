@@ -26,6 +26,15 @@ const actions = {
   markRead: vi.fn(),
   setSideCollapsed: vi.fn(),
   setScrollState: vi.fn(),
+  setFocus: vi.fn(),
+  setTargetContainer: vi.fn(),
+  setTargetArea: vi.fn(),
+  loadTargetAreas: vi.fn().mockResolvedValue(undefined),
+  openPopup: vi.fn(),
+  closePopup: vi.fn(),
+  togglePopup: vi.fn(),
+  setPopupCorner: vi.fn(),
+  dismissToast: vi.fn(),
   refresh: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   clearError: vi.fn(),
@@ -80,11 +89,15 @@ const state = {
     followTail: true,
     anchorMessageId: null,
   },
-  future: {
-    focus: { mode: 'fleet', containerId: null, pendingContainerId: null, durable: false },
-    target: { mode: 'auto', containerId: null, areaId: null, enabled: false },
-    toastQueue: [],
-    popup: { open: false, presentation: 'closed', preferredCorner: 'right', enabled: false },
+  focus: { mode: 'fleet', containerId: null },
+  target: { mode: 'auto', containerId: null, areaId: null },
+  popup: { open: false, preferredCorner: 'right' },
+  toasts: [],
+  fleet: {
+    loading: false,
+    error: '',
+    containers: [],
+    areasByContainer: {},
   },
   actions,
 }
@@ -122,10 +135,79 @@ describe('MasterScreen', () => {
     expect(screen.getByLabelText('Master work panel')).toBeInTheDocument()
   })
 
+  it('does not mount a hidden home composer on another shell surface', () => {
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={vi.fn()}
+        active={false}
+      />,
+    )
+    expect(screen.queryByRole('textbox', { name: 'Message Master' }))
+      .not.toBeInTheDocument()
+    expect(actions.setHomeActive).toHaveBeenCalledWith(false)
+  })
+
   it('routes the compact new Task affordance through the provider-owned draft', async () => {
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'New Task' }))
     expect(actions.seedDraft).toHaveBeenCalledWith('Delegate a new Task: ')
+  })
+
+  it('keeps Focus independent from the shell Container and defaults to Master routing', async () => {
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        activeProject={{ slug: 'shell-container' } as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('combobox', { name: 'Master Focus' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: 'Master message target' }))
+      .toHaveValue('')
+    expect(screen.getByRole('option', { name: 'Let Master route' }))
+      .toBeInTheDocument()
+    expect(actions.setFocus).not.toHaveBeenCalled()
+  })
+
+  it('shows explicit Container metadata, an advanced Area override, and the Focus warning', async () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      focus: { mode: 'fleet', containerId: null },
+      target: { mode: 'explicit', containerId: 21, areaId: null },
+      fleet: {
+        loading: false,
+        error: '',
+        containers: [{
+          id: 21,
+          slug: 'acme',
+          name: 'Acme',
+          identity_label: 'Acme',
+        }],
+        areasByContainer: {
+          21: {
+            container_id: 21,
+            container_slug: 'acme',
+            ops_area: { id: 210, kind: 'ops', rel_path: '.proxima/ops' },
+            code_areas: [{ id: 211, kind: 'code', rel_path: '.' }],
+          },
+        },
+      },
+    } as never)
+    const user = userEvent.setup()
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    expect(screen.getByText('Sending will Focus Master on Acme')).toBeInTheDocument()
+    await user.click(screen.getByText('Area override (advanced)'))
+    expect(screen.getByRole('combobox', { name: 'Target Area override' }))
+      .toHaveAccessibleName('Target Area override')
+    expect(screen.getByRole('option', { name: 'Master chooses Area' }))
+      .toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Operations' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Code: repository root' }))
+      .toBeInTheDocument()
   })
 
   it('disables the only composer while Master is working', () => {

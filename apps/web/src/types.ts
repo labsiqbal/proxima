@@ -178,6 +178,13 @@ export type ChatMessage = {
 	created_at?: string;
 	duration_s?: number;
 	turn_restore?: { available: boolean; paths_count: number };
+	master_target?: {
+		focus_mode: "fleet" | "container";
+		focus_container_id: number | null;
+		target_mode: "auto" | "explicit";
+		target_container_id: number | null;
+		target_area_id: number | null;
+	};
 };
 // Autonomous goal loop state for a session.
 export type GoalState = {

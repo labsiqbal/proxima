@@ -21,7 +21,22 @@ function mockState(draft: string) {
     activeRun: null,
     composer: { draft, selection: { start: 0, end: 0 }, sending: false, error: '', focusRequest: 0 },
     desk: { unattended: false },
-    actions: { setDraft: vi.fn(), setSelection: vi.fn(), send },
+    fleet: {
+      loading: false,
+      error: '',
+      containers: [],
+      areasByContainer: {},
+    },
+    focus: { mode: 'fleet', containerId: null },
+    target: { mode: 'auto', containerId: null, areaId: null },
+    actions: {
+      setDraft: vi.fn(),
+      setSelection: vi.fn(),
+      send,
+      loadTargetAreas: vi.fn().mockResolvedValue(undefined),
+      setTargetContainer: vi.fn(),
+      setTargetArea: vi.fn(),
+    },
   } as never)
 }
 

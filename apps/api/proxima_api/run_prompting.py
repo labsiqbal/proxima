@@ -351,18 +351,26 @@ class RunPrompting:
         cfg = self.app.state.config
         include_design_studio = features.enabled(cfg, features.DESIGN_STUDIO)
         prompt_text = run["prompt"]
-        if session_mode == "master" and is_fresh_session:
-            history = self._master_history(
-                db,
-                session_id,
-                current_prompt=str(run["prompt"]),
-            )
-            if history:
-                prompt_text = (
-                    "# Durable Master history\n\n"
-                    + history
-                    + "\n\n---\n\n"
-                    + prompt_text
+        if session_mode == "master":
+            if is_fresh_session:
+                history = self._master_history(
+                    db,
+                    session_id,
+                    current_prompt=str(run["prompt"]),
+                )
+                if history:
+                    prompt_text = (
+                        "# Durable Master history\n\n"
+                        + history
+                        + "\n\n---\n\n"
+                        + prompt_text
+                    )
+            routing = self._master_routing_context(db, int(run["id"]))
+            if routing:
+                prompt_text += (
+                    "\n\n---\n\n"
+                    "# Proxima routing context\n\n"
+                    + routing
                 )
         moodboard_references: list[dict[str, Any]] = []
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
@@ -511,6 +519,34 @@ class RunPrompting:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+
+    @staticmethod
+    def _master_routing_context(db: Any, run_id: int) -> str:
+        row = db.execute(
+            "SELECT mc.focus_mode, mc.focus_container_id, mc.target_mode, "
+            "mc.target_container_id, mc.target_area_id "
+            "FROM messages m JOIN master_message_context mc "
+            "ON mc.message_id = m.id "
+            "WHERE m.run_id = ? AND m.role = 'user' "
+            "ORDER BY m.id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return ""
+        if row["target_mode"] == "explicit":
+            text = (
+                "The owner explicitly targeted registered Container id "
+                f"{row['target_container_id']}."
+            )
+            if row["target_area_id"] is not None:
+                return text + f" Use registered Area id {row['target_area_id']}."
+            return text + " Choose one registered Area inside that Container."
+        if row["focus_mode"] == "container":
+            return (
+                "Route automatically, but stay inside the focused registered "
+                f"Container id {row['focus_container_id']}."
+            )
+        return "Route automatically across the registered Fleet."
 
     async def reset_agent_session(
         self,

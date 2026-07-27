@@ -177,7 +177,7 @@ export function MasterConversation({
 }: {
   onOpenJob: (id: number, engine?: string) => void
 }) {
-  const { messages, activeRun, view, actions } = useMasterState()
+  const { messages, activeRun, view, fleet, actions } = useMasterState()
   const threadRef = React.useRef<HTMLDivElement>(null)
   const restoredRef = React.useRef(false)
   const frameRef = React.useRef<number | null>(null)
@@ -243,6 +243,40 @@ export function MasterConversation({
             />
           )
         }
+        const metadata = message.master_target
+        const targetContainer = fleet.containers.find(
+          container => container.id === metadata?.target_container_id,
+        )
+        const focusContainer = fleet.containers.find(
+          container => container.id === metadata?.focus_container_id,
+        )
+        const targetLabel = metadata?.target_mode === 'explicit'
+          ? [
+              'Explicit target',
+              targetContainer?.identity_label
+                || targetContainer?.name
+                || (
+                  metadata.target_container_id == null
+                    ? 'Unavailable Container'
+                    : `Container #${metadata.target_container_id}`
+                ),
+              metadata.target_area_id == null
+                ? 'Master chooses Area'
+                : `Area #${metadata.target_area_id}`,
+            ].join(' · ')
+          : metadata?.focus_mode === 'container'
+            ? `Let Master route · within ${
+              focusContainer?.identity_label
+              || focusContainer?.name
+              || (
+                metadata.focus_container_id == null
+                  ? 'Unavailable Container'
+                  : `Container #${metadata.focus_container_id}`
+              )
+            }`
+            : metadata
+              ? 'Let Master route · Fleet'
+              : null
         return (
           <article
             className={`master-message ${message.role}${message.pending ? ' pending' : ''}`}
@@ -257,6 +291,9 @@ export function MasterConversation({
                   : 'Proxima'}
               {message.pending && <span className="master-message-pending">Sending</span>}
             </strong>
+            {targetLabel && (
+              <small className="master-message-target">{targetLabel}</small>
+            )}
             <MessageContent content={content} />
           </article>
         )

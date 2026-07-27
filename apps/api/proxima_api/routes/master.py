@@ -88,6 +88,93 @@ def register(app, deps):
             },
         )
 
+    def _owned_container(container_id: Any, user: dict[str, Any]):
+        resolved = _as_int(container_id)
+        row = db().execute(
+            "SELECT id FROM projects "
+            "WHERE id = ? AND owner_user_id = ? AND archived_at IS NULL",
+            (resolved, user["id"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Master target Container is not available",
+            )
+        return row
+
+    def _message_context(
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> dict[str, Any]:
+        focus = payload.get("focus")
+        target = payload.get("target")
+        if focus is None:
+            focus = {"mode": "fleet"}
+        if target is None:
+            target = {"mode": "auto"}
+        if not isinstance(focus, dict) or not isinstance(target, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="Master Focus and target must be objects",
+            )
+
+        focus_mode = focus.get("mode")
+        if focus_mode not in {"fleet", "container"}:
+            raise HTTPException(status_code=422, detail="unknown Master Focus mode")
+        focus_container = None
+        if focus_mode == "container":
+            focus_container = _owned_container(focus.get("container_id"), user)
+        elif focus.get("container_id") is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Fleet Focus cannot include a Container",
+            )
+
+        target_mode = target.get("mode")
+        if target_mode not in {"auto", "explicit"}:
+            raise HTTPException(status_code=422, detail="unknown Master target mode")
+        target_container = None
+        target_area_id = None
+        if target_mode == "explicit":
+            target_container = _owned_container(target.get("container_id"), user)
+            if target.get("area_id") is not None:
+                target_area_id = _as_int(target["area_id"])
+                area = db().execute(
+                    "SELECT id FROM project_areas "
+                    "WHERE id = ? AND project_id = ? AND source != 'excluded'",
+                    (target_area_id, target_container["id"]),
+                ).fetchone()
+                if area is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Master target Area is not in the selected Container",
+                    )
+        elif (
+            target.get("container_id") is not None
+            or target.get("area_id") is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Automatic Master routing cannot include an explicit target",
+            )
+
+        if target_container is not None:
+            focus_mode = "container"
+            focus_container = target_container
+
+        context = {
+            "focus_mode": focus_mode,
+            "focus_container_id": (
+                _as_int(focus_container["id"]) if focus_container is not None else None
+            ),
+            "target_mode": target_mode,
+            "target_container_id": (
+                _as_int(target_container["id"]) if target_container is not None else None
+            ),
+            "target_area_id": target_area_id,
+        }
+        return context
+
     def _master_job_payload(row) -> dict[str, Any]:
         data = dict(row)
         data["input"] = _json(data.get("input"), {})
@@ -157,41 +244,69 @@ def register(app, deps):
             raise HTTPException(status_code=422, detail="content is required")
         if len(content) > 50_000:
             raise HTTPException(status_code=422, detail="content is too long")
+        context = _message_context(payload, user)
         active = db().execute(
             "SELECT id FROM runs WHERE session_id = ? AND status IN ('queued','running') ORDER BY id LIMIT 1",
             (session["id"],),
         ).fetchone()
         if active:
             raise HTTPException(status_code=409, detail="Master is already working on a turn")
-        message_cur = db().execute(
-            "INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)",
-            (session["id"], content, user["username"]),
-        )
-        cur = db().execute(
-            "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, kind, status, prompt, model, hermes_home) "
-            "VALUES (?, NULL, ?, ?, ?, 'master', 'queued', ?, ?, ?)",
-            (
-                session["id"], user["id"], profile["id"], profile["runner_id"], content,
-                profile["default_model"], profile["hermes_home"],
-            ),
-        )
-        run_id = _as_int(cur.lastrowid)
-        db().execute(
-            "UPDATE messages SET run_id = ? WHERE id = ?",
-            (run_id, _as_int(message_cur.lastrowid)),
-        )
+        conn = db()
+        conn.execute("SAVEPOINT create_master_turn")
+        try:
+            message_cur = conn.execute(
+                "INSERT INTO messages(session_id, role, content, author) "
+                "VALUES (?, 'user', ?, ?)",
+                (session["id"], content, user["username"]),
+            )
+            message_id = _as_int(message_cur.lastrowid)
+            conn.execute(
+                "INSERT INTO master_message_context("
+                "message_id, focus_mode, focus_container_id, target_mode, "
+                "target_container_id, target_area_id"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    message_id,
+                    context["focus_mode"],
+                    context["focus_container_id"],
+                    context["target_mode"],
+                    context["target_container_id"],
+                    context["target_area_id"],
+                ),
+            )
+            cur = conn.execute(
+                "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, kind, status, prompt, model, hermes_home) "
+                "VALUES (?, NULL, ?, ?, ?, 'master', 'queued', ?, ?, ?)",
+                (
+                    session["id"], user["id"], profile["id"], profile["runner_id"],
+                    content, profile["default_model"], profile["hermes_home"],
+                ),
+            )
+            run_id = _as_int(cur.lastrowid)
+            conn.execute(
+                "UPDATE messages SET run_id = ? WHERE id = ?",
+                (run_id, message_id),
+            )
+            conn.execute(
+                "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (session["id"],),
+            )
+            conn.execute("RELEASE SAVEPOINT create_master_turn")
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
+            conn.execute("RELEASE SAVEPOINT create_master_turn")
+            raise
         message = db().execute(
             "SELECT id, role, content, author, run_id, created_at "
             "FROM messages WHERE id = ?",
-            (_as_int(message_cur.lastrowid),),
+            (message_id,),
         ).fetchone()
-        db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         app.state.worker.add_event(run_id, session["id"], None, "run.queued", {"runner": profile["runner_id"], "master": True})
         return {
             "run_id": run_id,
             "session_id": session["id"],
             "status": "queued",
-            "message": dict(message),
+            "message": {**dict(message), "master_target": context},
         }
 
     @app.get("/api/settings/alpha", deprecated=True)

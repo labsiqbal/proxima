@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getMasterDesk, sendMasterMessage } from '../api/master'
+import { listContainerAreas, listContainers } from '../api/containers'
 import { listEvents } from '../api/runs'
 import { listMessages } from '../api/sessions'
 import {
@@ -17,6 +18,29 @@ vi.mock('../api/master', () => ({
 }))
 vi.mock('../api/runs', () => ({ listEvents: vi.fn() }))
 vi.mock('../api/sessions', () => ({ listMessages: vi.fn() }))
+vi.mock('../api/containers', () => ({
+  listContainers: vi.fn(),
+  listContainerAreas: vi.fn(),
+}))
+
+const containers = [{
+  id: 21,
+  slug: 'acme',
+  name: 'Acme',
+  identity_label: 'Acme',
+  summary: null,
+  source_hash: null,
+  indexed_at: null,
+  last_activity_at: null,
+  live: { running_tasks: 0, queued_tasks: 0, open_attention: 0 },
+  area_inventory: { total: 2, code: 1, ops: 1 },
+  health: {
+    registry: 'ready',
+    areas: 'ready',
+    ops_migration: 'complete',
+    graph_freshness: null,
+  },
+}]
 
 const desk = {
   session: { id: 9, title: 'Master', mode: 'master' },
@@ -104,6 +128,15 @@ function Probe() {
       <output data-testid="sending">{String(state.composer.sending)}</output>
       <output data-testid="send-error">{state.composer.error}</output>
       <output data-testid="unread">{state.unread.count}</output>
+      <output data-testid="focus">{state.focus.mode}:{state.focus.containerId ?? 'fleet'}</output>
+      <output data-testid="target">{state.target.mode}:{state.target.containerId ?? 'auto'}:{state.target.areaId ?? 'any'}</output>
+      <output data-testid="popup">{String(state.popup.open)}:{state.popup.preferredCorner}</output>
+      <output data-testid="toasts">{state.toasts.map(toast => toast.title).join('|')}</output>
+      <output data-testid="fleet-error">{state.fleet.error}</output>
+      <output data-testid="fleet-count">{state.fleet.containers.length}</output>
+      <output data-testid="scroll">
+        {state.view.scrollTop}:{String(state.view.followTail)}:{state.view.anchorMessageId ?? 'none'}
+      </output>
       <button type="button" onClick={() => state.actions.setDraft('Keep this draft')}>Draft</button>
       <button
         type="button"
@@ -113,6 +146,19 @@ function Probe() {
       </button>
       <button type="button" onClick={() => void state.actions.send().catch(() => {})}>Send</button>
       <button type="button" onClick={() => void state.actions.refresh()}>Refresh</button>
+      <button type="button" onClick={() => state.actions.setTargetContainer(21)}>Target Acme</button>
+      <button type="button" onClick={state.actions.openPopup}>Open popup</button>
+      <button type="button" onClick={state.actions.closePopup}>Close popup</button>
+      <button
+        type="button"
+        onClick={() => state.actions.setScrollState({
+          scrollTop: 240,
+          followTail: false,
+          anchorMessageId: 55,
+        })}
+      >
+        Remember scroll
+      </button>
     </div>
   )
 }
@@ -140,10 +186,34 @@ function renderProvider({
 describe('MasterStateProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource)
     vi.mocked(getMasterDesk).mockResolvedValue(desk as never)
     vi.mocked(listMessages).mockResolvedValue({ messages: [], goal: null })
+    vi.mocked(listContainers).mockResolvedValue({ containers } as never)
+    vi.mocked(listContainerAreas).mockResolvedValue({
+      container_id: 21,
+      container_slug: 'acme',
+      ops_area: {
+        id: 210,
+        kind: 'ops',
+        rel_path: '.proxima/ops',
+        source: 'auto',
+        push_on_merge: false,
+        push_remote_url: null,
+        remote: null,
+      },
+      code_areas: [{
+        id: 211,
+        kind: 'code',
+        rel_path: '.',
+        source: 'auto',
+        push_on_merge: false,
+        push_remote_url: null,
+        remote: null,
+      }],
+    } as never)
     vi.mocked(listEvents).mockResolvedValue({
       events: [{
         id: 12,
@@ -213,6 +283,22 @@ describe('MasterStateProvider', () => {
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Arrived during bootstrap')
     expect(listEvents).not.toHaveBeenCalled()
     expect(FakeEventSource.instances[0].url).toContain('after_id=12')
+  })
+
+  it('keeps the durable thread live when the optional Fleet registry is unavailable', async () => {
+    localStorage.setItem(
+      'proxima.master.focus.1',
+      JSON.stringify({ mode: 'container', containerId: 21 }),
+    )
+    vi.mocked(listContainers).mockRejectedValue(new Error('fleet unavailable'))
+
+    renderProvider()
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(screen.getAllByTestId('connection')[0]).not.toHaveTextContent('disconnected')
+    expect(screen.getAllByTestId('fleet-error')[0]).toHaveTextContent('fleet unavailable')
+    expect(screen.getAllByTestId('fleet-count')[0]).toHaveTextContent('0')
+    expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
   })
 
   it('retries a failed bootstrap without remounting the authenticated app', async () => {
@@ -653,6 +739,101 @@ describe('MasterStateProvider', () => {
     expect(screen.getByTestId('draft')).toHaveTextContent('Keep this draft')
     expect(screen.getByTestId('selection')).toHaveTextContent('2:7')
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('focuses the explicit target before one enqueue and preserves it across route consumers', async () => {
+    const view = renderProvider({ strict: true })
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Target Acme' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Send' })[0])
+
+    expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    expect(sendMasterMessage).toHaveBeenCalledTimes(1)
+    expect(sendMasterMessage).toHaveBeenCalledWith(
+      'token-a',
+      'Keep this draft',
+      {
+        focus: { mode: 'container', container_id: 21 },
+        target: { mode: 'explicit', container_id: 21, area_id: undefined },
+      },
+      expect.any(AbortSignal),
+    )
+
+    view.rerender(
+      <MasterStateProvider token="token-a" ownerId={1} enabled>
+        <Probe />
+      </MasterStateProvider>,
+    )
+    expect(screen.getByTestId('focus')).toHaveTextContent('container:21')
+    expect(screen.getByTestId('target')).toHaveTextContent('explicit:21:any')
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('keeps popup visibility provider-owned without opening another stream', async () => {
+    renderProvider({ strict: true })
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remember scroll' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open popup' })[0])
+    expect(screen.getAllByTestId('popup')[0]).toHaveTextContent('true:right')
+    expect(screen.getAllByTestId('draft')[0]).toHaveTextContent('Keep this draft')
+    expect(screen.getAllByTestId('scroll')[0]).toHaveTextContent('240:false:55')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close popup' })[0])
+    expect(screen.getAllByTestId('popup')[0]).toHaveTextContent('false:right')
+    expect(screen.getAllByTestId('scroll')[0]).toHaveTextContent('240:false:55')
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('coalesces Task progress and emits one toast per durable completion transition', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    const base = {
+      seq: 1,
+      run_id: 0,
+      session_id: 9,
+      created_at: '2026-07-27T10:04:00Z',
+    }
+    act(() => {
+      source.emit('master.task.started', {
+        ...base,
+        id: 13,
+        type: 'master.task.started',
+        payload: { message_id: 70, task_id: 8 },
+      })
+      source.emit('master.task.started', {
+        ...base,
+        id: 14,
+        seq: 2,
+        type: 'master.task.started',
+        payload: { message_id: 71, task_id: 8 },
+      })
+      source.emit('master.task.completed', {
+        ...base,
+        id: 15,
+        seq: 3,
+        type: 'master.task.completed',
+        payload: { message_id: 72, task_id: 8 },
+      })
+      source.emit('master.task.completed', {
+        ...base,
+        id: 16,
+        seq: 4,
+        type: 'master.task.completed',
+        payload: { message_id: 72, task_id: 8 },
+      })
+      source.emit('message.delta', {
+        ...base,
+        id: 17,
+        seq: 5,
+        type: 'message.delta',
+        payload: { message_id: 72, text: 'raw token' },
+      })
+    })
+
+    expect(screen.getAllByTestId('toasts')[0].textContent)
+      .toBe('Task #8 started|Task #8 completed')
   })
 
   it('submits once, shows pending state, and clears the draft only after acceptance', async () => {
