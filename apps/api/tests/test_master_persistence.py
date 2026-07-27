@@ -851,3 +851,58 @@ def test_unrelated_requests_do_not_reconcile_master_identity_per_request(
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
     ).fetchone()[0] == 1
+
+
+def test_startup_contains_operational_master_provisioning_failure(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "operational.db"
+    workspace = tmp_path / "workspace"
+
+    import proxima_api.main as main_module
+
+    def _boom(*_args, **_kwargs):
+        raise MasterToolError("runner_unavailable", "no runnable agent")
+
+    monkeypatch.setattr(main_module, "ensure_master_identity", _boom)
+
+    app = _app(db_path, workspace)
+
+    client = TestClient(app)
+    assert client.get("/api/health").status_code == 200
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+    ).fetchone()[0] == 0
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+    ).fetchone()[0] == 0
+
+    token = client.post("/auth/auto").json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    desk = client.get("/api/master/desk")
+    assert desk.status_code == 200
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+    ).fetchone()[0] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+    ).fetchone()[0] == 1
+
+
+def test_startup_still_aborts_on_master_persistence_failure(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "still-fatal.db"
+    workspace = tmp_path / "workspace"
+
+    import proxima_api.main as main_module
+
+    def _boom(*_args, **_kwargs):
+        raise MasterPersistenceError("owner 1 has a forked Master identity")
+
+    monkeypatch.setattr(main_module, "ensure_master_identity", _boom)
+
+    with pytest.raises(MasterPersistenceError, match="forked Master identity"):
+        _app(db_path, workspace)

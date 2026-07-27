@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import connect, init_db
 from .migrations import run_migrations
-from .master_persistence import assert_master_persistence
+from .master_persistence import MasterPersistenceError, assert_master_persistence
 from .master_runtime import ensure_master_identity
 from .container_registry import migrate_legacy_ops_containers, refresh_registry_projections
 from .acp import AcpManager
@@ -254,11 +254,16 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
         owner = dict(owner_row)
         _route_deps["ensure_default_profile"](owner)
-        ensure_master_identity(
-            app.state.db,
-            owner,
-            create_profile_for=_route_deps["create_profile_for"],
-        )
+        try:
+            ensure_master_identity(
+                app.state.db,
+                owner,
+                create_profile_for=_route_deps["create_profile_for"],
+            )
+        except MasterPersistenceError:
+            raise
+        except Exception:
+            logger.exception("Master identity provisioning failed (non-fatal)")
     current_user = _route_deps["current_user"]
 
     @app.get("/api/health", include_in_schema=False)
