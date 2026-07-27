@@ -1339,7 +1339,7 @@ def register(app, deps):
         session_for_user(row["session_id"], user)
         job = db().execute(
             "SELECT j.* FROM sessions s JOIN jobs j ON j.id = s.job_id "
-            "WHERE s.id = ?",
+            "WHERE s.id = ? AND j.origin_master_session_id IS NOT NULL",
             (row["session_id"],),
         ).fetchone()
         changed = db().execute(

@@ -514,6 +514,53 @@ def test_api_run_cancel_cancels_master_task_and_projects_once(tmp_path: Path):
     assert len(cancelled) == 1
 
 
+def test_idle_reconcile_ticks_do_not_reinsert_projected_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    app, client, project = _app_and_client(tmp_path, max_parallel=1)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="idle-reconcile",
+        tasks=[{"key": "solo", "title": "Solo", "brief": "Run"}],
+    )
+    job = jobs[0]
+    app_settings.set_master_settings(app.state.worker_db, unattended=True)
+    assert app.state.master_supervisor.tick()["started"] == [job["id"]]
+    app.state.worker_db.execute(
+        "UPDATE jobs SET status = 'done', finished_at = CURRENT_TIMESTAMP, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (job["id"],),
+    )
+
+    first = app.state.master_projection.reconcile()
+    assert first["created"] >= 1
+
+    service = app.state.master_projection
+    original_insert = service._insert
+    insert_calls: list[str] = []
+
+    def spy_insert(*args, **kwargs):
+        insert_calls.append(str(kwargs.get("projection_type", "")))
+        return original_insert(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_insert", spy_insert)
+
+    for _ in range(3):
+        assert app.state.master_projection.reconcile()["created"] == 0
+    for _ in range(3):
+        app.state.master_supervisor.tick()
+
+    assert insert_calls == []
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE source_table = 'jobs' AND source_id = ? "
+        "AND projection_type = 'master.task.completed'",
+        (job["id"],),
+    ).fetchone()[0] == 1
+
+
 def test_duplicate_and_concurrent_supervisor_ticks_claim_each_task_once(
     tmp_path: Path,
 ):

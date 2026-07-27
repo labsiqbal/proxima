@@ -925,32 +925,106 @@ class MasterProjectionService:
             )
 
     def reconcile(self) -> dict[str, int]:
-        """Low-frequency restart/reconnect safety over authoritative rows."""
+        """Low-frequency restart/reconnect safety over authoritative rows.
+
+        Each authoritative source row is matched against the projection type
+        its current state would produce, and only rows still missing that
+        projection are selected. A steady-state tick therefore reads its
+        already-projected history through an index but opens no projection
+        write transactions for rows that are already up to date.
+        """
         before = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
         jobs = self.conn.execute(
-            "SELECT j.id FROM jobs j JOIN sessions ms "
-            "ON ms.id = j.origin_master_session_id "
-            "WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id "
-            "ORDER BY COALESCE(j.updated_at, j.created_at), j.id"
+            "WITH candidate AS ("
+            "  SELECT j.id AS source_id, "
+            "    COALESCE(j.updated_at, j.created_at) AS ordering, "
+            "    CASE "
+            "      WHEN j.status = 'running' THEN 'master.task.started' "
+            "      WHEN j.status = 'done' THEN 'master.task.completed' "
+            "      WHEN j.status = 'failed' THEN 'master.task.failed' "
+            "      WHEN j.status = 'cancelled' THEN 'master.task.cancelled' "
+            "      WHEN j.status = 'review' THEN 'master.task.review_ready' "
+            "      WHEN j.status = 'queued' "
+            "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
+            "        THEN 'master.task.blocked' "
+            "      ELSE NULL "
+            "    END AS expected_type "
+            "  FROM jobs j JOIN sessions ms "
+            "    ON ms.id = j.origin_master_session_id "
+            "  WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id"
+            ") "
+            "SELECT source_id FROM candidate c "
+            "WHERE c.expected_type IS NOT NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM master_projections mp "
+            "  WHERE mp.source_table = 'jobs' "
+            "  AND mp.source_id = c.source_id "
+            "  AND mp.projection_type = c.expected_type"
+            ") "
+            "ORDER BY c.ordering, c.source_id"
         ).fetchall()
         for row in jobs:
-            self.project_task(_as_int(row["id"]))
+            self.project_task(_as_int(row["source_id"]))
         interventions = self.conn.execute(
-            "SELECT si.id FROM satpam_interventions si "
-            "JOIN jobs j ON j.id = si.job_id "
-            "JOIN sessions ms ON ms.id = j.origin_master_session_id "
-            "WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id "
-            "ORDER BY si.id"
+            "WITH candidate AS ("
+            "  SELECT si.id AS source_id, "
+            "    CASE "
+            "      WHEN si.detection NOT IN ('stalled', 'looping', 'confused') "
+            "        THEN NULL "
+            "      WHEN si.action = 'steer' THEN 'master.satpam.steered' "
+            "      WHEN si.action = 'escalate' THEN 'master.satpam.escalated' "
+            "      WHEN si.action = 'restart' AND si.status = 'pending' "
+            "        THEN 'master.satpam.restart_queued' "
+            "      WHEN si.action = 'restart' "
+            "        AND si.status IN ('applied', 'approved') "
+            "        THEN 'master.satpam.restarted' "
+            "      ELSE NULL "
+            "    END AS expected_type "
+            "  FROM satpam_interventions si "
+            "  JOIN jobs j ON j.id = si.job_id "
+            "  JOIN sessions ms ON ms.id = j.origin_master_session_id "
+            "  WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id"
+            ") "
+            "SELECT source_id FROM candidate c "
+            "WHERE c.expected_type IS NOT NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM master_projections mp "
+            "  WHERE mp.source_table = 'satpam_interventions' "
+            "  AND mp.source_id = c.source_id "
+            "  AND mp.projection_type = c.expected_type"
+            ") "
+            "ORDER BY c.source_id"
         ).fetchall()
         for row in interventions:
-            self.project_satpam(_as_int(row["id"]))
+            self.project_satpam(_as_int(row["source_id"]))
         attentions = self.conn.execute(
-            "SELECT id FROM attention_items WHERE status = 'open' ORDER BY id"
+            "WITH candidate AS ("
+            "  SELECT ai.id AS source_id, "
+            "    CASE "
+            "      WHEN ai.kind = 'satpam_recovery_failed' "
+            "        THEN 'master.satpam.recovery_failed' "
+            "      WHEN ai.kind = 'master_budget' "
+            "        THEN 'master.supervisor.outcome' "
+            "      WHEN ai.kind IN ('master_decision', 'permission_job') "
+            "        THEN 'master.attention.required' "
+            "      ELSE NULL "
+            "    END AS expected_type "
+            "  FROM attention_items ai WHERE ai.status = 'open'"
+            ") "
+            "SELECT source_id FROM candidate c "
+            "WHERE c.expected_type IS NOT NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM master_projections mp "
+            "  WHERE mp.source_table = 'attention_items' "
+            "  AND mp.source_id = c.source_id "
+            "  AND mp.projection_type = c.expected_type"
+            ") "
+            "ORDER BY c.source_id"
         ).fetchall()
         for row in attentions:
-            self.project_attention(_as_int(row["id"]))
+            self.project_attention(_as_int(row["source_id"]))
         after = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
