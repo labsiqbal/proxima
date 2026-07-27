@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import subprocess
 import threading
 from pathlib import Path
@@ -10,10 +11,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import app_settings, satpam, worktrees
+from proxima_api.db import connect
+from proxima_api.graph import normalize_graph
 from proxima_api.main import create_app
 from proxima_api.master_runtime import execute_tool
 from proxima_api.master_tool_broker import MasterToolBroker
-from proxima_api.routes.chat import _stream_session_events
+from proxima_api.routes.chat import _sse_resume_cursor, _stream_session_events
+from proxima_api.task_delegation import TaskDelegationRequest
 
 
 def _app_and_client(
@@ -344,6 +348,44 @@ def test_task_lifecycle_review_checkpoint_and_sse_replay_are_exactly_once(
     )
 
 
+def test_sse_reconnect_honors_last_event_id_header(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="last-event-id",
+        tasks=[
+            {
+                "key": "task",
+                "title": "Reconnect safe",
+                "brief": "Project two states",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+    )
+    app.state.master_projection.project_task(job_id)
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,)
+    )
+    app.state.master_projection.project_task(job_id)
+    events = _projection_events(client, desk["session"]["id"])
+
+    resume_after = _sse_resume_cursor(0, str(events[0]["id"]))
+    sse = asyncio.run(
+        _next_sse_event(
+            app,
+            desk["session"]["id"],
+            resume_after,
+        )
+    )
+    assert f"id: {events[1]['id']}\n" in sse
+    assert "event: master.task.completed\n" in sse
+
+
 @pytest.mark.parametrize("terminal_status", ["failed", "cancelled"])
 def test_terminal_prerequisite_projects_stable_downstream_blocker(
     tmp_path: Path,
@@ -424,6 +466,54 @@ def test_terminal_prerequisite_projects_stable_downstream_blocker(
     ) == 1
 
 
+def test_api_run_cancel_cancels_master_task_and_projects_once(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path, max_parallel=1)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="api-cancel",
+        tasks=[
+            {"key": "upstream", "title": "Cancel me", "brief": "Run"},
+            {
+                "key": "downstream",
+                "title": "Wait",
+                "brief": "Wait",
+                "depends_on": ["upstream"],
+            },
+        ],
+    )
+    upstream, downstream = jobs
+    app_settings.set_master_settings(app.state.worker_db, unattended=True)
+    assert app.state.master_supervisor.tick()["started"] == [upstream["id"]]
+    run_id = app.state.db.execute(
+        "SELECT r.id FROM runs r JOIN sessions s ON s.id = r.session_id "
+        "WHERE s.job_id = ?",
+        (upstream["id"],),
+    ).fetchone()["id"]
+
+    first = client.post(f"/api/runs/{run_id}/cancel")
+    repeated = client.post(f"/api/runs/{run_id}/cancel")
+
+    assert first.status_code == repeated.status_code == 200
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (upstream["id"],)
+    ).fetchone()["status"] == "cancelled"
+    blocker = app.state.db.execute(
+        "SELECT status, blocked_reason FROM jobs WHERE id = ?",
+        (downstream["id"],),
+    ).fetchone()
+    assert blocker["status"] == "queued"
+    assert "which cancelled" in blocker["blocked_reason"]
+    cancelled = [
+        event
+        for event in _projection_events(client, desk["session"]["id"])
+        if event["type"] == "master.task.cancelled"
+        and event["payload"]["task_id"] == upstream["id"]
+    ]
+    assert len(cancelled) == 1
+
+
 def test_duplicate_and_concurrent_supervisor_ticks_claim_each_task_once(
     tmp_path: Path,
 ):
@@ -468,6 +558,360 @@ def test_duplicate_and_concurrent_supervisor_ticks_claim_each_task_once(
         for result in results
         for job_id in result.get("started", [])
     ) == sorted(job["id"] for job in jobs)
+
+
+def test_master_graph_branch_never_queues_beyond_parallel_capacity(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path, max_parallel=1)
+    desk = client.get("/api/master/desk").json()
+    owner = dict(
+        app.state.db.execute(
+            "SELECT * FROM users WHERE username = 'owner'"
+        ).fetchone()
+    )
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE user_id = ? AND is_default = 1",
+        (owner["id"],),
+    ).fetchone()["id"]
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (project["slug"],)
+    ).fetchone()["id"]
+    area_id = project["ops_area"]["id"]
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {"id": "left", "name": "Left", "instruction": "Do left"},
+                {"id": "right", "name": "Right", "instruction": "Do right"},
+            ]
+        }
+    )
+    recipe_id = app.state.db.execute(
+        "INSERT INTO workflows(project_id, name, graph, created_by) "
+        "VALUES (?, 'Parallel recipe', ?, ?)",
+        (project_id, json.dumps(graph), owner["id"]),
+    ).lastrowid
+    delegated = app.state.task_delegation.create_and_start(
+        owner,
+        TaskDelegationRequest(
+            title="Parallel Task",
+            brief="Run both graph branches",
+            container_id=project_id,
+            area_id=area_id,
+            profile_id=profile_id,
+            execution_policy="guarded",
+            idempotency_key="parallel-capacity",
+            recipe_id=recipe_id,
+            origin_session_id=desk["session"]["id"],
+            routing_reason="Capacity integration test",
+        ),
+        start=False,
+        connection=app.state.db,
+    )
+    app_settings.set_master_settings(app.state.worker_db, unattended=True)
+
+    app.state.master_supervisor.tick()
+
+    active_runs = app.state.db.execute(
+        "SELECT COUNT(*) FROM runs r "
+        "JOIN sessions s ON s.id = r.session_id "
+        "WHERE s.job_id = ? AND r.status IN ('queued', 'running')",
+        (delegated.job["id"],),
+    ).fetchone()[0]
+    assert active_runs <= 1
+
+
+def test_separate_worker_connections_claim_one_queued_run_once(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cross-process-claim.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+        max_parallel=1,
+    )
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="cross-process-claim",
+        tasks=[{"key": "one", "title": "One claim", "brief": "Run once"}],
+    )
+    app_settings.set_master_settings(app.state.worker_db, unattended=True)
+    assert app.state.master_supervisor.tick()["started"] == [jobs[0]["id"]]
+    second_app = create_app(dict(app.state.config))
+
+    update_seen = [threading.Event(), threading.Event()]
+    for index, candidate in enumerate((app, second_app)):
+        candidate.state.worker_db.set_trace_callback(
+            lambda statement, signal=update_seen[index]: (
+                signal.set()
+                if "UPDATE runs SET status = 'running'" in statement
+                else None
+            )
+        )
+    blocker = connect(database_path)
+    blocker.execute("BEGIN IMMEDIATE")
+    barrier = threading.Barrier(3)
+    claims: list[dict | None] = []
+
+    def claim(candidate) -> None:
+        barrier.wait()
+        claims.append(candidate.state.worker.claim_run())
+
+    threads = [
+        threading.Thread(target=claim, args=(candidate,))
+        for candidate in (app, second_app)
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for signal in update_seen:
+        signal.wait(timeout=0.5)
+    blocker.execute("COMMIT")
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert len([claim for claim in claims if claim is not None]) == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM events WHERE run_id = ("
+        "SELECT r.id FROM runs r JOIN sessions s ON s.id = r.session_id "
+        "WHERE s.job_id = ?) AND type = 'run.started'",
+        (jobs[0]["id"],),
+    ).fetchone()[0] == 1
+    assert desk["session"]["id"] > 0
+
+
+def test_separate_start_connections_reserve_master_capacity_atomically(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cross-process-start.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+        max_parallel=1,
+    )
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="cross-process-start",
+        tasks=[
+            {"key": "one", "title": "One", "brief": "Run one"},
+            {"key": "two", "title": "Two", "brief": "Run two"},
+        ],
+    )
+    second_app = create_app(dict(app.state.config))
+    barrier = threading.Barrier(3)
+    results: list[object] = []
+
+    def start(candidate, job_id: int) -> None:
+        barrier.wait()
+        try:
+            results.append(
+                candidate.state.task_delegation.start(
+                    job_id,
+                    {"id": 1},
+                    connection=candidate.state.worker_db,
+                )
+            )
+        except Exception as exc:
+            results.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=start,
+            args=(candidate, job["id"]),
+        )
+        for candidate, job in zip((app, second_app), jobs, strict=True)
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running')"
+    ).fetchone()[0] == 1
+    assert sorted(
+        row["status"]
+        for row in app.state.db.execute(
+            "SELECT status FROM jobs WHERE id IN (?, ?)",
+            (jobs[0]["id"], jobs[1]["id"]),
+        ).fetchall()
+    ) == ["queued", "running"]
+    assert len(results) == 2
+
+
+def test_separate_start_connections_reserve_supervisor_budget_atomically(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cross-process-budget.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+        max_parallel=2,
+    )
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="cross-process-budget",
+        tasks=[
+            {"key": "one", "title": "One", "brief": "Run one"},
+            {"key": "two", "title": "Two", "brief": "Run two"},
+        ],
+    )
+    app_settings.set_master_settings(
+        app.state.worker_db,
+        unattended=True,
+        budget_turns=1,
+    )
+    second_app = create_app(dict(app.state.config))
+    barrier = threading.Barrier(3)
+    results: list[object] = []
+
+    def start(candidate, job_id: int) -> None:
+        barrier.wait()
+        try:
+            results.append(
+                candidate.state.task_delegation.start(
+                    job_id,
+                    {"id": 1},
+                    connection=candidate.state.worker_db,
+                    supervisor_budget_turns=1,
+                )
+            )
+        except Exception as exc:
+            results.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=start,
+            args=(candidate, job["id"]),
+        )
+        for candidate, job in zip((app, second_app), jobs, strict=True)
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running')"
+    ).fetchone()[0] == 1
+    assert app_settings.get_setting(
+        app.state.db,
+        "master.budget.turns_used",
+    ) == "1"
+    assert sum(
+        getattr(result, "code", None) == "master_budget_exhausted"
+        for result in results
+    ) == 1
+
+
+def test_supervisor_skips_forged_routing_and_starts_later_valid_task(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path, max_parallel=1)
+    desk = client.get("/api/master/desk").json()
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users WHERE username = 'owner'"
+    ).fetchone()["id"]
+    profile = app.state.db.execute(
+        "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1",
+        (owner_id,),
+    ).fetchone()
+    other_id = app.state.db.execute(
+        "INSERT INTO users(username, os_user) VALUES ('other-route', 'other-route')"
+    ).lastrowid
+    other_root = tmp_path / "other-route"
+    other_root.mkdir()
+    other_project_id = app.state.db.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) "
+        "VALUES ('other-route', 'Other route', ?, ?)",
+        (str(other_root), other_id),
+    ).lastrowid
+    other_area_id = app.state.db.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'ops', 'ops', 'auto')",
+        (other_project_id,),
+    ).lastrowid
+    forged_session_id = app.state.db.execute(
+        "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, "
+        "runner_id, mode) VALUES ('Forged worker', ?, ?, ?, ?, 'chat')",
+        (
+            other_project_id,
+            owner_id,
+            profile["id"],
+            profile["runner_id"],
+        ),
+    ).lastrowid
+    forged_job_id = app.state.db.execute(
+        "INSERT INTO jobs(project_id, session_id, title, input, steps_state, "
+        "target_area_id, created_by, origin_master_session_id) "
+        "VALUES (?, ?, 'Forged route', '{}', ?, ?, ?, ?)",
+        (
+            other_project_id,
+            forged_session_id,
+            json.dumps(
+                [
+                    {
+                        "name": "Task",
+                        "instruction": "Must not run",
+                        "status": "pending",
+                    }
+                ]
+            ),
+            other_area_id,
+            owner_id,
+            desk["session"]["id"],
+        ),
+    ).lastrowid
+    app.state.db.execute(
+        "UPDATE sessions SET job_id = ? WHERE id = ?",
+        (forged_job_id, forged_session_id),
+    )
+    _desk, valid_jobs = _delegate(
+        app,
+        client,
+        project,
+        key="valid-after-forged",
+        tasks=[{"key": "valid", "title": "Valid", "brief": "Run valid"}],
+    )
+    app_settings.set_master_settings(app.state.worker_db, unattended=True)
+
+    tick = app.state.master_supervisor.tick()
+
+    assert tick["started"] == [valid_jobs[0]["id"]]
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (forged_job_id,)
+    ).fetchone()["status"] == "queued"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = ?", (forged_session_id,)
+    ).fetchone()[0] == 0
+    app.state.db.execute(
+        "UPDATE runs SET status = 'cancelled' WHERE session_id = ("
+        "SELECT session_id FROM jobs WHERE id = ?)",
+        (valid_jobs[0]["id"],),
+    )
+    app.state.db.execute(
+        "INSERT INTO runs(session_id, project_id, user_id, profile_id, "
+        "runner_id, status, prompt) VALUES (?, ?, ?, ?, ?, 'queued', 'forged')",
+        (
+            forged_session_id,
+            other_project_id,
+            owner_id,
+            profile["id"],
+            profile["runner_id"],
+        ),
+    )
+    assert app.state.worker.claim_run() is None
 
 
 def test_restart_reconciliation_preserves_one_message_and_event(
@@ -523,6 +967,173 @@ def test_restart_reconciliation_preserves_one_message_and_event(
     ).fetchone()["status"] == "running"
 
 
+def test_startup_rejects_matching_but_unsafe_legacy_projection_payload(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "unsafe-legacy-projection.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+    )
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="unsafe-legacy-projection",
+        tasks=[{"key": "task", "title": "Project", "brief": "Finish"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?",
+        (job_id,),
+    )
+    projection = app.state.master_projection.project_task(job_id)
+    assert projection is not None
+    payload = json.loads(projection["payload_json"])
+    payload["raw_path"] = "/private/worktree"
+    unsafe = json.dumps(payload)
+    app.state.db.execute(
+        "UPDATE master_projections SET payload_json = ? WHERE id = ?",
+        (unsafe, projection["id"]),
+    )
+    app.state.db.execute(
+        "UPDATE events SET payload = ? WHERE id = ?",
+        (unsafe, projection["event_id"]),
+    )
+
+    with pytest.raises(RuntimeError, match="payload links"):
+        create_app(dict(app.state.config))
+
+
+def test_concurrent_projection_connections_create_one_message_and_event(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "concurrent-projection.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+    )
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="concurrent-projection",
+        tasks=[{"key": "task", "title": "Project once", "brief": "Finish"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,)
+    )
+    second_app = create_app(dict(app.state.config))
+    barrier = threading.Barrier(3)
+    results: list[dict | None] = []
+
+    def project(candidate) -> None:
+        barrier.wait()
+        results.append(candidate.state.master_projection.project_task(job_id))
+
+    threads = [
+        threading.Thread(target=project, args=(candidate,))
+        for candidate in (app, second_app)
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert len(results) == 2
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE task_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ? "
+        "AND author = 'Master'",
+        (desk["session"]["id"],),
+    ).fetchone()[0] == 1
+    assert len(_projection_events(client, desk["session"]["id"])) == 1
+
+
+def test_projection_transaction_rolls_back_all_three_rows(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="projection-rollback",
+        tasks=[{"key": "task", "title": "Rollback", "brief": "Do work"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,)
+    )
+    app.state.db.execute(
+        "CREATE TRIGGER reject_master_projection_event "
+        "BEFORE INSERT ON events "
+        "WHEN NEW.type = 'master.task.completed' "
+        "BEGIN SELECT RAISE(ABORT, 'projection event rejected'); END"
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="rejected"):
+        app.state.master_projection.project_task(job_id)
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE task_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ? "
+        "AND author = 'Master'",
+        (desk["session"]["id"],),
+    ).fetchone()[0] == 0
+    assert _projection_events(client, desk["session"]["id"]) == []
+
+
+def test_projection_links_survive_task_delete_and_restrict_delivery_delete(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "projection-delete.db"
+    app, client, project = _app_and_client(
+        tmp_path,
+        database_path=database_path,
+    )
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="projection-delete",
+        tasks=[{"key": "task", "title": "Delete source", "brief": "Finish"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,)
+    )
+    projection = app.state.master_projection.project_task(job_id)
+    assert projection is not None
+
+    with pytest.raises(sqlite3.IntegrityError):
+        app.state.db.execute(
+            "DELETE FROM messages WHERE id = ?", (projection["message_id"],)
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        app.state.db.execute(
+            "DELETE FROM events WHERE id = ?", (projection["event_id"],)
+        )
+    app.state.db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    stored = app.state.db.execute(
+        "SELECT task_id, source_id, message_id, event_id "
+        "FROM master_projections WHERE id = ?",
+        (projection["id"],),
+    ).fetchone()
+    assert stored["task_id"] is None
+    assert stored["source_id"] == job_id
+    assert stored["message_id"] == projection["message_id"]
+    assert stored["event_id"] == projection["event_id"]
+    create_app(dict(app.state.config))
+
+
 def test_feature_off_does_not_instantiate_or_project_master_services(
     tmp_path: Path,
 ):
@@ -567,6 +1178,30 @@ def test_projection_refuses_mismatched_master_owner(tmp_path: Path):
     ).fetchone()[0] == 0
 
 
+def test_projection_refuses_forged_taskless_attention_owner(tmp_path: Path):
+    app, client, _project = _app_and_client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    attention_id = app.state.db.execute(
+        "INSERT INTO attention_items(kind, title, target_json, source_key) "
+        "VALUES ('master_decision', 'Forged attention', ?, 'forged-source')",
+        (
+            json.dumps(
+                {
+                    "origin_master_session_id": desk["session"]["id"],
+                    "message": "This row has no owner-scoped source",
+                }
+            ),
+        ),
+    ).lastrowid
+
+    assert app.state.master_projection.project_attention(attention_id) is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE source_id = ? "
+        "AND source_table = 'attention_items'",
+        (attention_id,),
+    ).fetchone()[0] == 0
+
+
 def test_retried_attention_tool_projects_one_action_required_message(
     tmp_path: Path,
 ):
@@ -600,6 +1235,96 @@ def test_retried_attention_tool_projects_one_action_required_message(
     ]
     assert len(attention_events) == 1
     assert attention_events[0]["payload"]["attention_required"] is True
+
+
+def test_projection_summaries_exclude_untrusted_paths_commands_and_secrets(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="safe-projection-summary",
+        tasks=[
+            {
+                "key": "task",
+                "title": "run /private/worktree/secret.sh",
+                "brief": "Do work",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed', "
+        "rejected_reason = 'token=TOP_SECRET /private/worktree' "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+    permission_id = app.state.db.execute(
+        "INSERT INTO attention_items(kind, title, target_json, source_key) "
+        "VALUES ('permission_job', ?, ?, 'permission:safe-summary')",
+        (
+            "cd /private/worktree && publish TOP_SECRET",
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "message": "token=TOP_SECRET",
+                }
+            ),
+        ),
+    ).lastrowid
+    app.state.master_projection.project_attention(permission_id)
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+    )
+    broker.execute(
+        "create_attention",
+        {
+            "title": "Read /private/worktree",
+            "message": "token=TOP_SECRET",
+            "idempotency_key": "safe-summary-attention",
+        },
+    )
+    intervention_id = satpam.record_intervention(
+        app.state.db,
+        job_id,
+        None,
+        satpam.ACTION_STEER,
+        satpam.DETECTION_STALLED,
+        satpam.STATUS_APPLIED,
+        "Inspect /private/worktree with token=TOP_SECRET",
+    )
+    app.state.master_projection.project_satpam(intervention_id)
+
+    messages = app.state.db.execute(
+        "SELECT content FROM messages WHERE session_id = ? "
+        "AND author = 'Master'",
+        (desk["session"]["id"],),
+    ).fetchall()
+    events = _projection_events(client, desk["session"]["id"])
+    projected_text = json.dumps(
+        {
+            "messages": [row["content"] for row in messages],
+            "events": [event["payload"] for event in events],
+        }
+    )
+    assert "/private/worktree" not in projected_text
+    assert "TOP_SECRET" not in projected_text
+    assert "token=" not in projected_text
+    assert "publish" not in projected_text
+    assert {
+        event["type"]
+        for event in events
+    } == {
+        "master.attention.required",
+        "master.satpam.steered",
+        "master.task.failed",
+    }
 
 
 def test_master_supervisor_never_invokes_satpam_recovery_methods(

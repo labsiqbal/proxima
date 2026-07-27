@@ -107,6 +107,40 @@ def test_schema_32_drift_fails_and_rolls_back_version_record(tmp_path: Path):
     } == {"id", "master_session_id"}
 
 
+def test_schema_33_rejects_incomplete_projection_state(tmp_path: Path):
+    db_path = tmp_path / "incomplete-projection.db"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('projection-owner', 'owner')"
+    ).lastrowid
+    profile_id = conn.execute(
+        "INSERT INTO profiles(user_id, slug, name, hermes_home, system_kind) "
+        "VALUES (?, 'master', 'Master', '/tmp/master', 'master')",
+        (owner_id,),
+    ).lastrowid
+    session_id = conn.execute(
+        "INSERT INTO sessions(title, owner_user_id, profile_id, mode) "
+        "VALUES ('Master', ?, ?, 'master')",
+        (owner_id, profile_id),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO master_projections("
+        "owner_user_id, master_session_id, projection_key, projection_type, "
+        "source_table, source_id, payload_json"
+        ") VALUES (?, ?, 'partial', 'master.attention.required', "
+        "'attention_items', 999, 'not-json')",
+        (owner_id, session_id),
+    )
+    conn.execute("DELETE FROM schema_migrations WHERE version = 33")
+
+    with pytest.raises(RuntimeError, match="projection ledger"):
+        run_migrations(conn, str(db_path))
+
+    assert current_version(conn) == 32
+
+
 def test_applies_pending_once_then_idempotent(tmp_path: Path):
     db = tmp_path / "h.db"
     conn = connect(db)

@@ -376,8 +376,11 @@ start already-queued Master Tasks, each following its own Guarded or Autonomous
 execution policy for ACP approval, plus normal BYO push/PR capability; destructive
 product admin is not in its handler set. `master_max_parallel` limits queued plus
 running Task-agent runs, and dependency-blocked rows do not starve later eligible
-Tasks. A process-local tick mutex and the Task service's database claim make repeated
-and concurrent ticks safe. Satpam remains the sole steer/restart authority.
+Tasks. Start and worker claims revalidate the owner, Master session, Container, Area,
+Task-agent, delegation audit, and dependency graph. Immediate database transactions
+reserve capacity and unattended turns across processes; graph branches share that
+same global cap. A process-local tick mutex avoids redundant same-process work.
+Satpam remains the sole steer/restart authority.
 
 **Durable Task and supervision projection:** `MasterProjectionService` appends
 concise Task start, review-ready, completion, failure, cancellation, stable
@@ -387,8 +390,14 @@ second lifecycle ledger: jobs, runs, checkpoints, Attention, node state, and Sat
 rows remain authoritative. Each projection also emits one named event on the
 existing session SSE stream with stable source, Task, Container, Area, checkpoint,
 intervention, message, projection, and toast keys. Raw token, reasoning, and tool
-deltas are never copied. Restart reconciliation safely retries missing projections
-without creating a second message or event. No projection can approve review,
+deltas are never copied, and the matching ledger/event payload is bounded to 16 KiB.
+Server-owned projection summaries do not copy Task titles, runner errors,
+permission commands, Attention text, Satpam reasons, paths, or credentials.
+Projection message, event, and ledger links commit atomically; strict startup
+validation rejects incomplete, cross-owner, malformed, or mismatched source/type
+state. Restart reconciliation safely retries missing projections without creating a
+second message or event. SSE reconnect accepts the existing cursor query and
+`Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 

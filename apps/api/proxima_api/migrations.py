@@ -1177,22 +1177,73 @@ def _add_master_tool_call_ledger(conn: sqlite3.Connection) -> None:
 
 def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
     """Exactly-once links from authoritative state to Master chat and SSE."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    required_tables = {
+        "users",
+        "sessions",
+        "messages",
+        "events",
+        "jobs",
+        "attention_items",
+        "satpam_interventions",
+    }
+    if not required_tables.issubset(tables):
+        return
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS master_projections (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-          projection_key TEXT NOT NULL,
-          projection_type TEXT NOT NULL,
-          source_table TEXT NOT NULL,
-          source_id INTEGER NOT NULL,
+          projection_key TEXT NOT NULL
+            CHECK (length(projection_key) BETWEEN 1 AND 300),
+          projection_type TEXT NOT NULL CHECK (projection_type IN (
+            'master.task.started',
+            'master.task.review_ready',
+            'master.task.completed',
+            'master.task.failed',
+            'master.task.cancelled',
+            'master.task.blocked',
+            'master.attention.required',
+            'master.supervisor.outcome',
+            'master.satpam.steered',
+            'master.satpam.restart_queued',
+            'master.satpam.restarted',
+            'master.satpam.recovery_failed',
+            'master.satpam.escalated'
+          )),
+          source_table TEXT NOT NULL CHECK (
+            source_table IN (
+              'jobs', 'attention_items', 'satpam_interventions'
+            )
+          ),
+          source_id INTEGER NOT NULL CHECK (source_id > 0),
           task_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
-          message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
-          event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+          message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
           payload_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK (
+            (projection_type LIKE 'master.task.%'
+              AND source_table = 'jobs' AND task_id = source_id)
+            OR
+            (projection_type LIKE 'master.satpam.%'
+              AND projection_type != 'master.satpam.recovery_failed'
+              AND source_table = 'satpam_interventions'
+              AND task_id IS NOT NULL)
+            OR
+            (projection_type IN (
+              'master.attention.required',
+              'master.supervisor.outcome',
+              'master.satpam.recovery_failed'
+            ) AND source_table = 'attention_items')
+          ),
           UNIQUE(owner_user_id, projection_key)
         )
         """
@@ -1204,6 +1255,19 @@ def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_master_projections_source "
         "ON master_projections(source_table, source_id, projection_type)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_source_type "
+        "ON master_projections("
+        "owner_user_id, source_table, source_id, projection_type)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_message "
+        "ON master_projections(message_id) WHERE message_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_event "
+        "ON master_projections(event_id) WHERE event_id IS NOT NULL"
     )
     expected_columns = {
         "id",
@@ -1228,6 +1292,9 @@ def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
     }
     if actual_columns != expected_columns:
         raise RuntimeError("Master projection ledger schema is incomplete")
+    from .master_projection import assert_master_projection_ledger
+
+    assert_master_projection_ledger(conn)
 
 
 MIGRATIONS: list[Migration] = [

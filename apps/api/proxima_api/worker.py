@@ -211,78 +211,207 @@ class RunWorker:
         stale_seconds = _as_int(getattr(self.app.state, "config", {}).get("run_stale_seconds") or 60)
         self.reap_stale_run_blockers(stale_seconds)
         with self.app.state.db_lock:
-            # Per-session serialization: normal chat runs must not overlap. Prompt
-            # collaboration children are the exception: their parent run stays
-            # 'running' as the visible busy indicator, while child agent runs fan out
-            # behind it and never write raw outputs to the main chat.
-            row = db.execute(
-                """
-                SELECT * FROM runs r WHERE r.status = 'queued'
-                  AND (
-                    (r.kind LIKE 'collab_%'
-                     AND NOT EXISTS (
-                       SELECT 1 FROM runs rr
-                       WHERE rr.session_id = r.session_id
-                         AND rr.status = 'running'
-                         AND rr.kind NOT LIKE 'collab_%'
-                     ))
-                    OR
-                    (r.kind NOT LIKE 'collab_%'
-                     AND NOT EXISTS (
-                       SELECT 1 FROM runs rr
-                       WHERE rr.session_id = r.session_id
-                         AND rr.status = 'running'
-                     ))
-                  )
-                  AND (
-                    NOT EXISTS (
-                      SELECT 1 FROM sessions master_session
-                      JOIN jobs master_job ON master_job.id = master_session.job_id
-                      WHERE master_session.id = r.session_id
-                        AND master_job.origin_master_session_id IS NOT NULL
-                    )
-                    OR (
-                      SELECT COUNT(*) FROM runs master_run
-                      JOIN sessions master_run_session
-                        ON master_run_session.id = master_run.session_id
-                      JOIN jobs master_run_job
-                        ON master_run_job.id = master_run_session.job_id
-                      WHERE master_run.status = 'running'
-                        AND master_run_job.origin_master_session_id IS NOT NULL
-                    ) < ?
-                  )
-                  AND (
-                    ? = 1
-                    OR NOT EXISTS (
-                      SELECT 1 FROM sessions ms
-                      LEFT JOIN jobs mj ON mj.id = ms.job_id
-                      WHERE ms.id = r.session_id
-                        AND (
-                          ms.mode = 'master'
-                          OR mj.origin_master_session_id IS NOT NULL
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                # Per-session serialization: normal chat runs must not overlap.
+                # Prompt collaboration children are the exception: their parent
+                # stays running while child agent runs fan out behind it.
+                row = db.execute(
+                    """
+                    SELECT * FROM runs r WHERE r.status = 'queued'
+                      AND (
+                        (r.kind LIKE 'collab_%'
+                         AND NOT EXISTS (
+                           SELECT 1 FROM runs rr
+                           WHERE rr.session_id = r.session_id
+                             AND rr.status = 'running'
+                             AND rr.kind NOT LIKE 'collab_%'
+                         ))
+                        OR
+                        (r.kind NOT LIKE 'collab_%'
+                         AND NOT EXISTS (
+                           SELECT 1 FROM runs rr
+                           WHERE rr.session_id = r.session_id
+                             AND rr.status = 'running'
+                         ))
+                      )
+                      AND (
+                        NOT EXISTS (
+                          SELECT 1 FROM sessions master_session
+                          JOIN jobs master_job
+                            ON master_job.id = master_session.job_id
+                          WHERE master_session.id = r.session_id
+                            AND master_job.origin_master_session_id IS NOT NULL
                         )
-                    )
-                  )
-                ORDER BY r.id LIMIT 1
-                """,
-                (
-                    master_parallel_limit(self.app.state.config),
-                    int(
-                        features.enabled(
-                            self.app.state.config,
-                            features.MASTER_ORCHESTRATOR,
+                        OR (
+                          SELECT COUNT(*) FROM runs master_run
+                          JOIN sessions master_run_session
+                            ON master_run_session.id = master_run.session_id
+                          JOIN jobs master_run_job
+                            ON master_run_job.id = master_run_session.job_id
+                          WHERE master_run.status = 'running'
+                            AND master_run_job.origin_master_session_id IS NOT NULL
+                            AND master_run_job.origin_master_session_id = (
+                              SELECT capacity_job.origin_master_session_id
+                              FROM sessions capacity_session
+                              JOIN jobs capacity_job
+                                ON capacity_job.id =
+                                   capacity_session.job_id
+                              WHERE capacity_session.id = r.session_id
+                            )
+                        ) < ?
+                      )
+                      AND (
+                        NOT EXISTS (
+                          SELECT 1 FROM sessions scoped_session
+                          JOIN jobs scoped_job
+                            ON scoped_job.id = scoped_session.job_id
+                          WHERE scoped_session.id = r.session_id
+                            AND scoped_job.origin_master_session_id IS NOT NULL
                         )
+                        OR EXISTS (
+                          SELECT 1 FROM sessions scoped_session
+                          JOIN jobs scoped_job
+                            ON scoped_job.id = scoped_session.job_id
+                          JOIN sessions origin
+                            ON origin.id =
+                               scoped_job.origin_master_session_id
+                          JOIN projects container
+                            ON container.id = scoped_job.project_id
+                          JOIN project_areas area
+                            ON area.id = scoped_job.target_area_id
+                          JOIN profiles task_profile
+                            ON task_profile.id = scoped_session.profile_id
+                          WHERE scoped_session.id = r.session_id
+                            AND scoped_job.status IN ('queued', 'running')
+                            AND origin.mode = 'master'
+                            AND origin.project_id IS NULL
+                            AND origin.owner_user_id = scoped_job.created_by
+                            AND container.owner_user_id =
+                                scoped_job.created_by
+                            AND container.archived_at IS NULL
+                            AND area.project_id = scoped_job.project_id
+                            AND area.source != 'excluded'
+                            AND scoped_session.owner_user_id =
+                                scoped_job.created_by
+                            AND scoped_session.project_id =
+                                scoped_job.project_id
+                            AND scoped_session.job_id = scoped_job.id
+                            AND task_profile.user_id =
+                                scoped_job.created_by
+                            AND COALESCE(task_profile.system_kind, '') = ''
+                            AND r.user_id = scoped_job.created_by
+                            AND r.profile_id = task_profile.id
+                            AND NOT EXISTS (
+                              SELECT 1 FROM task_dependencies dependency
+                              JOIN jobs prerequisite
+                                ON prerequisite.id =
+                                   dependency.depends_on_task_id
+                              WHERE dependency.task_id = scoped_job.id
+                                AND (
+                                  prerequisite.status
+                                    IN ('failed', 'cancelled')
+                                  OR (
+                                    dependency.required_status = 'review'
+                                    AND prerequisite.status
+                                      NOT IN ('review', 'done')
+                                  )
+                                  OR (
+                                    dependency.required_status = 'done'
+                                    AND prerequisite.status != 'done'
+                                  )
+                                  OR EXISTS (
+                                    SELECT 1 FROM node_states node_state
+                                    WHERE node_state.job_id = prerequisite.id
+                                      AND node_state.status = 'failed'
+                                  )
+                                )
+                            )
+                        )
+                      )
+                      AND (
+                        ? = 1
+                        OR NOT EXISTS (
+                          SELECT 1 FROM sessions ms
+                          LEFT JOIN jobs mj ON mj.id = ms.job_id
+                          WHERE ms.id = r.session_id
+                            AND (
+                              ms.mode = 'master'
+                              OR mj.origin_master_session_id IS NOT NULL
+                            )
+                        )
+                      )
+                    ORDER BY r.id LIMIT 1
+                    """,
+                    (
+                        master_parallel_limit(self.app.state.config),
+                        int(
+                            features.enabled(
+                                self.app.state.config,
+                                features.MASTER_ORCHESTRATOR,
+                            )
+                        ),
                     ),
-                ),
-            ).fetchone()
-            if not row:
-                return None
-            db.execute(
-                "UPDATE runs SET status = 'running', started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
-                (row["id"],),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return None
+                master_job = db.execute(
+                    "SELECT j.id, j.status FROM sessions s "
+                    "JOIN jobs j ON j.id = s.job_id "
+                    "WHERE s.id = ? "
+                    "AND j.origin_master_session_id IS NOT NULL",
+                    (row["session_id"],),
+                ).fetchone()
+                if master_job and master_job["status"] == "queued":
+                    started = db.execute(
+                        "UPDATE jobs SET status = 'running', "
+                        "started_at = COALESCE(started_at, CURRENT_TIMESTAMP), "
+                        "blocked_reason = NULL, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'queued'",
+                        (master_job["id"],),
+                    )
+                    if started.rowcount != 1:
+                        db.execute("ROLLBACK")
+                        return None
+                    db.execute(
+                        "UPDATE task_delegations SET start_state = 'started', "
+                        "started_at = COALESCE(started_at, CURRENT_TIMESTAMP), "
+                        "updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+                        (master_job["id"],),
+                    )
+                claimed = db.execute(
+                    "UPDATE runs SET status = 'running', "
+                    "started_at = CURRENT_TIMESTAMP, "
+                    "heartbeat_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'queued'",
+                    (row["id"],),
+                )
+                if claimed.rowcount != 1:
+                    db.execute("ROLLBACK")
+                    return None
+                claimed_row = dict(
+                    db.execute(
+                        "SELECT * FROM runs WHERE id = ?", (row["id"],)
+                    ).fetchone()
+                )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        self.add_event(
+            claimed_row["id"],
+            claimed_row["session_id"],
+            claimed_row["project_id"],
+            "run.started",
+            {"runner": claimed_row["runner_id"]},
+        )
+        if master_job and self.app.state.master_projection is not None:
+            self.app.state.master_projection.safe_project_task(
+                int(master_job["id"])
             )
-            self.add_event(row["id"], row["session_id"], row["project_id"], "run.started", {"runner": row["runner_id"]})
-            return dict(db.execute("SELECT * FROM runs WHERE id = ?", (row["id"],)).fetchone())
+        return claimed_row
 
     def _reconstruct_text(self, run_id: int) -> str:
         """Rebuild the agent's message from streamed deltas already in the DB —

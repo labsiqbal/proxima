@@ -267,12 +267,27 @@ def master_parallel_limit(config: Mapping[str, Any] | None = None) -> int:
 def master_active_slots(conn, origin_master_session_id: int) -> int:
     return _as_int(
         conn.execute(
-            "SELECT COUNT(DISTINCT r.id) AS c FROM runs r "
-            "JOIN sessions s ON s.id = r.session_id "
-            "JOIN jobs j ON j.id = s.job_id "
-            "WHERE j.origin_master_session_id = ? "
-            "AND r.status IN ('queued', 'running')",
-            (origin_master_session_id,),
+            "SELECT ("
+            "  SELECT COUNT(*) FROM runs active_run "
+            "  JOIN sessions active_session "
+            "  ON active_session.id = active_run.session_id "
+            "  JOIN jobs active_job "
+            "  ON active_job.id = active_session.job_id "
+            "  WHERE active_job.origin_master_session_id = ? "
+            "  AND active_run.status IN ('queued', 'running')"
+            ") + ("
+            "  SELECT COUNT(*) FROM jobs reserved_job "
+            "  WHERE reserved_job.origin_master_session_id = ? "
+            "  AND reserved_job.status = 'running' "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM sessions reserved_session "
+            "    JOIN runs reserved_run "
+            "    ON reserved_run.session_id = reserved_session.id "
+            "    WHERE reserved_session.job_id = reserved_job.id "
+            "    AND reserved_run.status IN ('queued', 'running')"
+            "  )"
+            ") AS c",
+            (origin_master_session_id, origin_master_session_id),
         ).fetchone()["c"]
     )
 
@@ -451,7 +466,14 @@ def create_master_plan(conn, app, user: dict[str, Any], origin_master_session_id
     return payload
 
 
-def start_master_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, Any]:
+def start_master_job(
+    conn,
+    app,
+    user: dict[str, Any],
+    job_id: int,
+    *,
+    supervisor_budget_turns: int | None = None,
+) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM jobs WHERE id = ? AND created_by = ? AND origin_master_session_id IS NOT NULL",
         (job_id, user["id"]),
@@ -459,7 +481,12 @@ def start_master_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, 
     if not row:
         raise MasterToolError("job_not_found", f"Master job {job_id} was not found")
     try:
-        app.state.task_delegation.start(job_id, user, connection=conn)
+        app.state.task_delegation.start(
+            job_id,
+            user,
+            connection=conn,
+            supervisor_budget_turns=supervisor_budget_turns,
+        )
     except TaskDelegationError as exc:
         raise MasterToolError(exc.code, str(exc)) from exc
     return _job_payload(conn, job_id)
@@ -636,7 +663,14 @@ def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_
                         started_jobs.append(start_master_job(conn, app, user, job["id"]))
                     except MasterToolError as exc:
                         queued = _job_payload(conn, job["id"])
-                        start_errors.append({"job_id": job["id"], "code": exc.code, "message": str(exc)})
+                        if exc.code != "master_capacity_full":
+                            start_errors.append(
+                                {
+                                    "job_id": job["id"],
+                                    "code": exc.code,
+                                    "message": str(exc),
+                                }
+                            )
                         started_jobs.append(queued)
                 jobs = started_jobs
             data = {

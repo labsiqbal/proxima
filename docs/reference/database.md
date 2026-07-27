@@ -226,13 +226,13 @@ SQLite (WAL mode). 33 tables. Applied migration version: **33**. This is the exa
 | `source_table` | TEXT | NO |  |  |
 | `source_id` | INTEGER | NO |  |  |
 | `task_id` | INTEGER | yes |  | → `jobs.id` (ON DELETE SET NULL) |
-| `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE SET NULL) |
-| `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE SET NULL) |
+| `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
+| `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
 | `payload_json` | TEXT | NO | `'{}'` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `idx_master_projections_source` - (source_table, source_id, projection_type); `idx_master_projections_session` - (master_session_id, id)
+**Indexes:** `uq_master_projections_event` - UNIQUE (event_id); `uq_master_projections_message` - UNIQUE (message_id); `uq_master_projections_source_type` - UNIQUE (owner_user_id, source_table, source_id, projection_type); `idx_master_projections_source` - (source_table, source_id, projection_type); `idx_master_projections_session` - (master_session_id, id)
 
 
 ### master_tool_calls
@@ -622,4 +622,4 @@ SQLite (WAL mode). 33 tables. Applied migration version: **33**. This is the exa
 
 
 ---
-_Generated 2026-07-27 07:20 UTC._
+_Generated 2026-07-27 08:10 UTC._

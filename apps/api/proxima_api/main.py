@@ -43,7 +43,10 @@ from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
 from .master_supervisor import MasterSupervisor
-from .master_projection import MasterProjectionService
+from .master_projection import (
+    MasterProjectionService,
+    assert_master_projection_ledger,
+)
 from .task_delegation import TaskDelegationService
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
@@ -207,6 +210,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
     run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
     assert_master_persistence(app.state.db)
+    assert_master_projection_ledger(app.state.db)
     migrate_legacy_ops_containers(app.state.db)
     app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)

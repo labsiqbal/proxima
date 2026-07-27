@@ -21,16 +21,25 @@ Each tick:
    (`PROXIMA_MASTER_MAX_PARALLEL`, default 3) active-run limit and unattended turn
    and wall-clock budgets.
 3. Reads only queued Tasks whose `created_by` matches that Master session owner.
-4. Calls `TaskDelegationService.start`, which owns dependency readiness, exact
-   Container and Area binding, worktree policy, and the transactional
-   queued-to-running claim.
-5. Skips blocked Tasks without consuming a start slot, so an earlier blocked row
+4. Calls `TaskDelegationService.start`, which revalidates the project-unbound
+   Master session, owner, active Container, exact Area, worker session, Task-agent
+   profile, and delegation audit before any claim.
+5. Lets the Task service own dependency readiness, worktree policy, and the
+   transactional queued-to-running claim. A running job without an active run is
+   counted as a start reservation until its run is committed or recovery resumes it.
+6. Reserves the unattended turn counter in the same immediate transaction as the
+   job claim. Separate server processes therefore cannot spend one turn twice.
+7. Skips blocked Tasks without consuming a start slot, so an earlier blocked row
    cannot starve later eligible work.
 
 Failed or cancelled prerequisites leave the dependent queued with a durable
 `jobs.blocked_reason`. Cycles are rejected by the delegation service and SQLite
-triggers before a supervisor tick can see them. A process-local nonblocking tick
-mutex plus the database claim prevents duplicate starts.
+triggers before a supervisor tick can see them. The process-local nonblocking tick
+mutex reduces duplicate work, while SQLite immediate transactions, conditional
+claims, and capacity reservations provide the cross-process safety boundary. Linear
+and graph starts use the same global Master capacity. Worker run claims use the same
+transactional compare-and-set boundary and revalidate Master ownership and
+dependency readiness before accepting a queued legacy run.
 
 ## Projection boundary
 
@@ -48,9 +57,21 @@ It writes:
 - one `master_projections` idempotency/link row
 
 `master_projections` is not lifecycle truth. Its unique owner and projection key
-links a message and event to a source table and row. Reconciliation after restart
-can safely retry because an existing key produces no second message or event.
-Raw token, reasoning, and tool delta events are never projected.
+links a message and event to a source table and row. Source table and event type
+must match, links are owner-scoped, and committed rows must have both their message
+and event. Message, event, and ledger creation is one transaction, so rollback
+cannot leave partial projection state. Message and event deletion is restricted;
+Task deletion clears the optional Task link while preserving the historical source
+identity.
+
+Startup validates the projection table schema, indexes, foreign keys, Master
+session ownership, source links, and bounded payload equality. Reconciliation after
+restart can safely retry because an existing key produces no second message or
+event. A reused key with different ownership or source binding fails closed. Raw
+token, reasoning, and tool delta events are never projected, and payloads are
+limited to 16 KiB. Projection messages are also server-owned summaries: Task
+titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
+and credentials are not copied into the Master conversation or event payload.
 
 Review-ready payloads include the stable Task, Container, Area, and latest
 checkpoint ids. Attention and Satpam payloads include their source row ids and a
@@ -80,9 +101,11 @@ Supervision events:
 
 These are named events on
 `GET /api/sessions/{master_session_id}/events/stream`. The existing global
-`events.id` cursor remains the resume key. Reconnect with the last received id
-delivers only later rows; replay from an earlier cursor returns the same one event
-per projection and creates no new durable data.
+`events.id` cursor remains the resume key. The stream accepts either `after_id` or
+the browser-standard `Last-Event-ID` header and resumes after the greater valid
+cursor. Reconnect with the last received id delivers only later rows; replay from
+an earlier cursor returns the same one event per projection and creates no new
+durable data.
 
 Events and projected chat messages report state only. They do not approve review,
 landing, restart, or Attention gates and are never accepted as control input.

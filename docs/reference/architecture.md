@@ -416,10 +416,15 @@ redirected responses to the runner.
 Interactive Master is quiet until asked. The desk can enable unattended mode; the
 `MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock
 budgets and the configured `master_max_parallel` active-run limit. Dependency-blocked
-rows do not consume a start slot. The optional token value is stored and shown, but
-current ACP events expose no usage counter, so turn + wall-clock are the enforced
-Master budgets today. Budget exhaustion disables unattended mode and creates a
-`master_budget` attention item.
+rows do not consume a start slot. Each start revalidates the canonical owner,
+project-unbound Master session, active Container, exact Area, worker session,
+Task-agent profile, delegation audit, and prerequisite state. Immediate SQLite
+transactions reserve job capacity and unattended turns across server processes.
+Running jobs between their job claim and first run commit count as reservations, and
+ready graph branches share the same global limit. The optional token value is stored
+and shown, but current ACP events expose no usage counter, so turn + wall-clock are
+the enforced Master budgets today. Budget exhaustion disables unattended mode and
+creates a `master_budget` attention item.
 Git commit/push/PR remains ordinary job work through the existing BYO environment.
 Destructive install administration is not in the unattended allowlist.
 
@@ -430,8 +435,13 @@ steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 Satpam rows into the same durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
-retry, reconnect, and restart reconciliation idempotent. Raw streaming deltas are
-never projected. See [master-supervision.md](../master-supervision.md).
+retry, reconnect, and restart reconciliation idempotent. Projection message, event,
+and ledger rows commit together. Startup validates their strict owner, source/type,
+foreign-key, index, complete-link, and bounded payload contract. Raw streaming deltas
+are never projected. Server-owned summaries omit Task titles, runner errors,
+permission commands, Attention text, Satpam reasons, paths, and credentials. The
+existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
+[master-supervision.md](../master-supervision.md).
 
 ### 1. Chat turn (the core loop)
 

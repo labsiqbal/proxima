@@ -112,9 +112,22 @@ class MasterSupervisor:
                 break
             try:
                 job = start_master_job(
-                    conn, self.app, {"id": row["created_by"]}, row["id"]
+                    conn,
+                    self.app,
+                    {"id": row["created_by"]},
+                    row["id"],
+                    supervisor_budget_turns=settings["budget_turns"],
                 )
             except Exception as exc:
+                if getattr(exc, "code", None) == "master_capacity_full":
+                    break
+                if getattr(exc, "code", None) == "master_budget_exhausted":
+                    self._stop_for_budget(
+                        conn,
+                        session["id"],
+                        "turn budget exhausted",
+                    )
+                    break
                 conn.execute(
                     "INSERT OR IGNORE INTO attention_items(kind, title, target_json, inline_ok, status, source_key) "
                     "VALUES ('master_decision', 'Master could not start queued work', ?, 0, 'open', ?)",
@@ -145,7 +158,6 @@ class MasterSupervisor:
                 continue
             started.append(row["id"])
             turns_used += 1
-            app_settings.set_setting(conn, "master.budget.turns_used", str(turns_used))
         if self.app.state.master_projection is not None:
             self.app.state.master_projection.safe_reconcile()
         return {

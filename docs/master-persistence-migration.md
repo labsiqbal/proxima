@@ -20,6 +20,15 @@ existing tables. `jobs` remains Task truth. Migration 33 adds
 `master_projections`, an idempotency and source-link ledger for concise Master
 messages and session events. It does not copy or replace lifecycle state.
 
+Migration 33 validates more than the presence of column names. On a complete
+application schema it requires the canonical constraints, restrictive
+message/event foreign keys, owner/source uniqueness indexes, valid source-to-event
+type mappings, complete message and event links, bounded matching JSON payloads,
+and a project-unbound owner-matched Master session. A partially created or
+malformed projection table is ambiguous and fails closed without advancing schema
+version 32. Intentionally minimal old test or bootstrap schemas that do not yet
+contain the application backbone remain eligible for the earlier migration chain.
+
 Checkpoint and job-input payloads are rewritten only for known ownership keys:
 `alpha_session_id` becomes `origin_master_session_id` and
 `alpha_dispatched` becomes `master_dispatched`. User message and prompt text are
@@ -84,6 +93,9 @@ the Alpha-era messages already there.
 | Both origin columns with conflicting values | refuse and roll back |
 | Mixed Alpha/Master profile and session names for the same linked identity | normalize in place |
 | Dual identities, wrong profile link, or project-bound system session | refuse and roll back |
+| Complete schema with no projection table | create the strict projection ledger and indexes |
+| Valid migration 33 schema and rows | validate and reuse without rewriting history |
+| Partial table, incomplete links, mismatched source/type, or malformed payload | refuse and leave migration 33 unapplied |
 
 Feature-off startup still migrates and validates persistence, but does not
 instantiate the Master supervisor or projection service, resume committed Master
