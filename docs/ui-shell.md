@@ -10,38 +10,43 @@ There is **one workspace**. The old Ops/Code split is gone — no workspace swit
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (hands-on), **Alpha** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Archive** (where deliverables live), plus feature-gated **Design**. The **active project** is switched from a text control in the shell top bar (immediately right of Search). Project **management** (list / link / create / remove / container settings) lives under **Settings → Projects**, not primary nav. Agents and Settings stay in the account menu. The default landing view is Chat.
+The left navigation is flow-ordered: **Chat** (hands-on), **Master** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Archive** (where deliverables live), plus feature-gated **Design**. The **active project** is switched from a text control in the shell top bar (immediately right of Search). Project **management** (list / link / create / remove / container settings) lives under **Settings → Projects**, not primary nav. Agents and Settings stay in the account menu. The default landing view is Chat.
 
 ## Chat — the front door
 
-Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The left nav lists destinations only (**Chat**, **Alpha**, **Tasks**, …); it does not carry a separate **New chat** row. A blank session is started from the **Chat** header control (compact icon on the mobile topbar), or via `/new`. The database session is created lazily on the first message; recent chats appear under the nav once a thread exists.
+Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The left nav lists destinations only (**Chat**, **Master**, **Tasks**, …); it does not carry a separate **New chat** row. A blank session is started from the **Chat** header control (compact icon on the mobile topbar), or via `/new`. The database session is created lazily on the first message; recent chats appear under the nav once a thread exists.
 
 A workflow's iteration thread is not an ordinary chat: the nav attributes it to Workflows, and picking Chat while one is open switches to a plain conversation instead.
 
 A file-changing assistant turn carries a **Restore changed paths** control. It first
-opens a path impact preview and asks for confirmation; active Alpha work in the same
+opens a path impact preview and asks for confirmation; active Master work in the same
 project adds a warning. The journal belongs to that chat session and disappears with it.
 
-## Alpha
+## Master
 
-Alpha is a first-class destination, not a Chat tab or Tasks filter. Its header identifies
+Master navigation, settings, tours, and deep links are omitted unless the
+server-owned `feature_master_orchestrator` flag is enabled. It defaults off
+while the restricted Master runtime is still integrating. Stale local view state
+cannot bypass this gate.
+
+Master is a first-class destination, not a Chat tab or Tasks filter. Its header identifies
 the built-in system orchestrator and lets the owner choose the backing runner; the desk
-itself keeps the counterpart label **Alpha** and does not expose a fake worker profile.
+itself keeps the counterpart label **Master** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
-saved unattended budgets. The main column is the Alpha thread plus the shared **Chat
-composer** stack (attach + `@` project file/artifact mentions) wired to Alpha's send
+saved unattended budgets. The main column is the Master thread plus the shared **Chat
+composer** stack (attach + `@` project file/artifact mentions) wired to Master's send
 API rather than a normal chat run; project context follows the shell active project
-(or an active Alpha job's project). The side column holds active/queued/needs-you jobs
+(or an active Master job's project). The side column holds active/queued/needs-you jobs
 and a job-scoped checkpoint timeline and is **collapsible** (header toggle + reopen
-edge control; preference in `localStorage` as `proxima.alpha.sideCollapsed`; mobile
+edge control; preference in `localStorage` as `proxima.master.sideCollapsed`; mobile
 defaults collapsed). Idle, loading, failure/retry, populated, and in-flight states all
 retain the same geometry. On narrow screens the side column stacks after the thread
 with no horizontal scroll.
 
-**Unattended** is a quick pressed toggle on the desk. Off means Alpha never starts work
-without an owner turn. On means the server may start already-queued Alpha jobs until the
-saved turn/wall budget stops cleanly; numeric limits live under Settings → Alpha and
-remain readable on the desk. Satpam, not Alpha, owns stuck-job steer/restart.
+**Unattended** is a quick pressed toggle on the desk. Off means Master never starts work
+without an owner turn. On means the server may start already-queued Master jobs until the
+saved turn/wall budget stops cleanly; numeric limits live under Settings → Master and
+remain readable on the desk. Satpam, not Master, owns stuck-job steer/restart.
 
 ## Tasks
 
@@ -116,15 +121,15 @@ switcher is disabled (locked). On top-level surfaces the switcher stays enabled 
 changing project **stays on the current view** (refilters content; does not force Chat).
 
 **Multitask foundation:** primary surfaces must not destroy in-flight UI on leave.
-Once visited, **Chat, Alpha, Tasks, Workflows, Archive, and Design** stay mounted in
+Once visited, **Chat, Master, Tasks, Workflows, Archive, and Design** stay mounted in
 hidden `surface-pane`s so draft text, open panels, canvas/plan state, and in-flight
 runs re-attach when the owner returns in the same browser session. Server work continues
 regardless; the client contract is keep-alive / re-attach, not remount-from-zero.
 
 **Teaching empty states:** top-level empties share one grammar — title, what the surface
-can do, short tutorial steps, and one primary CTA where it applies (Chat, Alpha, Tasks,
+can do, short tutorial steps, and one primary CTA where it applies (Chat, Master, Tasks,
 Workflows library context, Archive, Design home). Help/core tour nouns match the primary
-loop **Chat → Tasks → Workflows → Archive**, with Alpha as the delegate side path.
+loop **Chat → Tasks → Workflows → Archive**, with Master as the delegate side path.
 
 **Workflow how-it-runs:** library table rows show Manual or Scheduled badges derived from
 real schedule rows (optional short cron text). Schedule forms lock project to the workflow
@@ -135,7 +140,7 @@ paths show a download fallback immediately rather than remaining in a loading st
 ## Global attention, running work, and account surfaces
 
 The shell-level **Attention** badge persists across destinations and polls one unified
-shape. Every item is a real button that deep-links to the owning Alpha/Task/plan/Settings
+shape. Every item is a real button that deep-links to the owning Master/Task/plan/Settings
 surface. Only server-marked `inline_ok` binary actions render beside the link; diff
 review and open-text decisions navigate instead. The popover has loading, empty,
 populated, and persistent retryable-error states, closes on Escape/outside click, and
@@ -148,9 +153,9 @@ header). The popover lists de-duplicated tasks and chat sessions with deep-links
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
 Attention stays a separate `!` control and remains hidden when empty.
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Alpha, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Alpha side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Alpha's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across the app (shell `activeProject`). Surfaces that already filter / default-attach / list by active project (Chat, Alpha, Workflows library, Archive, Design) keep that contract. The header project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) — it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the header switch does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (global switcher only; open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project.
+Projects remain shared application entities: one active project across the app (shell `activeProject`). Surfaces that already filter / default-attach / list by active project (Chat, Master, Workflows library, Archive, Design) keep that contract. The header project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the header switch does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (global switcher only; open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project.
 
 ## Projects
 
@@ -177,15 +182,17 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Alpha has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
+Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
 
 ## Feature gates
 
 Routes, sidebar destinations, session eligibility, search, and deep links must all honor the server feature configuration. A hidden destination must not become reachable through stale state. Gating must not reorder the remaining navigation.
+The Master gate suppresses its settings section, help chapter, and delegation
+step in the general core tour.
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Alpha controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel and Attention); the modal core tour traps focus until completed/skipped. Focus indicators use shared tokens, and reduced-motion preferences apply globally.
+The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel and Attention); the modal core tour traps focus until completed/skipped. Focus indicators use shared tokens, and reduced-motion preferences apply globally.
 
 ## Extension points
 

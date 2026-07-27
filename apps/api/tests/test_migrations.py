@@ -15,22 +15,21 @@ def _add_users_nickname(conn):
     conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT")
 
 
-def test_init_db_upgrades_pre_alpha_jobs_before_creating_alpha_index(tmp_path: Path):
+def test_migrations_upgrade_pre_alpha_jobs_to_neutral_master_origin(tmp_path: Path):
     conn = connect(tmp_path / "pre-alpha.db")
     legacy_schema = SCHEMA.replace(
-        "  alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,\n", ""
-    ).replace(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at);\n",
-        "",
+        "  origin_master_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,\n", ""
     )
     conn.executescript(legacy_schema)
 
     init_db(conn)
+    run_migrations(conn, str(tmp_path / "pre-alpha.db"))
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     indexes = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
-    assert "alpha_session_id" in columns
-    assert "idx_jobs_alpha" in indexes
+    assert "origin_master_session_id" in columns
+    assert "alpha_session_id" not in columns
+    assert "idx_jobs_origin_master" in indexes
 
 
 def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
@@ -416,6 +415,14 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('Alpha', ?, ?, 'alpha')",
         (owner_id, profile_id),
     ).lastrowid
+    conn.execute("DROP INDEX IF EXISTS idx_jobs_origin_master")
+    conn.execute(
+        "ALTER TABLE jobs RENAME COLUMN origin_master_session_id TO alpha_session_id"
+    )
+    conn.execute(
+        "CREATE INDEX idx_jobs_alpha "
+        "ON jobs(alpha_session_id, status, created_at)"
+    )
     job_id = conn.execute(
         "INSERT INTO jobs(title, project_id, created_by, alpha_session_id, target_area_id) "
         "VALUES ('Alpha task', ?, ?, ?, ?)",
@@ -426,8 +433,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30]
-    assert current_version(conn) == 30
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31]
+    assert current_version(conn) == 31
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -437,11 +444,11 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "SELECT slug, path FROM projects WHERE id = ?", (container_id,)
     ).fetchone()["slug"] == "alpha-container"
     assert conn.execute(
-        "SELECT alpha_session_id, target_area_id FROM jobs WHERE id = ?", (job_id,)
-    ).fetchone()["alpha_session_id"] == session_id
+        "SELECT origin_master_session_id, target_area_id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["origin_master_session_id"] == session_id
     assert conn.execute(
         "SELECT mode FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()["mode"] == "alpha"
+    ).fetchone()["mode"] == "master"
     assert conn.execute(
         "SELECT status FROM attention_items WHERE source_key = 'alpha-existing'"
     ).fetchone()["status"] == "open"
@@ -468,8 +475,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30]
-    assert current_version(conn) == 30
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31]
+    assert current_version(conn) == 31
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }

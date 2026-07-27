@@ -57,6 +57,13 @@ def feature_flag_for(mode: str | None) -> str | None:
 # 'chat' is the main-chat gate itself. 'design' is Design Studio's session type,
 # gated + excluded from the main list. New surfaces register alongside these.
 register(SessionKind("chat", shown_in_main_chat=True, shown_in_global_search=True))
+register(SessionKind(
+    "master",
+    shown_in_main_chat=False,
+    shown_in_global_search=False,
+    feature_flag="master_orchestrator",
+))
+# One-release reader for a database restored from before migration 31.
 register(SessionKind("alpha", shown_in_main_chat=False, shown_in_global_search=False))
 register(SessionKind(
     "design",

@@ -11,9 +11,9 @@ describe('Settings IA groups (UI Flow M7)', () => {
     ])
   })
 
-  it('places Projects, Agents, Alpha under Work setup', () => {
+  it('places Projects, Agents, Master under Work setup', () => {
     const work = SETTINGS_GROUPS.find(g => g.id === 'work')
-    expect(work?.keys).toEqual(expect.arrayContaining(['projects', 'agents', 'alpha']))
+    expect(work?.keys).toEqual(expect.arrayContaining(['projects', 'agents', 'master']))
   })
 
   it('places Media and Remote under Integrations', () => {

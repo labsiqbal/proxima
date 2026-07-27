@@ -12,14 +12,16 @@ import { ProximaMark } from '../brand/ProximaMark'
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
-  { id: 'alpha', label: 'Alpha', icon: IconSparkle },
+  { id: 'master', label: 'Master', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
 const enabled = (item: Destination, features: AppFeatures) =>
-  (item.id !== 'design' || features.designStudio) && (item.id !== 'graph' || features.workflowGraph)
+  (item.id !== 'design' || features.designStudio)
+  && (item.id !== 'graph' || features.workflowGraph)
+  && (item.id !== 'master' || features.masterOrchestrator)
 
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View

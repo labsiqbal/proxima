@@ -25,6 +25,7 @@ from .container_registry import (
     root_for_virtual_path,
 )
 from .profile_seed import seed_agent_home
+from .master_runtime import ensure_master_identity
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -67,7 +68,12 @@ def build_route_deps(
         with app.state.db_lock:
             row = db().execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
             if row:
-                return dict(row)
+                user = dict(row)
+                ensure_default_profile(user)
+                ensure_master_identity(
+                    db(), user, create_profile_for=create_profile_for
+                )
+                return user
             cur = db().execute(
                 "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
                 (name, name, iso_now()),
@@ -78,6 +84,7 @@ def build_route_deps(
             provision_user_workspace(db(), cfg, user)
         except Exception:
             logger.exception("single-user owner provisioning failed (non-fatal)")
+        ensure_master_identity(db(), user, create_profile_for=create_profile_for)
         return user
 
     def current_user(

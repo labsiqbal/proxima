@@ -4,15 +4,18 @@ This is Proxima as it ships now: a single-user, self-hosted control plane for
 hands-on agent work and delegated agent teams. It is under **active development**
 (expect roughness; see [installation](installation.md#what-to-expect)). Every
 screenshot on this page was captured on 2026-07-24 in one uniform pass on branch
-`fm/proxima-screenshot-uniform-refresh` (HEAD of main after #37 Alpha UI parity
+`fm/proxima-screenshot-uniform-refresh` (HEAD of main after #37 orchestrator UI parity
 and destinations-only nav). Capture used a disposable owner DB and isolated
 `scripts/dev`-style API + Vite on loopback at a fixed viewport of **1440×1000**,
 sidebar expanded, Light theme, starter project after onboarding **Skip**.
 
-All primary tour shots share the same Deck chrome: destinations-only left nav
-(Chat, Alpha, Tasks, Recipes, Projects, Archive, Design), shared main-pane
+All primary tour shots share the same Deck chrome: destinations-only left nav,
+shared main-pane
 ambience, and tool rails on the right. Older multi-era PNGs were deleted and
-replaced; none of the files below mix pre-parity Alpha skin with current Deck.
+replaced. The old orchestrator screenshots used the Alpha compatibility name and
+are intentionally not presented as current Master evidence. On 2026-07-27 the
+renamed Master desk was re-driven against the production bundle at desktop and
+390x844 mobile viewports with no page overflow or visible Alpha copy.
 
 Feature details live in [CAPABILITIES.md](CAPABILITIES.md). This page focuses on
 what an owner sees and how the surfaces connect.
@@ -27,9 +30,9 @@ what an owner sees and how the surfaces connect.
 | Core tour (4 steps) | pass | `core-tour-*.png` |
 | Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
 | Chat send / approvals / restore | skip - no live agent turn in this pass | - |
-| Alpha empty + Grok backing | pass - Deck chrome parity | `alpha-desk.png` |
-| Alpha runner picker (Grok listed) | pass | `grok-runner-picker.png` |
-| Alpha populated / checkpoint restore | skip - no worker jobs in this pass | - |
+| Master empty | pass - production-bundle browser smoke, feature enabled | - |
+| Master runner picker (Grok listed) | pass | `grok-runner-picker.png` |
+| Master populated / checkpoint restore | skip - no worker jobs in this pass | - |
 | Attention inbox (empty) | pass | `attention-inbox.png` |
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
 | Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
@@ -40,7 +43,7 @@ what an owner sees and how the surfaces connect.
 | Design studio canvas | skip - not opened beyond home | - |
 | Terminal / Files / Preview rails | pass | `terminal.png`, `files.png`, `preview-rail.png` |
 | Search | pass | `search.png` |
-| Settings (appearance, Alpha, agents, diagnostics) | pass | `settings-*.png` |
+| Settings (appearance, agents, diagnostics) | pass | `settings-*.png` |
 | Help & Tours / Core flow chapter | pass | `help-tours.png`, `help-core-flow.png` |
 | Agents profiles | pass | `agents-profiles.png` |
 | Skills & MCP / bundled masterplan | pass | `skills-mcp.png`, `bundled-masterplan-skill.png` |
@@ -51,21 +54,20 @@ what an owner sees and how the surfaces connect.
 
 The shell keeps primary destinations on the left, the current surface in the
 center, and technical tools on the right. Left nav is **destinations only**:
-Chat, Alpha, Tasks, Recipes, Projects, Archive, and feature-gated Design. There
+Chat, Tasks, Workflows, Archive, and feature-gated Design. Master appears between
+Chat and Tasks only when its server gate is enabled. There
 is no primary-nav **New chat** row - a blank session starts from the Chat header
 control, the mobile topbar icon, or `/new`.
 
 ![Chat in the shared workspace](screenshots/deck-chat.png)
 
 The first post-setup visit offers a four-step core tour. It explains the two ways
-to work, hands-on Chat, delegated Alpha work, and the Tasks plus Attention review
+to work, hands-on Chat, delegated Master work, and the Tasks plus Attention review
 loop. The same tour can be replayed later from Settings → Help & Tours.
 
 ![Core tour: two ways to work](screenshots/core-tour-work-modes.png)
 
 ![Core tour: hands-on Chat](screenshots/core-tour-chat.png)
-
-![Core tour: Alpha delegation](screenshots/core-tour-alpha.png)
 
 ![Core tour: Tasks and Attention](screenshots/core-tour-review.png)
 
@@ -89,7 +91,7 @@ Create tabs, then used Skip for the rest of the tour.
 
 Chat is the direct path. An empty Chat is sparse by default (title + short lead,
 tooltip hints, **How it works** for the fuller path) - no session until the first
-send. Alpha empty and Design home use the same progressive-disclosure pattern.
+send. Master empty and Design home use the same progressive-disclosure pattern.
 Pick an agent, type a prompt or `/` for commands, and use the header
 **New chat** action when you want another blank thread.
 
@@ -100,25 +102,21 @@ masterplan intake, and `@` artifact mentions were not re-driven in this chrome
 refresh pass. Those flows remain shipped; they are not pictured here as fresh
 evidence.
 
-## 4. Alpha: delegate and monitor
+## 4. Master: delegate and monitor
 
-Alpha is a navigation peer to Chat. Its desk reuses Deck chrome: shared main-pane
+Master is a navigation peer to Chat. Its desk reuses Deck chrome: shared main-pane
 ambience, `code-header` style bar, Settings-sized toggle and select, ghost-button
 examples, and surface cards without a separate marketing page skin.
 
-This pass selected **Grok** as the backing runner (host reported it ready) and
-captured the honest empty desk: capacity 0/3 free, unattended off, empty queue,
-empty Attention, empty checkpoints.
-
-![Alpha desk with Grok backing, empty capacity and side rails](screenshots/alpha-desk.png)
+The current production-bundle smoke captured the honest empty state in the live
+accessibility tree: capacity 0/3 free, unattended off, empty queue, empty
+Attention, and empty checkpoints. No refreshed screenshot is claimed here.
 
 The profile runner picker lists every installed runner, including Grok.
 
 ![Runner picker with installed runners](screenshots/grok-runner-picker.png)
 
-Unattended budgets remain under Settings → Alpha.
-
-![Alpha unattended budgets](screenshots/settings-alpha.png)
+Unattended budgets remain under Settings → Master when the feature is enabled.
 
 ## 5. Attention and Tasks
 
@@ -226,15 +224,15 @@ Diagnostics keeps update checks, debug logs, and the owner audit trail.
 ## Live-pass notes
 
 - **Chrome standard:** 1440×1000, Light theme, expanded sidebar, destinations-only
-  left nav, post-#37 Deck shell on every primary shot. No mix of old solid Alpha
-  marketing empty state with current Alpha desk.
+  left nav, post-#37 Deck shell on every primary shot. No mix of old solid Master
+  marketing empty state with current Master desk.
 - **Passed:** first-run password, onboarding Link + Create tabs, core tour (4
-  steps), empty Chat, Alpha desk with Grok + open runner picker, Attention,
+  steps), empty Chat, Master desk with Grok + open runner picker, Attention,
   Tasks list/board/launcher, Recipes home/editor/schedules, Projects, Archive
   empty registry, Design home, tool rails, Search, Settings sections, Agents
   profiles, Skills/MCP + masterplan, Wiki, Help.
 - **Skipped (honest):** live Chat agent turns, approvals, turn restore,
-  masterplan intake UI in Chat, `@` mentions, Alpha worker dispatch and
+  masterplan intake UI in Chat, `@` mentions, Master worker dispatch and
   checkpoint restore, populated Tasks review, ArtifactViewer v2 deep review,
   Design studio canvas beyond home, mobile shell. Those surfaces still ship;
   this pass prioritized shell/nav uniformity over multi-minute agent runs.

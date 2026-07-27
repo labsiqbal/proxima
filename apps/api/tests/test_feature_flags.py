@@ -43,14 +43,19 @@ def _counts(app):
     }
 
 
-def test_public_config_defaults_all_shipped_features_on(tmp_path):
-    # Design Studio (standing decision 8), graph authoring, and repo worktrees
-    # are all shipped paths: every feature flag defaults on.
+def test_public_config_defaults_shipped_features_on_and_master_off(tmp_path):
+    # Durable Master migration is unconditional, but its runtime stays off until
+    # the integrated orchestrator acceptance gate passes.
     app = _app(tmp_path)
     response = TestClient(app).get("/api/config")
 
     assert response.status_code == 200
-    assert response.json()["features"] == {"design_studio": True, "workflow_graph": True, "repo_worktrees": True}
+    assert response.json()["features"] == {
+        "design_studio": True,
+        "workflow_graph": True,
+        "repo_worktrees": True,
+        "master_orchestrator": False,
+    }
 
 
 def test_public_config_reports_explicit_boot_opt_out(tmp_path):
@@ -66,6 +71,7 @@ def test_public_config_reports_explicit_boot_opt_out(tmp_path):
         "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": False,
+        "master_orchestrator": False,
     }
 
 
@@ -77,7 +83,72 @@ def test_workflow_graph_environment_flag_reaches_asgi_config(monkeypatch):
 
 def test_programmatic_zero_values_do_not_enable_features():
     config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0", "feature_repo_worktrees": "0"})
-    assert features.public_flags(config) == {"design_studio": False, "workflow_graph": False, "repo_worktrees": False}
+    assert features.public_flags(config) == {
+        "design_studio": False,
+        "workflow_graph": False,
+        "repo_worktrees": False,
+        "master_orchestrator": False,
+    }
+
+
+def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
+    tmp_path,
+):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    assert client.post("/auth/auto").status_code == 200
+    owner = app.state.worker_db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()
+    profile = app.state.worker_db.execute(
+        "SELECT * FROM profiles WHERE system_kind = 'master'"
+    ).fetchone()
+    master_session = app.state.worker_db.execute(
+        "SELECT id FROM sessions WHERE mode = 'master'"
+    ).fetchone()
+    worker_session_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO sessions("
+            "title, owner_user_id, profile_id, runner_id, mode"
+            ") VALUES ('Master-owned Task', ?, ?, ?, 'chat')",
+            (owner["id"], profile["id"], profile["runner_id"]),
+        ).lastrowid
+    )
+    job_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO jobs("
+            "session_id, title, status, origin_master_session_id, created_by"
+            ") VALUES (?, 'Master-owned Task', 'queued', ?, ?)",
+            (worker_session_id, master_session["id"], owner["id"]),
+        ).lastrowid
+    )
+    app.state.worker_db.execute(
+        "UPDATE sessions SET job_id = ? WHERE id = ?",
+        (job_id, worker_session_id),
+    )
+    run_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO runs("
+            "session_id, user_id, profile_id, runner_id, kind, status, prompt"
+            ") VALUES (?, ?, ?, ?, 'job', 'queued', 'preserve queued intent')",
+            (
+                worker_session_id,
+                owner["id"],
+                profile["id"],
+                profile["runner_id"],
+            ),
+        ).lastrowid
+    )
+
+    assert app.state.worker.claim_run() is None
+    assert app.state.worker_db.execute(
+        "SELECT status FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()["status"] == "queued"
+
+    app.state.config["feature_master_orchestrator"] = True
+    claimed = app.state.worker.claim_run()
+    assert claimed is not None
+    assert claimed["id"] == run_id
 
 
 def test_disabled_commands_are_omitted_and_rejected(tmp_path):

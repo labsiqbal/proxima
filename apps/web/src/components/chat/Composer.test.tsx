@@ -43,7 +43,7 @@ function renderComposer() {
 	render(
 		<Composer
 			token="token"
-			slug="alpha"
+			slug="master"
 			textareaLabel="Message"
 			promptModes={false}
 			onSubmit={onSubmit}
@@ -85,7 +85,7 @@ describe("Composer project-file references", () => {
 		}) as HTMLTextAreaElement;
 
 		await waitFor(() =>
-			expect(mocks.listReferenceFiles).toHaveBeenCalledWith("token", "alpha"),
+			expect(mocks.listReferenceFiles).toHaveBeenCalledWith("token", "master"),
 		);
 		await user.type(textarea, "Review @");
 		expect(await screen.findByText("docs/brief.md")).toBeInTheDocument();
@@ -395,7 +395,7 @@ describe("Composer slash commands", () => {
 			"/project",
 			"/runner",
 			"/goal",
-			"/skill-alpha",
+			"/skill-master",
 		].map((name) => ({
 			name,
 			description: `desc for ${name}`,
@@ -424,7 +424,7 @@ describe("Composer slash commands", () => {
 		).toBeInTheDocument();
 		expect(
 			screen.getByRole("option", {
-				name: "/skill-alpha desc for /skill-alpha",
+				name: "/skill-master desc for /skill-master",
 			}),
 		).toBeInTheDocument();
 
@@ -487,7 +487,7 @@ describe("Composer review draft handoff", () => {
 		render(
 			<Composer
 				token="token"
-				slug="alpha"
+				slug="master"
 				textareaLabel="Message"
 				promptModes={false}
 				draftSeed="Review feedback for [report](artifacts/report.md):"
@@ -514,16 +514,16 @@ describe("Composer submit CTA grammar", () => {
 
 	it("defaults to Send for Chat-like surfaces", () => {
 		render(
-			<Composer token="" slug="alpha" textareaLabel="Message" promptModes={false} mentionItems={[]} onSubmit={vi.fn()} />,
+			<Composer token="" slug="master" textareaLabel="Message" promptModes={false} mentionItems={[]} onSubmit={vi.fn()} />,
 		);
 		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
 	});
 
-	it("accepts Delegate for Alpha without changing shell grammar", () => {
+	it("accepts Delegate for Master without changing shell grammar", () => {
 		render(
 			<Composer
 				token=""
-				slug="alpha"
+				slug="master"
 				textareaLabel="Delegate an outcome"
 				promptModes={false}
 				mentionItems={[]}

@@ -10,7 +10,7 @@ import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { CoreTour } from './CoreTour'
-import type { AttentionItem } from '../../api/alpha'
+import type { AttentionItem } from '../../api/master'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -274,7 +274,7 @@ export function AppShell(props: {
       <main className="main-pane">{props.children}</main>
       <ToolDock token={props.token} project={props.activeProject} onOpenSettings={() => props.onSelectView('settings')} />
       {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
-      <CoreTour token={props.token} />
+      <CoreTour token={props.token} masterEnabled={props.features.masterOrchestrator} />
     </div>
   )
 }

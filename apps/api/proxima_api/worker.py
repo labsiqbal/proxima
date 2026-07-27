@@ -28,7 +28,7 @@ from .acp import format_rpc_error
 from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
-from . import alpha_runtime
+from . import master_runtime
 from . import features
 from . import state
 from . import turn_restore
@@ -231,19 +231,43 @@ class RunWorker:
                   )
                   AND (
                     NOT EXISTS (
-                      SELECT 1 FROM sessions als
-                      JOIN jobs alj ON alj.id = als.job_id
-                      WHERE als.id = r.session_id AND alj.alpha_session_id IS NOT NULL
+                      SELECT 1 FROM sessions master_session
+                      JOIN jobs master_job ON master_job.id = master_session.job_id
+                      WHERE master_session.id = r.session_id
+                        AND master_job.origin_master_session_id IS NOT NULL
                     )
                     OR (
-                      SELECT COUNT(*) FROM runs ar
-                      JOIN sessions ars ON ars.id = ar.session_id
-                      JOIN jobs arj ON arj.id = ars.job_id
-                      WHERE ar.status = 'running' AND arj.alpha_session_id IS NOT NULL
+                      SELECT COUNT(*) FROM runs master_run
+                      JOIN sessions master_run_session
+                        ON master_run_session.id = master_run.session_id
+                      JOIN jobs master_run_job
+                        ON master_run_job.id = master_run_session.job_id
+                      WHERE master_run.status = 'running'
+                        AND master_run_job.origin_master_session_id IS NOT NULL
                     ) < 3
                   )
+                  AND (
+                    ? = 1
+                    OR NOT EXISTS (
+                      SELECT 1 FROM sessions ms
+                      LEFT JOIN jobs mj ON mj.id = ms.job_id
+                      WHERE ms.id = r.session_id
+                        AND (
+                          ms.mode = 'master'
+                          OR mj.origin_master_session_id IS NOT NULL
+                        )
+                    )
+                  )
                 ORDER BY r.id LIMIT 1
-                """
+                """,
+                (
+                    int(
+                        features.enabled(
+                            self.app.state.config,
+                            features.MASTER_ORCHESTRATOR,
+                        )
+                    ),
+                ),
             ).fetchone()
             if not row:
                 return None
@@ -1047,7 +1071,7 @@ class RunWorker:
                         cwd = wt["worktree_path"]
             Path(cwd).mkdir(parents=True, exist_ok=True)
             # Hands-on Chat keeps a bounded pre-turn file journal. Only changed
-            # paths are persisted after the assistant message exists; job/Alpha
+            # paths are persisted after the assistant message exists; job/Master
             # sessions use job-scoped checkpoints instead.
             if session_mode == "chat" and project_id and not is_job and not is_build:
                 turn_root = Path(cwd)
@@ -1280,9 +1304,9 @@ class RunWorker:
                 except Exception:
                     logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
             try:
-                alpha_runtime.handle_alpha_response(self.app, db, run, answer)
+                master_runtime.handle_master_response(self.app, db, run, answer)
             except Exception:
-                logging.getLogger("proxima.worker").exception("Alpha product tool handling failed (non-fatal)")
+                logging.getLogger("proxima.worker").exception("Master product tool handling failed (non-fatal)")
             # Auto-name the chat from a ≤3-word recap on the first exchange (chats
             # only). Done BEFORE run.completed so the sidebar shows the recap as soon
             # as the run leaves the active set. Best-effort; never fails the run.
@@ -1433,7 +1457,7 @@ class RunWorker:
             proc.cancel(sid)
 
     def _auto_approve_on(self, run_id: int) -> bool:
-        """Auto-approve Alpha and Alpha-spawned runs, scoped by durable rows.
+        """Auto-approve Master and Master-spawned runs, scoped by durable rows.
 
         Ordinary runs continue to honor the owner's install-wide toggle. If the
         lookup fails, fail safe and surface the permission card.
@@ -1441,12 +1465,12 @@ class RunWorker:
         try:
             with self.app.state.db_lock:
                 row = self.app.state.worker_db.execute(
-                    "SELECT s.mode, j.alpha_session_id FROM runs r "
+                    "SELECT s.mode, j.origin_master_session_id FROM runs r "
                     "JOIN sessions s ON s.id = r.session_id "
                     "LEFT JOIN jobs j ON j.id = s.job_id WHERE r.id = ?",
                     (run_id,),
                 ).fetchone()
-                if row and (row["mode"] == "alpha" or row["alpha_session_id"] is not None):
+                if row and (row["mode"] == "master" or row["origin_master_session_id"] is not None):
                     return True
                 return app_settings.get_setting(self.app.state.worker_db, "auto_approve_permissions", "0") == "1"
         except Exception:

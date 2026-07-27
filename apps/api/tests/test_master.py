@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api.alpha_runtime import alpha_capacity, execute_tool, handle_alpha_response
+from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
 from proxima_api.job_checkpoints import create_checkpoint, restore_checkpoint
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
@@ -20,38 +20,39 @@ def _client(tmp_path: Path):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
+            "feature_master_orchestrator": True,
         }
     )
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
-    created = client.post("/api/projects", json={"slug": "alpha-project", "name": "Alpha project"})
+    created = client.post("/api/projects", json={"slug": "master-project", "name": "Master project"})
     assert created.status_code == 201
     return app, client
 
 
-def test_alpha_desk_creates_hidden_system_identity(tmp_path: Path):
+def test_master_desk_creates_hidden_system_identity(tmp_path: Path):
     app, client = _client(tmp_path)
 
-    desk = client.get("/api/alpha/desk")
+    desk = client.get("/api/master/desk")
 
     assert desk.status_code == 200
-    assert desk.json()["session"]["mode"] == "alpha"
+    assert desk.json()["session"]["mode"] == "master"
     assert desk.json()["capacity"] == {"running": 0, "max": 3, "free": 3, "queued": 0}
     assert client.get("/api/sessions").json()["sessions"] == []
     assert [profile["name"] for profile in client.get("/api/profiles").json()["profiles"]] == ["Default"]
-    alpha_profile = app.state.db.execute(
-        "SELECT id, name, system_kind FROM profiles WHERE system_kind = 'alpha'"
+    master_profile = app.state.db.execute(
+        "SELECT id, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()
-    assert {key: alpha_profile[key] for key in ("name", "system_kind")} == {"name": "Alpha", "system_kind": "alpha"}
-    assert client.post("/api/sessions", json={"title": "Imposter", "profile_id": alpha_profile["id"]}).status_code == 404
-    alpha_session_id = desk.json()["session"]["id"]
-    assert client.patch(f"/api/sessions/{alpha_session_id}", json={"title": "Imposter"}).status_code == 409
-    assert client.delete(f"/api/sessions/{alpha_session_id}").status_code == 409
-    alpha_run = client.post("/api/alpha/messages", json={"content": "List current work"}).json()
-    assert app.state.worker._auto_approve_on(alpha_run["run_id"]) is True
-    run_row = dict(app.state.db.execute("SELECT * FROM runs WHERE id=?", (alpha_run["run_id"],)).fetchone())
-    results = handle_alpha_response(
+    assert {key: master_profile[key] for key in ("name", "system_kind")} == {"name": "Master", "system_kind": "master"}
+    assert client.post("/api/sessions", json={"title": "Imposter", "profile_id": master_profile["id"]}).status_code == 404
+    origin_master_session_id = desk.json()["session"]["id"]
+    assert client.patch(f"/api/sessions/{origin_master_session_id}", json={"title": "Imposter"}).status_code == 409
+    assert client.delete(f"/api/sessions/{origin_master_session_id}").status_code == 409
+    master_run = client.post("/api/master/messages", json={"content": "List current work"}).json()
+    assert app.state.worker._auto_approve_on(master_run["run_id"]) is True
+    run_row = dict(app.state.db.execute("SELECT * FROM runs WHERE id=?", (master_run["run_id"],)).fetchone())
+    results = handle_master_response(
         app,
         app.state.db,
         run_row,
@@ -60,22 +61,39 @@ def test_alpha_desk_creates_hidden_system_identity(tmp_path: Path):
     assert results[0]["ok"] is True
     continuation = app.state.db.execute(
         "SELECT kind, prompt FROM runs WHERE session_id=? ORDER BY id DESC LIMIT 1",
-        (alpha_session_id,),
+        (origin_master_session_id,),
     ).fetchone()
-    assert continuation["kind"] == "alpha_tool_1"
-    assert "alpha-project" in continuation["prompt"]
-    assert client.put("/api/settings/alpha", json={"runner_id": "not-a-runner"}).status_code == 422
-    switched = client.put("/api/settings/alpha", json={"runner_id": "codex"})
+    assert continuation["kind"] == "master_tool_1"
+    assert "master-project" in continuation["prompt"]
+    assert client.put("/api/settings/master", json={"runner_id": "not-a-runner"}).status_code == 422
+    switched = client.put("/api/settings/master", json={"runner_id": "codex"})
     assert switched.status_code == 200
     assert switched.json()["runner_id"] == "codex"
     assert app.state.db.execute(
-        "SELECT COUNT(*) AS c FROM profiles WHERE system_kind='alpha'"
+        "SELECT COUNT(*) AS c FROM profiles WHERE system_kind='master'"
     ).fetchone()["c"] == 1
+
+
+def test_alpha_route_alias_reads_the_same_master_records(tmp_path: Path):
+    app, client = _client(tmp_path)
+    master = client.get("/api/master/desk")
+    legacy = client.get("/api/alpha/desk")
+
+    assert master.status_code == legacy.status_code == 200
+    assert master.json()["session"]["id"] == legacy.json()["session"]["id"]
+    assert master.json()["session"]["mode"] == "master"
+    assert legacy.json()["session"]["mode"] == "alpha"
+    assert master.json()["jobs"] == legacy.json()["jobs"]
+    assert "master_run" in master.json()
+    assert "alpha_run" in legacy.json()
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+    ).fetchone()[0] == 1
 
 
 def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
 
     result = execute_tool(
@@ -94,17 +112,17 @@ def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: 
     )
 
     assert result["ok"] is False
-    assert app.state.db.execute("SELECT COUNT(*) AS c FROM jobs WHERE alpha_session_id IS NOT NULL").fetchone()["c"] == 0
+    assert app.state.db.execute("SELECT COUNT(*) AS c FROM jobs WHERE origin_master_session_id IS NOT NULL").fetchone()["c"] == 0
 
 
-def test_alpha_batch_dispatch_uses_durable_idempotent_dependency_dag(
+def test_master_batch_dispatch_uses_durable_idempotent_dependency_dag(
     tmp_path: Path,
 ):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
     args = {
-        "idempotency_key": "alpha-dag-timeout",
+        "idempotency_key": "master-dag-timeout",
         "tasks": [
             {
                 "key": "research",
@@ -165,12 +183,12 @@ def test_alpha_batch_dispatch_uses_durable_idempotent_dependency_dag(
 
 def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
     run = dict(
         app.state.db.execute(
             "INSERT INTO runs(session_id, user_id, profile_id, runner_id, kind, "
-            "status, prompt) VALUES (?, 1, ?, ?, 'alpha', 'running', ?) "
+            "status, prompt) VALUES (?, 1, ?, ?, 'master', 'running', ?) "
             "RETURNING *",
             (
                 desk["session"]["id"],
@@ -196,7 +214,7 @@ def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Pat
         }
     )
 
-    calls = handle_alpha_response(
+    calls = handle_master_response(
         app,
         app.state.db,
         run,
@@ -207,14 +225,14 @@ def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Pat
     assert [call["ok"] for call in calls] == [True, True]
     assert calls[0]["result"]["jobs"] == calls[1]["result"]["jobs"]
     assert app.state.db.execute(
-        "SELECT COUNT(*) FROM jobs WHERE alpha_session_id = ?",
+        "SELECT COUNT(*) FROM jobs WHERE origin_master_session_id = ?",
         (desk["session"]["id"],),
     ).fetchone()[0] == 1
 
 
-def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):
+def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     tasks = [
@@ -234,13 +252,13 @@ def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_t
     assert result["ok"] is True
     assert len(result["result"]["jobs"]) == 4
     rows = app.state.db.execute(
-        "SELECT id, input, alpha_session_id FROM jobs ORDER BY id"
+        "SELECT id, input, origin_master_session_id FROM jobs ORDER BY id"
     ).fetchall()
     assert {json.loads(row["input"])["execution_policy"] for row in rows} == {"autonomous"}
-    assert {row["alpha_session_id"] for row in rows} == {desk["session"]["id"]}
+    assert {row["origin_master_session_id"] for row in rows} == {desk["session"]["id"]}
     assert app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints").fetchone()[0] == 4
     assert app.state.db.execute(
-        "SELECT COUNT(*) FROM audit_log WHERE action = 'alpha.job.create'"
+        "SELECT COUNT(*) FROM audit_log WHERE action = 'master.job.create'"
     ).fetchone()[0] == 4
     run_ids = [row["id"] for row in app.state.db.execute("SELECT id FROM runs ORDER BY id").fetchall()]
     assert all(app.state.worker._auto_approve_on(run_id) for run_id in run_ids)
@@ -248,12 +266,12 @@ def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_t
     claimed = [app.state.worker.claim_run() for _ in range(3)]
     assert all(claimed)
     assert app.state.worker.claim_run() is None
-    assert alpha_capacity(app.state.db, desk["session"]["id"])["running"] == 3
+    assert master_capacity(app.state.db, desk["session"]["id"])["running"] == 3
 
 
-def test_alpha_capacity_counts_each_queued_worker_run(tmp_path: Path):
+def test_master_capacity_counts_each_queued_worker_run(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
     job = execute_tool(
         app.state.db,
@@ -284,14 +302,14 @@ def test_alpha_capacity_counts_each_queued_worker_run(tmp_path: Path):
             ),
         )
 
-    assert alpha_capacity(app.state.db, desk["session"]["id"])["queued"] == 3
+    assert master_capacity(app.state.db, desk["session"]["id"])["queued"] == 3
 
 
-def test_alpha_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path):
+def test_master_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
-    project_id = app.state.db.execute("SELECT id FROM projects WHERE slug='alpha-project'").fetchone()["id"]
+    project_id = app.state.db.execute("SELECT id FROM projects WHERE slug='master-project'").fetchone()["id"]
     workflow_id = app.state.db.execute(
         "INSERT INTO workflows(project_id, name, graph, steps, created_by) VALUES (?, 'Saved plan', ?, '[]', ?)",
         (
@@ -313,13 +331,13 @@ def test_alpha_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path)
     assert result["ok"] is True
     job = app.state.db.execute("SELECT * FROM jobs WHERE id = ?", (result["result"]["job"]["id"],)).fetchone()
     assert job["engine"] == "graph"
-    assert job["alpha_session_id"] == desk["session"]["id"]
+    assert job["origin_master_session_id"] == desk["session"]["id"]
     assert app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints WHERE job_id = ?", (job["id"],)).fetchone()[0] == 1
 
 
 def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
     root = Path(project["path"])
     subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -356,9 +374,9 @@ def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: P
     assert (root / "state.txt").read_text() == "later\n"
 
 
-def test_alpha_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path: Path):
+def test_master_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
     root = Path(project["path"])
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
@@ -404,7 +422,7 @@ def test_alpha_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path: 
 
 def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     result = execute_tool(
@@ -465,7 +483,7 @@ def test_turn_restore_previews_paths_and_restores_pre_turn_content(tmp_path: Pat
 
 def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     execute_tool(
@@ -482,16 +500,16 @@ def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_
             "start": False,
         },
     )
-    app_settings.set_alpha_settings(app.state.worker_db, unattended=True, budget_turns=1)
+    app_settings.set_master_settings(app.state.worker_db, unattended=True, budget_turns=1)
 
-    first = app.state.alpha_supervisor.tick()
-    second = app.state.alpha_supervisor.tick()
+    first = app.state.master_supervisor.tick()
+    second = app.state.master_supervisor.tick()
 
     assert len(first["started"]) == 1
     assert second["stopped"] == "turn budget exhausted"
-    assert app_settings.get_alpha_settings(app.state.worker_db)["unattended"] is False
+    assert app_settings.get_master_settings(app.state.worker_db)["unattended"] is False
     attention = client.get("/api/attention").json()["items"]
-    assert any(item["kind"] == "alpha_budget" for item in attention)
+    assert any(item["kind"] == "master_budget" for item in attention)
 
 
 def test_script_trust_attention_shows_hash_and_uses_in_process_approval(tmp_path: Path):
@@ -561,9 +579,9 @@ def test_permission_attention_closes_when_choice_is_delivered(tmp_path: Path):
     ).fetchone()["status"] == "resolved"
 
 
-def test_disallowed_alpha_tool_returns_structured_error(tmp_path: Path):
+def test_disallowed_master_tool_returns_structured_error(tmp_path: Path):
     app, client = _client(tmp_path)
-    desk = client.get("/api/alpha/desk").json()
+    desk = client.get("/api/master/desk").json()
     owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
 
     result = execute_tool(app.state.db, app, {"id": owner_id}, desk["session"]["id"], "wipe_database", {})
@@ -571,5 +589,5 @@ def test_disallowed_alpha_tool_returns_structured_error(tmp_path: Path):
     assert result == {
         "ok": False,
         "tool": "wipe_database",
-        "error": {"code": "tool_not_allowed", "message": "Alpha tool 'wipe_database' is not allowed"},
+        "error": {"code": "tool_not_allowed", "message": "Master tool 'wipe_database' is not allowed"},
     }

@@ -32,9 +32,9 @@ Owner ── Profile ── Runner ── Project / Workspace
   establishes a bearer-token/HttpOnly-cookie session. Network controls remain the
   primary boundary, with application authentication as defense in depth.
 + **Profile** — an agent persona: its runner, an isolated credential home, a default
-  model, and system instructions ("soul"). Alpha uses a hidden `system_kind='alpha'`
+  model, and system instructions ("soul"). Master uses a hidden `system_kind='master'`
   profile so the owner can change its backing runner without creating a normal worker
-  persona; its thread is a `sessions.mode='alpha'` session excluded from Chat history.
+  persona; its thread is a `sessions.mode='master'` session excluded from Chat history.
 + **Runner** - the agent CLI a profile drives (Claude Code / Codex / Grok / Hermes / Pi),
   resolved by a _runner spec_.
 + **Project** - a scaffolded, linked, or newly-created-on-disk folder. Chat,
@@ -51,8 +51,8 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
-│  Alpha tools   in-process allowlist; dispatches jobs, never curls localhost     │
-│  AlphaSupervisor budgeted unattended queue starter (no stuck-run authority)    │
+│  Master tools   in-process allowlist; dispatches jobs, never curls localhost     │
+│  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
 │  AppManager    per-project dev-server processes  ── PreviewProxy (subdomains)  │
@@ -70,8 +70,8 @@ Owner ── Profile ── Runner ── Project / Workspace
 Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
-supervision loop over alive-but-unproductive jobs), `alpha_runtime.py` (system
-identity + in-process tool allowlist), `alpha_supervisor.py` (budgeted unattended
+supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
+identity + in-process tool allowlist), `master_supervisor.py` (budgeted unattended
 queue starter), `job_checkpoints.py`, `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
@@ -230,7 +230,7 @@ marker for legacy root-level Ops data.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
-Scoped Work, Home, Alpha, and future orchestration creation share
+Scoped Work, Home, Master, and future orchestration creation share
 `TaskDelegationService`. `task_delegations` is the one-to-one origin, routing,
 idempotency, and durable-start audit for a job. `task_dependencies` stores explicit
 Task-to-prerequisite edges with a required `review` or `done` status. A unique pair,
@@ -295,15 +295,24 @@ permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
 via `file_missing`. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
-Alpha adds only additive state (migration 26): `profiles.system_kind` hides the
-system identity from worker pickers; `jobs.alpha_session_id` scopes desk ownership,
+Migration 26 introduced the original orchestrator foundation. Migration 31
+converts that durable identity in place to Master: `profiles.system_kind='alpha'`
+becomes `master`, `sessions.mode='alpha'` becomes `master`, and
+`jobs.alpha_session_id` becomes `jobs.origin_master_session_id` without changing
+primary keys or ownership links. The profile kind hides the
+system identity from worker pickers; `jobs.origin_master_session_id` scopes desk ownership,
 three-slot claiming, and ACP auto-approval; `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
-and cascades with the session; `attention_items` stores durable Alpha, budget, and
+and cascades with the session; `attention_items` stores durable Master, budget, and
 permission needs-you items while review/satpam items are projected into the same API.
-Settings under `alpha.*` hold unattended state, turn/wall/optional-token budgets, and
-core-tour completion.
+Settings under `master.*` hold unattended state, turn/wall/optional-token budgets, and
+core-tour completion. Startup asserts one project-unbound Master identity per owner
+and refuses ambiguous dual identities or conflicting old/new origin columns. The
+migration is transactional and idempotent, runs regardless of the runtime feature
+flag, and preserves messages, runs, events, checkpoints, budgets, attention,
+delegations, and Task ownership. Deprecated Alpha routes and legacy payload readers
+project the same rows for one compatibility release.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the
@@ -342,40 +351,46 @@ ArtifactViewer render -> point notes / general note -> Add feedback to chat
 
 ## Key flows
 
-### 1a. Alpha delegation and unattended queue
+### 1a. Master delegation and unattended queue
+
+Durable identity provisioning and migration always run. The runtime, supervisor,
+routes, navigation, and settings surface require
+`feature_master_orchestrator`, which defaults off until the restricted Master
+runtime lands and integrated acceptance passes. With the flag off, queued Master
+turns and Master-owned Task runs remain queued without mutation.
 
 ```text
-Alpha nav -> GET /api/alpha/desk -> ensure hidden Alpha profile + mode='alpha' session
-owner message -> queued Alpha ACP run (scoped ACP auto-approve)
+Master nav -> GET /api/master/desk -> ensure hidden Master profile + mode='master' session
+owner message -> queued Master ACP run (scoped ACP auto-approve)
       -> assistant emits <proxima-tool>{name,arguments}</proxima-tool>
-      -> alpha_runtime validates + executes the allowlisted handler in process
-      -> trusted result card + queued Alpha continuation (bounded to 6 tool rounds)
+      -> master_runtime validates + executes the allowlisted handler in process
+      -> trusted result card + queued Master continuation (bounded to 6 tool rounds)
       -> dispatch_jobs calls TaskDelegationService
       -> atomic jobs + delegation audits + dependency edges
       -> isolated worktree cut when needed -> job-scoped checkpoint -> runs queue
-      -> RunWorker claims at most 3 Alpha runs; every excess worker run stays visibly queued
-      -> AlphaScreen polls desk/messages; global Attention deep-links owner decisions
+      -> RunWorker claims at most 3 Master runs; every excess worker run stays visibly queued
+      -> MasterScreen polls desk/messages; global Attention deep-links owner decisions
 ```
 
-There is no agent-to-localhost control plane. Tool calls are parsed from Alpha's
+There is no agent-to-localhost control plane. Tool calls are parsed from Master's
 orchestration response and executed by server-owned handlers with structured success
-or error messages written back to the Alpha thread and supplied to the next bounded
-Alpha continuation. Mutations create `audit_log` rows; pure reads do not. Alpha and
-every Alpha-spawned run are auto-approved by a durable
-scope check (`sessions.mode='alpha'` or `jobs.alpha_session_id IS NOT NULL`); the
+or error messages written back to the Master thread and supplied to the next bounded
+Master continuation. Mutations create `audit_log` rows; pure reads do not. Master and
+every Master-spawned run are auto-approved by a durable
+scope check (`sessions.mode='master'` or `jobs.origin_master_session_id IS NOT NULL`); the
 owner's global auto-approve setting for ordinary Chat remains unchanged, and product
 review gates remain separate.
 
-Interactive Alpha is quiet until asked. The desk can enable unattended mode; the
-`AlphaSupervisor` then starts already-queued Alpha jobs within turn and wall-clock
+Interactive Master is quiet until asked. The desk can enable unattended mode; the
+`MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock
 budgets. The optional token value is stored and shown, but current ACP events expose no
-usage counter, so turn + wall-clock are the enforced Alpha budgets today. Budget
-exhaustion disables unattended mode and creates an `alpha_budget` attention item.
+usage counter, so turn + wall-clock are the enforced Master budgets today. Budget
+exhaustion disables unattended mode and creates an `master_budget` attention item.
 Git commit/push/PR remains ordinary job work through the existing BYO environment.
 Destructive install administration is not in the unattended allowlist.
 
-Authority is singular: **Alpha dispatches and prioritizes; satpam alone detects,
-steers, or restarts stuck runs.** Alpha never calls satpam restart machinery.
+Authority is singular: **Master dispatches and prioritizes; satpam alone detects,
+steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 
 ### 1. Chat turn (the core loop)
 
@@ -429,7 +444,7 @@ Normal project Chat snapshots bounded eligible files at the turn boundary and us
 tool events as the journal trigger. Only changed paths and their pre-turn bytes are
 persisted; dependency/build/cache/git/media paths and oversized files are skipped.
 The journal lives for the session, previews every impacted path, and warns before an
-owner restores while Alpha work is active in the same project.
+owner restores while Master work is active in the same project.
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a per-turn quota cancels stragglers. The quota
@@ -555,7 +570,7 @@ job done  →  artifacts surface in the Result view + land as durable Archive re
 Scoped Task creation enters through one server-owned path:
 
 ```text
-Work / Home / Alpha / future Master caller
+Work / Home / Master / future Master caller
     -> TaskDelegationService.create_and_start
     -> validate owner + one Container + one Area + Task-agent + Recipe
     -> one transaction:
@@ -629,7 +644,7 @@ way). Jobs live-poll while running and auto-archive after 30 days. A dependency-
 Task remains queued but carries its durable reason in list/detail payloads and renders
 that reason in `TaskWorkspace`.
 
-Before an Alpha worker run is enqueued, `job_checkpoints.create_checkpoint` records
+Before a Master worker run is enqueued, `job_checkpoints.create_checkpoint` records
 only that job's restorable columns, node states, existing run ids, and target repository
 SHA / worktree identifiers. A repo job cuts its isolated worktree first so the checkpoint
 can restore that worktree; the worker still has not started. The 31st unpinned row
@@ -901,7 +916,7 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 `App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes intake fields and feeds the Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node. The Task Composer (behind Tasks → `+ New task`, view id `home`) creates then starts an ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration. `execution_policy=guarded` preserves final review; `autonomous` completes the final step without an approval stop. Normal tasks queue the selected profile; `/image` and `/design` reuse the proven media run path and link that run to the job so worker completion advances it to review. Start failure triggers queued-task cleanup; a media link failure preserves and exposes the task ID. Launcher project selection updates context directly. The shell header ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session for coherence) and **stays on the current view**; only intentional open paths (Search project pick, etc.) call `selectProject` to open Chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Alpha, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Alpha's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 Design Studio owns a Canvas / Brand Guide / Moodboard section menu. Moodboard reads and
 writes a project-local `artifacts/moodboard/items.json` store through gated routes in

@@ -65,17 +65,17 @@ describe("useProjectMentionItems", () => {
 	});
 
 	it("does not let a stale project response replace the active project", async () => {
-		const alpha = deferred<{ files: { path: string }[]; truncated: boolean }>();
+		const master = deferred<{ files: { path: string }[]; truncated: boolean }>();
 		const beta = deferred<{ files: { path: string }[]; truncated: boolean }>();
 		vi.mocked(listReferenceFiles).mockImplementation((_token, slug) =>
-			slug === "alpha" ? alpha.promise : beta.promise,
+			slug === "master" ? master.promise : beta.promise,
 		);
 		const { result, rerender } = renderHook(
 			({ slug }) => useProjectMentionItems("token", slug),
-			{ initialProps: { slug: "alpha" } },
+			{ initialProps: { slug: "master" } },
 		);
 		await waitFor(() =>
-			expect(listReferenceFiles).toHaveBeenCalledWith("token", "alpha"),
+			expect(listReferenceFiles).toHaveBeenCalledWith("token", "master"),
 		);
 
 		rerender({ slug: "beta" });
@@ -85,7 +85,7 @@ describe("useProjectMentionItems", () => {
 		act(() => beta.resolve({ files: [{ path: "beta.md" }], truncated: false }));
 		await waitFor(() => expect(result.current).toEqual([{ path: "beta.md" }]));
 
-		act(() => alpha.resolve({ files: [{ path: "alpha.md" }], truncated: false }));
+		act(() => master.resolve({ files: [{ path: "master.md" }], truncated: false }));
 		await act(async () => Promise.resolve());
 		expect(result.current).toEqual([{ path: "beta.md" }]);
 	});
@@ -110,7 +110,7 @@ describe("useProjectMentionItems", () => {
 			],
 		});
 		const { result } = renderHook(() =>
-			useProjectMentionItems("token", "alpha"),
+			useProjectMentionItems("token", "master"),
 		);
 		await waitFor(() =>
 			expect(result.current).toEqual([
@@ -129,7 +129,7 @@ describe("useProjectMentionItems", () => {
 		);
 		expect(listArtifacts).toHaveBeenCalledWith(
 			"token",
-			"alpha",
+			"master",
 			60 * 24 * 365,
 		);
 	});
@@ -144,7 +144,7 @@ describe("useProjectMentionItems", () => {
 			.mockResolvedValueOnce({ artifacts: [] })
 			.mockResolvedValueOnce({ artifacts: [] });
 		const { result } = renderHook(() =>
-			useProjectMentionItems("token", "alpha"),
+			useProjectMentionItems("token", "master"),
 		);
 		await waitFor(() => expect(result.current).toEqual([{ path: "before.md" }]));
 

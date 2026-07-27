@@ -27,6 +27,7 @@ from ..task_delegation import (
     TaskDelegationRequest,
     new_idempotency_key,
 )
+from ..master_persistence import canonical_job_payload
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -247,7 +248,7 @@ def register(app, deps):
         ).fetchall()
         if dependencies:
             d["dependencies"] = [dict(row) for row in dependencies]
-        return d
+        return canonical_job_payload(d)
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -651,8 +652,8 @@ def register(app, deps):
 
     # Global Attention applies review verdicts through these proven services so
     # artifact approval and worktree cleanup cannot drift from the Tasks flow.
-    app.state.alpha_approve_job = approve_job
-    app.state.alpha_reject_job = reject_job
+    app.state.master_approve_job = approve_job
+    app.state.master_reject_job = reject_job
 
     @app.post("/api/jobs/{job_id}/satpam/{intervention_id}/approve")
     def approve_satpam_restart(job_id: int, intervention_id: int, user: dict[str, Any] = Depends(current_user)):

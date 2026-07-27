@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 31 tables. Applied migration version: **31**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -203,7 +203,7 @@ SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exa
 | `target_area_id` | INTEGER | yes |  | → `project_areas.id` (ON DELETE SET NULL) |
 | `blocked_reason` | TEXT | yes |  |  |
 | `rejected_reason` | TEXT | yes |  |  |
-| `alpha_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
+| `origin_master_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
 | `created_by` | INTEGER | yes |  | → `users.id` |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
@@ -211,7 +211,7 @@ SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exa
 | `finished_at` | TEXT | yes |  |  |
 | `archived_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_jobs_alpha` - (alpha_session_id, status, created_at); `idx_jobs_archived` - (archived_at); `idx_jobs_workflow` - (workflow_id); `idx_jobs_project_status` - (project_id, status, created_at)
+**Indexes:** `idx_jobs_origin_master` - (origin_master_session_id, status, created_at); `idx_jobs_archived` - (archived_at); `idx_jobs_workflow` - (workflow_id); `idx_jobs_project_status` - (project_id, status, created_at)
 
 
 ### message_reviews
@@ -301,6 +301,8 @@ SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `capabilities` | TEXT | yes |  |  |
+
+**Indexes:** `idx_profiles_one_master` - UNIQUE (user_id)
 
 
 ### project_areas
@@ -489,7 +491,7 @@ SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exa
 | `goal_iteration` | INTEGER | NO | `0` |  |
 | `goal_max` | INTEGER | NO | `20` |  |
 
-**Indexes:** `idx_sessions_project` - (project_id, updated_at); `idx_sessions_owner` - (owner_user_id, updated_at)
+**Indexes:** `idx_sessions_one_master` - UNIQUE (owner_user_id); `idx_sessions_project` - (project_id, updated_at); `idx_sessions_owner` - (owner_user_id, updated_at)
 
 
 ### task_delegations
@@ -582,4 +584,4 @@ SQLite (WAL mode). 31 tables. Applied migration version: **30**. This is the exa
 
 
 ---
-_Generated 2026-07-27 01:03 UTC._
+_Generated 2026-07-27 02:08 UTC._

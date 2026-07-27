@@ -6,7 +6,7 @@ import { Sidebar } from './Sidebar'
 
 const base = {
   activeProfile: null, activeProject: null, activeSession: null, currentView: 'chat' as const,
-  features: { designStudio: false, workflowGraph: false }, onClose: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
+  features: { designStudio: false, workflowGraph: false, masterOrchestrator: false }, onClose: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
 }
 
 describe('Sidebar single-workspace IA', () => {
@@ -15,7 +15,7 @@ describe('Sidebar single-workspace IA', () => {
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     // Destinations only — blank session lives on Chat header / mobile topbar / `/new`.
     // Project switch is the shell top bar; project manage is Settings → Projects.
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Archive'])
+    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Archive'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
     // No workspace switch and no tool destinations: tools live on the right rail.
@@ -23,17 +23,17 @@ describe('Sidebar single-workspace IA', () => {
     expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Workflows' })).toBeInTheDocument()
-    rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true }} />)
-    expect(labels()).toEqual(['Chat', 'Alpha', 'Tasks', 'Workflows', 'Archive', 'Design'])
+    rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true, masterOrchestrator: true }} />)
+    expect(labels()).toEqual(['Chat', 'Master', 'Tasks', 'Workflows', 'Archive', 'Design'])
   })
 
   it('navigates the flow destinations', async () => {
     const user = userEvent.setup()
-    render(<Sidebar {...base} />)
+    render(<Sidebar {...base} features={{ ...base.features, masterOrchestrator: true }} />)
     await user.click(screen.getByRole('button', { name: 'Chat' }))
     expect(base.onSelectView).toHaveBeenCalledWith('chat')
-    await user.click(screen.getByRole('button', { name: 'Alpha' }))
-    expect(base.onSelectView).toHaveBeenCalledWith('alpha')
+    await user.click(screen.getByRole('button', { name: 'Master' }))
+    expect(base.onSelectView).toHaveBeenCalledWith('master')
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
     expect(base.onSelectView).toHaveBeenCalledWith('activity')
     await user.click(screen.getByRole('button', { name: 'Workflows' }))

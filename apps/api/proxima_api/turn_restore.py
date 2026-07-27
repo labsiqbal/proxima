@@ -159,26 +159,38 @@ def preview(conn, message_id: int) -> dict[str, Any]:
     row, entries = _journal_for_message(conn, message_id)
     active = [dict(item) for item in conn.execute(
         "SELECT j.id, j.title FROM jobs j WHERE j.project_id IS ? "
-        "AND j.alpha_session_id IS NOT NULL AND j.status = 'running' ORDER BY j.id",
+        "AND j.origin_master_session_id IS NOT NULL AND j.status = 'running' ORDER BY j.id",
         (row["project_id"],),
     ).fetchall()]
     return {
         "message_id": message_id,
         "paths": [entry["path"] for entry in entries],
         "warning": (
-            "Alpha has active work in this project. Restoring may overwrite those workers' changes."
+            "Master has active work in this Container. Restoring may overwrite those Task-agents' changes."
             if active else None
         ),
-        "active_alpha_jobs": active,
+        "active_master_tasks": active,
     }
 
 
-def restore(conn, message_id: int, *, root: Path, confirmed: bool, accept_active_alpha: bool) -> dict[str, Any]:
+def restore(
+    conn,
+    message_id: int,
+    *,
+    root: Path,
+    confirmed: bool,
+    accept_active_master: bool = False,
+    accept_active_alpha: bool | None = None,
+) -> dict[str, Any]:
+    if accept_active_alpha is not None:
+        if accept_active_master and not accept_active_alpha:
+            raise TurnRestoreError("conflicting Master and Alpha restore acknowledgements")
+        accept_active_master = accept_active_alpha
     impact = preview(conn, message_id)
     if not confirmed:
         raise TurnRestoreError("restore confirmation is required")
-    if impact["active_alpha_jobs"] and not accept_active_alpha:
-        raise TurnRestoreError("active Alpha work must be acknowledged before restore")
+    if impact["active_master_tasks"] and not accept_active_master:
+        raise TurnRestoreError("active Master work must be acknowledged before restore")
     _row, entries = _journal_for_message(conn, message_id)
     root = root.resolve()
     restored: list[str] = []

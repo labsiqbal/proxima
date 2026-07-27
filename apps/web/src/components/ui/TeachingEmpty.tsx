@@ -15,7 +15,7 @@ export type TeachingEmptyProps = {
   /** Optional single primary action. */
   ctaLabel?: string
   onCta?: () => void
-  /** Extra content under the tutorial (e.g. Alpha example chips). */
+  /** Extra content under the tutorial (e.g. Master example chips). */
   children?: React.ReactNode
   className?: string
   /** Optional mark / icon above the title. */

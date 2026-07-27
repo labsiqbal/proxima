@@ -203,8 +203,8 @@ def register(app, deps):
 
     @app.post("/api/sessions", status_code=201)
     def create_session(payload: SessionCreateRequest, user: dict[str, Any] = Depends(current_user)):
-        if payload.mode == "alpha":
-            raise HTTPException(status_code=422, detail="Alpha sessions are created by the Alpha desk")
+        if payload.mode in {"master", "alpha"}:
+            raise HTTPException(status_code=422, detail="Master sessions are created by the Master desk")
         _require_mode_feature(payload.mode)
         profile = profile_for_user(payload.profile_id, user)
         project_id = None
@@ -241,8 +241,8 @@ def register(app, deps):
     @app.patch("/api/sessions/{session_id}")
     def update_session(session_id: int, payload: SessionUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
-        if session["mode"] == "alpha":
-            raise HTTPException(status_code=409, detail="the Alpha session is managed by the Alpha desk")
+        if session["mode"] in {"master", "alpha"}:
+            raise HTTPException(status_code=409, detail="the Master session is managed by the Master desk")
         if session["owner_user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="only the session owner can change it")
         if payload.title is not None and payload.title.strip():
@@ -277,8 +277,8 @@ def register(app, deps):
     @app.delete("/api/sessions/{session_id}")
     def delete_session(session_id: int, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
-        if session["mode"] == "alpha":
-            raise HTTPException(status_code=409, detail="the Alpha session is managed by the Alpha desk")
+        if session["mode"] in {"master", "alpha"}:
+            raise HTTPException(status_code=409, detail="the Master session is managed by the Master desk")
         if session["owner_user_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="only the session owner can delete it")
         if session["job_id"]:  # a job's thread — delete the job (keeps it from orphaning)

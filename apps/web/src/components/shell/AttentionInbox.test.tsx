@@ -3,9 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttentionInbox } from './AttentionInbox'
-import { actAttention, getAttention } from '../../api/alpha'
+import { actAttention, getAttention } from '../../api/master'
 
-vi.mock('../../api/alpha', () => ({ getAttention: vi.fn(), actAttention: vi.fn() }))
+vi.mock('../../api/master', () => ({ getAttention: vi.fn(), actAttention: vi.fn() }))
 
 const item = {
   id: 'job:4', kind: 'job_review', title: 'Release needs review',

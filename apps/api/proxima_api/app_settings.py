@@ -146,48 +146,48 @@ def set_satpam_settings(conn, stall_turns: int, check_seconds: int) -> dict[str,
     return {"stall_turns": stall_turns, "check_seconds": check_seconds}
 
 
-# ── Alpha orchestration settings ─────────────────────────────────────────
+# ── Master orchestration settings ─────────────────────────────────────────
 
-ALPHA_UNATTENDED_KEY = "alpha.unattended"
-ALPHA_BUDGET_TURNS_KEY = "alpha.budget.turns"
-ALPHA_BUDGET_WALL_SECONDS_KEY = "alpha.budget.wall_seconds"
-ALPHA_BUDGET_TOKENS_KEY = "alpha.budget.tokens_optional"
-ALPHA_TOUR_CORE_DONE_KEY = "alpha.tour.core_done"
-ALPHA_BUDGET_TURNS_DEFAULT = 20
-ALPHA_BUDGET_WALL_SECONDS_DEFAULT = 14_400
-ALPHA_BUDGET_TURNS_MIN = 1
-ALPHA_BUDGET_TURNS_MAX = 200
-ALPHA_BUDGET_WALL_SECONDS_MIN = 300
-ALPHA_BUDGET_WALL_SECONDS_MAX = 86_400
-ALPHA_BUDGET_TOKENS_MAX = 10_000_000
+MASTER_UNATTENDED_KEY = "master.unattended"
+MASTER_BUDGET_TURNS_KEY = "master.budget.turns"
+MASTER_BUDGET_WALL_SECONDS_KEY = "master.budget.wall_seconds"
+MASTER_BUDGET_TOKENS_KEY = "master.budget.tokens_optional"
+MASTER_TOUR_CORE_DONE_KEY = "master.tour.core_done"
+MASTER_BUDGET_TURNS_DEFAULT = 20
+MASTER_BUDGET_WALL_SECONDS_DEFAULT = 14_400
+MASTER_BUDGET_TURNS_MIN = 1
+MASTER_BUDGET_TURNS_MAX = 200
+MASTER_BUDGET_WALL_SECONDS_MIN = 300
+MASTER_BUDGET_WALL_SECONDS_MAX = 86_400
+MASTER_BUDGET_TOKENS_MAX = 10_000_000
 
 
-def get_alpha_settings(conn) -> dict[str, Any]:
-    token_raw = get_setting(conn, ALPHA_BUDGET_TOKENS_KEY)
+def get_master_settings(conn) -> dict[str, Any]:
+    token_raw = get_setting(conn, MASTER_BUDGET_TOKENS_KEY)
     try:
         tokens = int(token_raw) if token_raw not in (None, "") else None
     except (TypeError, ValueError):
         tokens = None
     return {
-        "unattended": get_setting(conn, ALPHA_UNATTENDED_KEY, "0") == "1",
+        "unattended": get_setting(conn, MASTER_UNATTENDED_KEY, "0") == "1",
         "budget_turns": _bounded_int(
-            get_setting(conn, ALPHA_BUDGET_TURNS_KEY),
-            ALPHA_BUDGET_TURNS_DEFAULT,
-            ALPHA_BUDGET_TURNS_MIN,
-            ALPHA_BUDGET_TURNS_MAX,
+            get_setting(conn, MASTER_BUDGET_TURNS_KEY),
+            MASTER_BUDGET_TURNS_DEFAULT,
+            MASTER_BUDGET_TURNS_MIN,
+            MASTER_BUDGET_TURNS_MAX,
         ),
         "budget_wall_seconds": _bounded_int(
-            get_setting(conn, ALPHA_BUDGET_WALL_SECONDS_KEY),
-            ALPHA_BUDGET_WALL_SECONDS_DEFAULT,
-            ALPHA_BUDGET_WALL_SECONDS_MIN,
-            ALPHA_BUDGET_WALL_SECONDS_MAX,
+            get_setting(conn, MASTER_BUDGET_WALL_SECONDS_KEY),
+            MASTER_BUDGET_WALL_SECONDS_DEFAULT,
+            MASTER_BUDGET_WALL_SECONDS_MIN,
+            MASTER_BUDGET_WALL_SECONDS_MAX,
         ),
-        "budget_tokens": tokens if tokens is not None and 1 <= tokens <= ALPHA_BUDGET_TOKENS_MAX else None,
-        "tour_core_done": get_setting(conn, ALPHA_TOUR_CORE_DONE_KEY, "0") == "1",
+        "budget_tokens": tokens if tokens is not None and 1 <= tokens <= MASTER_BUDGET_TOKENS_MAX else None,
+        "tour_core_done": get_setting(conn, MASTER_TOUR_CORE_DONE_KEY, "0") == "1",
     }
 
 
-def set_alpha_settings(
+def set_master_settings(
     conn,
     *,
     unattended: bool | None = None,
@@ -199,42 +199,52 @@ def set_alpha_settings(
     if budget_turns is not None and (
         not isinstance(budget_turns, int)
         or isinstance(budget_turns, bool)
-        or not ALPHA_BUDGET_TURNS_MIN <= budget_turns <= ALPHA_BUDGET_TURNS_MAX
+        or not MASTER_BUDGET_TURNS_MIN <= budget_turns <= MASTER_BUDGET_TURNS_MAX
     ):
         raise ValueError(
-            f"budget_turns must be between {ALPHA_BUDGET_TURNS_MIN} and {ALPHA_BUDGET_TURNS_MAX}"
+            f"budget_turns must be between {MASTER_BUDGET_TURNS_MIN} and {MASTER_BUDGET_TURNS_MAX}"
         )
     if budget_wall_seconds is not None and (
         not isinstance(budget_wall_seconds, int)
         or isinstance(budget_wall_seconds, bool)
-        or not ALPHA_BUDGET_WALL_SECONDS_MIN <= budget_wall_seconds <= ALPHA_BUDGET_WALL_SECONDS_MAX
+        or not MASTER_BUDGET_WALL_SECONDS_MIN <= budget_wall_seconds <= MASTER_BUDGET_WALL_SECONDS_MAX
     ):
         raise ValueError(
             "budget_wall_seconds must be between "
-            f"{ALPHA_BUDGET_WALL_SECONDS_MIN} and {ALPHA_BUDGET_WALL_SECONDS_MAX}"
+            f"{MASTER_BUDGET_WALL_SECONDS_MIN} and {MASTER_BUDGET_WALL_SECONDS_MAX}"
         )
     if budget_tokens is not ... and budget_tokens is not None and (
         not isinstance(budget_tokens, int)
         or isinstance(budget_tokens, bool)
-        or not 1 <= budget_tokens <= ALPHA_BUDGET_TOKENS_MAX
+        or not 1 <= budget_tokens <= MASTER_BUDGET_TOKENS_MAX
     ):
-        raise ValueError(f"budget_tokens must be between 1 and {ALPHA_BUDGET_TOKENS_MAX}, or empty")
+        raise ValueError(f"budget_tokens must be between 1 and {MASTER_BUDGET_TOKENS_MAX}, or empty")
     if unattended is not None:
-        set_setting(conn, ALPHA_UNATTENDED_KEY, "1" if unattended else "0")
+        set_setting(conn, MASTER_UNATTENDED_KEY, "1" if unattended else "0")
         if unattended:
-            set_setting(conn, "alpha.budget.started_at", datetime.now(timezone.utc).isoformat())
-            set_setting(conn, "alpha.budget.turns_used", "0")
+            set_setting(conn, "master.budget.started_at", datetime.now(timezone.utc).isoformat())
+            set_setting(conn, "master.budget.turns_used", "0")
         else:
-            set_setting(conn, "alpha.budget.started_at", "")
+            set_setting(conn, "master.budget.started_at", "")
     if budget_turns is not None:
-        set_setting(conn, ALPHA_BUDGET_TURNS_KEY, str(budget_turns))
+        set_setting(conn, MASTER_BUDGET_TURNS_KEY, str(budget_turns))
     if budget_wall_seconds is not None:
-        set_setting(conn, ALPHA_BUDGET_WALL_SECONDS_KEY, str(budget_wall_seconds))
+        set_setting(conn, MASTER_BUDGET_WALL_SECONDS_KEY, str(budget_wall_seconds))
     if budget_tokens is not ...:
-        set_setting(conn, ALPHA_BUDGET_TOKENS_KEY, "" if budget_tokens is None else str(budget_tokens))
+        set_setting(conn, MASTER_BUDGET_TOKENS_KEY, "" if budget_tokens is None else str(budget_tokens))
     if tour_core_done is not None:
-        set_setting(conn, ALPHA_TOUR_CORE_DONE_KEY, "1" if tour_core_done else "0")
-    return get_alpha_settings(conn)
+        set_setting(conn, MASTER_TOUR_CORE_DONE_KEY, "1" if tour_core_done else "0")
+    return get_master_settings(conn)
+
+
+def get_alpha_settings(conn) -> dict[str, Any]:
+    """One-release reader for callers using the former Alpha function name."""
+    return get_master_settings(conn)
+
+
+def set_alpha_settings(conn, **kwargs: Any) -> dict[str, Any]:
+    """One-release writer for callers using the former Alpha function name."""
+    return set_master_settings(conn, **kwargs)
 
 
 # ── image-generation config ────────────────────────────────────────────────

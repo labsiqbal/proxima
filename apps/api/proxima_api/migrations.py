@@ -701,11 +701,14 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE profiles ADD COLUMN system_kind TEXT")
     if "jobs" in table_names:
         job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-        if "alpha_session_id" not in job_cols:
+        if (
+            "alpha_session_id" not in job_cols
+            and "origin_master_session_id" not in job_cols
+        ):
             conn.execute(
                 "ALTER TABLE jobs ADD COLUMN alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL"
             )
-        job_cols.add("alpha_session_id")
+            job_cols.add("alpha_session_id")
         if {"alpha_session_id", "status", "created_at"}.issubset(job_cols):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
         conn.execute(
@@ -1115,6 +1118,12 @@ def _protect_task_prerequisites_from_deletion(
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _migrate_alpha_identity_to_master(conn: sqlite3.Connection) -> None:
+    from .master_persistence import migrate_master_persistence
+
+    migrate_master_persistence(conn)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1150,6 +1159,11 @@ MIGRATIONS: list[Migration] = [
         "protect durable Task prerequisites from silent deletion",
         _protect_task_prerequisites_from_deletion,
         {"no_auto_tx": True},
+    ),
+    (
+        31,
+        "migrate durable Alpha identity and Task ownership links to Master",
+        _migrate_alpha_identity_to_master,
     ),
 ]
 

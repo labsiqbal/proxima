@@ -10,9 +10,10 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
 
 ## Current highlights
 
-- **Alpha orchestration desk:** delegate an outcome to a built-in orchestrator,
+- **Master orchestration desk:** delegate an outcome to a built-in orchestrator,
   choose its backing runner, and monitor three worker slots, queued work,
-  Attention decisions, and job-scoped checkpoints.
+  Attention decisions, and job-scoped checkpoints. Its durable migration is
+  shipped, while the runtime/UI gate defaults off during integration.
 - **Native Grok runner:** use the official Grok Build CLI over its native ACP
   endpoint, with the same ready/not-ready status shown for every installed runner.
 - **First-class `/masterplan`:** start the bundled masterplan methodology from
@@ -20,8 +21,6 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
 - **ArtifactViewer v2:** review ordinary artifacts in Proxima with point
   annotations, rendered Mermaid, editable Excalidraw conversion, and an editable
   feedback handoff to the producing Chat.
-
-![Alpha desk with Deck chrome parity](docs/screenshots/alpha-desk.png)
 
 ![Core tour: two ways to work](docs/screenshots/core-tour-work-modes.png)
 
@@ -43,12 +42,12 @@ no credentials**. The work it orchestrates is domain-neutral: content, ops,
 research, and code all flow through the same chats, plans, reviews, and
 archive records.
 
-One workspace, organized around two paths into durable work: **Chat or Alpha → Tasks → Recipes**:
+One workspace, organized around two paths into durable work: **Chat or Master → Tasks → Recipes**:
 
 - **Chat** is the hands-on front door - think it through with one agent, then
   *Slice into plan*: the AI turns the conversation into a runnable plan of
   reviewable jobs. File-changing turns carry a previewable session-scoped restore.
-- **Alpha** is the delegation desk - give the built-in orchestrator an outcome and
+- **Master** is the delegation desk - give the built-in orchestrator an outcome and
   it dispatches Autonomous worker jobs through the agents you already own, up to
   three at once, with the rest queued honestly.
 - **Tasks** holds the resulting plans and one-off jobs with their review gates.
@@ -65,15 +64,15 @@ One workspace, organized around two paths into durable work: **Chat or Alpha →
 - **Single-user cockpit** — set one owner password on first run, then use a
   persistent owner session. Run it for yourself, see your work organized, never
   lose context.
-- **Alpha orchestration desk** - a built-in system persona backed by the runner
+- **Master orchestration desk** - a built-in system persona backed by the runner
   you choose, with in-process Proxima tools, live worker capacity, active queue,
-  needs-you links, and job-scoped checkpoints. Alpha and its workers auto-approve
+  needs-you links, and job-scoped checkpoints. Master and its workers auto-approve
   ACP tool prompts without changing the global permission setting. Optional
   unattended mode starts only queued work and stops at saved turn and wall-clock
   budgets; code jobs may still commit, push, or open PRs through your existing
   `git`/`gh` setup. Satpam alone owns stuck-job recovery.
 - **Global Attention inbox** - review gates, tool permissions, satpam restart asks,
-  and Alpha decisions collect in one shell badge. Safe binary actions can run
+  and Master decisions collect in one shell badge. Safe binary actions can run
   inline; complex diffs and open questions always deep-link to their owning surface.
 - **Tasks with review gates** — describe an outcome, pick an agent and a
   **Guarded** or **Autonomous** policy; the task runs as a durable job and

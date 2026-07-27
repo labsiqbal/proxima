@@ -37,6 +37,7 @@ from ..schemas import (
     GraphScriptApproveRequest,
     GraphTemplateSaveRequest,
 )
+from ..master_persistence import canonical_job_payload
 
 # The approval card renders the script body; cap what one response carries so a
 # runaway file cannot flood the UI. The sha256 always covers the WHOLE file.
@@ -191,7 +192,7 @@ def register(app, deps):
                 "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
             ).fetchone()
             payload["project_slug"] = project["slug"] if project else None
-        return payload
+        return canonical_job_payload(payload)
 
     def graph_template_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         payload = dict(row)
@@ -650,9 +651,9 @@ def register(app, deps):
                 status_code=409, detail=f"cannot start repo plan: {exc}"
             ) from exc
         job = graph_job_or_404(job_id, user)
-        # Alpha graph plans capture their latest queued node state after any
+        # Master graph plans capture their latest queued node state after any
         # isolated worktree exists and before ready nodes are dispatched.
-        if job["alpha_session_id"] is not None:
+        if job["origin_master_session_id"] is not None:
             create_checkpoint(db(), job_id)
         claimed = db().execute(
             "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, "
@@ -1075,8 +1076,8 @@ def register(app, deps):
 
     # Global Attention reuses the exact hash-visible read/approve services in
     # process rather than duplicating trust transitions or calling loopback HTTP.
-    app.state.alpha_read_node_script = read_node_script
-    app.state.alpha_approve_node_script = approve_node_script
+    app.state.master_read_node_script = read_node_script
+    app.state.master_approve_node_script = approve_node_script
 
     @app.post("/api/graph/jobs/{job_id}/approve")
     def approve_graph_job(

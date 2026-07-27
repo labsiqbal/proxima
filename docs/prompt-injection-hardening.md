@@ -53,6 +53,13 @@ prevent repeated or malformed tool output from creating partial duplicate work.
 These controls do not expand runner permissions and do not turn cwd selection into an
 OS sandbox.
 
+Master persistence is not a permission grant. Migration 31 preserves the hidden
+orchestrator session and Task ownership in SQLite, while
+`feature_master_orchestrator` defaults off. With the flag off, Master APIs reject
+use and the worker does not claim Master turns or Master-owned Task runs. Production
+activation remains blocked until the restricted runner and typed product-tool
+broker enforce the chat-only Master boundary.
+
 ## Path policy
 
 Runner/file APIs must enforce:

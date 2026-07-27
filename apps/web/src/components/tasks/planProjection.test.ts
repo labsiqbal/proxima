@@ -59,14 +59,14 @@ describe('orderedPlanJobs', () => {
 
   it('keeps authoring order between independent siblings', () => {
     const plan = job({
-      nodes: [node('root'), node('beta'), node('alpha')],
+      nodes: [node('root'), node('beta'), node('master')],
       edges: [
         { from: 'root', to: 'beta' },
-        { from: 'root', to: 'alpha' },
+        { from: 'root', to: 'master' },
       ],
     })
 
-    expect(orderedPlanJobs(plan).map(row => row.node.id)).toEqual(['root', 'beta', 'alpha'])
+    expect(orderedPlanJobs(plan).map(row => row.node.id)).toEqual(['root', 'beta', 'master'])
   })
 })
 

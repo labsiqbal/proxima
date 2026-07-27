@@ -65,7 +65,7 @@ an explicit trusted-owner setting and is recorded in run events.
 
 ## Task delegation boundary
 
-Scoped Task creation is a server-owned operation. Work, Home quick Task, Alpha, and
+Scoped Task creation is a server-owned operation. Work, Home quick Task, Master, and
 future orchestration callers pass database identities, never filesystem paths, to
 `TaskDelegationService`. The service verifies that the authenticated owner owns the
 Container, that the one selected Area is active and belongs to that Container, that
@@ -88,6 +88,27 @@ recovery retry safely, including reconciliation of a graph Task interrupted afte
 live `jobs` state, and unmet or failed prerequisites persist a visible blocked reason
 rather than leaving an unexplained queue row. Starting still uses the existing guarded
 job claim, worktree, and run queue.
+
+## Master persistence and activation boundary
+
+Master's durable profile, project-unbound session, messages, runs, checkpoints,
+budgets, attention, delegations, and Task ownership remain in the existing SQLite
+tables. Migration 31 changes the former Alpha identity and origin column in place
+and refuses ambiguous identities, conflicting compatibility columns, malformed
+owned JSON payloads, or foreign-key violations. It does not create a parallel
+ledger or a second Master session.
+
+`feature_master_orchestrator` is server-owned and defaults off. Persistence
+migration and identity recovery still run while it is off, but canonical and
+deprecated compatibility routes reject use, the supervisor does not start, and
+the run worker leaves both Master turns and Master-owned Task runs queued. This
+gate limits activation only. It does not weaken migration checks or authorize a
+runner.
+
+The temporary `/api/alpha` and `/api/settings/alpha` aliases are authenticated
+projections over the same records. They grant no extra access and disappear after
+the compatibility release. The current in-process orchestration runtime remains
+disabled by default until the restricted runner and typed tool broker land.
 
 This service is an authority and consistency boundary, not an OS sandbox. Repo Tasks
 still run in the existing external worktree and require review before local merge.

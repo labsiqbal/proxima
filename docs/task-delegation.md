@@ -30,9 +30,15 @@ when the fingerprint matches and returns a conflict when the key names different
 work.
 
 A batch is all replay or all new. Mixing existing and new keys is rejected rather
-than creating a partial second batch. Alpha also derives a stable per-run key for a
+than creating a partial second batch. Master derives a stable per-run key for a
 mutation envelope when the model omits one, so duplicate envelopes in the same turn
 resolve to the same Tasks.
+
+The Master persistence migration preserves `origin_session_id`,
+`origin_message_id`, `job_id`, and every Task edge in place. Existing Alpha-origin
+rows continue to point at the same session and message primary keys after that
+session becomes Master. Restart recovery therefore sees the same committed start
+intent and never creates replacement ownership rows.
 
 ## Dependencies
 

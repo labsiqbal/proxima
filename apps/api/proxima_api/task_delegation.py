@@ -1,6 +1,6 @@
 """Server-owned Task creation, idempotency, dependency, and start boundary.
 
-Every scoped Task created by Work, Home, Alpha, or a future Master enters through
+Every scoped Task created by Work, Home, or Master enters through
 ``TaskDelegationService``. The service commits the worker session, job,
 delegation audit, and dependency edges before it attempts the retryable start.
 """
@@ -17,6 +17,7 @@ from . import features, workflows as wf, worktrees
 from .auth import iso_now
 from .graph import GraphValidationError, normalize_graph, repo_target_paths
 from .job_checkpoints import create_checkpoint
+from .master_persistence import canonical_job_payload
 
 
 REQUIRED_DEPENDENCY_STATUSES = frozenset({"review", "done"})
@@ -176,7 +177,7 @@ class TaskDelegationService:
         ).fetchall()
         if dependencies:
             payload["dependencies"] = [dict(row) for row in dependencies]
-        return payload
+        return canonical_job_payload(payload)
 
     def _validate_request(
         self,
@@ -567,14 +568,14 @@ class TaskDelegationService:
                             ),
                         )
                         action = (
-                            "alpha.job.create"
+                            "master.job.create"
                             if item["origin_session"] is not None
-                            and item["origin_session"]["mode"] == "alpha"
+                            and item["origin_session"]["mode"] == "master"
                             else "task.delegation.create"
                         )
-                        if action == "alpha.job.create":
+                        if action == "master.job.create":
                             conn.execute(
-                                "UPDATE jobs SET alpha_session_id = ? WHERE id = ?",
+                                "UPDATE jobs SET origin_master_session_id = ? WHERE id = ?",
                                 (request.origin_session_id, job_id),
                             )
                         conn.execute(
@@ -703,7 +704,7 @@ class TaskDelegationService:
 
         New delegated work cannot use this path because it has no Container or
         Area to audit. It stays server-owned so old API clients retain their
-        scratch-work behavior while scoped UI and Alpha callers use the durable
+        scratch-work behavior while scoped UI and Master callers use the durable
         delegation contract.
         """
         conn = connection or self.db_factory()

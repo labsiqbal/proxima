@@ -11,8 +11,8 @@ const baseProps = {
 		{ label: "jobs", hint: "Watch the active queue on the side rail" },
 		{ label: "needs you", hint: "Reviews and questions collect on the side rail" },
 	],
-	helpTitle: "How Alpha works",
-	helpLead: "Alpha breaks outcomes into durable jobs and returns decisions here.",
+	helpTitle: "How Master works",
+	helpLead: "Master breaks outcomes into durable jobs and returns decisions here.",
 	capabilities: [
 		"Describe an outcome and press Delegate",
 		"Watch the active queue and Needs-you list",
@@ -23,7 +23,7 @@ const baseProps = {
 		"Write the outcome and constraints",
 		"Press Delegate — leave anytime; return to the same desk",
 	],
-	testId: "alpha-empty",
+	testId: "master-empty",
 };
 
 describe("CompactTeachingEmpty", () => {
@@ -52,7 +52,7 @@ describe("CompactTeachingEmpty", () => {
 		const trigger = screen.getByRole("button", { name: "How it works" });
 		await user.click(trigger);
 
-		const dialog = screen.getByRole("dialog", { name: "How Alpha works" });
+		const dialog = screen.getByRole("dialog", { name: "How Master works" });
 		expect(dialog).toBeInTheDocument();
 		expect(within(dialog).getByLabelText("What you can do here")).toBeInTheDocument();
 		expect(within(dialog).getByLabelText("Getting started")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("CompactTeachingEmpty", () => {
 		await waitFor(() => expect(trigger).toHaveFocus());
 
 		await user.click(trigger);
-		fireEvent.click(screen.getByTestId("alpha-empty-help-scrim"));
+		fireEvent.click(screen.getByTestId("master-empty-help-scrim"));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
