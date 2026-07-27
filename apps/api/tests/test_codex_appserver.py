@@ -7,6 +7,7 @@ backend is exercised manually against the system Codex CLI (see the PR body):
 that path needs real OAuth + network, so it is not a hermetic unit test.
 """
 import asyncio
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -828,9 +829,17 @@ def test_master_proxy_stop_cancels_partial_connections():
                 break
             await asyncio.sleep(0)
         await proxy.stop()
-        closed = await reader.read()
+        # Cancelling a partial connection may tear the socket down with a TCP
+        # RST (when unread inbound bytes remain) rather than a clean FIN, so the
+        # client sees ``ConnectionResetError`` instead of EOF. Both prove the
+        # connection was closed and yielded no application data.
+        try:
+            closed = await reader.read()
+        except ConnectionResetError:
+            closed = b""
         writer.close()
-        await writer.wait_closed()
+        with contextlib.suppress(ConnectionResetError):
+            await writer.wait_closed()
         return closed, proxy._connection_tasks, proxy._client
 
     closed, tasks, client = asyncio.run(go())
