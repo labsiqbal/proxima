@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { ChatSession, Job } from '../types'
+import type { ChatMessage, ChatSession, Job } from '../types'
 
 export type MasterCapacity = { running: number; max: number; free: number; queued: number }
 export type MasterBudgets = {
@@ -36,6 +36,7 @@ export type AttentionItem = {
 export type MasterDesk = {
   session: ChatSession
   master_run?: { id: number; status: string } | null
+  event_cursor: number
   backing_runner: string
   jobs: MasterJob[]
   unattended: boolean
@@ -46,9 +47,10 @@ export type MasterDesk = {
 }
 export type MasterSettings = MasterBudgets & { runner_id: string; max_parallel: number }
 
-type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'jobs'> & {
+type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs'> & {
   master_run?: MasterDesk['master_run']
   alpha_run?: MasterDesk['master_run']
+  event_cursor?: number
   jobs: (MasterJob & { alpha_session_id?: number | null })[]
 }
 
@@ -62,6 +64,9 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
       mode: payload.session.mode === 'alpha' ? 'master' : payload.session.mode,
     },
     master_run: payload.master_run ?? legacyRun ?? null,
+    event_cursor: Number.isSafeInteger(payload.event_cursor)
+      ? Math.max(0, payload.event_cursor || 0)
+      : 0,
     jobs: payload.jobs.map(job => {
       const legacy = job as MasterJob & { alpha_session_id?: number | null }
       const normalized = {
@@ -93,7 +98,16 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
 export const getMasterDesk = async (token: string, signal?: AbortSignal): Promise<MasterDesk> =>
   normalizeMasterDesk(await api<LegacyMasterDesk>('/api/master/desk', token, { signal }))
 export const sendMasterMessage = (token: string, content: string, signal?: AbortSignal) =>
-  api<{ run_id: number; session_id: number; status: string }>('/api/master/messages', token, { method: 'POST', body: JSON.stringify({ content }), signal })
+  api<{
+    run_id: number
+    session_id: number
+    status: string
+    message: ChatMessage
+  }>('/api/master/messages', token, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+    signal,
+  })
 export const getMasterSettings = (token: string) => api<MasterSettings>('/api/settings/master', token)
 export const saveMasterSettings = (
   token: string,

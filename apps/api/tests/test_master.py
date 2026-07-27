@@ -89,6 +89,42 @@ def test_alpha_route_alias_reads_the_same_master_records(tmp_path: Path):
     ).fetchone()[0] == 1
 
 
+def test_master_message_acceptance_returns_canonical_durable_message(
+    tmp_path: Path, monkeypatch
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+
+    response = client.post(
+        "/api/master/messages",
+        json={"content": "Keep this turn in durable order"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["message"] == {
+        "id": body["message"]["id"],
+        "role": "user",
+        "content": "Keep this turn in durable order",
+        "author": "owner",
+        "run_id": body["run_id"],
+        "created_at": body["message"]["created_at"],
+    }
+    stored = app.state.db.execute(
+        "SELECT id, run_id FROM messages WHERE id = ?",
+        (body["message"]["id"],),
+    ).fetchone()
+    assert dict(stored) == {
+        "id": body["message"]["id"],
+        "run_id": body["run_id"],
+    }
+    assert client.get("/api/master/desk").json()["event_cursor"] > 0
+
+
 def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()

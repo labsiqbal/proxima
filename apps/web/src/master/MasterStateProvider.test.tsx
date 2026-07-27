@@ -21,6 +21,7 @@ vi.mock('../api/sessions', () => ({ listMessages: vi.fn() }))
 const desk = {
   session: { id: 9, title: 'Master', mode: 'master' },
   master_run: null,
+  event_cursor: 12,
   backing_runner: 'codex',
   jobs: [],
   unattended: false,
@@ -76,7 +77,11 @@ class FakeEventSource {
   }
 
   emit(type: string, payload: unknown) {
-    const event = new MessageEvent(type, { data: JSON.stringify(payload) })
+    this.emitRaw(type, JSON.stringify(payload))
+  }
+
+  emitRaw(type: string, data: string) {
+    const event = new MessageEvent(type, { data })
     for (const listener of this.listeners.get(type) || []) listener(event)
   }
 }
@@ -152,6 +157,14 @@ describe('MasterStateProvider', () => {
       run_id: 40,
       session_id: 9,
       status: 'queued',
+      message: {
+        id: 41,
+        role: 'user',
+        content: 'Keep this draft',
+        author: 'owner',
+        run_id: 40,
+        created_at: '2026-07-27T10:02:00Z',
+      },
     })
   })
 
@@ -166,9 +179,55 @@ describe('MasterStateProvider', () => {
   it('creates one stream for multiple consumers and React StrictMode', async () => {
     renderProvider({ strict: true })
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    expect(getMasterDesk).toHaveBeenCalledTimes(1)
+    expect(getMasterDesk).toHaveBeenCalledTimes(2)
+    expect(listMessages).toHaveBeenCalledTimes(1)
+    expect(listEvents).not.toHaveBeenCalled()
     expect(FakeEventSource.instances[0].url).toContain('after_id=12')
     expect(FakeEventSource.instances[0].withCredentials).toBe(true)
+  })
+
+  it('takes the durable desk cursor before the authoritative bootstrap snapshots', async () => {
+    vi.mocked(getMasterDesk)
+      .mockResolvedValueOnce(desk as never)
+      .mockResolvedValueOnce({
+        ...desk,
+        master_run: { id: 22, status: 'running' },
+      } as never)
+    vi.mocked(listMessages).mockResolvedValue({
+      messages: [{
+        id: 55,
+        role: 'assistant',
+        author: 'Master',
+        content: 'Arrived during bootstrap',
+        run_id: 22,
+      }],
+      goal: null,
+    } as never)
+
+    renderProvider()
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Arrived during bootstrap')
+    expect(getMasterDesk.mock.invocationCallOrder[0])
+      .toBeLessThan(getMasterDesk.mock.invocationCallOrder[1])
+    expect(listEvents).not.toHaveBeenCalled()
+    expect(FakeEventSource.instances[0].url).toContain('after_id=12')
+  })
+
+  it('retries a failed bootstrap without remounting the authenticated app', async () => {
+    vi.mocked(getMasterDesk)
+      .mockRejectedValueOnce(new Error('initial desk unavailable'))
+      .mockResolvedValue(desk as never)
+    renderProvider()
+    await waitFor(() => {
+      expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('disconnected')
+    })
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(getMasterDesk).toHaveBeenCalledTimes(3)
   })
 
   it('does not present the latest terminal Master run as active work', async () => {
@@ -240,8 +299,117 @@ describe('MasterStateProvider', () => {
     act(() => source.fail())
     expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('retrying')
     act(() => source.open())
-    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(3))
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('does not let a stale reconciliation snapshot clear a newer live run', async () => {
+    let resolveDelta!: (value: { events: never[] }) => void
+    const liveEvent = {
+      id: 13,
+      seq: 1,
+      type: 'run.started',
+      run_id: 40,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:01:00Z',
+    }
+    vi.mocked(listEvents).mockReturnValueOnce(new Promise(resolve => {
+      resolveDelta = resolve as typeof resolveDelta
+    }))
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.fail())
+    act(() => source.open())
+    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(3))
+
+    act(() => source.emit('run.started', liveEvent))
+    expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
+    act(() => resolveDelta({ events: [liveEvent] as never[] }))
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
+    })
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('ignores a late terminal event for an older run', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.emit('run.started', {
+      id: 13,
+      seq: 1,
+      type: 'run.started',
+      run_id: 40,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+    act(() => source.emit('run.completed', {
+      id: 14,
+      seq: 1,
+      type: 'run.completed',
+      run_id: 39,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:01:01Z',
+    }))
+
+    expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('running')
+  })
+
+  it('does not reconcile an intact stream merely because a run terminated', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.emit('run.started', {
+      id: 13,
+      seq: 1,
+      type: 'run.started',
+      run_id: 40,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+    act(() => source.emit('run.completed', {
+      id: 14,
+      seq: 2,
+      type: 'run.completed',
+      run_id: 40,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:01:01Z',
+    }))
+
+    expect(screen.getAllByTestId('active-run')[0]).toHaveTextContent('idle')
+    await new Promise(resolve => window.setTimeout(resolve, 10))
+    expect(listEvents).not.toHaveBeenCalled()
+  })
+
+  it('keeps durable messages ordered when a replay fills a snapshot gap', async () => {
+    vi.mocked(listMessages).mockResolvedValue({
+      messages: [
+        { id: 3, role: 'assistant', content: 'three' },
+        { id: 1, role: 'user', content: 'one' },
+      ],
+      goal: null,
+    } as never)
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => FakeEventSource.instances[0].emit('message.complete', {
+      id: 13,
+      seq: 1,
+      type: 'message.complete',
+      run_id: 3,
+      session_id: 9,
+      payload: { message_id: 2, text: 'two' },
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('one|two|three')
   })
 
   it('reports a disconnected state when reconnect reconciliation cannot recover', async () => {
@@ -259,22 +427,72 @@ describe('MasterStateProvider', () => {
     expect(FakeEventSource.instances).toHaveLength(1)
   })
 
-  it('detects a per-run sequence gap and reconciles from the prior cursor', async () => {
-    vi.mocked(listEvents)
-      .mockResolvedValueOnce({
-        events: [{
-          id: 12,
-          seq: 1,
-          type: 'run.queued',
-          run_id: 22,
-          session_id: 9,
-          payload: {},
-          created_at: '2026-07-27T10:00:00Z',
-        }],
-      })
-      .mockResolvedValueOnce({ events: [] })
+  it('restarts a fatally closed stream when the owner retries', async () => {
     renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.fail(true))
+    expect(screen.getAllByTestId('connection')[0]).toHaveTextContent('disconnected')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    expect(source.close).toHaveBeenCalled()
+    expect(FakeEventSource.instances.filter(instance => !instance.close.mock.calls.length))
+      .toHaveLength(1)
+  })
+
+  it('coalesces a reconnect storm into bounded reconciliation on one stream', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        source.fail()
+        source.open()
+      }
+    })
+
+    await waitFor(() => expect(listEvents).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => window.setTimeout(resolve, 10))
+    expect(listEvents.mock.calls.length).toBeLessThanOrEqual(3)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('ignores malformed stream data and reconciles from the durable cursor', async () => {
+    vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+
+    act(() => FakeEventSource.instances[0].emitRaw('warning', '{"id":13'))
+
+    await waitFor(() => {
+      expect(listEvents).toHaveBeenLastCalledWith(
+        'token-a',
+        9,
+        12,
+        expect.any(AbortSignal),
+      )
+    })
+    expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('12')
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('detects a per-run sequence gap and reconciles from the prior cursor', async () => {
+    vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => FakeEventSource.instances[0].emit('run.queued', {
+      id: 13,
+      seq: 1,
+      type: 'run.queued',
+      run_id: 22,
+      session_id: 9,
+      payload: {},
+      created_at: '2026-07-27T10:00:00Z',
+    }))
     act(() => FakeEventSource.instances[0].emit('run.started', {
       id: 14,
       seq: 3,
@@ -284,7 +502,7 @@ describe('MasterStateProvider', () => {
       payload: {},
       created_at: '2026-07-27T10:01:00Z',
     }))
-    await waitFor(() => expect(listEvents).toHaveBeenLastCalledWith('token-a', 9, 12, expect.any(AbortSignal)))
+    await waitFor(() => expect(listEvents).toHaveBeenLastCalledWith('token-a', 9, 13, expect.any(AbortSignal)))
   })
 
   it('aborts and ignores an initial response after owner and token transition', async () => {
@@ -309,6 +527,35 @@ describe('MasterStateProvider', () => {
     await waitFor(() => expect(getMasterDesk).toHaveBeenCalledWith('token-b', expect.any(AbortSignal)))
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     expect(FakeEventSource.instances[0].url).toContain('/sessions/10/')
+  })
+
+  it('closes the old stream and clears owned state on same-owner token rotation', async () => {
+    const view = renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
+    act(() => source.emit('message.complete', {
+      id: 13,
+      seq: 1,
+      type: 'message.complete',
+      run_id: 3,
+      session_id: 9,
+      payload: { message_id: 2, text: 'old owner state' },
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+
+    view.rerender(
+      <MasterStateProvider token="token-b" ownerId={1} enabled>
+        <Probe />
+      </MasterStateProvider>,
+    )
+
+    expect(source.close).toHaveBeenCalled()
+    expect(screen.getByTestId('draft')).toHaveTextContent('')
+    expect(screen.getByTestId('messages')).toHaveTextContent('')
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    expect(FakeEventSource.instances.filter(instance => !instance.close.mock.calls.length))
+      .toHaveLength(1)
   })
 
   it('closes the old stream and clears state when disabled', async () => {
@@ -343,7 +590,7 @@ describe('MasterStateProvider', () => {
   })
 
   it('submits once, shows pending state, and clears the draft only after acceptance', async () => {
-    let resolveSend!: (value: { run_id: number; session_id: number; status: string }) => void
+    let resolveSend!: (value: Awaited<ReturnType<typeof sendMasterMessage>>) => void
     vi.mocked(sendMasterMessage).mockReturnValue(
       new Promise(resolve => { resolveSend = resolve }),
     )
@@ -356,9 +603,32 @@ describe('MasterStateProvider', () => {
     expect(screen.getAllByTestId('draft')[0]).toHaveTextContent('Keep this draft')
     expect(screen.getAllByTestId('sending')[0]).toHaveTextContent('true')
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Keep this draft')
-    act(() => resolveSend({ run_id: 40, session_id: 9, status: 'queued' }))
+    act(() => resolveSend({
+      run_id: 40,
+      session_id: 9,
+      status: 'queued',
+      message: {
+        id: 41,
+        role: 'user',
+        content: 'Keep this draft',
+        author: 'owner',
+        run_id: 40,
+        created_at: '2026-07-27T10:02:00Z',
+      },
+    }))
     await waitFor(() => expect(screen.getAllByTestId('draft')[0]).toHaveTextContent(''))
     expect(screen.getAllByTestId('sending')[0]).toHaveTextContent('false')
+    act(() => FakeEventSource.instances[0].emit('message.complete', {
+      id: 13,
+      seq: 2,
+      type: 'message.complete',
+      run_id: 40,
+      session_id: 9,
+      payload: { message_id: 42, text: 'Accepted reply' },
+      created_at: '2026-07-27T10:02:01Z',
+    }))
+    expect(screen.getAllByTestId('messages')[0])
+      .toHaveTextContent('Keep this draft|Accepted reply')
   })
 
   it('keeps the draft and removes the pending row after a send error', async () => {

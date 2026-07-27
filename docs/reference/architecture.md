@@ -454,8 +454,13 @@ responses, close replaced streams, and keep React StrictMode from creating two l
 connections or duplicate UI submissions. Projection and final-message events are
 deduplicated by durable ids and ordered by the server cursor. Raw message,
 reasoning, and tool deltas advance cursor/sequence tracking only and are never
-rendered. Desk/messages/events reconciliation is recovery-only after reconnect,
-cursor gap, terminal turn, or explicit retry, not a primary poll. The SSE stream
+rendered. Bootstrap reads the desk's constant-size durable `event_cursor` barrier
+before the final authoritative desk/message snapshots and opens the stream there
+without fetching the full event history. A successful message
+submission returns its canonical persisted user message so the pending row gains a
+durable id before a streamed reply can reorder it. Desk/messages/events
+reconciliation is bounded and recovery-only after reconnect, cursor gap, malformed
+event, or explicit retry, not a primary poll. The SSE stream
 emits an immediate comment on an idle connection so browser `EventSource.onopen`
 reports the healthy transport without waiting for the keepalive interval.
 

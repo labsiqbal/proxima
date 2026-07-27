@@ -121,9 +121,14 @@ def register(app, deps):
             "SELECT id, status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
             (session["id"],),
         ).fetchone()
+        event_cursor = db().execute(
+            "SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE session_id = ?",
+            (session["id"],),
+        ).fetchone()["id"]
         return {
             "session": session_payload(session),
             "master_run": dict(master_run) if master_run else None,
+            "event_cursor": event_cursor,
             "backing_runner": profile["runner_id"],
             "jobs": jobs,
             "unattended": app_settings.get_master_settings(db())["unattended"],
@@ -175,9 +180,19 @@ def register(app, deps):
             "UPDATE messages SET run_id = ? WHERE id = ?",
             (run_id, _as_int(message_cur.lastrowid)),
         )
+        message = db().execute(
+            "SELECT id, role, content, author, run_id, created_at "
+            "FROM messages WHERE id = ?",
+            (_as_int(message_cur.lastrowid),),
+        ).fetchone()
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         app.state.worker.add_event(run_id, session["id"], None, "run.queued", {"runner": profile["runner_id"], "master": True})
-        return {"run_id": run_id, "session_id": session["id"], "status": "queued"}
+        return {
+            "run_id": run_id,
+            "session_id": session["id"],
+            "status": "queued",
+            "message": dict(message),
+        }
 
     @app.get("/api/settings/alpha", deprecated=True)
     @app.get("/api/settings/master")

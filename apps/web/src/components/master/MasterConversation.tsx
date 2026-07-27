@@ -222,8 +222,11 @@ export function MasterConversation({
       className="master-thread"
       ref={threadRef}
       onScroll={recordScroll}
+      role="log"
       aria-label="Master conversation"
       aria-live="polite"
+      aria-relevant="additions text"
+      aria-atomic="false"
     >
       {messages.map((message, index) => {
         const content = message.role === 'assistant'

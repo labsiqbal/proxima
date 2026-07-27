@@ -280,8 +280,10 @@ entry point creates or reuses exactly one hidden
 Chat history; Settings/desk runner selection creates or reuses the matching system
 home while the UI counterpart stays named Master. The desk reuses Chat's shared
 composer for delegation (attach + `@` project mentions; submit still hits
-`/api/master/messages`), and the work side panel is collapsible with a persisted
-preference. One authenticated `MasterStateProvider` above `AppShell` owns the
+`/api/master/messages`). A successful send returns the canonical persisted user
+message with its durable id, so the provider can replace the pending row without
+polling or letting the streamed reply sort ahead of its prompt. The work side panel
+is collapsible with a persisted preference. One authenticated `MasterStateProvider` above `AppShell` owns the
 canonical desk/session, ordered thread, active turn, durable event cursor, one SSE
 connection, reconnect reconciliation, unread count, composer draft and selection,
 and stable scroll/panel state. The full-page Master home and future presentation
@@ -292,11 +294,14 @@ abort stale work, close the old stream, and clear owner-scoped state.
 The existing Master-session SSE stream is the only live path. It resumes from the
 durable cursor, deduplicates replay, ignores raw delta events, and applies typed
 Task/review/Attention/Satpam projections to the thread and work panel once. A
-low-frequency authoritative desk/messages/events reconciliation runs only after a
-disconnect, reconnect, detected sequence gap, terminal turn, or explicit retry. It
+bounded authoritative desk/messages/events reconciliation runs only after a
+disconnect, reconnect, detected sequence gap, malformed event, or explicit retry. It
 does not restore the former five-second Master desk poll. The SSE generator flushes
 an initial comment so an idle healthy connection becomes Live immediately while
-retaining the same cursor and event contract.
+retaining the same cursor and event contract. The first desk response supplies a
+constant-size durable `event_cursor` barrier before the final desk/message snapshots;
+bootstrap opens the stream at that barrier without fetching the full event history,
+so neither a delayed first event nor an in-flight snapshot can lose state.
 
 The home renders queued, running, review/attention, completed, and failed
 Master-owned Tasks, the needs-you subset, job-scoped checkpoint timeline, and honest

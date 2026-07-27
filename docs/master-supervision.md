@@ -125,10 +125,15 @@ full-page home and prepared for the later popup.
 The provider deduplicates event and message ids, preserves server ordering, and
 applies only safe final messages and server-owned Master projection summaries. Raw
 message, reasoning, and tool delta payloads are never surfaced. Reconciliation
-fetches desk/messages/events only after disconnect/reconnect, a sequence gap, a
-terminal turn, or explicit owner retry. Lifecycle generations and abort controllers
-ignore late responses, close replaced streams, and clear all owner-scoped state on
-token/owner change, feature-off, logout, onboarding, or update application.
+fetches desk/messages/events only after disconnect/reconnect, a sequence gap,
+malformed input, or explicit owner retry, and coalesces reconnect storms into a
+bounded number of attempts. Bootstrap reads the desk's constant-size durable
+`event_cursor` barrier before its final desk/message snapshots and does not fetch
+event history. Successful submission returns the canonical persisted user
+message, replacing the pending row with its durable id before streamed replies are
+ordered. Lifecycle generations and abort controllers ignore late responses, close
+replaced streams, and clear all owner-scoped state on token/owner change,
+feature-off, logout, onboarding, or update application.
 
 ## Compatibility
 

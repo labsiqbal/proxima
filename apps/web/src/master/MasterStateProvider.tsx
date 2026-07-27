@@ -4,13 +4,23 @@ import {
   saveMasterSettings,
   sendMasterMessage,
   type MasterDesk,
-  type MasterJob,
   type MasterSettings,
 } from '../api/master'
 import { listEvents } from '../api/runs'
 import { listMessages } from '../api/sessions'
 import { SESSION_EVENT_TYPES } from '../lib/eventTypes'
-import type { ChatMessage, RunEvent } from '../types'
+import type { RunEvent } from '../types'
+import {
+  activeMasterRun,
+  mergeMasterMessageSnapshot,
+  orderMasterMessages,
+  parseMasterStreamEvent,
+  projectMasterEvent,
+  projectMasterSnapshot,
+  type MasterViewMessage,
+} from './masterProjection'
+
+export type { MasterViewMessage } from './masterProjection'
 
 export type MasterConnectionState =
   | 'feature-off'
@@ -18,11 +28,6 @@ export type MasterConnectionState =
   | 'connected'
   | 'retrying'
   | 'disconnected'
-
-export type MasterViewMessage = ChatMessage & {
-  clientId?: string
-  pending?: boolean
-}
 
 export type MasterComposerSelection = { start: number; end: number }
 
@@ -99,19 +104,6 @@ export type MasterStateValue = {
 
 const MasterStateContext = React.createContext<MasterStateValue | null>(null)
 
-const MASTER_PROJECTION_TYPES = new Set(
-  SESSION_EVENT_TYPES.filter(type => type.startsWith('master.')),
-)
-
-const MASTER_TASK_STATUS: Record<string, MasterJob['status']> = {
-  'master.task.started': 'running',
-  'master.task.review_ready': 'review',
-  'master.task.completed': 'done',
-  'master.task.failed': 'failed',
-  'master.task.cancelled': 'cancelled',
-  'master.task.blocked': 'queued',
-}
-
 const FUTURE_STATE: MasterFutureState = {
   focus: {
     mode: 'fleet',
@@ -135,8 +127,8 @@ const FUTURE_STATE: MasterFutureState = {
 }
 
 const SIDE_COLLAPSED_KEY = 'proxima.master.sideCollapsed'
-const RECONCILE_THROTTLE_MS = 1000
 const EVENT_DEDUPE_LIMIT = 2000
+const RECONCILE_RACE_LIMIT = 3
 
 function rememberEventIds(
   current: ReadonlySet<number>,
@@ -166,141 +158,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-    ? value
-    : null
-}
-
-function activeMasterRun(
-  run: MasterDesk['master_run'],
-): { id: number; status: string } | null {
-  return run && ['queued', 'running'].includes(run.status) ? run : null
-}
-
-function safeProjectionContent(type: string, payload: Record<string, unknown>): string | null {
-  const taskId = positiveInteger(payload.task_id)
-  if (type === 'master.task.review_ready' && taskId != null) {
-    const checkpointId = positiveInteger(payload.checkpoint_id)
-    return `Task #${taskId} is ready for review.${checkpointId == null ? '' : ` Checkpoint #${checkpointId} is available.`}`
-  }
-  const taskLabels: Record<string, string> = {
-    'master.task.started': 'Started',
-    'master.task.completed': 'Completed',
-    'master.task.failed': 'Failed',
-    'master.task.cancelled': 'Cancelled',
-  }
-  if (taskLabels[type] && taskId != null) return `${taskLabels[type]} Task #${taskId}.`
-  if (type === 'master.task.blocked' && taskId != null) {
-    return `Task #${taskId} is blocked by a prerequisite.`
-  }
-  const satpamLabels: Record<string, string> = {
-    'master.satpam.steered': 'steered',
-    'master.satpam.restart_queued': 'needs approval to restart',
-    'master.satpam.restarted': 'restarted',
-    'master.satpam.escalated': 'escalated',
-  }
-  if (satpamLabels[type] && taskId != null) {
-    return `Satpam ${satpamLabels[type]} Task #${taskId}.`
-  }
-  if (type === 'master.satpam.recovery_failed' && taskId != null) {
-    return `Satpam could not complete the approved recovery for Task #${taskId}.`
-  }
-  const attentionKind = payload.attention_kind
-  if (attentionKind === 'permission_job' && taskId != null) {
-    return `Task #${taskId} needs an owner permission decision.`
-  }
-  if (attentionKind === 'master_budget') {
-    return 'Master unattended work stopped at its configured budget.'
-  }
-  if (taskId != null) return `Master needs an owner decision for Task #${taskId}.`
-  if (type === 'master.attention.required' || type === 'master.supervisor.outcome') {
-    return 'Master needs an owner decision.'
-  }
-  return null
-}
-
-function mergeMessageSnapshot(
-  snapshot: ChatMessage[],
-  current: MasterViewMessage[],
-): MasterViewMessage[] {
-  const canonicalIds = new Set(snapshot.flatMap(message => message.id == null ? [] : [message.id]))
-  const canonicalRuns = new Set(
-    snapshot.flatMap(message => message.role === 'user' && message.run_id != null ? [message.run_id] : []),
-  )
-  const extras = current.filter(message => {
-    if (message.id != null) return !canonicalIds.has(message.id)
-    if (message.run_id != null && canonicalRuns.has(message.run_id)) return false
-    return true
-  })
-  return [...snapshot, ...extras]
-}
-
-function updateProjectedJob(
-  desk: MasterDesk | null,
-  event: RunEvent,
-): MasterDesk | null {
-  if (!desk) return desk
-  const status = MASTER_TASK_STATUS[event.type]
-  const taskId = positiveInteger(event.payload.task_id)
-  if (!status || taskId == null) return desk
-  const index = desk.jobs.findIndex(job => job.id === taskId)
-  if (index < 0) {
-    const now = event.created_at
-    const projected: MasterJob = {
-      id: taskId,
-      project_id: positiveInteger(event.payload.container_id),
-      project_slug: typeof event.payload.container_slug === 'string'
-        ? event.payload.container_slug
-        : null,
-      project_name: typeof event.payload.container_slug === 'string'
-        ? event.payload.container_slug
-        : null,
-      workflow_id: null,
-      session_id: desk.session.id,
-      origin_master_session_id: desk.session.id,
-      title: `Task #${taskId}`,
-      status,
-      desk_status: status,
-      run_status: status === 'running' ? 'running' : null,
-      engine: 'linear',
-      current_step_idx: 0,
-      input: {},
-      steps_state: [],
-      schedule_id: null,
-      created_by: null,
-      created_at: now,
-      updated_at: now,
-      started_at: status === 'running' ? now : null,
-      finished_at: ['done', 'failed', 'cancelled'].includes(status) ? now : null,
-      archived_at: null,
-      blocked_reason: event.type === 'master.task.blocked'
-        ? 'Waiting for a prerequisite'
-        : null,
-    }
-    return { ...desk, jobs: [projected, ...desk.jobs] }
-  }
-  const jobs = desk.jobs.slice()
-  jobs[index] = {
-    ...jobs[index],
-    status,
-    desk_status: status,
-    run_status: status === 'running' ? 'running' : jobs[index].run_status,
-    blocked_reason: event.type === 'master.task.blocked'
-      ? jobs[index].blocked_reason || 'Waiting for a prerequisite'
-      : null,
-    updated_at: event.created_at,
-    finished_at: ['done', 'failed', 'cancelled'].includes(status)
-      ? event.created_at
-      : jobs[index].finished_at,
-  }
-  return { ...desk, jobs }
-}
-
 function MasterStateHost({
   token,
   ownerId,
@@ -315,7 +172,6 @@ function MasterStateHost({
   const [loading, setLoading] = React.useState(enabled)
   const [desk, setDesk] = React.useState<MasterDesk | null>(null)
   const [messages, setMessages] = React.useState<MasterViewMessage[]>([])
-  const [activeRun, setActiveRun] = React.useState<{ id: number; status: string } | null>(null)
   const [connectionState, setConnectionState] = React.useState<MasterConnectionState>(
     enabled ? 'connecting' : 'feature-off',
   )
@@ -335,9 +191,11 @@ function MasterStateHost({
     followTail: true,
     anchorMessageId: null as number | null,
   })
+  const [bootstrapRequest, setBootstrapRequest] = React.useState(0)
 
   const generationRef = React.useRef(0)
   const deskRef = React.useRef<MasterDesk | null>(null)
+  const messagesRef = React.useRef<MasterViewMessage[]>([])
   const cursorRef = React.useRef(0)
   const eventIdsRef = React.useRef(new Set<number>())
   const runSeqRef = React.useRef(new Map<number, number>())
@@ -347,7 +205,11 @@ function MasterStateHost({
   const settingsAbortRef = React.useRef<AbortController | null>(null)
   const reconcileAbortRef = React.useRef<AbortController | null>(null)
   const reconcilePromiseRef = React.useRef<Promise<void> | null>(null)
-  const reconcileRequestedAtRef = React.useRef(0)
+  const reconcileRequestRef = React.useRef<{
+    reason: string
+    afterId: number
+  } | null>(null)
+  const mutationRevisionRef = React.useRef(0)
   const sendLockRef = React.useRef(false)
   const tempMessageIdRef = React.useRef(0)
   const homeActiveRef = React.useRef(false)
@@ -366,13 +228,15 @@ function MasterStateHost({
 
   const clearOwnedState = React.useCallback((nextEnabled: boolean) => {
     deskRef.current = null
+    messagesRef.current = []
     cursorRef.current = 0
     eventIdsRef.current = new Set()
     runSeqRef.current = new Map()
+    reconcileRequestRef.current = null
+    mutationRevisionRef.current = 0
     sendLockRef.current = false
     setDesk(null)
     setMessages([])
-    setActiveRun(null)
     setLoading(nextEnabled)
     setConnectionState(nextEnabled ? 'connecting' : 'feature-off')
     setResumeCursor(0)
@@ -393,66 +257,129 @@ function MasterStateHost({
     afterId = cursorRef.current,
   ) => {
     if (!enabled || !token || !deskRef.current) return
+    const pending = reconcileRequestRef.current
+    reconcileRequestRef.current = {
+      reason: reason === 'manual' || pending?.reason === 'manual'
+        ? 'manual'
+        : reason,
+      afterId: Math.min(
+        Math.max(0, afterId),
+        pending?.afterId ?? Number.MAX_SAFE_INTEGER,
+      ),
+    }
     if (reconcilePromiseRef.current) return reconcilePromiseRef.current
-    const now = Date.now()
-    if (
-      reason !== 'manual'
-      && now - reconcileRequestedAtRef.current < RECONCILE_THROTTLE_MS
-    ) return
-    reconcileRequestedAtRef.current = now
     const generation = generationRef.current
-    const sessionId = deskRef.current.session.id
     const controller = new AbortController()
-    reconcileAbortRef.current?.abort()
     reconcileAbortRef.current = controller
     const promise = (async () => {
-      try {
-        const [nextDesk, thread, delta] = await Promise.all([
-          getMasterDesk(token, controller.signal),
-          listMessages(token, sessionId, controller.signal),
-          listEvents(token, sessionId, Math.max(0, afterId), controller.signal),
-        ])
-        if (
-          controller.signal.aborted
-          || generation !== generationRef.current
-          || nextDesk.session.id !== sessionId
-        ) return
-        eventIdsRef.current = rememberEventIds(eventIdsRef.current, delta.events)
-        for (const event of delta.events) {
-          if (event.run_id > 0) {
-            runSeqRef.current.set(
-              event.run_id,
-              Math.max(runSeqRef.current.get(event.run_id) || 0, event.seq),
+      let attempts = 0
+      while (
+        reconcileRequestRef.current
+        && attempts < RECONCILE_RACE_LIMIT
+        && !controller.signal.aborted
+        && generation === generationRef.current
+      ) {
+        attempts += 1
+        const request = reconcileRequestRef.current
+        reconcileRequestRef.current = null
+        const currentDesk = deskRef.current
+        if (!currentDesk) return
+        const sessionId = currentDesk.session.id
+        const revision = mutationRevisionRef.current
+        try {
+          const [nextDesk, thread] = await Promise.all([
+            getMasterDesk(token, controller.signal),
+            listMessages(token, sessionId, controller.signal),
+          ])
+          const delta = await listEvents(
+            token,
+            sessionId,
+            request.afterId,
+            controller.signal,
+          )
+          if (
+            controller.signal.aborted
+            || generation !== generationRef.current
+            || nextDesk.session.id !== sessionId
+          ) return
+          const barrier = delta.events.reduce(
+            (cursor, event) => Math.max(cursor, event.id),
+            request.afterId,
+          )
+          if (
+            cursorRef.current > barrier
+            || mutationRevisionRef.current !== revision
+          ) {
+            const queued = reconcileRequestRef.current as {
+              reason: string
+              afterId: number
+            } | null
+            reconcileRequestRef.current = {
+              reason: request.reason,
+              afterId: Math.min(request.afterId, queued?.afterId ?? request.afterId),
+            }
+            continue
+          }
+          const projected = projectMasterSnapshot(
+            nextDesk,
+            thread.messages,
+            delta.events,
+          )
+          const previousMessageIds = new Set(
+            messagesRef.current.flatMap(message => message.id == null ? [] : [message.id]),
+          )
+          const nextMessages = mergeMasterMessageSnapshot(
+            projected.messages,
+            messagesRef.current,
+          )
+          const unreadMessageIds = new Set(
+            nextMessages.flatMap(message => (
+              message.id != null
+              && message.role !== 'user'
+              && !previousMessageIds.has(message.id)
+                ? [message.id]
+                : []
+            )),
+          )
+          eventIdsRef.current = rememberEventIds(eventIdsRef.current, delta.events)
+          for (const event of delta.events) {
+            if (event.run_id > 0 && event.seq > 0) {
+              runSeqRef.current.set(
+                event.run_id,
+                Math.max(runSeqRef.current.get(event.run_id) || 0, event.seq),
+              )
+            }
+          }
+          deskRef.current = projected.desk
+          messagesRef.current = nextMessages
+          setDesk(projected.desk)
+          setMessages(nextMessages)
+          if (!homeActiveRef.current && unreadMessageIds.size) {
+            setUnreadCount(count => count + unreadMessageIds.size)
+          }
+          setCursor(barrier)
+          setConnectionError('')
+        } catch (error) {
+          reconcileRequestRef.current = null
+          if (
+            !controller.signal.aborted
+            && generation === generationRef.current
+          ) {
+            if (request.reason !== 'manual') setConnectionState('disconnected')
+            setConnectionError(
+              request.reason === 'manual'
+                ? errorMessage(error)
+                : 'Master state could not be reconciled after the live connection changed.',
             )
           }
+          return
         }
-        const newest = delta.events.reduce(
-          (cursor, event) => Math.max(cursor, event.id),
-          afterId,
+      }
+      if (reconcileRequestRef.current && generation === generationRef.current) {
+        setConnectionError(
+          'Master state changed repeatedly during reconciliation. Live state was kept and another retry is available.',
         )
-        // A newer live event may land while these three reconciliation requests
-        // are in flight. Never let its older desk snapshot roll that projection
-        // backward. Message snapshots merge by durable id and are safe to apply.
-        if (cursorRef.current <= newest) {
-          deskRef.current = nextDesk
-          setDesk(nextDesk)
-          setActiveRun(activeMasterRun(nextDesk.master_run))
-        }
-        setMessages(current => mergeMessageSnapshot(thread.messages, current))
-        setCursor(newest)
-        setConnectionError('')
-      } catch (error) {
-        if (
-          !controller.signal.aborted
-          && generation === generationRef.current
-        ) {
-          if (reason !== 'manual') setConnectionState('disconnected')
-          setConnectionError(
-            reason === 'manual'
-              ? errorMessage(error)
-              : 'Master state could not be reconciled after the live connection changed.',
-          )
-        }
+        reconcileRequestRef.current = null
       }
     })().finally(() => {
       if (reconcilePromiseRef.current === promise) reconcilePromiseRef.current = null
@@ -472,69 +399,36 @@ function MasterStateHost({
 
     const previousCursor = cursorRef.current
     let sequenceGap = false
+    let staleSequence = false
     if (event.run_id > 0 && event.seq > 0) {
       const previousSeq = runSeqRef.current.get(event.run_id)
       if (previousSeq != null && event.seq > previousSeq + 1) sequenceGap = true
+      if (previousSeq != null && event.seq <= previousSeq) staleSequence = true
       runSeqRef.current.set(event.run_id, Math.max(previousSeq || 0, event.seq))
     }
     eventIdsRef.current = rememberEventIds(eventIdsRef.current, [event])
     setCursor(event.id)
+    if (staleSequence) {
+      setConnectionError('An out-of-order live event was ignored. Master is reconciling durable state.')
+      void reconcileRef.current('cursor-gap', previousCursor)
+      return
+    }
 
-    if (event.type === 'run.queued') {
-      setActiveRun({ id: event.run_id, status: 'queued' })
-      setDesk(current => {
-        if (!current) return current
-        const next = { id: event.run_id, status: 'queued' }
-        deskRef.current = { ...current, master_run: next }
-        return deskRef.current
-      })
-    } else if (event.type === 'run.started') {
-      setActiveRun({ id: event.run_id, status: 'running' })
-      setDesk(current => {
-        if (!current) return current
-        const next = { id: event.run_id, status: 'running' }
-        deskRef.current = { ...current, master_run: next }
-        return deskRef.current
-      })
-    } else if (event.type === 'message.complete') {
-      const payload = isRecord(event.payload) ? event.payload : {}
-      const messageId = positiveInteger(payload.message_id)
-      const text = typeof payload.text === 'string' ? payload.text : ''
-      if (messageId != null && text) {
-        setMessages(current => current.some(message => message.id === messageId)
-          ? current
-          : [...current, {
-              id: messageId,
-              role: 'assistant',
-              author: 'Master',
-              content: text,
-              run_id: event.run_id,
-              created_at: event.created_at,
-            }])
-        if (!homeActiveRef.current) setUnreadCount(count => count + 1)
-      }
-    } else if (MASTER_PROJECTION_TYPES.has(event.type as never)) {
-      const payload = isRecord(event.payload) ? event.payload : {}
-      const messageId = positiveInteger(payload.message_id)
-      const content = safeProjectionContent(event.type, payload)
-      if (messageId != null && content) {
-        setMessages(current => current.some(message => message.id === messageId)
-          ? current
-          : [...current, {
-              id: messageId,
-              role: 'assistant',
-              author: 'Master',
-              content,
-              run_id: null,
-              created_at: event.created_at,
-            }])
-        if (!homeActiveRef.current) setUnreadCount(count => count + 1)
-      }
-      setDesk(current => {
-        const next = updateProjectedJob(current, event)
-        deskRef.current = next
-        return next
-      })
+    const projected = projectMasterEvent(
+      currentDesk,
+      messagesRef.current,
+      event,
+    )
+    if (projected.desk !== currentDesk) {
+      deskRef.current = projected.desk
+      setDesk(projected.desk)
+    }
+    if (projected.messages !== messagesRef.current) {
+      messagesRef.current = projected.messages
+      setMessages(projected.messages)
+    }
+    if (projected.insertedMessageId != null && !homeActiveRef.current) {
+      setUnreadCount(count => count + 1)
     }
 
     if (
@@ -542,16 +436,12 @@ function MasterStateHost({
       || event.type === 'run.failed'
       || event.type === 'run.cancelled'
     ) {
-      setActiveRun(null)
-      setDesk(current => {
-        if (!current) return current
-        deskRef.current = { ...current, master_run: null }
-        return deskRef.current
-      })
-      if (event.type === 'run.failed') {
+      if (
+        event.type === 'run.failed'
+        && activeMasterRun(currentDesk.master_run)?.id === event.run_id
+      ) {
         setConnectionError('Master could not complete the accepted turn. The durable thread is preserved.')
       }
-      void reconcileRef.current('terminal', previousCursor)
     } else if (sequenceGap) {
       setConnectionError('A live event gap was detected. Master is reconciling durable state.')
       void reconcileRef.current('cursor-gap', previousCursor)
@@ -578,35 +468,25 @@ function MasterStateHost({
       startTimer = 0
       void (async () => {
         try {
-          const initialDesk = await getMasterDesk(token, controller.signal)
-          const sessionId = initialDesk.session.id
-          const [thread, eventPage] = await Promise.all([
+          const discoveredDesk = await getMasterDesk(token, controller.signal)
+          const sessionId = discoveredDesk.session.id
+          const cursor = discoveredDesk.event_cursor
+          const [initialDesk, thread] = await Promise.all([
+            getMasterDesk(token, controller.signal),
             listMessages(token, sessionId, controller.signal),
-            listEvents(token, sessionId, 0, controller.signal),
           ])
           if (
             controller.signal.aborted
             || generation !== generationRef.current
+            || initialDesk.session.id !== sessionId
           ) return
-          const cursor = eventPage.events.reduce(
-            (latest, event) => Math.max(latest, event.id),
-            0,
-          )
-          eventIdsRef.current = rememberEventIds(new Set(), eventPage.events)
+          eventIdsRef.current = new Set()
           runSeqRef.current = new Map()
-          for (const event of eventPage.events) {
-            if (event.run_id > 0) {
-              runSeqRef.current.set(
-                event.run_id,
-                Math.max(runSeqRef.current.get(event.run_id) || 0, event.seq),
-              )
-            }
-          }
           deskRef.current = initialDesk
+          messagesRef.current = orderMasterMessages(thread.messages)
           cursorRef.current = cursor
           setDesk(initialDesk)
-          setMessages(thread.messages)
-          setActiveRun(activeMasterRun(initialDesk.master_run))
+          setMessages(messagesRef.current)
           setResumeCursor(cursor)
           setLoading(false)
           setConnectionError('')
@@ -630,13 +510,13 @@ function MasterStateHost({
               controller.signal.aborted
               || generation !== generationRef.current
             ) return
-            try {
-              const parsed = JSON.parse(value) as RunEvent
-              handleEventRef.current(parsed)
-            } catch {
+            const parsed = parseMasterStreamEvent(value)
+            if (!parsed) {
               setConnectionError('A malformed live event was ignored. Master is reconciling durable state.')
               void reconcileRef.current('cursor-gap', cursorRef.current)
+              return
             }
+            handleEventRef.current(parsed)
           }
           source.onopen = () => {
             if (
@@ -692,7 +572,7 @@ function MasterStateHost({
       reconcileAbortRef.current = null
       sendLockRef.current = false
     }
-  }, [clearOwnedState, enabled, ownerId, token])
+  }, [bootstrapRequest, clearOwnedState, enabled, ownerId, token])
 
   const setDraft = React.useCallback((nextDraft: string) => {
     if (!sendLockRef.current) setDraftState(nextDraft)
@@ -704,6 +584,8 @@ function MasterStateHost({
     setSelection({ start: nextDraft.length, end: nextDraft.length })
     setFocusRequest(request => request + 1)
   }, [])
+
+  const activeRun = activeMasterRun(desk?.master_run ?? null)
 
   const send = React.useCallback(async (content = draft) => {
     const text = content.trim()
@@ -720,23 +602,26 @@ function MasterStateHost({
     sendAbortRef.current?.abort()
     sendAbortRef.current = controller
     const clientId = `master-send-${++tempMessageIdRef.current}`
-    setMessages(current => [...current, {
+    messagesRef.current = orderMasterMessages([...messagesRef.current, {
       role: 'user',
       content: text,
       author: 'You',
       clientId,
       pending: true,
     }])
+    setMessages(messagesRef.current)
     try {
       const result = await sendMasterMessage(token, text, controller.signal)
       if (
         controller.signal.aborted
         || generation !== generationRef.current
       ) return
-      setMessages(current => current.map(message => message.clientId === clientId
-        ? { ...message, pending: false, run_id: result.run_id }
-        : message))
-      setActiveRun({ id: result.run_id, status: result.status })
+      mutationRevisionRef.current += 1
+      messagesRef.current = messagesRef.current.map(message => message.clientId === clientId
+        ? { ...result.message, pending: false }
+        : message)
+      messagesRef.current = orderMasterMessages(messagesRef.current)
+      setMessages(messagesRef.current)
       setDesk(current => {
         if (!current) return current
         const next = { id: result.run_id, status: result.status }
@@ -750,7 +635,10 @@ function MasterStateHost({
         !controller.signal.aborted
         && generation === generationRef.current
       ) {
-        setMessages(current => current.filter(message => message.clientId !== clientId))
+        messagesRef.current = messagesRef.current.filter(
+          message => message.clientId !== clientId,
+        )
+        setMessages(messagesRef.current)
         setSendError(errorMessage(error))
         throw error
       }
@@ -804,6 +692,7 @@ function MasterStateHost({
         controller.signal.aborted
         || generation !== generationRef.current
       ) return
+      mutationRevisionRef.current += 1
       setDesk(current => {
         if (!current) return current
         deskRef.current = {
@@ -874,7 +763,17 @@ function MasterStateHost({
       markRead: () => setUnreadCount(0),
       setSideCollapsed,
       setScrollState,
-      refresh: () => reconcile('manual'),
+      refresh: () => {
+        if (
+          !deskRef.current
+          || connectionState === 'disconnected'
+          || sourceRef.current?.readyState === EventSource.CLOSED
+        ) {
+          setBootstrapRequest(request => request + 1)
+          return Promise.resolve()
+        }
+        return reconcile('manual')
+      },
       updateSettings,
       clearError: () => {
         setConnectionError('')
@@ -922,7 +821,7 @@ export function MasterStateProvider(props: {
   children: React.ReactNode
 }) {
   const identity = props.enabled
-    ? `${props.ownerId}:${props.token}`
+    ? String(props.ownerId)
     : 'feature-off'
   return <MasterStateHost key={identity} {...props} />
 }
