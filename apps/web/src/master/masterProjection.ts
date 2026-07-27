@@ -106,13 +106,14 @@ export function parseMasterStreamEvent(value: string): RunEvent | null {
     return null
   }
   if (!isRecord(parsed)) return null
+  const runId = parsed.run_id == null ? 0 : parsed.run_id
   if (
     !Number.isSafeInteger(parsed.id)
     || Number(parsed.id) <= 0
     || !Number.isSafeInteger(parsed.seq)
     || Number(parsed.seq) < 0
-    || !Number.isSafeInteger(parsed.run_id)
-    || Number(parsed.run_id) < 0
+    || !Number.isSafeInteger(runId)
+    || Number(runId) < 0
     || !Number.isSafeInteger(parsed.session_id)
     || Number(parsed.session_id) <= 0
     || typeof parsed.type !== 'string'
@@ -120,7 +121,7 @@ export function parseMasterStreamEvent(value: string): RunEvent | null {
     || !isRecord(parsed.payload)
     || typeof parsed.created_at !== 'string'
   ) return null
-  return parsed as RunEvent
+  return { ...parsed, run_id: runId } as RunEvent
 }
 
 export function orderMasterMessages(

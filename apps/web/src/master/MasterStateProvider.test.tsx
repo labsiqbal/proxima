@@ -264,6 +264,49 @@ describe('MasterStateProvider', () => {
     expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('13')
   })
 
+  it('projects a production master projection event whose run_id is null', async () => {
+    vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.emit('master.task.completed', {
+      id: 13,
+      seq: 2,
+      type: 'master.task.completed',
+      run_id: null,
+      session_id: 9,
+      payload: { message_id: 55, task_id: 7 },
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Completed Task #7.')
+    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:done')
+    expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('13')
+    expect(listEvents).not.toHaveBeenCalled()
+  })
+
+  it('projects a production master projection event whose run_id is absent', async () => {
+    vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.emitRaw(
+      'master.task.review_ready',
+      JSON.stringify({
+        id: 14,
+        seq: 3,
+        type: 'master.task.review_ready',
+        session_id: 9,
+        payload: { message_id: 56, task_id: 8 },
+        created_at: '2026-07-27T10:02:00Z',
+      }),
+    ))
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Task #8 is ready for review.')
+    expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('14')
+    expect(listEvents).not.toHaveBeenCalled()
+  })
+
   it('advances the cursor without surfacing raw delta or tool payload material', async () => {
     renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
