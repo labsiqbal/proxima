@@ -208,6 +208,46 @@ class ContainerAreas(BaseModel):
     ops_area: ContainerArea
 
 
+class GraphScopePayload(BaseModel):
+    container_id: int = Field(gt=0)
+    container_slug: str
+    kind: str = Field(pattern="^(knowledge|code)$")
+    area_id: int | None = Field(default=None, gt=0)
+    area_rel_path: str | None = None
+
+
+class GraphFreshnessPayload(BaseModel):
+    state: str = Field(pattern="^(missing|queued|building|fresh|stale|failed)$")
+    generation: int = Field(ge=0)
+    source_fingerprint: str | None = Field(
+        default=None,
+        pattern="^[0-9a-f]{64}$",
+    )
+    graph_sha256: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    tool_version: str | None = None
+    semantic_backend: str = "disabled"
+    last_success_at: str | None = None
+    last_attempt_at: str | None = None
+    last_error: str | None = None
+
+
+class GraphStatePayload(BaseModel):
+    id: int = Field(gt=0)
+    scope: GraphScopePayload
+    state: str = Field(pattern="^(missing|queued|building|fresh|stale|failed)$")
+    generation: int = Field(ge=0)
+    freshness: GraphFreshnessPayload
+
+
+class GraphStatesResponse(BaseModel):
+    graphs: list[GraphStatePayload]
+
+
+class GraphRebuildRequest(BaseModel):
+    kind: str = Field(pattern="^(knowledge|code)$")
+    area_id: int | None = Field(default=None, gt=0)
+
+
 class ContainerUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
 

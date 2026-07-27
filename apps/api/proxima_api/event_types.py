@@ -31,3 +31,14 @@ MASTER_SUPERVISION_EVENT_TYPES = frozenset(
 MASTER_PROJECTION_EVENT_TYPES = (
     MASTER_TASK_EVENT_TYPES | MASTER_SUPERVISION_EVENT_TYPES
 )
+
+GRAPH_STATE_EVENT_TYPES = frozenset(
+    {
+        "graph.state.missing",
+        "graph.state.queued",
+        "graph.state.building",
+        "graph.state.fresh",
+        "graph.state.stale",
+        "graph.state.failed",
+    }
+)

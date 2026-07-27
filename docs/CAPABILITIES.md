@@ -368,6 +368,27 @@ server-owned handler in the API process. Supported reads are `list_containers`,
 graph/context slice. No tool accepts or returns filesystem paths, credentials,
 runner homes, configuration, or arbitrary tool input.
 
+Group 9 supplies the path-free graph state boundary beneath that future tool.
+With Master enabled, authenticated owners can read exact Container and Area graph
+state and request one explicit rebuild. The adapter pins Graphify `0.9.28`, resolves
+all roots from registered Container and Area identities, excludes nested Areas from
+a root-repository Code graph, and enforces server ceilings for build/query time,
+depth, tokens, result count, and graph bytes. Every internal query result carries
+exact scope, generation, freshness, citations, and provenance. There is no caller
+path, Graphify shell command, raw MCP project path, watcher, scheduled rebuild,
+Focus epoch, lifecycle automation, or Master context routing in this group.
+
+Builds are staged in a temporary same-filesystem generation directory and must pass
+complete JSON, scope, fingerprint, citation, provenance, and symlink containment
+validation before atomic canonical replacement. Failed or missing builds preserve
+the prior canonical graph byte-for-byte and publish explicit `failed` or `missing`
+state events without affecting Tasks or Live state. Structural extraction is local;
+semantic model egress defaults off and Knowledge builds refuse that future mode in
+Group 9.
+
+**Endpoints:** `GET /api/containers/{slug}/graphs`,
+`POST /api/containers/{slug}/graphs/rebuild`.
+
 `delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
 or start jobs directly. A Master batch may name client-local Task keys and
 dependency keys; all Tasks and dependency edges commit atomically, cycles fail
@@ -958,9 +979,10 @@ payloads retain the compatibility `code_areas` and `ops_area` fields.
 
 The Container-facing Fleet API joins the registry with Live state directly in
 SQLite: running and queued Task counts, open Attention count, last activity, Area
-inventory, and current registry, Area, and Ops migration health. Graph freshness is
-`null` until the graph slice and no graph files are read. The Fleet list uses one
-SQLite statement for any Fleet size and performs no per-Container filesystem scan.
+inventory, and current registry, Area, and Ops migration health. The Fleet health
+field remains `null` and never reads graph files; gated graph state is available
+through the separate scoped graph endpoint. The Fleet list uses one SQLite statement
+for any Fleet size and performs no per-Container filesystem scan.
 Container detail is owner-scoped, and its Areas endpoint applies the canonical
 Container boundary validation before returning target choices.
 

@@ -38,6 +38,7 @@ from .updates import (
 )
 from .provisioning import backfill
 from .event_hub import EventHub
+from .graph_context import GraphContextService
 from .frontend_static import register_frontend
 from .features import public_flags
 from .route_deps import build_route_deps
@@ -58,6 +59,7 @@ from .routes import (
     containers as routes_containers,
     design as routes_design,
     files as routes_files,
+    graphs as routes_graphs,
     profiles as routes_profiles,
     projects as routes_projects,
     reviews as routes_reviews,
@@ -250,6 +252,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         return conn
 
     app.state.task_delegation = TaskDelegationService(app, db)
+    app.state.graph_context = GraphContextService(app, db)
     # Durable start intent is committed before the retryable start step. Resume
     # any request that was interrupted in that gap before serving new traffic.
     try:
@@ -308,6 +311,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_master.register(app, _route_deps)
     routes_profiles.register(app, _route_deps)
     routes_containers.register(app, _route_deps)
+    routes_graphs.register(app, _route_deps)
     routes_projects.register(app, _route_deps)
     routes_files.register(app, _route_deps)
     routes_archive.register(app, _route_deps)
@@ -403,6 +407,34 @@ def _config_from_env() -> dict[str, Any]:
             int(DEFAULT_CONFIG["master_max_parallel"]),
         ),
         "graph_node_concurrency": env_int("PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])),
+        "graph_query_max_depth": env_int(
+            "PROXIMA_GRAPH_QUERY_MAX_DEPTH",
+            int(DEFAULT_CONFIG["graph_query_max_depth"]),
+        ),
+        "graph_query_timeout_ms": env_int(
+            "PROXIMA_GRAPH_QUERY_TIMEOUT_MS",
+            int(DEFAULT_CONFIG["graph_query_timeout_ms"]),
+        ),
+        "graph_query_token_budget": env_int(
+            "PROXIMA_GRAPH_QUERY_TOKEN_BUDGET",
+            int(DEFAULT_CONFIG["graph_query_token_budget"]),
+        ),
+        "graph_query_result_limit": env_int(
+            "PROXIMA_GRAPH_QUERY_RESULT_LIMIT",
+            int(DEFAULT_CONFIG["graph_query_result_limit"]),
+        ),
+        "graph_build_timeout_seconds": env_int(
+            "PROXIMA_GRAPH_BUILD_TIMEOUT_SECONDS",
+            int(DEFAULT_CONFIG["graph_build_timeout_seconds"]),
+        ),
+        "graph_max_bytes": env_int(
+            "PROXIMA_GRAPH_MAX_BYTES",
+            int(DEFAULT_CONFIG["graph_max_bytes"]),
+        ),
+        "graph_semantic_egress_enabled": os.environ.get(
+            "PROXIMA_GRAPH_SEMANTIC_EGRESS",
+            "0",
+        ).lower() in ("1", "true", "yes", "on"),
         "container_registry_refresh_seconds": env_int(
             "PROXIMA_CONTAINER_REGISTRY_REFRESH_SECONDS",
             int(DEFAULT_CONFIG["container_registry_refresh_seconds"]),

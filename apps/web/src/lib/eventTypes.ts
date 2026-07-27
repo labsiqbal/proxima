@@ -16,6 +16,8 @@ export const SESSION_EVENT_TYPES = [
   'master.satpam.steered', 'master.satpam.restart_queued',
   'master.satpam.restarted', 'master.satpam.recovery_failed',
   'master.satpam.escalated',
+  'graph.state.missing', 'graph.state.queued', 'graph.state.building',
+  'graph.state.fresh', 'graph.state.stale', 'graph.state.failed',
 ] as const
 
 export type SessionEventType = typeof SESSION_EVENT_TYPES[number]

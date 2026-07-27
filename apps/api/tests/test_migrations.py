@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from proxima_api.db import SCHEMA, connect, init_db
 from proxima_api.master_persistence import MasterPersistenceError
-from proxima_api.migrations import current_version, run_migrations
+from proxima_api.migrations import MIGRATIONS, current_version, run_migrations
 
 
 def _add_foo(conn):
@@ -42,7 +43,7 @@ def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
     assert current_version(conn) == 0
 
 
-def test_schema_31_to_34_is_idempotent_and_preserves_replay_contract(
+def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     tmp_path: Path,
 ):
     db_path = tmp_path / "schema-31.db"
@@ -52,10 +53,11 @@ def test_schema_31_to_34_is_idempotent_and_preserves_replay_contract(
     conn.execute("DELETE FROM schema_migrations WHERE version >= 32")
     conn.execute("DROP TABLE master_tool_calls")
     conn.execute("DROP TABLE master_projections")
+    conn.execute("DROP TABLE graph_states")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 34
+    assert current_version(conn) == 35
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -548,8 +550,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34]
-    assert current_version(conn) == 34
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35]
+    assert current_version(conn) == 35
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -590,8 +592,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34]
-    assert current_version(conn) == 34
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35]
+    assert current_version(conn) == 35
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -618,4 +620,143 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         if row[3] == "depends_on_task_id"
     )
     assert prerequisite_fk[6] == "RESTRICT"
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def _prepare_schema_34_graph_fixture(tmp_path: Path):
+    db_path = tmp_path / "schema-34.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    conn.execute("DROP TABLE graph_states")
+    current_version(conn)
+    conn.executemany(
+        "INSERT INTO schema_migrations(version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [(version, f"schema {version}") for version in range(1, 35)],
+    )
+    return db_path, conn
+
+
+def test_v35_graph_states_upgrade_rerun_and_scope_constraints(tmp_path: Path):
+    db_path, conn = _prepare_schema_34_graph_fixture(tmp_path)
+
+    assert run_migrations(conn, str(db_path)) == [35]
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) == 35
+
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
+    }
+    assert columns == {
+        "id",
+        "container_id",
+        "area_id",
+        "kind",
+        "root_path",
+        "graph_path",
+        "source_fingerprint",
+        "graph_sha256",
+        "tool_version",
+        "semantic_backend",
+        "state",
+        "generation",
+        "last_success_at",
+        "last_attempt_at",
+        "last_error",
+        "created_at",
+        "updated_at",
+    }
+    indexes = {
+        row[1]: bool(row[2])
+        for row in conn.execute("PRAGMA index_list(graph_states)")
+    }
+    assert indexes["uq_graph_states_knowledge"]
+    assert indexes["uq_graph_states_code"]
+    assert not indexes["idx_graph_states_container"]
+
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('graph-owner', 'owner')"
+    ).lastrowid
+    first_container = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) "
+        "VALUES ('first-graph', 'First', '/tmp/first-graph', ?)",
+        (owner_id,),
+    ).lastrowid
+    second_container = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) "
+        "VALUES ('second-graph', 'Second', '/tmp/second-graph', ?)",
+        (owner_id,),
+    ).lastrowid
+    wrong_area = conn.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'code', '.', 'manual')",
+        (second_container,),
+    ).lastrowid
+
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="graph state Area is not an active code Area",
+    ):
+        conn.execute(
+            "INSERT INTO graph_states("
+            "container_id, area_id, kind, root_path, graph_path"
+            ") VALUES (?, ?, 'code', '/tmp', '/tmp/graph.json')",
+            (first_container, wrong_area),
+        )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v35_graph_states_migration_rolls_back_as_one_transaction(
+    tmp_path: Path,
+):
+    db_path, conn = _prepare_schema_34_graph_fixture(tmp_path)
+    apply_graph_states = MIGRATIONS[-1][2]
+
+    def apply_then_fail(connection):
+        apply_graph_states(connection)
+        raise RuntimeError("forced graph migration rollback")
+
+    with pytest.raises(RuntimeError, match="forced graph migration rollback"):
+        run_migrations(
+            conn,
+            str(db_path),
+            migrations=[
+                (
+                    35,
+                    "forced graph migration rollback",
+                    apply_then_fail,
+                )
+            ],
+        )
+
+    assert current_version(conn) == 34
+    assert conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'graph_states'"
+    ).fetchone() is None
+
+
+def test_fresh_install_graph_states_matches_idempotent_migration(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "fresh.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    apply_graph_states = MIGRATIONS[-1][2]
+
+    before = [
+        tuple(row)
+        for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
+    ]
+    apply_graph_states(conn)
+    after = [
+        tuple(row)
+        for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
+    ]
+
+    assert before == after
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+        "AND name = 'graph_states_area_scope_insert'"
+    ).fetchone()
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

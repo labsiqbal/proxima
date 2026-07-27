@@ -23,6 +23,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
 from .runner_specs import FALLBACK_RUNNER
 
 # (version, human description, apply function[, opts]).
@@ -773,7 +775,7 @@ def _move_workflow_inputs_to_trigger(conn: sqlite3.Connection) -> None:
         if not isinstance(inputs, list):
             inputs = []
         nodes = graph["nodes"]
-        trigger = next(
+        trigger: dict[str, Any] | None = next(
             (
                 node
                 for node in nodes
@@ -1329,6 +1331,89 @@ def _add_master_message_context(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_graph_states(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS graph_states (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          area_id INTEGER REFERENCES project_areas(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('knowledge', 'code')),
+          root_path TEXT NOT NULL,
+          graph_path TEXT NOT NULL,
+          source_fingerprint TEXT,
+          graph_sha256 TEXT,
+          tool_version TEXT,
+          semantic_backend TEXT NOT NULL DEFAULT 'disabled',
+          state TEXT NOT NULL DEFAULT 'missing'
+            CHECK(state IN ('missing', 'queued', 'building', 'fresh', 'stale', 'failed')),
+          generation INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0),
+          last_success_at TEXT,
+          last_attempt_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK(
+            (kind = 'knowledge' AND area_id IS NULL)
+            OR (kind = 'code' AND area_id IS NOT NULL)
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_states_knowledge "
+        "ON graph_states(container_id, kind) "
+        "WHERE kind = 'knowledge' AND area_id IS NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_states_code "
+        "ON graph_states(container_id, area_id, kind) "
+        "WHERE kind = 'code' AND area_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_graph_states_container "
+        "ON graph_states(container_id, state, kind, area_id)"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS graph_states_area_scope_insert
+        BEFORE INSERT ON graph_states
+        WHEN NEW.area_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM project_areas area
+          WHERE area.id = NEW.area_id
+            AND area.project_id = NEW.container_id
+            AND area.kind = 'code'
+            AND area.source != 'excluded'
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'graph state Area is not an active code Area in its Container'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS graph_states_area_scope_update
+        BEFORE UPDATE OF container_id, area_id, kind ON graph_states
+        WHEN NEW.area_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM project_areas area
+          WHERE area.id = NEW.area_id
+            AND area.project_id = NEW.container_id
+            AND area.kind = 'code'
+            AND area.source != 'excluded'
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'graph state Area is not an active code Area in its Container'
+          );
+        END
+        """
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1384,6 +1469,11 @@ MIGRATIONS: list[Migration] = [
         34,
         "add durable Master Focus and target context per owner message",
         _add_master_message_context,
+    ),
+    (
+        35,
+        "add scoped Graphify operational state and freshness contract",
+        _add_graph_states,
     ),
 ]
 

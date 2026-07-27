@@ -14,6 +14,7 @@ it ships no model and no credentials of its own.
 | --- | --- | --- |
 | Language | Python ≥ 3.11 | |
 | Web framework | **FastAPI** (`>=0.115`) | REST + WebSocket + SSE |
+| ASGI framework core | **Starlette 1.3.1** (locked) | security-fixed transitive runtime |
 | ASGI server | **Uvicorn** (`>=0.30`) | entrypoint `proxima_api.main:app` |
 | Data validation | **Pydantic v2** (`>=2.8`) | request models in `schemas.py` |
 | JSON contracts | **jsonschema** (`>=4.23`) | validates graph-node output schemas before execution |
@@ -21,6 +22,7 @@ it ships no model and no credentials of its own.
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
 | Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex/Grok TOML MCP selections while preserving unrelated settings |
+| Scoped graph extraction | **Graphify** (`graphifyy==0.9.28`) | exact tested pin; local structural extraction only; no semantic extras or cloud model egress |
 | Database | **SQLite** (stdlib `sqlite3`, WAL mode) | one file per install; no server |
 | Package manager | **uv** (`uv.lock`) | `uv run …`, `uv sync` |
 | Tests | **pytest** (`>=8.3`) | `apps/api/tests/` |
@@ -45,6 +47,10 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 - **Scheduler** (`scheduler.py`) — a 60-second loop that materializes due cron jobs.
 - **Event hub** (`event_hub.py`) — fan-out of run/session events to SSE + WebSocket
   subscribers.
+- **Graph context adapter** (`graph_context.py`) - resolves server-owned Container
+  and Area scopes, runs the pinned Graphify library without a shell, validates
+  staged JSON and source provenance, and publishes canonical generations
+  atomically. Semantic model egress defaults off.
 - **Terminal** (`terminal.py`) — a PTY-backed shell exposed over WebSocket.
 - **App runner + preview proxy** (`apprunner.py`, `preview_proxy.py`) — launch an
   owner-confirmed project dev server with a filtered env and reverse-proxy it using

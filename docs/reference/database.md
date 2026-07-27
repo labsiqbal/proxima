@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 34 tables. Applied migration version: **34**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 35 tables. Applied migration version: **35**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -143,6 +143,31 @@ SQLite (WAL mode). 34 tables. Applied migration version: **34**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `idx_events_run_seq` - (run_id, seq); `idx_events_session` - (session_id, id)
+
+
+### graph_states
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `container_id` | INTEGER | NO |  | → `projects.id` (ON DELETE CASCADE) |
+| `area_id` | INTEGER | yes |  | → `project_areas.id` (ON DELETE CASCADE) |
+| `kind` | TEXT | NO |  |  |
+| `root_path` | TEXT | NO |  |  |
+| `graph_path` | TEXT | NO |  |  |
+| `source_fingerprint` | TEXT | yes |  |  |
+| `graph_sha256` | TEXT | yes |  |  |
+| `tool_version` | TEXT | yes |  |  |
+| `semantic_backend` | TEXT | NO | `'disabled'` |  |
+| `state` | TEXT | NO | `'missing'` |  |
+| `generation` | INTEGER | NO | `0` |  |
+| `last_success_at` | TEXT | yes |  |  |
+| `last_attempt_at` | TEXT | yes |  |  |
+| `last_error` | TEXT | yes |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_graph_states_container` - (container_id, state, kind, area_id); `uq_graph_states_code` - UNIQUE (container_id, area_id, kind); `uq_graph_states_knowledge` - UNIQUE (container_id, kind)
 
 
 ### job_checkpoints
@@ -637,4 +662,4 @@ SQLite (WAL mode). 34 tables. Applied migration version: **34**. This is the exa
 
 
 ---
-_Generated 2026-07-27 14:56 UTC._
+_Generated 2026-07-27 15:45 UTC._

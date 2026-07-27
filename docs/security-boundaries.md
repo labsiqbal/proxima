@@ -144,6 +144,22 @@ review, independently of Guarded or Autonomous in-run permissions. The runner pr
 for a Task retains the service user's host permissions as described above; a cwd alone
 does not prevent `..` traversal or arbitrary host reads.
 
+The Graphify adapter is a separate server-owned filesystem boundary. Its API accepts
+only an authenticated Container slug, graph kind, and registered Area id. It never
+accepts a shell command, absolute or relative path, Graphify CLI argument, raw MCP
+project path, or semantic backend. Knowledge resolves to the physical Ops boundary;
+Code resolves to one exact active code Area after symlink resolution and excludes
+all nested registered Areas. Source citations are re-resolved and revalidated at
+build and query time.
+
+Build output is confined to a validated `graphify-out` directory inside that scope.
+A symlinked output directory, incomplete walk, escaped citation, malformed JSON,
+wrong scope, timeout, or killed worker fails before atomic publication and leaves
+the prior canonical graph unchanged. Public state and events omit internal paths.
+Graphify performs only local structural extraction in Group 9. Semantic model
+egress defaults off, Ops content is never sent to a cloud model, and enabling the
+future egress switch makes Knowledge rebuild fail closed.
+
 ## Script steps (hash-bound trust, honest statement)
 
 A plan's `script` node executes a file from the Container's `ops/scripts/` folder as

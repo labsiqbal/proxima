@@ -55,6 +55,8 @@ if (-not (Test-Path $ConfigFile)) {
     "PROXIMA_PORT=8765"
     "PROXIMA_UPDATE_REPO=labsiqbal/proxima"
     "PROXIMA_FEATURE_DESIGN_STUDIO=1"
+    "PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0"
+    "PROXIMA_GRAPH_SEMANTIC_EGRESS=0"
   ) | Set-Content -Encoding ASCII $ConfigFile
 }
 
