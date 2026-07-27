@@ -304,7 +304,7 @@ becomes `master`, `sessions.mode='alpha'` becomes `master`, and
 `jobs.alpha_session_id` becomes `jobs.origin_master_session_id` without changing
 primary keys or ownership links. The profile kind hides the
 system identity from worker pickers; `jobs.origin_master_session_id` scopes desk ownership
-and three-slot claiming, while each Task's execution policy controls ACP approval;
+and `master_max_parallel` capacity claiming, while each Task's execution policy controls ACP approval;
 `master_tool_calls` is the durable per-turn product-envelope replay ledger;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
