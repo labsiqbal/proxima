@@ -52,6 +52,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  RunWorker     bounded-concurrency background executor for agent runs          │
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
 │  MasterToolBroker  typed, schema-validated, bounded path-free product tools      │
+│  GraphContextService  scoped, bounded Graphify generations and query results     │
 │  Master runtime chat-only conformance, read-only scratch, deny native tools      │
 │  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
@@ -278,11 +279,13 @@ The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers/{slug}/areas`. List and detail read registry metadata plus
 running and queued Task counts, open Attention counts, last activity, Area
 inventory, and the health indicators available before graph delivery. Graph
-freshness is explicitly `null` until its later slice. A single SQLite statement
-aggregates every Fleet list row through grouped CTEs, so the statement count stays
-constant as the Fleet grows and no graph or per-Container file is read. Container
-detail uses the same owner-scoped query. The Areas route then applies the canonical
-realpath and overlap validation before returning targetable Areas.
+freshness remains `null` on Fleet so Live state never depends on graph availability;
+the separate authenticated graph route exposes scoped state behind the Master
+feature boundary. A single SQLite statement aggregates every Fleet list row through
+grouped CTEs, so the statement count stays constant as the Fleet grows and no graph
+or per-Container file is read. Container detail uses the same owner-scoped query.
+The Areas route then applies the canonical realpath and overlap validation before
+returning targetable Areas.
 
 The existing `/api/projects` readers remain a one-release compatibility surface.
 They render the historical `projects`, `code_areas`, and `ops_area` payload from the
@@ -306,6 +309,10 @@ primary keys or ownership links. The profile kind hides the
 system identity from worker pickers; `jobs.origin_master_session_id` scopes desk ownership
 and `master_max_parallel` capacity claiming, while each Task's execution policy controls ACP approval;
 `master_tool_calls` is the durable per-turn product-envelope replay ledger;
+`graph_states` stores one Knowledge row per Container and one Code row per exact
+code Area, including generation, state, fingerprints, Graphify version, freshness,
+and failure metadata. Its internal roots and canonical graph paths never appear in
+public payloads;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
@@ -327,6 +334,45 @@ owner-visible record of every steer/restart/escalate, including the pending repo
 restart awaiting approval); decision-hold rides on `node_states`
 (`question`/`answer`/`contract_failures`, migration 25).
 Full column-level detail: [database.md](database.md).
+
+### Scoped graph state and Graphify adapter
+
+Migration 35 adds graph state independently of graph availability. When
+`feature_master_orchestrator` is off, the authenticated graph routes reject use and
+no build starts. When enabled, `GET /api/containers/{slug}/graphs` reads path-free
+state and `POST /api/containers/{slug}/graphs/rebuild` accepts only a typed
+`knowledge` or `code` scope plus an optional registered Area id. Callers cannot
+provide a command, filesystem path, MCP project path, depth, timeout, result limit,
+or model setting.
+
+`GraphContextService` resolves Knowledge to the Container's physical Ops boundary
+and Code to one exact active code Area after canonical symlink resolution. A
+root-repository Code scope excludes every nested registered Area, including Ops.
+Source discovery rejects symlinks, traversal, escaped roots, incomplete walks, and
+scope changes during a build. Graphify `0.9.28` runs as a local Python library in a
+killable worker with server ceilings for time and output bytes. Group 9 extracts
+only structural Code and the curated `ops/container.md` Knowledge source. It does
+not add filesystem watchers, scheduled rebuilds, Code or Knowledge lifecycle
+automation, Focus epochs, history projection, or Master context routing.
+
+Each build writes to a same-filesystem temporary generation directory. Proxima
+validates the complete JSON shape, exact scope metadata, source citations, edge
+provenance, source fingerprint, graph size, and resolved source containment before
+an atomic canonical replacement. A killed, incomplete, malformed, or wrong-scope
+generation cannot replace the canonical graph. A successful replacement preserves
+the previous bytes as `graph.last-good.json`; a database finalization failure
+restores those prior bytes. Missing Graphify records an explicit `missing` state,
+and all other failures record `failed`, without affecting Tasks, Fleet, or Live
+state.
+
+The service's internal query contract is typed and path-free, clamps depth, elapsed
+time, approximate tokens, and result count to server limits, and returns exact
+scope, generation, freshness, citations, and provenance even for unavailable
+results. There is deliberately no public graph query route and
+`MasterToolBroker.query_context` remains `feature_unavailable` until the later
+context-routing group. Graph state transitions use the existing Master session
+event stream. Structural extraction is local, semantic model egress defaults off,
+and Group 9 refuses Knowledge builds if that future egress switch is enabled.
 
 ### Native artifact review flow
 

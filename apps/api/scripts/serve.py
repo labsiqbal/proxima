@@ -79,6 +79,27 @@ app = create_app(
         "graph_node_concurrency": env_int(
             "PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])
         ),
+        "graph_query_max_depth": env_int(
+            "PROXIMA_GRAPH_QUERY_MAX_DEPTH", int(DEFAULT_CONFIG["graph_query_max_depth"])
+        ),
+        "graph_query_timeout_ms": env_int(
+            "PROXIMA_GRAPH_QUERY_TIMEOUT_MS", int(DEFAULT_CONFIG["graph_query_timeout_ms"])
+        ),
+        "graph_query_token_budget": env_int(
+            "PROXIMA_GRAPH_QUERY_TOKEN_BUDGET", int(DEFAULT_CONFIG["graph_query_token_budget"])
+        ),
+        "graph_query_result_limit": env_int(
+            "PROXIMA_GRAPH_QUERY_RESULT_LIMIT", int(DEFAULT_CONFIG["graph_query_result_limit"])
+        ),
+        "graph_build_timeout_seconds": env_int(
+            "PROXIMA_GRAPH_BUILD_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["graph_build_timeout_seconds"])
+        ),
+        "graph_max_bytes": env_int(
+            "PROXIMA_GRAPH_MAX_BYTES", int(DEFAULT_CONFIG["graph_max_bytes"])
+        ),
+        "graph_semantic_egress_enabled": env_bool(
+            "PROXIMA_GRAPH_SEMANTIC_EGRESS", False
+        ),
         "seed_users": [],
         # Single-user owner identity. The password/session gate is established by
         # first-run setup; this flag is retained for config compatibility.

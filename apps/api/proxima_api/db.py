@@ -101,6 +101,66 @@ CREATE TABLE IF NOT EXISTS container_ops_migrations (
 );
 CREATE INDEX IF NOT EXISTS idx_container_ops_migrations_status
   ON container_ops_migrations(status, updated_at);
+-- Graphify artifacts stay in their exact Container/Area filesystem scope.
+-- SQLite stores only operational state and freshness metadata. Knowledge
+-- graphs belong to one Container (area_id NULL); Code graphs belong to one
+-- registered code Area.
+CREATE TABLE IF NOT EXISTS graph_states (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area_id INTEGER REFERENCES project_areas(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('knowledge', 'code')),
+  root_path TEXT NOT NULL,
+  graph_path TEXT NOT NULL,
+  source_fingerprint TEXT,
+  graph_sha256 TEXT,
+  tool_version TEXT,
+  semantic_backend TEXT NOT NULL DEFAULT 'disabled',
+  state TEXT NOT NULL DEFAULT 'missing'
+    CHECK(state IN ('missing', 'queued', 'building', 'fresh', 'stale', 'failed')),
+  generation INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0),
+  last_success_at TEXT,
+  last_attempt_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK(
+    (kind = 'knowledge' AND area_id IS NULL)
+    OR (kind = 'code' AND area_id IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_states_knowledge
+  ON graph_states(container_id, kind)
+  WHERE kind = 'knowledge' AND area_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_states_code
+  ON graph_states(container_id, area_id, kind)
+  WHERE kind = 'code' AND area_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_graph_states_container
+  ON graph_states(container_id, state, kind, area_id);
+CREATE TRIGGER IF NOT EXISTS graph_states_area_scope_insert
+BEFORE INSERT ON graph_states
+WHEN NEW.area_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM project_areas area
+  WHERE area.id = NEW.area_id
+    AND area.project_id = NEW.container_id
+    AND area.kind = 'code'
+    AND area.source != 'excluded'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'graph state Area is not an active code Area in its Container');
+END;
+CREATE TRIGGER IF NOT EXISTS graph_states_area_scope_update
+BEFORE UPDATE OF container_id, area_id, kind ON graph_states
+WHEN NEW.area_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM project_areas area
+  WHERE area.id = NEW.area_id
+    AND area.project_id = NEW.container_id
+    AND area.kind = 'code'
+    AND area.source != 'excluded'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'graph state Area is not an active code Area in its Container');
+END;
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,

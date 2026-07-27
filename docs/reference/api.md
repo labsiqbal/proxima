@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-180 endpoints across 16 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+182 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -16,6 +16,7 @@
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
 - [`routes/files.py`](#routes-files-py) - 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
+- [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 16 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
 - [`routes/projects.py`](#routes-projects-py) - 12 endpoints
@@ -171,6 +172,14 @@
 | GET | `/api/graph/templates` | `list_graph_templates` |  |
 
 
+## routes/graphs.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/containers/{slug}/graphs` | `list_graph_states` | Read exact scoped graph freshness without exposing filesystem paths. |
+| POST | `/api/containers/{slug}/graphs/rebuild` | `rebuild_graph` | Run one bounded explicit build through the server-owned adapter. |
+
+
 ## routes/master.py
 
 | Method | Path | Handler | Description |
@@ -303,4 +312,4 @@
 
 
 ---
-_Generated 2026-07-27 14:56 UTC._
+_Generated 2026-07-27 15:45 UTC._

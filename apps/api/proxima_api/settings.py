@@ -67,6 +67,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.
     "graph_node_concurrency": 4,
+    # Graphify adapter budgets. Callers may request smaller values but cannot
+    # widen these server-owned ceilings.
+    "graph_query_max_depth": 4,
+    "graph_query_timeout_ms": 3000,
+    "graph_query_token_budget": 2000,
+    "graph_query_result_limit": 40,
+    "graph_build_timeout_seconds": 120,
+    "graph_max_bytes": 128 * 1024 * 1024,
+    # Group 9 has no semantic-model adapter. Code extraction and the bounded
+    # ops/container.md Knowledge seed are local structural passes only.
+    "graph_semantic_egress_enabled": False,
     # Proxima's shipped capability bundle (T8): bundled skills + the recommended-
     # tools advisory list. None -> <repo root>/bundled-skills (normalize_config).
     "bundled_skills_dir": None,
@@ -109,6 +120,9 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["feature_repo_worktrees"] = _bool_flag(cfg.get("feature_repo_worktrees"))
     cfg["feature_master_orchestrator"] = _bool_flag(
         cfg.get("feature_master_orchestrator")
+    )
+    cfg["graph_semantic_egress_enabled"] = _bool_flag(
+        cfg.get("graph_semantic_egress_enabled")
     )
     raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
     cfg["service_name"] = raw_service.removesuffix(".service")

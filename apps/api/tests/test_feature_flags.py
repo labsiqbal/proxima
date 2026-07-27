@@ -84,6 +84,20 @@ def test_workflow_graph_environment_flag_reaches_asgi_config(monkeypatch):
     assert _config_from_env()["feature_workflow_graph"]
 
 
+def test_graph_semantic_egress_defaults_off_and_requires_explicit_opt_in(
+    monkeypatch,
+):
+    monkeypatch.delenv("PROXIMA_GRAPH_SEMANTIC_EGRESS", raising=False)
+    assert _config_from_env()["graph_semantic_egress_enabled"] is False
+    assert normalize_config()["graph_semantic_egress_enabled"] is False
+
+    monkeypatch.setenv("PROXIMA_GRAPH_SEMANTIC_EGRESS", "1")
+    assert _config_from_env()["graph_semantic_egress_enabled"] is True
+    assert normalize_config(
+        {"graph_semantic_egress_enabled": "true"}
+    )["graph_semantic_egress_enabled"] is True
+
+
 def test_master_environment_flag_reaches_production_serve_entrypoint(tmp_path):
     env = os.environ.copy()
     env.update(
