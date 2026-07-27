@@ -285,14 +285,18 @@ after the ACP turn and invokes only server-owned handlers in the API process - n
 curl/HTTP to localhost and never prompt-granted tools. Reads cover projects, worker
 agents, jobs, plans, capacity, and Alpha settings; mutations cover multi-job dispatch,
 starting queued Alpha jobs, unattended/budget settings, and needs-you creation.
-The `start_plan` handler invokes the proven graph create/start closures directly in
-process (or snapshots a legacy linear workflow), then applies the same Alpha ownership,
-checkpoint, audit, and permission scope. Every success/failure returns a structured
+Ad-hoc dispatch and `start_plan` both call the server-owned
+`TaskDelegationService`; Recipe execution keeps the existing linear or graph engine.
+The service applies the same Alpha ownership, checkpoint, audit, and permission scope.
+Every success/failure returns a structured
 result to the thread and back into a bounded six-round Alpha continuation, so a product
 read can inform the next in-process call without an HTTP control loop. Dispatch creates
 ordinary durable jobs with `execution_policy='autonomous'`,
-`jobs.alpha_session_id`, an `alpha.job.create` audit row, and a checkpoint after any
-isolated worktree is cut but before a run is enqueued. The global worker default is
+`jobs.alpha_session_id`, one `task_delegations` audit row, an `alpha.job.create` audit
+row, and a checkpoint after any isolated worktree is cut but before a run is enqueued.
+An Alpha batch may name client-local Task keys and dependency keys; all Tasks and
+dependency edges commit atomically, cycles fail without partial rows, and a repeated
+batch idempotency key returns the same Tasks. The global worker default is
 three slots and its claim query separately refuses a fourth running Alpha child; extra
 runs remain queued and capacity counts each queued worker run, including parallel graph
 branches. Existing job capabilities are
@@ -460,6 +464,40 @@ graph API. Live-polls while running; auto-archive after 30 days. Old kanban task
 were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
 
+### Durable Task delegation and dependency readiness
+
+**Why:** Work, Home quick Task, Alpha, and future orchestration callers must not
+implement slightly different session/job/start transactions. A timeout or restart must
+not create duplicate work, and cross-Area outcomes need explicit Task edges rather than
+hidden multi-Area execution.
+
+**How:** `TaskDelegationService.create_and_start` is the scoped server boundary. It
+validates the owner, one Container, one active Area in that Container, and a normal
+Task-agent profile. It stores execution policy separately from landing behavior,
+supports a linear or graph Recipe with input, and writes the worker session, `jobs`
+row, `task_delegations` audit, and `task_dependencies` edges in one transaction. The
+transaction commits before start. Durable `start_requested` and idempotency identity
+let startup or a repeated request resume the same Task safely. Full replay is resolved
+before revalidating mutable referenced rows, so an archived Container or removed
+Task-agent cannot turn a previously successful create into a false "not found."
+
+Project-scoped compatibility requests that omit `target_area_id` resolve to the
+Container's physical Ops Area. Historical project-less API jobs remain scratch jobs
+and cannot produce a scoped delegation audit. Alpha batches accept client-local Task
+and dependency keys. Duplicate edges, self-dependencies, cycles, cross-owner Tasks,
+cross-Container Areas, and prerequisites already in a terminal failure state are
+rejected before commit. SQLite triggers also reject dependency cycles from non-service
+writers.
+
+A requested downstream Task stays `queued` with `jobs.blocked_reason` and a durable
+delegation `start_state='blocked'` until every prerequisite reaches `review` or `done`
+as required. Failure and cancellation produce an explicit prerequisite reason.
+Prerequisite transitions retry ready dependents; the guarded queued-to-running claim
+ensures one run is created even when notifications or retries repeat. A prerequisite
+cannot be deleted while dependents exist, including across Containers. The Task
+workspace renders the stored reason. Startup also reconciles a graph Task interrupted
+after its `running` claim but before its first node run was committed.
+
 ### Tasks screen = plans + their jobs (Phase-1 slice 3, T2)
 
 **Why:** One index of everything running or awaiting the owner — a sliced plan and a
@@ -507,6 +545,10 @@ parks the job in `review` with the surfaced error (worktree kept; approve again 
 resolving) - never forced. Success records `merge_commit` on the job's worktree row
 (`job_worktrees`) and tears the worktree + branch down; deleting a job also tears its
 worktree down.
+For delegated Tasks, Guarded or Autonomous controls in-run permissions but never
+changes landing policy. Delegated Ops Tasks finish directly in physical `ops/` because
+their work already landed in place; every repo Task stops in `review` for its diff and
+local-merge verdict. An explicit Recipe review gate remains an in-run decision.
 **Endpoints:** `GET /api/jobs/{id}/diff` (per-file status + unified patch; also
 readable after the merge), `POST /api/jobs/{id}/approve` (merge point),
 `POST /api/jobs/{id}/reject` (see below), `POST /api/jobs` (`target_area_id`). Job
@@ -514,11 +556,15 @@ payloads carry a `worktree` object (branch, base, status
 `active/merging/merged/conflict/discarded`, merge_commit, error) and, after a
 rejection, `rejected_reason`.
 
-**Graph plans (slice 3):** the same machinery wired per job-in-plan. With the flag on,
+**Graph plans (slice 3):** the same machinery wired per job-in-plan. Legacy graph
+plans retain their node-level repo/Ops placement. A delegated graph Recipe instead
+inherits its Task's one exact Area for every node and rejects a Recipe whose explicit
+repo target disagrees with that Area. With the flag on,
 starting a plan with repo jobs pins their single code-area target to the job row and
 cuts the worktree before the plan claims running (multi-area plans refuse to start -
-Phase-1 is one worktree per plan); the worker runs each node in the worktree **only if
-that node touches the repo** (Ops jobs run at the physical Ops Area), and the plan's final
+Phase-1 is one worktree per plan); direct legacy plans run a node in the worktree only
+when that node touches the repo, while delegated Tasks run every node in the selected
+repo worktree or physical Ops Area. The plan's final
 approve is the merge point. Flag off: target tags are inert metadata and plans run
 exactly as before.
 

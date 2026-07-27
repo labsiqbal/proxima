@@ -41,6 +41,7 @@ from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
 from .alpha_supervisor import AlphaSupervisor
+from .task_delegation import TaskDelegationService
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
     admin as routes_admin,
@@ -228,6 +229,14 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             conn = connect(cfg["database_path"])
             _db_local.conn = conn
         return conn
+
+    app.state.task_delegation = TaskDelegationService(app, db)
+    # Durable start intent is committed before the retryable start step. Resume
+    # any request that was interrupted in that gap before serving new traffic.
+    try:
+        app.state.task_delegation.resume_committed()
+    except Exception:
+        logger.exception("durable Task start recovery failed")
 
     _route_deps = build_route_deps(
         app,

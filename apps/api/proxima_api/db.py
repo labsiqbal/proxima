@@ -264,6 +264,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- repo job (isolated worktree + diff review + local merge); an ops-area
   -- target (or NULL, today's jobs) runs exactly as before.
   target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+  -- Durable reason a delegated Task is queued but cannot start yet. NULL means
+  -- the Task is ready, already running, or is a legacy non-delegated job.
+  blocked_reason TEXT,
   -- Why the owner rejected the job at review (slice 4). Set only by the reject
   -- action (status -> 'failed'); NULL for jobs that failed on their own.
   rejected_reason TEXT,
@@ -277,6 +280,91 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT,
   archived_at TEXT
 );
+-- Server-owned Task creation audit. jobs remains the Task lifecycle truth; this
+-- row records where the Task came from, why it was routed to one exact Area,
+-- and enough durable start intent to resume safely after a process crash.
+CREATE TABLE IF NOT EXISTS task_delegations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  origin_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  target_area_id INTEGER NOT NULL REFERENCES project_areas(id) ON DELETE RESTRICT,
+  job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+  routing_mode TEXT NOT NULL CHECK (routing_mode IN ('explicit', 'auto')),
+  routing_reason TEXT,
+  created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  idempotency_identity TEXT NOT NULL UNIQUE,
+  request_fingerprint TEXT NOT NULL,
+  start_requested INTEGER NOT NULL DEFAULT 0 CHECK (start_requested IN (0, 1)),
+  start_state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (start_state IN ('pending', 'blocked', 'starting', 'started', 'failed')),
+  blocked_reason TEXT,
+  last_start_error TEXT,
+  start_attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  start_attempted_at TEXT,
+  started_at TEXT,
+  UNIQUE(created_by, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_task_delegations_origin
+  ON task_delegations(origin_session_id, origin_message_id);
+CREATE INDEX IF NOT EXISTS idx_task_delegations_container
+  ON task_delegations(container_id, target_area_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_delegations_start
+  ON task_delegations(start_requested, start_state, updated_at);
+-- Cross-Area outcomes are represented as several one-Area Tasks joined by
+-- these edges. The recursive trigger makes cycle safety a database invariant,
+-- including for writers that do not use TaskDelegationService.
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  depends_on_task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE RESTRICT,
+  required_status TEXT NOT NULL DEFAULT 'done'
+    CHECK (required_status IN ('review', 'done')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (task_id, depends_on_task_id),
+  CHECK (task_id != depends_on_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite
+  ON task_dependencies(depends_on_task_id, task_id);
+CREATE TRIGGER IF NOT EXISTS task_dependencies_no_cycle
+BEFORE INSERT ON task_dependencies
+BEGIN
+  SELECT RAISE(ABORT, 'task dependency cycle')
+  WHERE EXISTS (
+    WITH RECURSIVE prerequisites(task_id) AS (
+      SELECT NEW.depends_on_task_id
+      UNION
+      SELECT dependency.depends_on_task_id
+      FROM task_dependencies AS dependency
+      JOIN prerequisites
+        ON dependency.task_id = prerequisites.task_id
+    )
+    SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+  );
+END;
+CREATE TRIGGER IF NOT EXISTS task_dependencies_no_cycle_update
+BEFORE UPDATE OF task_id, depends_on_task_id ON task_dependencies
+BEGIN
+  SELECT RAISE(ABORT, 'task dependency cycle')
+  WHERE NEW.task_id = NEW.depends_on_task_id OR EXISTS (
+    WITH RECURSIVE prerequisites(task_id) AS (
+      SELECT NEW.depends_on_task_id
+      UNION
+      SELECT dependency.depends_on_task_id
+      FROM task_dependencies AS dependency
+      JOIN prerequisites
+        ON dependency.task_id = prerequisites.task_id
+      WHERE NOT (
+        dependency.task_id = OLD.task_id
+        AND dependency.depends_on_task_id = OLD.depends_on_task_id
+      )
+    )
+    SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+  );
+END;
 -- Isolated worktree per repo job (Phase-1 slice 2, T1): where the branch was
 -- cut from (repo_path/base_branch/base_commit), where the agent works
 -- (worktree_path, outside the container under <workspace_root>/worktrees/),
@@ -634,6 +722,7 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "profiles", "runner_id", f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
     _add_column(conn, "profiles", "system_kind", "system_kind TEXT")
     _add_column(conn, "jobs", "alpha_session_id", "alpha_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
+    _add_column(conn, "jobs", "blocked_reason", "blocked_reason TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
     # Per-profile skill/MCP selection (JSON: {"skills":[ids],"mcp":[names]}).
     # NULL = inherit ALL detected for the runner (best default: host skills just work).

@@ -200,8 +200,8 @@ def register(app, deps):
     @app.delete("/api/projects/{slug}")
     def delete_project(slug: str, user: dict[str, Any] = Depends(current_user)):
         project = visible_project(slug, user)
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)", (user["id"], slug))
         _purge_project(project)  # rm dir (jailed) + DB row; cascades tasks, nulls session/run links
+        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)", (user["id"], slug))
         return {"ok": True, "slug": slug}
 
     # ── Work-container areas (Phase-1 slice 1, T1): code areas + ops area ──

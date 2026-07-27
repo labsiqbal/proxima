@@ -13,6 +13,7 @@ from . import features, satpam, state
 from .container_registry import ops_root
 from .graph import normalize_graph, parse_output_contract, ready_node_ids
 from .graph_executor import GraphExecutor  # pyright: ignore[reportMissingImports]
+from .task_delegation import completed_landing_status
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 
@@ -404,15 +405,28 @@ class GraphAdvancers:
                 ).fetchone()["c"]
                 job_status = str(attempt["job_status"])
                 if gate or remaining == 0:
+                    completed_job = db.execute(
+                        "SELECT * FROM jobs WHERE id = ?",
+                        (attempt["job_id"],),
+                    ).fetchone()
+                    completed_status = (
+                        completed_landing_status(db, completed_job)
+                        if remaining == 0 and not gate and completed_job is not None
+                        else "review"
+                    )
                     state.guarded_transition(
                         db,
                         "jobs",
                         _as_int(attempt["job_id"]),
-                        "review",
+                        completed_status,
                         ("running",),
-                        set_extra="updated_at=CURRENT_TIMESTAMP",
+                        set_extra=(
+                            "finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP"
+                            if completed_status == "done"
+                            else "updated_at=CURRENT_TIMESTAMP"
+                        ),
                     )
-                    job_status = "review"
+                    job_status = completed_status
                 elif job_status == "running":
                     # Only a job that is still running may pull more work forward.
                     # If a sibling already paused it, this node's dependents wait
@@ -446,6 +460,10 @@ class GraphAdvancers:
                 add_event,
                 job_status=job_status,
             )
+            if job_status in {"review", "done"}:
+                self.app.state.task_delegation.prerequisite_changed(
+                    _as_int(attempt["job_id"]), connection=db
+                )
 
         if dispatch_job_id is not None:
             self.executor.dispatch_ready(dispatch_job_id)
@@ -470,5 +488,8 @@ class GraphAdvancers:
             if failed:
                 self._emit_update(
                     run, attempt, "failed", add_event, error=error[:1000]
+                )
+                self.app.state.task_delegation.prerequisite_changed(
+                    _as_int(attempt["job_id"]), connection=db
                 )
             return failed

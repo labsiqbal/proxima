@@ -132,6 +132,11 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
             <span>✅ Ready for review.</span>
             <button className="primary-button" onClick={() => void approve()} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve → Done'}</button>
           </div>)}
+    {job.status === 'queued' && job.blocked_reason && (
+      <div className="task-review-bar" role="status">
+        <span>⏳ {job.blocked_reason}</span>
+      </div>
+    )}
     {error && <div className="error-bar">{error}</div>}
     <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={updated => { setJob(updated); onChanged?.() }} />
     {job.worktree && <ChangesReview

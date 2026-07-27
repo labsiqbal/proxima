@@ -94,6 +94,22 @@ describe("TaskWorkspace", () => {
 		);
 	});
 
+	it("shows the durable prerequisite reason for a blocked queued task", async () => {
+		vi.mocked(getJob).mockResolvedValue({
+			...job,
+			status: "queued",
+			blocked_reason:
+				"Waiting for prerequisite Task #7 (Research) to reach done; currently running",
+			steps_state: [{ ...job.steps_state[0], status: "queued" }],
+		} as never);
+
+		render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+
+		expect(
+			await screen.findByText(/Waiting for prerequisite Task #7/),
+		).toBeInTheDocument();
+	});
+
 	it("repo job at final review: the verdict lives with the changes (slice 4)", async () => {
 		const repoJob = {
 			...job,

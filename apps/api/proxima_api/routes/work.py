@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from ..auth import iso_now
 from .. import artifact_registry
@@ -22,7 +22,11 @@ from .. import satpam
 from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
-from ..job_checkpoints import create_checkpoint
+from ..task_delegation import (
+    TaskDelegationError,
+    TaskDelegationRequest,
+    new_idempotency_key,
+)
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -231,6 +235,18 @@ def register(app, deps):
         satpam_rows = satpam.interventions_payload(db(), d["id"])
         if satpam_rows:
             d["satpam"] = satpam_rows
+        delegation = db().execute(
+            "SELECT * FROM task_delegations WHERE job_id = ?", (d["id"],)
+        ).fetchone()
+        if delegation:
+            d["delegation"] = dict(delegation)
+        dependencies = db().execute(
+            "SELECT task_id, depends_on_task_id, required_status, created_at, updated_at "
+            "FROM task_dependencies WHERE task_id = ? ORDER BY depends_on_task_id",
+            (d["id"],),
+        ).fetchall()
+        if dependencies:
+            d["dependencies"] = [dict(row) for row in dependencies]
         return d
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
@@ -248,7 +264,13 @@ def register(app, deps):
             pass
 
     @app.post("/api/jobs")
-    def create_job(payload: JobCreateRequest, user: dict[str, Any] = Depends(current_user)):
+    def create_job(
+        payload: JobCreateRequest,
+        user: dict[str, Any] = Depends(current_user),
+        idempotency_key: str | None = Header(
+            default=None, alias="Idempotency-Key"
+        ),
+    ):
         profile = profile_for_user(payload.profile_id, user)
         req_project_id = _member_project_id(payload.project_id, payload.project_slug, user)
         if payload.workflow_id:
@@ -256,36 +278,86 @@ def register(app, deps):
             steps = _decode_json(wfrow["steps"] or "[]")
             title = payload.title or wfrow["name"]
             project_id = req_project_id if req_project_id is not None else wfrow["project_id"]
+            brief = (
+                (payload.input or {}).get("brief")
+                or wfrow["description"]
+                or wfrow["name"]
+            )
         else:
             brief = (payload.input or {}).get("brief") or "Task"
             steps = wf.normalize_steps([{"name": "Task", "instruction": brief}])
             title = payload.title or brief[:80]
             project_id = req_project_id
-        steps_state = [wf.step_state_from(s, payload.input or {}) for s in steps]
-        # Job -> target binding (T1, slice 2): the target must be one of THIS
-        # project's live areas, pinned before the job runs. Code area = repo
-        # job; ops area (or None) = today's behavior.
-        target_area_id = None
-        if payload.target_area_id is not None:
+        if project_id is None:
+            if payload.target_area_id is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="target area not found in this job's project",
+                )
+            # Historical API clients may still create project-less scratch jobs.
+            # They cannot carry a delegation audit because no exact Area exists.
+            legacy = app.state.task_delegation.create_legacy_unscoped(
+                user,
+                title=title,
+                brief=str(brief),
+                profile=profile,
+                input_data=payload.input or {},
+                recipe_id=payload.workflow_id,
+                steps=[wf.step_state_from(s, payload.input or {}) for s in steps],
+                connection=db(),
+            )
+            return _job_payload(_job_or_404(_as_int(legacy["id"]), user))
+
+        if payload.target_area_id is None:
             area = db().execute(
-                "SELECT * FROM project_areas WHERE id = ?", (payload.target_area_id,)
+                "SELECT * FROM project_areas WHERE project_id = ? AND kind = 'ops' "
+                "AND source != 'excluded'",
+                (project_id,),
             ).fetchone()
-            if not area or area["source"] == "excluded" or project_id is None or area["project_id"] != project_id:
-                raise HTTPException(status_code=422, detail="target area not found in this job's project")
-            target_area_id = _as_int(area["id"])
-        visibility = "project" if project_id else "private"
-        scur = db().execute(
-            "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
-            (title[:80], project_id, user["id"], profile["id"], profile["runner_id"], visibility),
-        )
-        session_id = _as_int(scur.lastrowid)
-        jcur = db().execute(
-            "INSERT INTO jobs(project_id, workflow_id, session_id, title, input, steps_state, target_area_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, payload.workflow_id, session_id, title, json.dumps(payload.input or {}), json.dumps(steps_state), target_area_id, user["id"]),
-        )
-        job_id = _as_int(jcur.lastrowid)
-        db().execute("UPDATE sessions SET job_id = ? WHERE id = ?", (job_id, session_id))
-        return _job_payload(_job_or_404(job_id, user))
+            routing_reason = "Compatibility defaulted to the Container Ops Area"
+        else:
+            area = db().execute(
+                "SELECT * FROM project_areas WHERE id = ?",
+                (payload.target_area_id,),
+            ).fetchone()
+            routing_reason = "Owner selected the Task Area"
+        if (
+            not area
+            or area["source"] == "excluded"
+            or area["project_id"] != project_id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="target area not found in this job's project",
+            )
+        try:
+            delegated = app.state.task_delegation.create_and_start(
+                user,
+                TaskDelegationRequest(
+                    title=str(title),
+                    brief=str(brief),
+                    container_id=_as_int(project_id),
+                    area_id=_as_int(area["id"]),
+                    profile_id=_as_int(profile["id"]),
+                    execution_policy=str(
+                        (payload.input or {}).get("execution_policy") or "guarded"
+                    ),
+                    recipe_id=payload.workflow_id,
+                    input_data=payload.input or {},
+                    routing_mode="explicit",
+                    routing_reason=routing_reason,
+                    idempotency_key=idempotency_key
+                    or new_idempotency_key("work"),
+                ),
+                start=False,
+                connection=db(),
+            )
+        except TaskDelegationError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        return _job_payload(_job_or_404(_as_int(delegated.job["id"]), user))
 
     @app.post("/api/jobs/{job_id}/start")
     def start_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
@@ -295,57 +367,24 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="job has no steps")
         if not job["session_id"]:
             raise HTTPException(status_code=409, detail="job session missing")
-        session = db().execute("SELECT profile_id FROM sessions WHERE id = ?", (job["session_id"],)).fetchone()
-        profile = profile_for_user(session["profile_id"] if session else None, user)
-        inputs = _decode_json(job["input"]) if job["input"] else {}
-        prompt = wf.build_step_prompt(steps[0], 0, len(steps), inputs)
-        # Repo job (slice 2, flag-gated): cut the isolated worktree BEFORE the
-        # job claims running, so a refused cut (dirty repo, detached HEAD, no
-        # commits) surfaces loudly and leaves the job queued for a clean retry.
-        if features.enabled(app.state.config, features.REPO_WORKTREES):
-            try:
-                worktrees.ensure_job_worktree(db(), app.state.config, job)
-            except worktrees.WorktreeError as exc:
-                raise HTTPException(status_code=409, detail=f"cannot start repo job: {exc}") from exc
-        # Alpha jobs checkpoint the queued state after the isolated worktree is
-        # available, but before any worker run is enqueued. Avoid duplicates on
-        # an idempotent retry.
-        if job["alpha_session_id"] is not None and not db().execute(
-            "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job_id,)
-        ).fetchone():
-            create_checkpoint(db(), job_id)
-        conn = db()
-        with app.state.db_lock:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                # Claim + enqueue atomically. Without this transaction, a failure
-                # after the status update can leave the job stuck as running with no run.
-                claimed = conn.execute(
-                    "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, current_step_idx=0, updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='queued'",
-                    (job_id,),
-                )
-                if claimed.rowcount == 0:
-                    conn.execute("ROLLBACK")
-                    return _job_payload(_job_or_404(job_id, user))  # already started; idempotent
-                cur = conn.execute(
-                    "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home) "
-                    "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                    (job["session_id"], job["project_id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
-                )
-                run_id = _as_int(cur.lastrowid)
-                steps[0]["status"] = "running"
-                steps[0]["run_id"] = run_id
-                steps[0]["started_at"] = iso_now()
-                conn.execute(
-                    "UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (json.dumps(steps), job_id),
-                )
-                conn.execute("COMMIT")
-            except Exception:
-                _rollback(conn)
-                raise
-        app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
+        try:
+            app.state.task_delegation.start(
+                job_id, user, connection=db()
+            )
+        except TaskDelegationError as exc:
+            if exc.code == "worktree_failed":
+                message = str(exc)
+                prefix = "Cannot start repo Task: "
+                if message.startswith(prefix):
+                    message = message[len(prefix):]
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"cannot start repo job: {message}",
+                ) from exc
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
         return _job_payload(_job_or_404(job_id, user))
 
     @app.post("/api/jobs/{job_id}/link-run")
@@ -572,6 +611,9 @@ def register(app, deps):
                 artifact_registry.approve_records_for_job(db(), job_id)
             except Exception:
                 logging.getLogger("proxima.work").exception("registry approve sync failed (non-fatal)")
+            app.state.task_delegation.prerequisite_changed(
+                job_id, connection=db()
+            )
         return _job_payload(_job_or_404(job_id, user))
 
     @app.post("/api/jobs/{job_id}/reject")
@@ -602,6 +644,9 @@ def register(app, deps):
             logging.getLogger("proxima.worktrees").exception(
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
+        app.state.task_delegation.prerequisite_changed(
+            job_id, connection=db()
+        )
         return _job_payload(_job_or_404(job_id, user))
 
     # Global Attention applies review verdicts through these proven services so
@@ -640,6 +685,27 @@ def register(app, deps):
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
+        dependents = db().execute(
+            "SELECT jobs.id, jobs.title FROM task_dependencies "
+            "JOIN jobs ON jobs.id = task_dependencies.task_id "
+            "WHERE task_dependencies.depends_on_task_id = ? "
+            "ORDER BY jobs.id LIMIT 20",
+            (job_id,),
+        ).fetchall()
+        if dependents:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "task_has_dependents",
+                    "message": (
+                        "Delete dependent Tasks first; this Task is still required "
+                        "by " + ", ".join(
+                            f"#{row['id']} {row['title']}" for row in dependents
+                        )
+                    ),
+                    "dependent_task_ids": [row["id"] for row in dependents],
+                },
+            )
         # Remove the run record + its threads (messages/runs/events cascade). Produced
         # artifacts (Design Studio designs, project files) are deliverables and are
         # deliberately left in place. "Threads" is plural for a graph job: every node

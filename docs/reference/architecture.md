@@ -50,6 +50,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  routes/*.py   REST handlers (registered via register(app, deps))              │
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
+│  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
 │  Alpha tools   in-process allowlist; dispatches jobs, never curls localhost     │
 │  AlphaSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
@@ -229,6 +230,15 @@ marker for legacy root-level Ops data.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
+Scoped Work, Home, Alpha, and future orchestration creation share
+`TaskDelegationService`. `task_delegations` is the one-to-one origin, routing,
+idempotency, and durable-start audit for a job. `task_dependencies` stores explicit
+Task-to-prerequisite edges with a required `review` or `done` status. A unique pair,
+self-edge check, and recursive insert/update triggers make the stored graph
+cycle-safe. The prerequisite foreign key is restrictive, so deleting a Task or
+Container cannot silently erase an edge that another Task still needs.
+`jobs.blocked_reason` is the visible reason a requested Task remains queued.
+Historical project-less Work API jobs remain an unscoped compatibility path.
 A code area with a detected git remote may opt into push-after-merge via
 `project_areas.push_on_merge` (T9, slice 11, default off); enabling pins the remote
 URL into `project_areas.push_remote_url` (audit F3) and the push refuses on a
@@ -340,7 +350,8 @@ owner message -> queued Alpha ACP run (scoped ACP auto-approve)
       -> assistant emits <proxima-tool>{name,arguments}</proxima-tool>
       -> alpha_runtime validates + executes the allowlisted handler in process
       -> trusted result card + queued Alpha continuation (bounded to 6 tool rounds)
-      -> dispatch_jobs creates Autonomous jobs linked by jobs.alpha_session_id
+      -> dispatch_jobs calls TaskDelegationService
+      -> atomic jobs + delegation audits + dependency edges
       -> isolated worktree cut when needed -> job-scoped checkpoint -> runs queue
       -> RunWorker claims at most 3 Alpha runs; every excess worker run stays visibly queued
       -> AlphaScreen polls desk/messages; global Attention deep-links owner decisions
@@ -541,6 +552,31 @@ job done  →  artifacts surface in the Result view + land as durable Archive re
              (registry feed; approving the job auto-approves its records - T4)
 ```
 
+Scoped Task creation enters through one server-owned path:
+
+```text
+Work / Home / Alpha / future Master caller
+    -> TaskDelegationService.create_and_start
+    -> validate owner + one Container + one Area + Task-agent + Recipe
+    -> one transaction:
+         worker session + job + task_delegations + task_dependencies
+    -> commit durable start_requested and idempotency identity
+    -> retryable start:
+         unmet prerequisite -> queued + explicit blocked_reason
+         repo Area -> existing external worktree and review/local merge
+         Ops Area -> existing physical ops/ execution
+```
+
+The service accepts a batch of client-local Task keys and dependency keys. It inserts
+all jobs first, resolves edges second, and commits only if the whole DAG is valid.
+Repeated idempotency identities return the original jobs before mutable references are
+revalidated. Startup retries committed start intents, so interruption after commit but
+before start cannot duplicate a Task. A graph start also reconciles the narrower crash
+gap where the job reached `running` before the graph dispatcher committed a node run.
+When a prerequisite reaches its required state, the dependent is retried through the
+same guarded queued-to-running claim; repeated notifications create no second run.
+Deleting a prerequisite is refused until its dependents are deleted.
+
 The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attempt in
 `node_states`, dispatches every ready node concurrently (bounded by
 `graph_node_concurrency`, then by `run_worker_concurrency`) in a fresh hidden ACP
@@ -589,7 +625,9 @@ extracted, not duplicated). Plan rows also carry **Open plan** (to the canvas, w
 review actions live) and **Save as Workflow** (the same save-template mechanics).
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
-way). Jobs live-poll while running and auto-archive after 30 days.
+way). Jobs live-poll while running and auto-archive after 30 days. A dependency-blocked
+Task remains queued but carries its durable reason in list/detail payloads and renders
+that reason in `TaskWorkspace`.
 
 Before an Alpha worker run is enqueued, `job_checkpoints.create_checkpoint` records
 only that job's restorable columns, node states, existing run ids, and target repository
@@ -664,14 +702,19 @@ in review, retry offered), and gates the reject door behind a required one-line
 reason. UI copy is de-jargonized ("isolated copy", "changes"); the satpam (slice 12,
 flow 6c) consumes these same review states.
 
-**Graph plans reuse this same machinery per job-in-plan (slice 3).** When the flag is
+**Graph plans reuse this same machinery per job-in-plan (slice 3).** Direct legacy
+plans keep the existing node-aware placement. Delegated graph Recipes inherit the
+Task's exact Area for every node, so one Task never crosses from a repo worktree into
+Ops. When the flag is
 on and a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`
 resolves their one code-area target to `jobs.target_area_id` and cuts the plan's
 worktree before claiming `running` — same loud-refusal ordering as the linear start. A
 plan's repo jobs must share ONE code area (Phase-1: one worktree row per job); a
-multi-area plan refuses to start with a split-the-plan message. The worker's cwd seam
-is node-aware: a `wf_node` run executes in the worktree only when ITS node touches the
-repo, while Ops siblings run at the physical Ops Area, where their artifact outputs belong.
+multi-area plan refuses to start with a split-the-plan message. For a direct legacy
+plan, the worker's cwd seam remains node-aware: a `wf_node` run executes in the
+worktree only when its node touches the repo, while Ops siblings use the physical Ops
+Area. For a delegated Task, every node uses the selected repo worktree or selected
+physical Ops Area.
 The final `POST /api/graph/jobs/{id}/approve` is the merge point, with the identical
 guarded-merge/park-in-review contract as the linear approve. Flag off: none of this
 runs and target tags are inert metadata.

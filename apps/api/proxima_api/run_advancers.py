@@ -10,6 +10,7 @@ from . import workflows as wf
 from . import state
 from .auth import iso_now
 from .goal_loop import build_goal_prompt, parse_goal_status
+from .task_delegation import completed_landing_status
 
 AddEvent = Callable[[int, int, int | None, str, dict[str, Any]], None]
 ProducedArtifacts = Callable[[Any, str | None], list[dict[str, Any]]]
@@ -115,6 +116,9 @@ class RunAdvancers:
                     set_params=(json.dumps(steps),),
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "failed", "step": idx, "reason": "blocked"})
+                self.app.state.task_delegation.prerequisite_changed(
+                    int(job["id"]), connection=db
+                )
                 return
             steps[idx]["status"] = "done"
             steps[idx]["output_summary"] = answer
@@ -134,13 +138,17 @@ class RunAdvancers:
             last = idx + 1 >= len(steps)
             gate = bool(steps[idx].get("review_required"))
             inputs = json.loads(job["input"] or "{}")
-            if last and inputs.get("execution_policy") == "autonomous":
+            final_status = completed_landing_status(db, job) if last else "review"
+            if last and final_status == "done" and not gate:
                 state.guarded_transition(
                     db, "jobs", int(job["id"]), "done", ("running",),
                     set_extra="steps_state = ?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
                     set_params=(json.dumps(steps),),
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "done", "step": idx, "autonomous": True})
+                self.app.state.task_delegation.prerequisite_changed(
+                    int(job["id"]), connection=db
+                )
                 return
             if last or gate:
                 state.guarded_transition(
@@ -149,6 +157,9 @@ class RunAdvancers:
                     set_params=(json.dumps(steps),),
                 )
                 add_event(int(run["id"]), session_id, run.get("project_id"), "job.update", {"status": "review", "step": idx, "gate": gate})
+                self.app.state.task_delegation.prerequisite_changed(
+                    int(job["id"]), connection=db
+                )
                 return
             nxt = idx + 1
             prompt = wf.build_step_prompt(steps[nxt], nxt, len(steps), inputs)

@@ -269,9 +269,12 @@ reserves the repo jobs' path: the plan's single code-area target is pinned to
 `running` (a refused cut — dirty repo, detached HEAD, no commits — is a 409 and the
 plan stays queued). Phase-1 keeps **one worktree per plan**, so all repo jobs of a
 plan must target the *same* code area; a multi-area plan refuses to start with a
-split-the-plan message. During execution the worker's cwd seam is **node-aware**: a
-node runs in the worktree only when *it* touches the repo - its Ops siblings run at
-the physical Ops Area, where their artifact outputs belong. The final plan approve is the
+split-the-plan message. During execution of a direct legacy plan the worker's cwd seam
+is **node-aware**: a node runs in the worktree only when *it* touches the repo - its Ops
+siblings run at the physical Ops Area, where their artifact outputs belong. A graph
+Recipe run as a delegated Task instead inherits that Task's one selected Area for every
+node (see [`task-delegation.md`](task-delegation.md)), and rejects a Recipe whose
+explicit repo target disagrees with that Area. The final plan approve is the
 merge point, with the same guarded `--no-ff` local merge and park-in-review-on-conflict
 contract as a linear repo job.
 Flag **off** (the escape hatch): targets are inert metadata, no worktree is cut, and

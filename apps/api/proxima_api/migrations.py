@@ -865,6 +865,256 @@ def _add_container_foundation(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_task_delegation_contracts(conn: sqlite3.Connection) -> None:
+    """Durable, idempotent one-Area Task delegation and dependency DAG edges."""
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    required_tables = {
+        "users",
+        "projects",
+        "project_areas",
+        "sessions",
+        "messages",
+        "jobs",
+    }
+    if not required_tables.issubset(tables):
+        return
+    job_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "blocked_reason" not in job_columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN blocked_reason TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_delegations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          origin_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+          origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+          target_area_id INTEGER NOT NULL REFERENCES project_areas(id) ON DELETE RESTRICT,
+          job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+          routing_mode TEXT NOT NULL CHECK (routing_mode IN ('explicit', 'auto')),
+          routing_reason TEXT,
+          created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          idempotency_identity TEXT NOT NULL UNIQUE,
+          request_fingerprint TEXT NOT NULL,
+          start_requested INTEGER NOT NULL DEFAULT 0 CHECK (start_requested IN (0, 1)),
+          start_state TEXT NOT NULL DEFAULT 'pending'
+            CHECK (start_state IN ('pending', 'blocked', 'starting', 'started', 'failed')),
+          blocked_reason TEXT,
+          last_start_error TEXT,
+          start_attempts INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          start_attempted_at TEXT,
+          started_at TEXT,
+          UNIQUE(created_by, idempotency_key)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_delegations_origin "
+        "ON task_delegations(origin_session_id, origin_message_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_delegations_container "
+        "ON task_delegations(container_id, target_area_id, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_delegations_start "
+        "ON task_delegations(start_requested, start_state, updated_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_dependencies (
+          task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          depends_on_task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          required_status TEXT NOT NULL DEFAULT 'done'
+            CHECK (required_status IN ('review', 'done')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (task_id, depends_on_task_id),
+          CHECK (task_id != depends_on_task_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite "
+        "ON task_dependencies(depends_on_task_id, task_id)"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_dependencies_no_cycle
+        BEFORE INSERT ON task_dependencies
+        BEGIN
+          SELECT RAISE(ABORT, 'task dependency cycle')
+          WHERE EXISTS (
+            WITH RECURSIVE prerequisites(task_id) AS (
+              SELECT NEW.depends_on_task_id
+              UNION
+              SELECT dependency.depends_on_task_id
+              FROM task_dependencies AS dependency
+              JOIN prerequisites
+                ON dependency.task_id = prerequisites.task_id
+            )
+            SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_dependencies_no_cycle_update
+        BEFORE UPDATE OF task_id, depends_on_task_id ON task_dependencies
+        BEGIN
+          SELECT RAISE(ABORT, 'task dependency cycle')
+          WHERE NEW.task_id = NEW.depends_on_task_id OR EXISTS (
+            WITH RECURSIVE prerequisites(task_id) AS (
+              SELECT NEW.depends_on_task_id
+              UNION
+              SELECT dependency.depends_on_task_id
+              FROM task_dependencies AS dependency
+              JOIN prerequisites
+                ON dependency.task_id = prerequisites.task_id
+              WHERE NOT (
+                dependency.task_id = OLD.task_id
+                AND dependency.depends_on_task_id = OLD.depends_on_task_id
+              )
+            )
+            SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+          );
+        END
+        """
+    )
+
+
+def _protect_task_prerequisites_from_deletion(
+    conn: sqlite3.Connection,
+) -> None:
+    """Rebuild dependency edges so a prerequisite cannot disappear silently.
+
+    ``task_id`` remains cascading because deleting a dependent Task should
+    remove its outgoing requirements. ``depends_on_task_id`` is restrictive:
+    callers must remove dependents first, preserving the durable explanation
+    for why a queued Task may or may not start.
+    """
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'task_dependencies'"
+    ).fetchone():
+        return
+    prerequisite_fk = next(
+        (
+            row
+            for row in conn.execute(
+                "PRAGMA foreign_key_list(task_dependencies)"
+            ).fetchall()
+            if row[3] == "depends_on_task_id"
+        ),
+        None,
+    )
+    if prerequisite_fk is not None and str(prerequisite_fk[6]).upper() in {
+        "RESTRICT",
+        "NO ACTION",
+    }:
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _task_dependencies_new (
+              task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+              depends_on_task_id INTEGER NOT NULL
+                REFERENCES jobs(id) ON DELETE RESTRICT,
+              required_status TEXT NOT NULL DEFAULT 'done'
+                CHECK (required_status IN ('review', 'done')),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (task_id, depends_on_task_id),
+              CHECK (task_id != depends_on_task_id)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO _task_dependencies_new("
+            "task_id, depends_on_task_id, required_status, created_at, updated_at"
+            ") SELECT task_id, depends_on_task_id, required_status, "
+            "created_at, updated_at FROM task_dependencies"
+        )
+        conn.execute("DROP TABLE task_dependencies")
+        conn.execute(
+            "ALTER TABLE _task_dependencies_new RENAME TO task_dependencies"
+        )
+        conn.execute(
+            "CREATE INDEX idx_task_dependencies_prerequisite "
+            "ON task_dependencies(depends_on_task_id, task_id)"
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER task_dependencies_no_cycle
+            BEFORE INSERT ON task_dependencies
+            BEGIN
+              SELECT RAISE(ABORT, 'task dependency cycle')
+              WHERE EXISTS (
+                WITH RECURSIVE prerequisites(task_id) AS (
+                  SELECT NEW.depends_on_task_id
+                  UNION
+                  SELECT dependency.depends_on_task_id
+                  FROM task_dependencies AS dependency
+                  JOIN prerequisites
+                    ON dependency.task_id = prerequisites.task_id
+                )
+                SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+              );
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER task_dependencies_no_cycle_update
+            BEFORE UPDATE OF task_id, depends_on_task_id ON task_dependencies
+            BEGIN
+              SELECT RAISE(ABORT, 'task dependency cycle')
+              WHERE NEW.task_id = NEW.depends_on_task_id OR EXISTS (
+                WITH RECURSIVE prerequisites(task_id) AS (
+                  SELECT NEW.depends_on_task_id
+                  UNION
+                  SELECT dependency.depends_on_task_id
+                  FROM task_dependencies AS dependency
+                  JOIN prerequisites
+                    ON dependency.task_id = prerequisites.task_id
+                  WHERE NOT (
+                    dependency.task_id = OLD.task_id
+                    AND dependency.depends_on_task_id = OLD.depends_on_task_id
+                  )
+                )
+                SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+              );
+            END
+            """
+        )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                "task dependency FK rebuild introduced violations: "
+                f"{[tuple(row) for row in violations]}"
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -894,6 +1144,13 @@ MIGRATIONS: list[Migration] = [
     (26, "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox", _add_alpha_foundation),
     (27, "move graph workflow inputs onto trigger nodes", _move_workflow_inputs_to_trigger),
     (28, "add Container registry and durable physical Ops migration state", _add_container_foundation),
+    (29, "add durable one-Area Task delegations and dependency DAG contracts", _add_task_delegation_contracts),
+    (
+        30,
+        "protect durable Task prerequisites from silent deletion",
+        _protect_task_prerequisites_from_deletion,
+        {"no_auto_tx": True},
+    ),
 ]
 
 

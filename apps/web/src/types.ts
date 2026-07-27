@@ -474,6 +474,25 @@ export type Job = {
 	satpam?: SatpamIntervention[];
 	// The owner's one-line why from the reject-at-review action (slice 4).
 	rejected_reason?: string | null;
+	// Durable explanation for a queued delegated Task whose prerequisites are
+	// not ready or have failed.
+	blocked_reason?: string | null;
+	delegation?: {
+		id: number;
+		origin_session_id?: number | null;
+		origin_message_id?: number | null;
+		container_id: number;
+		target_area_id: number;
+		routing_mode: "explicit" | "auto";
+		routing_reason?: string | null;
+		start_state: "pending" | "blocked" | "starting" | "started" | "failed";
+		blocked_reason?: string | null;
+	};
+	dependencies?: {
+		task_id: number;
+		depends_on_task_id: number;
+		required_status: "review" | "done";
+	}[];
 	schedule_id: number | null;
 	created_by: number | null;
 	created_at: string;

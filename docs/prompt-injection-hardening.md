@@ -44,6 +44,15 @@ The runner receives this resolved context and a filtered environment. This is a
 guardrail, not an OS sandbox: the subprocess still has the service user's filesystem
 permissions.
 
+Delegated Task routing is resolved before a runner starts. The server-owned
+`TaskDelegationService` accepts Container, Area, profile, Recipe, origin, and
+dependency database identities rather than model-supplied paths. It validates owner
+scope and exact Container/Area membership, commits one immutable routing audit with
+the Task, and rejects cross-Container Areas. Idempotency and atomic DAG insertion
+prevent repeated or malformed tool output from creating partial duplicate work.
+These controls do not expand runner permissions and do not turn cwd selection into an
+OS sandbox.
+
 ## Path policy
 
 Runner/file APIs must enforce:
