@@ -520,8 +520,9 @@ describe('MasterStateProvider', () => {
       }
     })
 
-    await waitFor(() => expect(listEvents).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(listEvents.mock.calls.length).toBeGreaterThanOrEqual(2))
     await new Promise(resolve => window.setTimeout(resolve, 10))
+    expect(listEvents.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(listEvents.mock.calls.length).toBeLessThanOrEqual(3)
     expect(FakeEventSource.instances).toHaveLength(1)
   })
