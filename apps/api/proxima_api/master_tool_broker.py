@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -43,6 +44,14 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
+_PATH_TEXT = re.compile(
+    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
+    r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
+)
+_SECRET_TEXT = re.compile(
+    r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
+    r"""\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,})"""
+)
 
 
 class MasterToolError(RuntimeError):
@@ -179,10 +188,8 @@ _TOOL_DESCRIPTIONS = {
     "create_attention": "Create one idempotent owner Attention item.",
 }
 
-
-def master_dynamic_tools() -> list[dict[str, Any]]:
-    """Render the broker contract as Codex app-server dynamic tools."""
-    return [
+_MASTER_DYNAMIC_TOOLS_JSON = json.dumps(
+    [
         {
             "type": "function",
             "name": name,
@@ -190,7 +197,15 @@ def master_dynamic_tools() -> list[dict[str, Any]]:
             "inputSchema": schema,
         }
         for name, schema in TOOL_SCHEMAS.items()
-    ]
+    ],
+    ensure_ascii=False,
+    separators=(",", ":"),
+)
+
+
+def master_dynamic_tools() -> list[dict[str, Any]]:
+    """Render the broker contract as Codex app-server dynamic tools."""
+    return json.loads(_MASTER_DYNAMIC_TOOLS_JSON)
 
 
 def _as_int(value: Any) -> int:
@@ -215,6 +230,12 @@ def _validation_error(name: str, arguments: Any) -> MasterToolError | None:
         ),
     )
     if not errors:
+        unsafe = _unsafe_text(arguments)
+        if unsafe is not None:
+            return MasterToolError(
+                "unsafe_tool_text",
+                f"{name} input contains {unsafe}",
+            )
         return None
     error = errors[0]
     location = ".".join(str(part) for part in error.absolute_path) or "arguments"
@@ -222,6 +243,41 @@ def _validation_error(name: str, arguments: Any) -> MasterToolError | None:
         "invalid_tool_arguments",
         f"{name}.{location}: {error.message}",
     )
+
+
+def validate_master_tool_call(
+    name: str,
+    arguments: Any,
+) -> dict[str, Any] | None:
+    """Return a stable validation error without executing a product handler."""
+    error = _validation_error(name, arguments)
+    if error is None:
+        return None
+    return {
+        "ok": False,
+        "tool": name or None,
+        "error": {"code": error.code, "message": str(error)},
+    }
+
+
+def _unsafe_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        if _PATH_TEXT.search(value):
+            return "a filesystem path"
+        if _SECRET_TEXT.search(value):
+            return "credential-like material"
+        return None
+    if isinstance(value, dict):
+        for nested in value.values():
+            unsafe = _unsafe_text(nested)
+            if unsafe is not None:
+                return unsafe
+    elif isinstance(value, list):
+        for nested in value:
+            unsafe = _unsafe_text(nested)
+            if unsafe is not None:
+                return unsafe
+    return None
 
 
 def _safe_container(container: Mapping[str, Any]) -> dict[str, Any]:
@@ -267,6 +323,7 @@ class MasterToolBroker:
         user: Mapping[str, Any],
         origin_master_session_id: int,
         *,
+        origin_message_id: int | None = None,
         result_bytes: int = MASTER_TOOL_RESULT_BYTES,
     ):
         self.conn = conn
@@ -274,6 +331,9 @@ class MasterToolBroker:
         self.user = dict(user)
         self.user_id = _as_int(user["id"])
         self.origin_master_session_id = _as_int(origin_master_session_id)
+        self.origin_message_id = (
+            _as_int(origin_message_id) if origin_message_id is not None else None
+        )
         self.result_bytes = result_bytes
         self._definitions = {
             "list_containers": ToolDefinition(
@@ -314,6 +374,13 @@ class MasterToolBroker:
             return self._error(name, error.code, str(error))
         try:
             data = self._definitions[name].handler(dict(arguments))
+            unsafe = _unsafe_text(data)
+            if unsafe is not None:
+                return self._error(
+                    name,
+                    "unsafe_tool_result",
+                    f"{name} result contained {unsafe}",
+                )
             result = {"ok": True, "tool": name, "result": data}
             encoded = json.dumps(
                 result, ensure_ascii=False, separators=(",", ":")
@@ -337,8 +404,12 @@ class MasterToolBroker:
                 else "product request failed"
             )
             return self._error(name, "product_request_failed", str(message))
-        except (sqlite3.Error, TypeError, ValueError):
-            log.exception("Master product tool failed: %s", name)
+        except Exception as exc:
+            log.error(
+                "Master product tool failed: %s (%s)",
+                name,
+                type(exc).__name__,
+            )
             return self._error(
                 name,
                 "tool_failed",
@@ -489,7 +560,7 @@ class MasterToolBroker:
             "SELECT id, project_id AS container_id, name, description, category, "
             "CASE WHEN graph IS NULL THEN 'linear' ELSE 'graph' END AS engine "
             "FROM workflows WHERE status = 'active' "
-            "AND (created_by = ? OR project_id IN "
+            "AND ((project_id IS NULL AND created_by = ?) OR project_id IN "
             "(SELECT id FROM projects WHERE owner_user_id = ?)) "
             "AND (? IS NULL OR project_id = ?) "
             "ORDER BY updated_at DESC, id DESC LIMIT ?",
@@ -553,8 +624,12 @@ class MasterToolBroker:
             input_data=input_data,
             dependencies=tuple(dependencies),
             origin_session_id=self.origin_master_session_id,
-            routing_mode="explicit",
-            routing_reason="Master selected one registered Container Area",
+            origin_message_id=self.origin_message_id,
+            routing_mode="auto",
+            routing_reason=(
+                "Master resolved the requested outcome to one registered "
+                "Container Area"
+            ),
             idempotency_key=str(
                 task.get("idempotency_key")
                 or f"{batch_key}:{client_key}"
@@ -577,8 +652,8 @@ class MasterToolBroker:
         delegated = self.app.state.task_delegation.create_batch(
             self.user,
             requests,
-            start=False,
-            defer_start=False,
+            start=start,
+            defer_start=start,
             connection=self.conn,
         )
         tasks = [

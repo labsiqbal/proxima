@@ -1721,10 +1721,11 @@ class RunWorker:
             proc.cancel(sid)
 
     def _auto_approve_on(self, run_id: int) -> bool:
-        """Auto-approve Master and Master-spawned runs, scoped by durable rows.
+        """Resolve auto-approval from the durable run and Task policy.
 
-        Ordinary runs continue to honor the owner's install-wide toggle. If the
-        lookup fails, fail safe and surface the permission card.
+        Master itself always denies. Master-created Tasks retain their guarded
+        or autonomous execution policy. Ordinary runs continue to honor the
+        owner's install-wide toggle. Lookup failure is fail-closed.
         """
         try:
             with self.app.state.db_lock:

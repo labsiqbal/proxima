@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from proxima_api.runner_specs import (
     RUNNER_SPECS,
     master_runner_conformance,
@@ -81,6 +83,51 @@ def test_old_codex_fails_master_conformance_closed(monkeypatch):
     assert master_runner_conformance("codex") == (
         False,
         "Codex 0.144.9 is below required 0.145.0",
+    )
+
+
+def test_missing_codex_fails_master_conformance_closed(monkeypatch):
+    monkeypatch.setattr(
+        "proxima_api.runner_specs.shutil.which",
+        lambda _binary: None,
+    )
+
+    assert master_runner_conformance("codex") == (
+        False,
+        "Codex binary is not installed",
+    )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [
+        (1, "codex-cli 0.145.0"),
+        (0, "unknown"),
+        (0, "warning 9.9.9 codex-cli 0.145.0"),
+        (0, "codex-cli 0.145"),
+    ],
+)
+def test_unverifiable_codex_version_fails_closed(
+    monkeypatch,
+    returncode,
+    stdout,
+):
+    monkeypatch.setattr(
+        "proxima_api.runner_specs.shutil.which",
+        lambda _binary: "/usr/bin/codex",
+    )
+    monkeypatch.setattr(
+        "proxima_api.runner_specs.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    assert master_runner_conformance("codex") == (
+        False,
+        "Codex version could not be verified",
     )
 
 

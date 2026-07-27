@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from proxima_api.db import SCHEMA, connect, init_db
+from proxima_api.master_persistence import MasterPersistenceError
 from proxima_api.migrations import current_version, run_migrations
 
 
@@ -37,6 +40,58 @@ def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
     assert run_migrations(conn, str(tmp_path / "h.db"), migrations=[]) == []
     # tracking table exists, version 0
     assert current_version(conn) == 0
+
+
+def test_schema_31_to_32_is_idempotent_and_preserves_replay_contract(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "schema-31.db"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    conn.execute("DELETE FROM schema_migrations WHERE version = 32")
+    conn.execute("DROP TABLE master_tool_calls")
+
+    assert run_migrations(conn, str(db_path)) == [32]
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) == 32
+    assert {
+        row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
+    } == {
+        "id",
+        "master_session_id",
+        "turn_root_run_id",
+        "envelope_hash",
+        "tool_name",
+        "status",
+        "result_json",
+        "created_at",
+        "completed_at",
+    }
+
+
+def test_schema_32_drift_fails_and_rolls_back_version_record(tmp_path: Path):
+    db_path = tmp_path / "drifted-schema-31.db"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    conn.execute("DELETE FROM schema_migrations WHERE version = 32")
+    conn.execute("DROP TABLE master_tool_calls")
+    conn.execute(
+        "CREATE TABLE master_tool_calls("
+        "id INTEGER PRIMARY KEY, master_session_id INTEGER NOT NULL)"
+    )
+
+    with pytest.raises(
+        MasterPersistenceError,
+        match="ledger schema is incomplete",
+    ):
+        run_migrations(conn, str(db_path))
+
+    assert current_version(conn) == 31
+    assert {
+        row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
+    } == {"id", "master_session_id"}
 
 
 def test_applies_pending_once_then_idempotent(tmp_path: Path):

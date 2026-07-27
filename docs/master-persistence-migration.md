@@ -46,8 +46,9 @@ Migration 31 is transactional. A refusal rolls back the whole migration and does
 not record the schema version. The standard pre-migration `VACUUM INTO` backup
 remains available for operator recovery.
 
-Fresh provisioning creates exactly one hidden Master profile and one
-project-unbound Master session after the owner and default worker profile exist.
+Fresh provisioning creates no Master identity while the feature gate is off.
+After the feature is enabled, the first authenticated Master entry point creates
+exactly one hidden Master profile and one project-unbound Master session.
 Repeated startup, migration re-run, runner switch, and partial identical-column
 recovery reuse those primary keys.
 
@@ -70,7 +71,8 @@ the canonical routes.
 
 | Database state | Result |
 | --- | --- |
-| Fresh current schema | provision one Master identity |
+| Fresh current schema, feature off | preserve zero Master identities |
+| Fresh current schema, feature on and first Master use | provision one Master identity |
 | Current Alpha schema | rename identity and origin column in place |
 | Pre-current schema | apply all earlier migrations, then migration 31 |
 | Canonical identity and column already present | no-op validation |

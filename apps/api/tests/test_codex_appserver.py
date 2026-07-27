@@ -9,6 +9,8 @@ that path needs real OAuth + network, so it is not a hermetic unit test.
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from proxima_api.codex_appserver import (
     MASTER_APP_SERVER_CONFIG,
     MASTER_CODEX_BASE_INSTRUCTIONS,
@@ -23,6 +25,7 @@ from proxima_api.codex_master_proxy import (
     reconstruct_developer_context,
     reconstruct_model_tools,
 )
+from proxima_api.master_tool_broker import master_dynamic_tools
 from proxima_api.runner_specs import RUNNER_SPECS
 
 
@@ -112,6 +115,21 @@ def test_ordinary_backend_error_passes_through():
     assert out == "rate limit exceeded"
 
 
+def test_master_errors_redact_paths_and_credential_like_text():
+    p = _proc(master_chat_only=True)
+    out = p._explain_turn_error(
+        {
+            "message": (
+                "failed at /host/runtime/config.toml with "
+                "Bearer provider-secret-material"
+            )
+        }
+    )
+    assert "/host/runtime/config.toml" not in out
+    assert "provider-secret-material" not in out
+    assert "[protected-path]" in out
+
+
 def test_approval_decision_vocabulary():
     assert _approval_decisions("execCommandApproval") == {
         "allow_once": "approved", "allow_always": "approved_for_session", "reject": "denied"}
@@ -160,17 +178,7 @@ def test_master_thread_has_no_execution_environment_or_inherited_capabilities():
             return {"thread": {"id": "master-thread"}}
 
         p._request = request
-        tools = [
-            {
-                "type": "function",
-                "name": "list_tasks",
-                "description": "List bounded product records",
-                "inputSchema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                },
-            }
-        ]
+        tools = master_dynamic_tools()
         thread_id = await p.new_master_session("/master", tools)
         return thread_id, requests
 
@@ -185,7 +193,9 @@ def test_master_thread_has_no_execution_environment_or_inherited_capabilities():
     assert params["environments"] == []
     assert params["runtimeWorkspaceRoots"] == []
     assert params["selectedCapabilityRoots"] == []
-    assert params["dynamicTools"][0]["name"] == "list_tasks"
+    assert {tool["name"] for tool in params["dynamicTools"]} == {
+        tool["name"] for tool in master_dynamic_tools()
+    }
     assert params["ephemeral"] is True
 
 
@@ -254,7 +264,6 @@ def test_master_model_firewall_keeps_only_exact_dynamic_product_tools():
                         "strict": False,
                         "parameters": product_tools[1]["inputSchema"],
                     },
-                    {"type": "function", "name": "exec"},
                 ],
             }
         ],
@@ -269,7 +278,34 @@ def test_master_model_firewall_keeps_only_exact_dynamic_product_tools():
     assert tools[0]["parameters"] == product_tools[0]["inputSchema"]
     assert tools[0]["strict"] is False
     assert seen == {"list_tasks", "delegate_tasks"}
-    assert removed == {"update_plan", "exec"}
+    assert removed == {"update_plan"}
+
+    with pytest.raises(
+        MasterModelRequestError,
+        match="unrecognized runner-native tools",
+    ):
+        reconstruct_model_tools(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "list_tasks",
+                        "description": "List tasks",
+                        "strict": False,
+                        "parameters": product_tools[0]["inputSchema"],
+                    },
+                    {
+                        "type": "function",
+                        "name": "delegate_tasks",
+                        "description": "Delegate tasks",
+                        "strict": False,
+                        "parameters": product_tools[1]["inputSchema"],
+                    },
+                    {"type": "function", "name": "browser"},
+                ]
+            },
+            product_tools,
+        )
 
 
 def test_master_model_firewall_rejects_missing_or_duplicate_product_tools():
@@ -295,6 +331,16 @@ def test_master_model_firewall_rejects_missing_or_duplicate_product_tools():
             },
         },
     )
+    with pytest.raises(MasterModelRequestError, match="omitted"):
+        reconstruct_model_tools({"input": []}, product_tools)
+    reconstructed, names, removed = reconstruct_model_tools(
+        {"input": []},
+        product_tools,
+        allow_attested_omission=True,
+    )
+    assert names == {"list_tasks", "delegate_tasks"}
+    assert removed == set()
+    assert reconstructed["input"][0]["type"] == "additional_tools"
     with pytest.raises(MasterModelRequestError, match="incomplete"):
         reconstruct_model_tools(
             {
@@ -378,11 +424,20 @@ def test_master_model_firewall_reconstructs_path_free_developer_context():
                     "role": "developer",
                     "content": [{"type": "input_text", "text": leaked}],
                 },
-                {
-                    "type": "additional_tools",
-                    "role": "developer",
-                    "tools": [{"type": "function", "name": "update_plan"}],
-                },
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "list_tasks",
+                                "description": "List tasks",
+                                "strict": False,
+                                "parameters": product_tools[0]["inputSchema"],
+                            },
+                            {"type": "function", "name": "update_plan"},
+                        ],
+                    },
             ]
         }
         encoded, _headers = proxy._restrict_request(
@@ -402,7 +457,16 @@ def test_master_model_firewall_reconstructs_path_free_developer_context():
             {
                 "type": "additional_tools",
                 "role": "developer",
-                "tools": [{"type": "function", "name": "update_plan"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "list_tasks",
+                        "description": "List tasks",
+                        "strict": False,
+                        "parameters": product_tools[0]["inputSchema"],
+                    },
+                    {"type": "function", "name": "update_plan"},
+                ],
             },
         ]
     }
@@ -438,6 +502,360 @@ def test_master_model_firewall_binds_loopback_only():
     url, hosts = asyncio.run(go())
     assert url.startswith("http://127.0.0.1:")
     assert hosts == {"127.0.0.1"}
+
+
+def test_master_proxy_rejects_compression_before_decompression():
+    import gzip
+    import json
+
+    tools = master_dynamic_tools()
+    provider_tools = [
+        {
+            "type": "function",
+            "name": tool["name"],
+            "description": tool["description"],
+            "strict": False,
+            "parameters": tool["inputSchema"],
+        }
+        for tool in tools
+    ]
+    payload = {
+        "input": [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    *provider_tools,
+                    {"type": "function", "name": "update_plan"},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "x" * (12 * 1024 * 1024)}
+                ],
+            },
+        ]
+    }
+    proxy = CodexMasterModelProxy()
+    proxy.set_product_tools(
+        tools,
+        required_names={tool["name"] for tool in tools},
+    )
+
+    with pytest.raises(MasterModelRequestError, match="encoding"):
+        proxy._restrict_request(
+            gzip.compress(json.dumps(payload).encode()),
+            {"content-encoding": "gzip"},
+        )
+
+
+@pytest.mark.parametrize(
+    "headers,error",
+    [
+        (
+            b"Host: local\r\nContent-Length: 0\r\nContent-Length: 1\r\n",
+            "duplicate headers",
+        ),
+        (
+            b"Host: local\r\nTransfer-Encoding: chunked\r\n",
+            "transfer encoding",
+        ),
+        (
+            b"Host: local\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n",
+            "transfer encoding",
+        ),
+    ],
+)
+def test_master_proxy_rejects_ambiguous_http_framing(headers, error):
+    async def go():
+        proxy = CodexMasterModelProxy()
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"POST /private/v1/responses HTTP/1.1\r\n")
+        reader.feed_data(headers)
+        reader.feed_data(b"\r\nX")
+        reader.feed_eof()
+        with pytest.raises(MasterModelRequestError, match=error):
+            await proxy._read_request(reader)
+
+    asyncio.run(go())
+
+
+def test_master_proxy_rejects_non_responses_routes_without_forwarding():
+    async def request(path: str) -> bytes:
+        proxy = CodexMasterModelProxy()
+        base_url = await proxy.start()
+        try:
+            from urllib.parse import urlsplit
+
+            split = urlsplit(base_url)
+            reader, writer = await asyncio.open_connection(
+                split.hostname,
+                split.port,
+            )
+            writer.write(
+                (
+                    f"POST {path} HTTP/1.1\r\n"
+                    "Host: localhost\r\n"
+                    "Content-Length: 0\r\n\r\n"
+                ).encode()
+            )
+            await writer.drain()
+            response = await reader.read()
+            writer.close()
+            await writer.wait_closed()
+            return response
+        finally:
+            await proxy.stop()
+
+    response = asyncio.run(request("/not-the-private-responses-route"))
+
+    assert response.startswith(b"HTTP/1.1 400")
+
+
+def test_master_proxy_rejects_websocket_probe_with_http_fallback_signal():
+    async def go():
+        from urllib.parse import urlsplit
+
+        proxy = CodexMasterModelProxy()
+        base_url = await proxy.start()
+        split = urlsplit(base_url)
+        try:
+            reader, writer = await asyncio.open_connection(
+                split.hostname,
+                split.port,
+            )
+            writer.write(
+                (
+                    f"GET {split.path}/responses HTTP/1.1\r\n"
+                    "Host: localhost\r\n\r\n"
+                ).encode()
+            )
+            await writer.drain()
+            response = await reader.read()
+            writer.close()
+            await writer.wait_closed()
+            return response
+        finally:
+            await proxy.stop()
+
+    response = asyncio.run(go())
+
+    assert response.startswith(b"HTTP/1.1 426")
+
+
+def test_master_proxy_keeps_concurrent_connections_session_independent():
+    async def go():
+        from urllib.parse import urlsplit
+
+        proxy = CodexMasterModelProxy()
+        base_url = await proxy.start()
+        split = urlsplit(base_url)
+
+        async def probe():
+            reader, writer = await asyncio.open_connection(
+                split.hostname,
+                split.port,
+            )
+            writer.write(
+                (
+                    f"GET {split.path}/responses HTTP/1.1\r\n"
+                    "Host: localhost\r\n\r\n"
+                ).encode()
+            )
+            await writer.drain()
+            response = await reader.read()
+            writer.close()
+            await writer.wait_closed()
+            return response
+
+        try:
+            return await asyncio.gather(*(probe() for _ in range(12)))
+        finally:
+            await proxy.stop()
+
+    responses = asyncio.run(go())
+
+    assert len(responses) == 12
+    assert all(response.startswith(b"HTTP/1.1 426") for response in responses)
+
+
+def test_master_proxy_rejects_provider_redirects():
+    import httpx
+
+    class Writer:
+        def __init__(self):
+            self.data = bytearray()
+
+        def write(self, data):
+            self.data.extend(data)
+
+        async def drain(self):
+            return None
+
+    async def go():
+        proxy = CodexMasterModelProxy()
+        proxy._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    307,
+                    headers={"location": "https://example.invalid/relay"},
+                )
+            )
+        )
+        writer = Writer()
+        try:
+            await proxy._forward(
+                "POST",
+                f"/{proxy._secret}/v1/responses",
+                {"authorization": "Bearer protected"},
+                b"{}",
+                writer,
+            )
+            return bytes(writer.data)
+        finally:
+            await proxy._client.aclose()
+            proxy._client = None
+
+    response = asyncio.run(go())
+
+    assert response.startswith(b"HTTP/1.1 502")
+    assert b"location:" not in response.lower()
+    assert b"example.invalid" not in response
+
+
+@pytest.mark.parametrize(
+    ("headers", "body"),
+    [
+        ({"content-encoding": "gzip"}, b"compressed"),
+        (
+            {"content-length": str(16 * 1024 * 1024 + 1)},
+            b"not-forwarded",
+        ),
+        (
+            [
+                ("content-length", "4"),
+                ("content-length", "5"),
+            ],
+            b"not-forwarded",
+        ),
+    ],
+)
+def test_master_proxy_buffers_and_rejects_unsafe_provider_responses(
+    headers, body
+):
+    import gzip
+    import httpx
+
+    class Writer:
+        def __init__(self):
+            self.data = bytearray()
+
+        def write(self, data):
+            self.data.extend(data)
+
+        async def drain(self):
+            return None
+
+    async def go():
+        proxy = CodexMasterModelProxy()
+        header_map = dict(headers)
+        proxy._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(
+                        200,
+                        headers=headers,
+                        content=(
+                            gzip.compress(body)
+                            if header_map.get("content-encoding") == "gzip"
+                            else body
+                        ),
+                    )
+            )
+        )
+        writer = Writer()
+        try:
+            await proxy._forward(
+                "POST",
+                f"/{proxy._secret}/v1/responses",
+                {"authorization": "Bearer protected"},
+                b"{}",
+                writer,
+            )
+            return bytes(writer.data)
+        finally:
+            await proxy._client.aclose()
+            proxy._client = None
+
+    response = asyncio.run(go())
+
+    assert response.startswith(b"HTTP/1.1 502")
+    assert body not in response
+
+
+def test_master_prompt_requires_pre_turn_runtime_attestation():
+    async def go():
+        proc = _proc(master_chat_only=True)
+        with pytest.raises(
+            Exception, match="contract was not attested before the turn"
+        ):
+            await proc.prompt(
+                "unattested",
+                "hello",
+                lambda _update: None,
+                on_dynamic_tool=lambda _name, _args: {},
+            )
+
+    asyncio.run(go())
+
+
+def test_master_proxy_stop_cancels_partial_connections():
+    async def go():
+        proxy = CodexMasterModelProxy()
+        base_url = await proxy.start()
+        from urllib.parse import urlsplit
+
+        split = urlsplit(base_url)
+        reader, writer = await asyncio.open_connection(
+            split.hostname,
+            split.port,
+        )
+        writer.write(b"POST /partial HTTP/1.1\r\nHost: localhost\r\n")
+        await writer.drain()
+        for _ in range(20):
+            if proxy._connection_tasks:
+                break
+            await asyncio.sleep(0)
+        await proxy.stop()
+        closed = await reader.read()
+        writer.close()
+        await writer.wait_closed()
+        return closed, proxy._connection_tasks, proxy._client
+
+    closed, tasks, client = asyncio.run(go())
+
+    assert closed == b""
+    assert tasks == set()
+    assert client is None
+
+
+def test_master_permission_without_active_handler_is_denied():
+    process = _proc(master_chat_only=True)
+    replies = []
+    process._reply = lambda mid, result, error=None: replies.append(
+        (mid, result, error)
+    )
+
+    process._handle_server_request(
+        {
+            "id": 7,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "not-active"},
+        }
+    )
+
+    assert replies == [(7, {"decision": "decline"}, None)]
 
 
 def test_dynamic_product_tool_call_is_answered_by_registered_broker():

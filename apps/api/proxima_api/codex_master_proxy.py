@@ -1,10 +1,10 @@
 """Fail-closed model-request firewall for Codex Master.
 
-Codex app-server 0.145 always registers a harmless but runner-native
-``update_plan`` tool. Master is stricter: the model may receive only Proxima's
-dynamic product tools. This loopback proxy removes every non-broker tool from
-the final Responses request, verifies the exact resulting allowlist, and only
-then forwards the request to the provider.
+Codex app-server 0.145 registers runner-native utility and execution tools even
+under its empty-environment configuration. Master is stricter: the model may
+receive only Proxima's dynamic product tools. This loopback proxy removes every
+known non-broker tool from the final Responses request, rejects unknown drift,
+verifies the exact resulting allowlist, and only then forwards the request.
 
 The proxy is deliberately private to one Codex process. Its unguessable URL is
 written only to that process's trusted configuration, it accepts bounded
@@ -13,11 +13,11 @@ requests, and it never logs authorization headers or request bodies.
 from __future__ import annotations
 
 import asyncio
-import gzip
 import json
 import re
 import secrets
 from contextlib import suppress
+from http import HTTPStatus
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
@@ -25,6 +25,8 @@ import httpx
 
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_REQUEST_BYTES = 8 * 1024 * 1024
+_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+_READ_TIMEOUT_SECONDS = 15.0
 _HOP_HEADERS = {
     "connection",
     "content-length",
@@ -37,8 +39,15 @@ _HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+_EXPECTED_REMOVED_NATIVE_TOOLS = {
+    "collaboration",
+    "exec",
+    "update_plan",
+    "wait",
+}
 _ABSOLUTE_PATH = re.compile(
-    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+)"""
+    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
+    r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
 )
 _MASTER_DEVELOPER_TEXT = (
     "You are Proxima Master. Chat and call only the supplied Proxima product "
@@ -124,14 +133,15 @@ def reconstruct_developer_context(payload: dict[str, Any]) -> dict[str, Any]:
             },
         )
         payload["input"] = retained
-    if "instructions" in payload:
-        payload["instructions"] = _MASTER_DEVELOPER_TEXT
+    payload["instructions"] = _MASTER_DEVELOPER_TEXT
     return payload
 
 
 def reconstruct_model_tools(
     payload: dict[str, Any],
     product_specs: tuple[dict[str, Any], ...],
+    *,
+    allow_attested_omission: bool = False,
 ) -> tuple[dict[str, Any], set[str], set[str]]:
     """Replace Codex's tool set with exact server-owned Proxima schemas.
 
@@ -184,15 +194,21 @@ def reconstruct_model_tools(
             retained.append(item)
         payload["input"] = retained
 
-    # If Codex supplied any broker schemas, it must have supplied the complete,
-    # byte-for-byte equivalent set. A partial or rewritten broker contract is
-    # rejected. Supplying none is allowed because this firewall is the trusted
-    # source of the complete model-visible contract.
+    if not supplied_product and not allow_attested_omission:
+        raise MasterModelRequestError(
+            "Codex omitted the Master product tool set"
+        )
+    if supplied_product and set(supplied_product) != allowed_names:
+        raise MasterModelRequestError(
+            "Codex supplied an incomplete Master product tool set"
+        )
+    unexpected_native = removed - _EXPECTED_REMOVED_NATIVE_TOOLS
+    if unexpected_native:
+        raise MasterModelRequestError(
+            "Codex supplied unrecognized runner-native tools: "
+            + ", ".join(sorted(unexpected_native))
+        )
     if supplied_product:
-        if set(supplied_product) != allowed_names:
-            raise MasterModelRequestError(
-                "Codex supplied an incomplete Master product tool set"
-            )
         expected = {spec["name"]: spec for spec in canonical}
         for name, supplied in supplied_product.items():
             if supplied != expected[name]:
@@ -238,9 +254,11 @@ class CodexMasterModelProxy:
     def __init__(self, *, protected_values: tuple[str, ...] = ()):
         self._protected_values = tuple(v for v in protected_values if v)
         self._product_specs: tuple[dict[str, Any], ...] = ()
+        self._product_specs_attested = False
         self._secret = secrets.token_urlsafe(32)
         self._server: asyncio.AbstractServer | None = None
         self._client: httpx.AsyncClient | None = None
+        self._connection_tasks: set[asyncio.Task[Any]] = set()
         self.last_forwarded_tool_names: tuple[str, ...] = ()
         self.last_removed_tool_names: tuple[str, ...] = ()
 
@@ -256,7 +274,10 @@ class CodexMasterModelProxy:
             follow_redirects=False,
         )
         self._server = await asyncio.start_server(
-            self._handle_connection, "127.0.0.1", 0
+            self._track_connection,
+            "127.0.0.1",
+            0,
+            limit=_MAX_HEADER_BYTES + 1,
         )
         port = (self._server.sockets or ())[0].getsockname()[1]
         return f"http://127.0.0.1:{port}/{self._secret}/v1"
@@ -283,15 +304,39 @@ class CodexMasterModelProxy:
         for spec in copied:
             _provider_tool(spec)
         self._product_specs = copied
+        self._product_specs_attested = True
 
     async def stop(self) -> None:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        tasks = [
+            task
+            for task in self._connection_tasks
+            if task is not asyncio.current_task()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    async def _track_connection(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._connection_tasks.add(task)
+        try:
+            await self._handle_connection(reader, writer)
+        finally:
+            if task is not None:
+                self._connection_tasks.discard(task)
 
     async def _handle_connection(
         self,
@@ -299,23 +344,39 @@ class CodexMasterModelProxy:
         writer: asyncio.StreamWriter,
     ) -> None:
         try:
-            method, target, headers, body = await self._read_request(reader)
+            method, target, headers, body = await asyncio.wait_for(
+                self._read_request(reader),
+                timeout=_READ_TIMEOUT_SECONDS,
+            )
             path = urlsplit(target).path
-            prefix = f"/{self._secret}/v1/"
-            if not path.startswith(prefix):
-                raise MasterModelRequestError("Invalid Master proxy route")
-            if method == "GET" and path.endswith("/responses"):
+            expected_path = f"/{self._secret}/v1/responses"
+            if method == "GET" and path == expected_path:
                 await self._write_error(
-                    writer, 426, "Master requires filtered HTTP transport"
+                    writer,
+                    426,
+                    "Master requires filtered HTTP transport",
                 )
                 return
-            if method == "POST" and path.endswith("/responses"):
-                body, headers = self._restrict_request(body, headers)
+            if (
+                method != "POST"
+                or path != expected_path
+            ):
+                raise MasterModelRequestError(
+                    "Invalid Master proxy route "
+                    f"(method={method}, expected_path={path == expected_path})"
+                )
+            body, headers = self._restrict_request(body, headers)
             await self._forward(method, target, headers, body, writer)
         except MasterModelRequestError as exc:
             await self._write_error(writer, 400, str(exc))
+        except asyncio.TimeoutError:
+            await self._write_error(
+                writer, 408, "Master proxy request timed out"
+            )
         except (httpx.HTTPError, asyncio.IncompleteReadError):
             await self._write_error(writer, 502, "Master model provider failed")
+        except asyncio.CancelledError:
+            raise
         except Exception:
             await self._write_error(writer, 500, "Master request firewall failed")
         finally:
@@ -326,21 +387,31 @@ class CodexMasterModelProxy:
     async def _read_request(
         self, reader: asyncio.StreamReader
     ) -> tuple[str, str, dict[str, str], bytes]:
-        line = await reader.readline()
+        try:
+            line = await reader.readline()
+        except (asyncio.LimitOverrunError, ValueError) as exc:
+            raise MasterModelRequestError(
+                "Invalid Master proxy request"
+            ) from exc
         if not line or len(line) > _MAX_HEADER_BYTES:
             raise MasterModelRequestError("Invalid Master proxy request")
         try:
-            method, target, _version = line.decode("ascii").strip().split(" ", 2)
+            method, target, version = line.decode("ascii").strip().split(" ", 2)
         except (UnicodeDecodeError, ValueError) as exc:
             raise MasterModelRequestError(
                 "Invalid Master proxy request line"
             ) from exc
-        if method not in {"GET", "POST"}:
+        if method not in {"GET", "POST"} or version != "HTTP/1.1":
             raise MasterModelRequestError("Master proxy method is not allowed")
         headers: dict[str, str] = {}
         header_bytes = len(line)
         while True:
-            raw = await reader.readline()
+            try:
+                raw = await reader.readline()
+            except (asyncio.LimitOverrunError, ValueError) as exc:
+                raise MasterModelRequestError(
+                    "Master proxy headers are too large"
+                ) from exc
             header_bytes += len(raw)
             if header_bytes > _MAX_HEADER_BYTES:
                 raise MasterModelRequestError(
@@ -354,7 +425,16 @@ class CodexMasterModelProxy:
                 raise MasterModelRequestError(
                     "Invalid Master proxy header"
                 ) from exc
-            headers[key.strip().lower()] = value.strip()
+            normalized = key.strip().lower()
+            if not normalized or normalized in headers:
+                raise MasterModelRequestError(
+                    "Master proxy request has duplicate headers"
+                )
+            headers[normalized] = value.strip()
+        if "transfer-encoding" in headers:
+            raise MasterModelRequestError(
+                "Master proxy transfer encoding is not allowed"
+            )
         try:
             content_length = int(headers.get("content-length", "0"))
         except ValueError as exc:
@@ -374,10 +454,13 @@ class CodexMasterModelProxy:
         headers: dict[str, str],
     ) -> tuple[bytes, dict[str, str]]:
         encoding = headers.get("content-encoding", "").lower()
+        if encoding not in {"", "identity"}:
+            raise MasterModelRequestError(
+                "Master model request encoding is unsupported"
+            )
         try:
-            decoded = gzip.decompress(body) if encoding == "gzip" else body
-            payload = json.loads(decoded)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise MasterModelRequestError(
                 "Master model request is not valid JSON "
                 f"(encoding={encoding or 'identity'}, bytes={len(body)})"
@@ -387,19 +470,20 @@ class CodexMasterModelProxy:
                 "Master model request must be an object"
             )
         payload, seen, removed = reconstruct_model_tools(
-            payload, self._product_specs
+            payload,
+            self._product_specs,
+            allow_attested_omission=self._product_specs_attested,
         )
         payload = reconstruct_developer_context(payload)
         self._reject_protected_developer_context(payload, headers)
         encoded = json.dumps(
             payload, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
-        if encoding == "gzip":
-            encoded = gzip.compress(encoded)
-        elif encoding:
+        if len(encoded) > _MAX_REQUEST_BYTES:
             raise MasterModelRequestError(
-                "Master model request encoding is unsupported"
+                "Master model request exceeds the byte limit"
             )
+        headers.pop("content-encoding", None)
         self.last_forwarded_tool_names = tuple(sorted(seen))
         self.last_removed_tool_names = tuple(sorted(removed))
         return encoded, headers
@@ -413,18 +497,19 @@ class CodexMasterModelProxy:
         authorization = headers.get("authorization", "")
         if authorization:
             protected.append(authorization.removeprefix("Bearer ").strip())
+        all_strings = tuple(_string_values(payload))
+        if any(
+            secret and secret in text
+            for secret in protected
+            for text in all_strings
+        ):
+            raise MasterModelRequestError(
+                "Master model input contains protected host data"
+            )
         for item in payload.get("input") or []:
             if not isinstance(item, dict) or item.get("role") != "developer":
                 continue
             strings = tuple(_string_values(item))
-            if any(
-                secret and secret in text
-                for secret in protected
-                for text in strings
-            ):
-                raise MasterModelRequestError(
-                    "Master developer context contains protected host data"
-                )
             if item.get("type") != "additional_tools" and any(
                 _ABSOLUTE_PATH.search(text) for text in strings
             ):
@@ -455,31 +540,103 @@ class CodexMasterModelProxy:
             for key, value in headers.items()
             if key not in _HOP_HEADERS
         }
+        forwarded_headers["accept-encoding"] = "identity"
         async with self._client.stream(
             method,
             upstream,
             headers=forwarded_headers,
             content=body or None,
         ) as response:
-            reason = response.reason_phrase or "Response"
+            if 300 <= response.status_code < 400:
+                await self._write_error(
+                    writer,
+                    502,
+                    "Master model provider redirect was rejected",
+                )
+                return
+            for singleton in ("content-encoding", "content-length"):
+                if len(response.headers.get_list(singleton)) > 1:
+                    await self._write_error(
+                        writer,
+                        502,
+                        "Master model provider response was malformed",
+                    )
+                    return
+            encoding = response.headers.get("content-encoding", "").lower()
+            if encoding not in {"", "identity"}:
+                await self._write_error(
+                    writer,
+                    502,
+                    "Master model provider encoding was rejected",
+                )
+                return
+            try:
+                declared_length = int(
+                    response.headers.get("content-length", "0")
+                )
+            except ValueError:
+                await self._write_error(
+                    writer,
+                    502,
+                    "Master model provider response was malformed",
+                )
+                return
+            if declared_length < 0 or declared_length > _MAX_RESPONSE_BYTES:
+                await self._write_error(
+                    writer,
+                    502,
+                    "Master model provider response was too large",
+                )
+                return
+            chunks: list[bytes] = []
+            response_bytes = 0
+            async for chunk in response.aiter_raw():
+                if not chunk:
+                    continue
+                response_bytes += len(chunk)
+                if response_bytes > _MAX_RESPONSE_BYTES:
+                    await self._write_error(
+                        writer,
+                        502,
+                        "Master model provider response was too large",
+                    )
+                    return
+                chunks.append(chunk)
+            body = b"".join(chunks)
+            response_protected = (
+                *self._protected_values,
+                headers.get("authorization", ""),
+                headers.get("authorization", "").removeprefix("Bearer ").strip(),
+            )
+            for value in response_protected:
+                if value and value.encode("utf-8", errors="ignore") in body:
+                    await self._write_error(
+                        writer,
+                        502,
+                        "Master model provider response contained protected data",
+                    )
+                    return
+            try:
+                reason = HTTPStatus(response.status_code).phrase
+            except ValueError:
+                reason = "Response"
             writer.write(
                 f"HTTP/1.1 {response.status_code} {reason}\r\n".encode("ascii")
             )
             for key, value in response.headers.multi_items():
-                if key.lower() not in _HOP_HEADERS:
+                if (
+                    key.lower() not in _HOP_HEADERS
+                    and key.lower() != "content-encoding"
+                ):
                     writer.write(
                         f"{key}: {value}\r\n".encode("latin-1")
                     )
-            writer.write(b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
-            await writer.drain()
-            async for chunk in response.aiter_raw():
-                if not chunk:
-                    continue
-                writer.write(f"{len(chunk):x}\r\n".encode("ascii"))
-                writer.write(chunk)
-                writer.write(b"\r\n")
-                await writer.drain()
-            writer.write(b"0\r\n\r\n")
+            writer.write(
+                f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode(
+                    "ascii"
+                )
+            )
+            writer.write(body)
             await writer.drain()
 
     @staticmethod

@@ -16,7 +16,7 @@ from . import app_settings
 from .auth import iso_now
 from .job_checkpoints import create_checkpoint
 from .master_persistence import master_identity_rows
-from .master_tool_broker import MasterToolBroker
+from .master_tool_broker import MasterToolBroker, validate_master_tool_call
 from .runner_specs import master_runner_conformance, runner_spec
 from .task_delegation import (
     DependencyRequest,
@@ -852,6 +852,18 @@ class MasterToolEnvelopeParser:
             )
             self._inside = False
             self._buffer = ""
+        elif any(
+            token.startswith(self._buffer[-length:])
+            for token in (self.OPEN, self.CLOSE)
+            for length in range(1, min(len(token), len(self._buffer)) + 1)
+            if self._buffer[-length:].startswith("<")
+        ):
+            self.errors.append(
+                self._error(
+                    "malformed_tool_call",
+                    "partial Master tool envelope marker",
+                )
+            )
         return self.calls, self.errors
 
     def _append_payload(self, text: str) -> None:
@@ -943,6 +955,17 @@ def _turn_root_run_id(conn, run: dict[str, Any]) -> int:
     return current
 
 
+def _master_tool_digest(name: str, arguments: Any) -> tuple[str, int]:
+    canonical = json.dumps(
+        {"name": name, "arguments": arguments},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    encoded = canonical.encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), len(encoded)
+
+
 def execute_master_tool_call(
     app,
     conn,
@@ -964,13 +987,17 @@ def execute_master_tool_call(
                 "message": "Master product tools require a Master session",
             },
         }
-    canonical = json.dumps(
-        {"name": name, "arguments": arguments},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    request_size = len(canonical.encode("utf-8"))
+    try:
+        digest, request_size = _master_tool_digest(name, arguments)
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "tool": name or None,
+            "error": {
+                "code": "invalid_tool_arguments",
+                "message": "Master tool arguments must be JSON-compatible",
+            },
+        }
     if request_size > MASTER_MAX_TOOL_REQUEST_BYTES:
         return {
             "ok": False,
@@ -983,14 +1010,18 @@ def execute_master_tool_call(
                 ),
             },
         }
-    digest = hashlib.sha256(canonical.encode()).hexdigest()
     turn_root_run_id = _turn_root_run_id(conn, run)
+    origin_message = conn.execute(
+        "SELECT id FROM messages WHERE run_id = ? AND role = 'user' "
+        "ORDER BY id DESC LIMIT 1",
+        (turn_root_run_id,),
+    ).fetchone()
     ledger = conn.execute(
         "SELECT status FROM master_tool_calls "
         "WHERE turn_root_run_id = ? AND envelope_hash = ?",
         (turn_root_run_id, digest),
     ).fetchone()
-    if ledger is not None and ledger["status"] == "complete":
+    if ledger is not None:
         return {
             "ok": False,
             "tool": name or None,
@@ -1017,6 +1048,9 @@ def execute_master_tool_call(
         app,
         {"id": session["owner_user_id"]},
         run["session_id"],
+        origin_message_id=(
+            _as_int(origin_message["id"]) if origin_message is not None else None
+        ),
     ).execute(name, args)
     conn.execute(
         "UPDATE master_tool_calls SET status = 'complete', result_json = ?, "
@@ -1039,6 +1073,55 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
         return []
     parsed, calls = parse_master_tool_envelopes([answer])
     round_number = _tool_round(run.get("kind"))
+    if calls:
+        parsed = []
+    elif parsed:
+        validation_errors = [
+            error
+            for call in parsed
+            if (
+                error := validate_master_tool_call(
+                    call.name,
+                    call.arguments,
+                )
+            )
+            is not None
+        ]
+        digests = [
+            _master_tool_digest(call.name, call.arguments)[0]
+            for call in parsed
+        ]
+        duplicates = {
+            digest
+            for digest in digests
+            if digests.count(digest) > 1
+        }
+        turn_root_run_id = _turn_root_run_id(conn, run)
+        replayed = {
+            row["envelope_hash"]
+            for row in conn.execute(
+                "SELECT envelope_hash FROM master_tool_calls "
+                "WHERE turn_root_run_id = ?",
+                (turn_root_run_id,),
+            ).fetchall()
+        }.intersection(digests)
+        if validation_errors:
+            parsed = []
+            calls.extend(validation_errors)
+        elif duplicates or replayed:
+            parsed = []
+            calls.append(
+                {
+                    "ok": False,
+                    "tool": None,
+                    "error": {
+                        "code": "duplicate_tool_call",
+                        "message": (
+                            "Duplicate Master tool call was not executed"
+                        ),
+                    },
+                }
+            )
     if parsed and round_number >= MASTER_MAX_TOOL_ROUNDS:
         parsed = []
         calls.append(

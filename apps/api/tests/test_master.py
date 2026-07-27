@@ -179,7 +179,7 @@ def test_master_batch_dispatch_uses_durable_idempotent_dependency_dag(
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
 
 
-def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Path):
+def test_duplicate_dispatch_envelopes_reject_the_round_before_mutation(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
     project = client.get("/api/projects").json()["projects"][0]
@@ -232,12 +232,11 @@ def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Pat
         f"<proxima-tool>{envelope}</proxima-tool>",
     )
 
-    assert calls[0]["ok"] is True
-    assert calls[1]["error"]["code"] == "duplicate_tool_call"
+    assert calls[0]["error"]["code"] == "duplicate_tool_call"
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM jobs WHERE origin_master_session_id = ?",
         (desk["session"]["id"],),
-    ).fetchone()[0] == 1
+    ).fetchone()[0] == 0
 
 
 def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):

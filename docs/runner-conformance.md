@@ -48,16 +48,37 @@ skills, MCP orchestration, permission requests, and inherited project
 instructions. Each thread also sets `environments=[]`,
 `runtimeWorkspaceRoots=[]`, `selectedCapabilityRoots=[]`, read-only sandboxing,
 and `approvalPolicy=never`.
+The restricted child ignores the ordinary runner environment inheritance and
+allowlist escape hatches. It receives only the process variables needed to launch
+Codex, the applicable OpenAI authentication, and HOME, XDG, TEMP, TMP, and TMPDIR
+roots inside its dedicated managed home.
 
 Codex may still construct runner-native utility schemas internally. A private
 loopback provider firewall therefore discards the complete Codex tool carrier and
 reconstructs it from `MasterToolBroker` definitions. It validates the exact names,
 descriptions, and JSON schemas before forwarding. Missing, extra, duplicate, or
-changed product schemas fail closed. The provider bearer remains an HTTP header
-inside trusted Proxima code and is never logged or inserted into model input.
+changed product schemas fail closed. Codex's HTTP fallback omits the dynamic carrier
+after its WebSocket probe is rejected; that omission is accepted only after the
+same process has registered the exact broker contract on `thread/start`. A missing
+carrier without that pre-turn attestation fails closed. The provider bearer remains
+an HTTP header inside trusted Proxima code and is never logged or inserted into
+model input.
 Runner-generated developer context is discarded and replaced by a fixed server-owned
 path-free policy. The app-server retains its dynamic-tool dispatch registration, so
 returned function calls route to the in-process broker.
+
+The loopback listener binds IPv4 loopback only and exposes one secret Responses
+route. It rejects alternate routes, framing ambiguity, request compression,
+redirects, compressed responses, and non-identity encodings. Provider responses
+are bounded and fully buffered before any bytes are released to Codex, so an
+oversized or malformed response cannot become a trusted partial stream. Connection
+timeouts, cancellation, process exit, and restart close all listener tasks.
+
+Version parsing is necessary but not sufficient. Before `turn/start`, app-server
+must complete its strict initialize handshake, accept the exact dynamic broker
+schemas on an ephemeral thread, return a thread identity, and install those same
+schemas in the private firewall. Any behavioral mismatch fails before model input
+is sent.
 
 ## Adding support
 

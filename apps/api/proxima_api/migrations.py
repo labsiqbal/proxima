@@ -1143,10 +1143,36 @@ def _add_master_tool_call_ledger(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    expected_columns = {
+        "id",
+        "master_session_id",
+        "turn_root_run_id",
+        "envelope_hash",
+        "tool_name",
+        "status",
+        "result_json",
+        "created_at",
+        "completed_at",
+    }
+    actual_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(master_tool_calls)"
+        ).fetchall()
+    }
+    if actual_columns != expected_columns:
+        from .master_persistence import MasterPersistenceError
+
+        raise MasterPersistenceError(
+            "Master tool-call ledger schema is incomplete"
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_master_tool_calls_session "
         "ON master_tool_calls(master_session_id, turn_root_run_id, id)"
     )
+    from .master_persistence import assert_master_tool_ledger
+
+    assert_master_tool_ledger(conn)
 
 
 MIGRATIONS: list[Migration] = [

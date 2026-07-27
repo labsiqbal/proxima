@@ -154,7 +154,7 @@ def register(app, deps):
         ).fetchone()
         if active:
             raise HTTPException(status_code=409, detail="Master is already working on a turn")
-        db().execute(
+        message_cur = db().execute(
             "INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)",
             (session["id"], content, user["username"]),
         )
@@ -167,6 +167,10 @@ def register(app, deps):
             ),
         )
         run_id = _as_int(cur.lastrowid)
+        db().execute(
+            "UPDATE messages SET run_id = ? WHERE id = ?",
+            (run_id, _as_int(message_cur.lastrowid)),
+        )
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         app.state.worker.add_event(run_id, session["id"], None, "run.queued", {"runner": profile["runner_id"], "master": True})
         return {"run_id": run_id, "session_id": session["id"], "status": "queued"}

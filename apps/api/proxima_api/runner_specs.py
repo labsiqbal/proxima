@@ -187,9 +187,19 @@ def master_runner_conformance(runner_id: str | None) -> tuple[bool, str]:
             )
         except (OSError, subprocess.SubprocessError):
             return False, f"{spec.display_name} version could not be verified"
-        match = re.search(
-            r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)",
-            f"{completed.stdout}\n{completed.stderr}",
+        version_output = str(completed.stdout or "").strip()
+        match = (
+            re.fullmatch(
+                r"codex-cli\s+(\d+)\.(\d+)\.(\d+)"
+                r"(?:[-+][0-9A-Za-z.-]+)?",
+                version_output,
+            )
+            if spec.id == "codex"
+            else re.fullmatch(
+                r"(?:\S+\s+)?(\d+)\.(\d+)\.(\d+)"
+                r"(?:[-+][0-9A-Za-z.-]+)?",
+                version_output,
+            )
         )
         if completed.returncode != 0 or match is None:
             return False, f"{spec.display_name} version could not be verified"

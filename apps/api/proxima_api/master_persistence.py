@@ -528,12 +528,109 @@ def assert_master_persistence(conn: sqlite3.Connection) -> None:
         raise MasterPersistenceError("Alpha identity migration is incomplete")
     _migrate_identity_rows(conn)
     _assert_job_origin_integrity(conn)
+    assert_master_tool_ledger(conn)
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
         raise MasterPersistenceError(
             "Master persistence validation found foreign-key violations: "
             f"{[tuple(row) for row in violations]}"
         )
+
+
+def assert_master_tool_ledger(conn: sqlite3.Connection) -> None:
+    """Refuse a partial or drifted durable Master tool ledger."""
+    expected_columns = {
+        "id",
+        "master_session_id",
+        "turn_root_run_id",
+        "envelope_hash",
+        "tool_name",
+        "status",
+        "result_json",
+        "created_at",
+        "completed_at",
+    }
+    columns = _columns(conn, "master_tool_calls")
+    if columns != expected_columns:
+        raise MasterPersistenceError(
+            "Master tool-call ledger schema is incomplete"
+        )
+    foreign_keys = {
+        (str(row[3]), str(row[2]), str(row[6]))
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(master_tool_calls)"
+        ).fetchall()
+    }
+    if {
+        ("master_session_id", "sessions", "CASCADE"),
+        ("turn_root_run_id", "runs", "CASCADE"),
+    } - foreign_keys:
+        raise MasterPersistenceError(
+            "Master tool-call ledger ownership is not enforced"
+        )
+    unique_shapes = set()
+    for row in conn.execute(
+        "PRAGMA index_list(master_tool_calls)"
+    ).fetchall():
+        if not row[2]:
+            continue
+        index_name = str(row[1]).replace('"', '""')
+        unique_shapes.add(
+            tuple(
+                str(column[2])
+                for column in conn.execute(
+                    f'PRAGMA index_info("{index_name}")'
+                ).fetchall()
+            )
+        )
+    if ("turn_root_run_id", "envelope_hash") not in unique_shapes:
+        raise MasterPersistenceError(
+            "Master tool-call replay protection is not unique"
+        )
+    has_rows = conn.execute(
+        "SELECT 1 FROM master_tool_calls LIMIT 1"
+    ).fetchone()
+    inconsistent = None
+    if has_rows is not None:
+        if "mode" not in _columns(conn, "sessions") or (
+            "session_id" not in _columns(conn, "runs")
+        ):
+            raise MasterPersistenceError(
+                "Master tool-call ledger parent schema is incomplete"
+            )
+        inconsistent = conn.execute(
+            "SELECT mtc.id FROM master_tool_calls mtc "
+            "JOIN sessions s ON s.id = mtc.master_session_id "
+            "JOIN runs r ON r.id = mtc.turn_root_run_id "
+            "WHERE s.mode != 'master' "
+            "OR r.session_id != mtc.master_session_id "
+            "OR mtc.envelope_hash GLOB '*[^0-9a-f]*' "
+            "OR length(mtc.envelope_hash) != 64 "
+            "OR trim(mtc.tool_name) = '' "
+            "OR (mtc.status = 'pending' AND "
+            "(mtc.result_json IS NOT NULL OR mtc.completed_at IS NOT NULL)) "
+            "OR (mtc.status = 'complete' AND "
+            "(mtc.result_json IS NULL OR mtc.completed_at IS NULL)) "
+            "LIMIT 1"
+        ).fetchone()
+    if inconsistent is not None:
+        raise MasterPersistenceError(
+            "Master tool-call ledger contains ambiguous durable state"
+        )
+    for row in conn.execute(
+        "SELECT id, result_json FROM master_tool_calls "
+        "WHERE result_json IS NOT NULL"
+    ).fetchall():
+        try:
+            result = json.loads(row["result_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise MasterPersistenceError(
+                "Master tool-call ledger contains invalid result JSON"
+            ) from exc
+        if not isinstance(result, dict):
+            raise MasterPersistenceError(
+                "Master tool-call ledger result must be an object"
+            )
 
 
 def master_identity_rows(

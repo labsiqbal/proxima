@@ -404,6 +404,13 @@ again before process spawn. Codex app-server 0.145.0 or newer is the one conform
 production adapter; all other production adapters fail closed. See
 [runner-conformance.md](../runner-conformance.md).
 
+Codex conformance has two pre-turn gates: strict version parsing and a behavioral
+app-server handshake that registers the exact server-owned dynamic schemas on an
+ephemeral thread. The private loopback firewall then accepts only its secret
+Responses route, reconstructs the attested broker carrier, and fully buffers bounded
+identity-encoded provider responses. It does not release partial oversized or
+redirected responses to the runner.
+
 Interactive Master is quiet until asked. The desk can enable unattended mode; the
 `MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock
 budgets. The optional token value is stored and shown, but current ACP events expose no

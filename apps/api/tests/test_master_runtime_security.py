@@ -5,6 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import app_settings
@@ -228,6 +229,83 @@ def test_malformed_nested_tool_envelope_is_a_visible_stable_error(tmp_path: Path
     assert "malformed_tool_call" in message["content"]
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "<proxima-too",
+        "</proxima-too",
+        "<",
+    ],
+)
+def test_partial_tool_markers_are_visible_errors(tmp_path: Path, answer: str):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    run = dict(
+        app.state.db.execute(
+            "INSERT INTO runs(session_id, user_id, profile_id, runner_id, kind, "
+            "status, prompt) VALUES (?, 1, ?, ?, 'master', 'running', 'partial') "
+            "RETURNING *",
+            (
+                desk["session"]["id"],
+                desk["session"]["profile_id"],
+                desk["session"]["runner_id"],
+            ),
+        ).fetchone()
+    )
+
+    results = handle_master_response(app, app.state.db, run, answer)
+
+    assert results[0]["error"]["code"] == "malformed_tool_call"
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "<proxima-tool>{",
+        (
+            '<proxima-tool>{"name":"not_allowed",'
+            '"arguments":{}}</proxima-tool>'
+        ),
+    ],
+)
+def test_invalid_envelope_rejects_valid_mutation_in_same_round(
+    tmp_path: Path,
+    invalid: str,
+):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    run = dict(
+        app.state.db.execute(
+            "INSERT INTO runs(session_id, user_id, profile_id, runner_id, kind, "
+            "status, prompt) VALUES (?, 1, ?, ?, 'master', 'running', 'mixed') "
+            "RETURNING *",
+            (
+                desk["session"]["id"],
+                desk["session"]["profile_id"],
+                desk["session"]["runner_id"],
+            ),
+        ).fetchone()
+    )
+    valid = (
+        '<proxima-tool>{"name":"create_attention","arguments":'
+        '{"title":"Must not exist","message":"No partial action"}}'
+        "</proxima-tool>"
+    )
+
+    results = handle_master_response(
+        app,
+        app.state.db,
+        run,
+        valid + invalid,
+    )
+
+    assert results[0]["ok"] is False
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM attention_items "
+        "WHERE title = 'Must not exist'"
+    ).fetchone()[0] == 0
+
+
 def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: Path):
     app, client = _client(tmp_path)
     client.post(
@@ -265,8 +343,76 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
     assert rejected["error"]["code"] == "invalid_tool_arguments"
     assert unavailable["result"]["code"] == "feature_unavailable"
 
+    area_id = app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    ).fetchone()["id"]
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
+    unsafe_input = broker.execute(
+        "delegate_tasks",
+        {
+            "idempotency_key": "unsafe-path",
+            "tasks": [
+                {
+                    "title": "Unsafe",
+                    "brief": "Read /etc/passwd",
+                    "container_id": container_id,
+                    "area_id": area_id,
+                    "profile_id": profile_id,
+                }
+            ],
+        },
+    )
+    assert unsafe_input["error"]["code"] == "unsafe_tool_text"
+    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
-def test_duplicate_delegate_envelope_creates_one_atomic_task_dag(tmp_path: Path):
+    app.state.db.execute(
+        "UPDATE projects SET name = '/protected/container/root' WHERE id = ?",
+        (container_id,),
+    )
+    unsafe_output = broker.execute("list_containers", {})
+    assert unsafe_output["error"]["code"] == "unsafe_tool_result"
+    assert "/protected/container/root" not in json.dumps(unsafe_output)
+
+
+def test_broker_does_not_list_recipe_bound_to_another_owner(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    other_user_id = app.state.db.execute(
+        "INSERT INTO users(username, os_user) VALUES ('other', 'other')"
+    ).lastrowid
+    other_container_id = app.state.db.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) "
+        "VALUES ('other-container', 'Other', ?, ?)",
+        (str(tmp_path / "other"), other_user_id),
+    ).lastrowid
+    app.state.db.execute(
+        "INSERT INTO workflows(project_id, name, created_by) "
+        "VALUES (?, 'Cross-owner recipe', 1)",
+        (other_container_id,),
+    )
+    global_recipe_id = app.state.db.execute(
+        "INSERT INTO workflows(project_id, name, created_by) "
+        "VALUES (NULL, 'Owner global recipe', 1)"
+    ).lastrowid
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+    )
+
+    result = broker.execute("list_recipes", {})
+
+    assert result["ok"] is True
+    assert [recipe["id"] for recipe in result["result"]["recipes"]] == [
+        global_recipe_id
+    ]
+
+
+def test_duplicate_delegate_envelope_rejects_before_atomic_task_dag(tmp_path: Path):
     app, client = _client(tmp_path)
     client.post(
         "/api/projects",
@@ -333,11 +479,10 @@ def test_duplicate_delegate_envelope_creates_one_atomic_task_dag(tmp_path: Path)
         ),
     )
 
-    assert results[0]["ok"] is True
-    assert results[1]["error"]["code"] == "duplicate_tool_call"
-    assert app.state.db.execute("SELECT COUNT(*) FROM task_delegations").fetchone()[0] == 2
-    assert app.state.db.execute("SELECT COUNT(*) FROM task_dependencies").fetchone()[0] == 1
-    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
+    assert results[0]["error"]["code"] == "duplicate_tool_call"
+    assert app.state.db.execute("SELECT COUNT(*) FROM task_delegations").fetchone()[0] == 0
+    assert app.state.db.execute("SELECT COUNT(*) FROM task_dependencies").fetchone()[0] == 0
+    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
 
 def test_replayed_delegate_envelope_across_tool_rounds_is_rejected(tmp_path: Path):
@@ -368,6 +513,13 @@ def test_replayed_delegate_envelope_across_tool_rounds_is_rejected(tmp_path: Pat
                 desk["session"]["runner_id"],
             ),
         ).fetchone()
+    )
+    origin_message_id = int(
+        app.state.db.execute(
+            "INSERT INTO messages(session_id, role, content, author, run_id) "
+            "VALUES (?, 'user', 'Delegate once', 'owner', ?)",
+            (desk["session"]["id"], first_run["id"]),
+        ).lastrowid
     )
     envelope = json.dumps(
         {
@@ -409,6 +561,68 @@ def test_replayed_delegate_envelope_across_tool_rounds_is_rejected(tmp_path: Pat
     assert first[0]["ok"] is True
     assert replay[0]["error"]["code"] == "duplicate_tool_call"
     assert app.state.db.execute("SELECT COUNT(*) FROM task_delegations").fetchone()[0] == 1
+    delegation = app.state.db.execute(
+        "SELECT origin_message_id, routing_mode, routing_reason "
+        "FROM task_delegations"
+    ).fetchone()
+    assert delegation["origin_message_id"] == origin_message_id
+    assert delegation["routing_mode"] == "auto"
+    assert delegation["routing_reason"]
+
+
+def test_delegate_start_intent_survives_failure_between_commit_and_start(
+    tmp_path: Path, monkeypatch
+):
+    app, client = _client(tmp_path)
+    client.post(
+        "/api/projects",
+        json={"slug": "restart-container", "name": "Restart container"},
+    )
+    container_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'restart-container'"
+    ).fetchone()["id"]
+    area_id = app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    ).fetchone()["id"]
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
+    desk = client.get("/api/master/desk").json()
+    broker = MasterToolBroker(
+        app.state.db, app, {"id": 1}, desk["session"]["id"]
+    )
+    monkeypatch.setattr(
+        broker,
+        "_start_task_ids",
+        lambda _task_ids: (_ for _ in ()).throw(RuntimeError("exit")),
+    )
+
+    result = broker.execute(
+        "delegate_tasks",
+        {
+            "idempotency_key": "restart-gap",
+            "start": True,
+            "tasks": [
+                {
+                    "title": "Resume me",
+                    "brief": "Start after recovery",
+                    "container_id": container_id,
+                    "area_id": area_id,
+                    "profile_id": profile_id,
+                }
+            ],
+        },
+    )
+
+    assert result["error"]["code"] == "tool_failed"
+    durable = app.state.db.execute(
+        "SELECT start_requested, start_state FROM task_delegations"
+    ).fetchone()
+    assert dict(durable) == {
+        "start_requested": 1,
+        "start_state": "pending",
+    }
 
 
 def test_master_permissions_are_deny_only_but_task_policy_is_preserved(tmp_path: Path):
