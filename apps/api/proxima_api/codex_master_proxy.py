@@ -307,10 +307,12 @@ class CodexMasterModelProxy:
         self._product_specs_attested = True
 
     async def stop(self) -> None:
+        # Cancel in-flight connection handlers before awaiting the server to
+        # close. On Python 3.12 ``Server.wait_closed()`` blocks until active
+        # connections finish, so waiting first would stall on the per-request
+        # read timeout instead of tearing the connections down immediately.
         if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
-            self._server = None
         tasks = [
             task
             for task in self._connection_tasks
@@ -320,6 +322,9 @@ class CodexMasterModelProxy:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._server is not None:
+            await self._server.wait_closed()
+            self._server = None
         if self._client is not None:
             await self._client.aclose()
             self._client = None
