@@ -238,67 +238,6 @@ def _job_payload(conn, job_id: int) -> dict[str, Any]:
     return data
 
 
-def create_alpha_job(conn, app, user: dict[str, Any], alpha_session_id: int, task: dict[str, Any]) -> dict[str, Any]:
-    title = str(task.get("title") or "").strip()
-    brief = str(task.get("brief") or "").strip()
-    if not title or not brief:
-        raise AlphaToolError("invalid_task", "Each task needs a title and brief")
-    if len(title) > 200 or len(brief) > 50_000:
-        raise AlphaToolError("task_too_large", "Task title or brief is too long")
-    project = _project_for_slug(conn, user["id"], task.get("project_slug"))
-    profile = _profile_for_worker(conn, user["id"], task.get("profile_id"))
-    target_area_id = task.get("target_area_id")
-    if target_area_id is None:
-        area = conn.execute(
-            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops' "
-            "AND source != 'excluded'",
-            (project["id"],),
-        ).fetchone()
-    else:
-        area = conn.execute(
-            "SELECT id FROM project_areas WHERE id = ? AND project_id = ? "
-            "AND source != 'excluded'",
-            (_as_int(target_area_id), project["id"]),
-        ).fetchone()
-    if not area:
-        raise AlphaToolError("target_area_not_found", "Target area is not in this project")
-    input_data = {
-        "brief": brief,
-        "task_kind": "agent",
-        "execution_policy": "autonomous",
-        "alpha_dispatched": True,
-    }
-    try:
-        result = app.state.task_delegation.create_and_start(
-            user,
-            TaskDelegationRequest(
-                title=title,
-                brief=brief,
-                container_id=_as_int(project["id"]),
-                area_id=_as_int(area["id"]),
-                profile_id=_as_int(profile["id"]),
-                execution_policy="autonomous",
-                input_data=input_data,
-                origin_session_id=alpha_session_id,
-                routing_mode="explicit",
-                routing_reason=(
-                    "Alpha selected the Task Area"
-                    if target_area_id is not None
-                    else "Alpha defaulted to the Container Ops Area"
-                ),
-                idempotency_key=str(
-                    task.get("idempotency_key")
-                    or new_idempotency_key("alpha")
-                ),
-            ),
-            start=False,
-            connection=conn,
-        )
-    except TaskDelegationError as exc:
-        raise AlphaToolError(exc.code, str(exc)) from exc
-    return _job_payload(conn, _as_int(result.job["id"]))
-
-
 def create_alpha_plan(conn, app, user: dict[str, Any], alpha_session_id: int, args: dict[str, Any]) -> dict[str, Any]:
     workflow_id = _as_int(args.get("workflow_id"))
     workflow = conn.execute(

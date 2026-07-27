@@ -695,11 +695,6 @@ def register(app, deps):
             )
         return graph_job_payload(graph_job_or_404(job_id, user))
 
-    # Alpha invokes these proven route services in-process. They remain private
-    # Python callables, not loopback HTTP endpoints or prompt-granted authority.
-    app.state.alpha_create_graph_job = create_graph_job
-    app.state.alpha_start_graph_job = start_graph_job
-
     @app.patch("/api/graph/jobs/{job_id}/nodes/{node_id}/output")
     def edit_node_output(
         job_id: int,
