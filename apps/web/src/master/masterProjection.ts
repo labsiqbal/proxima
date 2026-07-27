@@ -146,12 +146,45 @@ export function mergeMasterMessageSnapshot(
       message.role === 'user' && message.run_id != null ? [message.run_id] : []
     )),
   )
+  const currentById = new Map<number, MasterViewMessage>()
+  for (const message of current) {
+    if (message.id != null) currentById.set(message.id, message)
+  }
+  const pendingSends = current.filter(message => (
+    message.role === 'user'
+    && message.id == null
+    && message.pending === true
+    && message.clientId != null
+  ))
+  const claimed = new Set<string>()
+  const merged: MasterViewMessage[] = snapshot.map(message => {
+    if (message.id != null && currentById.has(message.id)) {
+      const existing = currentById.get(message.id)
+      if (existing?.clientId != null) {
+        return { ...message, clientId: existing.clientId }
+      }
+      return message
+    }
+    if (message.role === 'user' && message.id != null) {
+      const pending = pendingSends.find(candidate => (
+        candidate.clientId != null
+        && !claimed.has(candidate.clientId)
+        && candidate.content === message.content
+      ))
+      if (pending?.clientId != null) {
+        claimed.add(pending.clientId)
+        return { ...message, clientId: pending.clientId, pending: false }
+      }
+    }
+    return message
+  })
   const extras = current.filter(message => {
     if (message.id != null) return !canonicalIds.has(message.id)
     if (message.run_id != null && canonicalRuns.has(message.run_id)) return false
+    if (message.clientId != null && claimed.has(message.clientId)) return false
     return true
   })
-  return orderMasterMessages([...snapshot, ...extras])
+  return orderMasterMessages([...merged, ...extras])
 }
 
 function updateProjectedJob(

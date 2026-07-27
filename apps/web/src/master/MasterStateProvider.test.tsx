@@ -94,6 +94,7 @@ function Probe() {
       <output data-testid="conn-error">{state.connection.error}</output>
       <output data-testid="cursor">{state.connection.resumeCursor}</output>
       <output data-testid="messages">{state.messages.map(message => message.content).join('|')}</output>
+      <output data-testid="message-ids">{state.messages.map(message => message.id ?? 'pending').join('|')}</output>
       <output data-testid="jobs">{state.desk?.jobs.map(job => `${job.id}:${job.desk_status}`).join('|')}</output>
       <output data-testid="active-run">{state.activeRun?.status || 'idle'}</output>
       <output data-testid="draft">{state.composer.draft}</output>
@@ -650,6 +651,71 @@ describe('MasterStateProvider', () => {
     }))
     expect(screen.getAllByTestId('messages')[0])
       .toHaveTextContent('Keep this draft|Accepted reply')
+  })
+
+  it('collapses the optimistic send into the persisted row when reconciliation lands mid-send', async () => {
+    let resolveSend!: (value: Awaited<ReturnType<typeof sendMasterMessage>>) => void
+    vi.mocked(sendMasterMessage).mockReturnValue(
+      new Promise(resolve => { resolveSend = resolve }),
+    )
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Send' })[0])
+    expect(sendMasterMessage).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Keep this draft')
+    expect(screen.getAllByTestId('message-ids')[0]).toHaveTextContent('pending')
+
+    vi.mocked(listMessages).mockResolvedValueOnce({
+      messages: [{
+        id: 41,
+        role: 'user',
+        content: 'Keep this draft',
+        author: 'owner',
+        run_id: 40,
+        created_at: '2026-07-27T10:02:00Z',
+      }],
+      goal: null,
+    } as never)
+    vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
+    act(() => source.fail())
+    act(() => source.open())
+    await waitFor(() => expect(getMasterDesk).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getAllByTestId('message-ids')[0].textContent).toBe('41'))
+    expect(screen.getAllByTestId('messages')[0].textContent).toBe('Keep this draft')
+
+    act(() => resolveSend({
+      run_id: 40,
+      session_id: 9,
+      status: 'queued',
+      message: {
+        id: 41,
+        role: 'user',
+        content: 'Keep this draft',
+        author: 'owner',
+        run_id: 40,
+        created_at: '2026-07-27T10:02:00Z',
+      },
+    }))
+    await waitFor(() => expect(screen.getAllByTestId('draft')[0]).toHaveTextContent(''))
+    expect(screen.getAllByTestId('message-ids')[0].textContent).toBe('41')
+    expect(screen.getAllByTestId('sending')[0]).toHaveTextContent('false')
+
+    act(() => source.emit('message.complete', {
+      id: 44,
+      seq: 2,
+      type: 'message.complete',
+      run_id: 40,
+      session_id: 9,
+      payload: { message_id: 42, text: 'Accepted reply' },
+      created_at: '2026-07-27T10:02:01Z',
+    }))
+    expect(screen.getAllByTestId('messages')[0].textContent)
+      .toBe('Keep this draft|Accepted reply')
+    expect(screen.getAllByTestId('message-ids')[0].textContent).toBe('41|42')
   })
 
   it('keeps the draft and removes the pending row after a send error', async () => {
