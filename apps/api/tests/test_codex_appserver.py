@@ -6,17 +6,33 @@ end-to-end proof that the driver actually runs `gpt-5.6-sol` against the ChatGPT
 backend is exercised manually against the system Codex CLI (see the PR body):
 that path needs real OAuth + network, so it is not a hermetic unit test.
 """
+import asyncio
+from types import SimpleNamespace
+
 from proxima_api.codex_appserver import (
+    MASTER_APP_SERVER_CONFIG,
+    MASTER_CODEX_BASE_INSTRUCTIONS,
     CodexAppServerProcess,
     _approval_decisions,
     _approval_title,
     _tool_title,
 )
+from proxima_api.codex_master_proxy import (
+    CodexMasterModelProxy,
+    MasterModelRequestError,
+    reconstruct_developer_context,
+    reconstruct_model_tools,
+)
 from proxima_api.runner_specs import RUNNER_SPECS
 
 
-def _proc():
-    p = CodexAppServerProcess(RUNNER_SPECS["codex"], "/tmp/home", "/tmp/cwd")
+def _proc(*, master_chat_only=False):
+    p = CodexAppServerProcess(
+        RUNNER_SPECS["codex"],
+        "/tmp/home",
+        "/tmp/cwd",
+        master_chat_only=master_chat_only,
+    )
     p._codex_path = "/usr/bin/codex"
     return p
 
@@ -69,10 +85,8 @@ def test_non_tool_items_are_ignored():
 
 
 def test_turn_completed_resolves_turn_future():
-    import asyncio
-
     async def go():
-        p = _proc()
+        p = _proc(master_chat_only=True)
         fut = asyncio.get_event_loop().create_future()
         p._turn_done["t1"] = fut
         p._handle_notification("turn/completed", {"threadId": "t1", "turn": {"status": "completed", "error": None}})
@@ -122,8 +136,6 @@ def test_tool_title_renders_command_and_types():
 
 
 def test_resolve_permission_delivers_choice():
-    import asyncio
-
     async def go():
         p = _proc()
         fut = asyncio.get_event_loop().create_future()
@@ -133,3 +145,347 @@ def test_resolve_permission_delivers_choice():
         return await fut
 
     assert asyncio.run(go()) == "accept"
+
+
+def test_master_thread_has_no_execution_environment_or_inherited_capabilities():
+    async def go():
+        p = _proc(master_chat_only=True)
+        p._master_proxy = SimpleNamespace(
+            set_product_tools=lambda tools, required_names: None
+        )
+        requests = []
+
+        async def request(method, params):
+            requests.append((method, params))
+            return {"thread": {"id": "master-thread"}}
+
+        p._request = request
+        tools = [
+            {
+                "type": "function",
+                "name": "list_tasks",
+                "description": "List bounded product records",
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        thread_id = await p.new_master_session("/master", tools)
+        return thread_id, requests
+
+    thread_id, requests = asyncio.run(go())
+    assert thread_id == "master-thread"
+    method, params = requests[0]
+    assert method == "thread/start"
+    assert params["approvalPolicy"] == "never"
+    assert params["sandbox"] == "read-only"
+    assert params["baseInstructions"] == MASTER_CODEX_BASE_INSTRUCTIONS
+    assert "supplied Proxima product functions" in params["developerInstructions"]
+    assert params["environments"] == []
+    assert params["runtimeWorkspaceRoots"] == []
+    assert params["selectedCapabilityRoots"] == []
+    assert params["dynamicTools"][0]["name"] == "list_tasks"
+    assert params["ephemeral"] is True
+
+
+def test_master_strict_config_disables_detected_capability_sources():
+    assert 'approval_policy="never"' in MASTER_APP_SERVER_CONFIG
+    assert 'sandbox_mode="read-only"' in MASTER_APP_SERVER_CONFIG
+    assert 'web_search="disabled"' in MASTER_APP_SERVER_CONFIG
+    assert "features.shell_tool=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.in_app_browser=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.browser_use=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.image_generation=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.enable_request_compression=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.apps=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.plugins=false" in MASTER_APP_SERVER_CONFIG
+    assert "features.hooks=false" in MASTER_APP_SERVER_CONFIG
+    assert "skills.bundled.enabled=false" in MASTER_APP_SERVER_CONFIG
+    assert (
+        "tools.experimental_request_user_input.enabled=false"
+        in MASTER_APP_SERVER_CONFIG
+    )
+    assert "orchestrator.skills.enabled=false" in MASTER_APP_SERVER_CONFIG
+    assert "orchestrator.mcp.enabled=false" in MASTER_APP_SERVER_CONFIG
+    assert "include_environment_context=false" in MASTER_APP_SERVER_CONFIG
+    assert "project_doc_max_bytes=0" in MASTER_APP_SERVER_CONFIG
+
+
+def test_master_model_firewall_keeps_only_exact_dynamic_product_tools():
+    product_tools = (
+        {
+            "type": "function",
+            "name": "list_tasks",
+            "description": "List tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+        {
+            "type": "function",
+            "name": "delegate_tasks",
+            "description": "Delegate tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+    )
+    payload = {
+        "input": [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {"type": "function", "name": "update_plan"},
+                    {
+                        "type": "function",
+                        "name": "list_tasks",
+                        "description": "List tasks",
+                        "strict": False,
+                        "parameters": product_tools[0]["inputSchema"],
+                    },
+                    {
+                        "type": "function",
+                        "name": "delegate_tasks",
+                        "description": "Delegate tasks",
+                        "strict": False,
+                        "parameters": product_tools[1]["inputSchema"],
+                    },
+                    {"type": "function", "name": "exec"},
+                ],
+            }
+        ],
+        "tool_choice": "auto",
+    }
+    restricted, seen, removed = reconstruct_model_tools(payload, product_tools)
+    tools = restricted["input"][0]["tools"]
+    assert [tool["name"] for tool in tools] == [
+        "list_tasks",
+        "delegate_tasks",
+    ]
+    assert tools[0]["parameters"] == product_tools[0]["inputSchema"]
+    assert tools[0]["strict"] is False
+    assert seen == {"list_tasks", "delegate_tasks"}
+    assert removed == {"update_plan", "exec"}
+
+
+def test_master_model_firewall_rejects_missing_or_duplicate_product_tools():
+    import pytest
+
+    product_tools = (
+        {
+            "type": "function",
+            "name": "list_tasks",
+            "description": "List tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+        {
+            "type": "function",
+            "name": "delegate_tasks",
+            "description": "Delegate tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+    )
+    with pytest.raises(MasterModelRequestError, match="incomplete"):
+        reconstruct_model_tools(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "list_tasks",
+                        "description": "List tasks",
+                        "strict": False,
+                        "parameters": product_tools[0]["inputSchema"],
+                    }
+                ]
+            },
+            product_tools,
+        )
+    with pytest.raises(MasterModelRequestError, match="duplicates"):
+        reconstruct_model_tools(
+            {
+                "tools": [
+                    {"type": "function", "name": "list_tasks"},
+                    {"type": "function", "name": "list_tasks"},
+                ]
+            },
+            product_tools,
+        )
+
+
+def test_master_model_firewall_rejects_changed_product_schema():
+    import pytest
+
+    product_tools = (
+        {
+            "type": "function",
+            "name": "list_tasks",
+            "description": "List tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        },
+    )
+    with pytest.raises(MasterModelRequestError, match="changed"):
+        reconstruct_model_tools(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "list_tasks",
+                        "description": "Changed",
+                        "strict": False,
+                        "parameters": product_tools[0]["inputSchema"],
+                    }
+                ]
+            },
+            product_tools,
+        )
+
+
+def test_master_model_firewall_reconstructs_path_free_developer_context():
+    import json
+
+    product_tools = [
+        {
+            "type": "function",
+            "name": "list_tasks",
+            "description": "List tasks",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+            },
+        }
+    ]
+    proxy = CodexMasterModelProxy(protected_values=("/protected/home",))
+    proxy.set_product_tools(product_tools, required_names={"list_tasks"})
+
+    for leaked in ("/protected/home/config.toml", "secret-bearer-value"):
+        payload = {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": leaked}],
+                },
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "update_plan"}],
+                },
+            ]
+        }
+        encoded, _headers = proxy._restrict_request(
+            json.dumps(payload).encode(),
+            {"authorization": "Bearer secret-bearer-value"},
+        )
+        assert leaked.encode() not in encoded
+    payload = {
+        "input": [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "/another/host/root"}
+                ],
+            },
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{"type": "function", "name": "update_plan"}],
+            },
+        ]
+    }
+    encoded, _headers = proxy._restrict_request(
+        json.dumps(payload).encode(),
+        {"authorization": "Bearer unrelated-token"},
+    )
+    assert b"/another/host/root" not in encoded
+    restricted = json.loads(encoded)
+    developer = [
+        item
+        for item in restricted["input"]
+        if item.get("role") == "developer"
+        and item.get("type") != "additional_tools"
+    ]
+    assert len(developer) == 1
+    assert reconstruct_developer_context(restricted) == restricted
+
+
+def test_master_model_firewall_binds_loopback_only():
+    async def go():
+        proxy = CodexMasterModelProxy()
+        url = await proxy.start()
+        try:
+            hosts = {
+                socket.getsockname()[0]
+                for socket in proxy._server.sockets
+            }
+            return url, hosts
+        finally:
+            await proxy.stop()
+
+    url, hosts = asyncio.run(go())
+    assert url.startswith("http://127.0.0.1:")
+    assert hosts == {"127.0.0.1"}
+
+
+def test_dynamic_product_tool_call_is_answered_by_registered_broker():
+    async def go():
+        p = _proc()
+        replies = []
+        p._reply = lambda mid, result, error=None: replies.append(
+            (mid, result, error)
+        )
+        p._dynamic_tool_handlers["t1"] = (
+            lambda name, arguments: {
+                "ok": True,
+                "tool": name,
+                "result": arguments,
+            }
+        )
+        p._handle_server_request(
+            {
+                "id": 9,
+                "method": "item/tool/call",
+                "params": {
+                    "threadId": "t1",
+                    "turnId": "turn-1",
+                    "callId": "call-1",
+                    "tool": "list_tasks",
+                    "arguments": {"limit": 3},
+                },
+            }
+        )
+        await asyncio.sleep(0)
+        return replies
+
+    replies = asyncio.run(go())
+    assert replies == [
+        (
+            9,
+            {
+                "success": True,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": (
+                            '{"ok":true,"tool":"list_tasks",'
+                            '"result":{"limit":3}}'
+                        ),
+                    }
+                ],
+            },
+            None,
+        )
+    ]

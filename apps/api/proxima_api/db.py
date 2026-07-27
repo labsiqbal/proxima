@@ -314,6 +314,23 @@ CREATE INDEX IF NOT EXISTS idx_task_delegations_container
   ON task_delegations(container_id, target_area_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_delegations_start
   ON task_delegations(start_requested, start_state, updated_at);
+-- One durable record per logical Master turn and canonical tool envelope.
+-- Pending rows make crash replay safe; complete rows make duplicates visible.
+CREATE TABLE IF NOT EXISTS master_tool_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  turn_root_run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  envelope_hash TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'complete')),
+  result_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT,
+  UNIQUE(turn_root_run_id, envelope_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_master_tool_calls_session
+  ON master_tool_calls(master_session_id, turn_root_run_id, id);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.

@@ -134,12 +134,33 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
     owner = app.state.worker_db.execute(
         "SELECT id FROM users ORDER BY id LIMIT 1"
     ).fetchone()
-    profile = app.state.worker_db.execute(
-        "SELECT * FROM profiles WHERE system_kind = 'master'"
+    worker_profile = app.state.worker_db.execute(
+        "SELECT * FROM profiles WHERE system_kind IS NULL ORDER BY id LIMIT 1"
     ).fetchone()
-    master_session = app.state.worker_db.execute(
-        "SELECT id FROM sessions WHERE mode = 'master'"
-    ).fetchone()
+    master_profile_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO profiles("
+            "user_id, slug, name, hermes_home, runner_id, system_kind"
+            ") VALUES (?, 'persisted-master', 'Master', ?, ?, 'master')",
+            (
+                owner["id"],
+                str(tmp_path / "unprovisioned-master-home"),
+                worker_profile["runner_id"],
+            ),
+        ).lastrowid
+    )
+    master_session_id = int(
+        app.state.worker_db.execute(
+            "INSERT INTO sessions("
+            "title, owner_user_id, profile_id, runner_id, mode"
+            ") VALUES ('Master', ?, ?, ?, 'master')",
+            (
+                owner["id"],
+                master_profile_id,
+                worker_profile["runner_id"],
+            ),
+        ).lastrowid
+    )
     container_root = tmp_path / "feature-off-container"
     container_root.mkdir()
     container_id = int(
@@ -164,8 +185,8 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
             (
                 container_id,
                 owner["id"],
-                profile["id"],
-                profile["runner_id"],
+                worker_profile["id"],
+                worker_profile["runner_id"],
             ),
         ).lastrowid
     )
@@ -179,7 +200,7 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
                 container_id,
                 worker_session_id,
                 target_area_id,
-                master_session["id"],
+                master_session_id,
                 owner["id"],
             ),
         ).lastrowid
@@ -196,8 +217,8 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
             (
                 worker_session_id,
                 owner["id"],
-                profile["id"],
-                profile["runner_id"],
+                worker_profile["id"],
+                worker_profile["runner_id"],
             ),
         ).lastrowid
     )
@@ -209,7 +230,7 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
         ") VALUES (?, ?, ?, ?, 'explicit', ?, 'feature-off', "
         "'feature-off-identity', 'feature-off-fingerprint', 1, 'pending')",
         (
-            master_session["id"],
+            master_session_id,
             container_id,
             target_area_id,
             job_id,

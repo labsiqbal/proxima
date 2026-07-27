@@ -330,7 +330,15 @@ class AcpProcess:
             logger.exception("acp permission emitter failed")
         try:
             option_id = await asyncio.wait_for(fut, timeout=300)
-            result: dict[str, Any] = {"outcome": {"outcome": "selected", "optionId": option_id}}
+            if option_id is None:
+                result = {"outcome": {"outcome": "cancelled"}}
+            else:
+                result = {
+                    "outcome": {
+                        "outcome": "selected",
+                        "optionId": option_id,
+                    }
+                }
         except Exception:
             # Timeout / no answer: default to CANCEL (safer) — see
             # _permission_timeout_outcome. The agent never hangs, but it also never
@@ -343,12 +351,30 @@ class AcpProcess:
         except Exception:
             logger.exception("acp permission reply failed")
 
-    def resolve_permission(self, request_id: str, option_id: str) -> bool:
+    def resolve_permission(self, request_id: str, option_id: str | None) -> bool:
         fut = self._perm_futures.get(str(request_id))
         if fut and not fut.done():
             fut.set_result(option_id)
             return True
         return False
+
+    def deny_permission(
+        self, request_id: str, options: list[dict[str, Any]]
+    ) -> bool:
+        reject = next(
+            (
+                option
+                for option in options
+                if str(option.get("kind") or "").startswith(
+                    ("reject", "deny", "cancel")
+                )
+            ),
+            None,
+        )
+        return self.resolve_permission(
+            request_id,
+            reject.get("optionId") if reject else None,
+        )
 
     def _respond_to_agent(self, msg: dict[str, Any]) -> None:
         method = msg.get("method", "")
@@ -465,11 +491,18 @@ class AcpManager:
     """
 
     def __init__(self) -> None:
-        self._procs: dict[tuple[str, str, str], Any] = {}
+        self._procs: dict[tuple[str, str, str, bool], Any] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, spec, home: str, cwd: str) -> Any:
-        key = (spec.id, home, cwd)
+    async def get(
+        self,
+        spec,
+        home: str,
+        cwd: str,
+        *,
+        master_chat_only: bool = False,
+    ) -> Any:
+        key = (spec.id, home, cwd, master_chat_only)
         async with self._lock:
             proc = self._procs.get(key)
             if proc and proc._started:
@@ -480,7 +513,20 @@ class AcpManager:
                 logger.info("acp: tool config changed, recycling process for %s", home)
                 await proc.stop()
                 self._procs.pop(key, None)
-            proc = _process_class(spec)(spec, home, cwd)
+            process_class = _process_class(spec)
+            if getattr(spec, "protocol", "acp") == "codex-app-server":
+                proc = process_class(
+                    spec,
+                    home,
+                    cwd,
+                    master_chat_only=master_chat_only,
+                )
+            else:
+                if master_chat_only:
+                    raise AcpError(
+                        "runner does not implement a restricted Master process"
+                    )
+                proc = process_class(spec, home, cwd)
             await proc.start()
             self._procs[key] = proc
             return proc
@@ -493,7 +539,14 @@ class AcpManager:
                 return True
         return False
 
-    async def recycle(self, spec, home: str, cwd: str) -> None:
+    async def recycle(
+        self,
+        spec,
+        home: str,
+        cwd: str,
+        *,
+        master_chat_only: bool = False,
+    ) -> None:
         """Kill and evict the cached process for (spec.id, home, cwd).
 
         Used when a run times out: `session/cancel` is fire-and-forget and a
@@ -502,7 +555,7 @@ class AcpManager:
         later message returns "Queued for the next turn"). Terminating the
         process guarantees the next run spawns a fresh agent.
         """
-        key = (spec.id, home, cwd)
+        key = (spec.id, home, cwd, master_chat_only)
         async with self._lock:
             proc = self._procs.pop(key, None)
         if proc:

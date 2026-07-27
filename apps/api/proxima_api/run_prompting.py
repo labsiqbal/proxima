@@ -15,6 +15,7 @@ from . import recommended_tools
 from . import wiki_memory
 
 logger = logging.getLogger("proxima.run_prompting")
+MASTER_HISTORY_BYTES = 64 * 1024
 
 # A design run appends ⟦VISION:relpath|relpath⟧ to its prompt so the worker can read
 # those project files and send them to the model as image content blocks (vision).
@@ -154,6 +155,7 @@ class RunPrompting:
         hermes_home: str,
         profile_id: Any,
         required_skill_ids: Iterable[str] = (),
+        require_explicit_empty: bool = False,
     ) -> None:
         """Re-activate the run's profile skill/MCP selection into its home before the
         run. Idempotent (symlinks/config write) and self-healing: newly installed host
@@ -163,13 +165,24 @@ class RunPrompting:
         (home already IS the host config)."""
         if not hermes_home or profile_id in (None, 0):
             return
-        if cfg.get("claude_live_home") and getattr(spec, "id", "") == "claude-code":
+        if (
+            not require_explicit_empty
+            and cfg.get("claude_live_home")
+            and getattr(spec, "id", "") == "claude-code"
+        ):
             return
         try:
             row = self.app.state.worker_db.execute(
                 "SELECT capabilities FROM profiles WHERE id = ?", (profile_id,)
             ).fetchone()
             selection = parse_selection(row["capabilities"] if row else None)
+            if require_explicit_empty and selection != {
+                "skills": [],
+                "mcp": [],
+            }:
+                raise RuntimeError(
+                    "Master requires an explicit empty skill and MCP selection"
+                )
             required = [str(skill_id) for skill_id in required_skill_ids if str(skill_id)]
             # None, or a selection without an explicit skills list, already means
             # inherit every detected skill. Only an explicit subset needs a
@@ -187,18 +200,38 @@ class RunPrompting:
                 custom_roots = _app_settings.get_custom_skill_roots(self.app.state.worker_db)
             except Exception:
                 custom_roots = []
-            apply_capabilities(
+            applied = apply_capabilities(
                 spec,
                 Path(hermes_home),
                 selection,
                 override,
                 bundle_dir=cfg.get("bundled_skills_dir"),
                 custom_roots=custom_roots,
+                strict=require_explicit_empty,
             )
+            if require_explicit_empty and applied != {
+                "skills": [],
+                "mcp": [],
+            }:
+                raise RuntimeError(
+                    "Master capability activation was not empty"
+                )
         except Exception:
-            logging.getLogger("proxima.worker").exception("capability re-apply failed (non-fatal)")
+            if require_explicit_empty:
+                raise
+            logging.getLogger("proxima.worker").exception(
+                "capability re-apply failed (non-fatal)"
+            )
 
-    async def refresh_credentials_if_needed(self, cfg: dict[str, Any], spec: Any, hermes_home: str, cwd: str) -> None:
+    async def refresh_credentials_if_needed(
+        self,
+        cfg: dict[str, Any],
+        spec: Any,
+        hermes_home: str,
+        cwd: str,
+        *,
+        master_chat_only: bool = False,
+    ) -> None:
         """Refresh runner auth files before a run and recycle stale cached agents."""
         # Keep this profile's credentials current: a copy made at account
         # creation goes stale when the host rotates its OAuth token, which
@@ -215,7 +248,17 @@ class RunPrompting:
                 if changed:
                     # A cached agent process holds the old auth in memory; drop
                     # it so the next get() spawns one that reads the fresh token.
-                    await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
+                    if master_chat_only:
+                        await self.app.state.acp_manager.recycle(
+                            spec,
+                            hermes_home,
+                            cwd,
+                            master_chat_only=True,
+                        )
+                    else:
+                        await self.app.state.acp_manager.recycle(
+                            spec, hermes_home, cwd
+                        )
             except Exception:
                 logging.getLogger("proxima.worker").exception("agent credential refresh failed")
 
@@ -227,10 +270,44 @@ class RunPrompting:
         hermes_home: str,
         cwd: str,
         active_runs: dict[int, tuple[Any, str]],
+        *,
+        master_dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> tuple[Any, str, bool]:
         """Get an ACP process and a per-home ACP session for this Proxima session."""
         db = self.app.state.worker_db
-        proc = await self.app.state.acp_manager.get(spec, hermes_home, cwd)
+        restricted = master_dynamic_tools is not None
+        proc = (
+            await self.app.state.acp_manager.get(
+                spec,
+                hermes_home,
+                cwd,
+                master_chat_only=True,
+            )
+            if restricted
+            else await self.app.state.acp_manager.get(
+                spec, hermes_home, cwd
+            )
+        )
+        if restricted:
+            with self.app.state.db_lock:
+                db.execute(
+                    "DELETE FROM agent_sessions "
+                    "WHERE session_id = ? AND hermes_home = ?",
+                    (session_id, hermes_home),
+                )
+            acp_sid = await proc.new_master_session(
+                cwd,
+                master_dynamic_tools,
+            )
+            with self.app.state.db_lock:
+                db.execute(
+                    "INSERT OR REPLACE INTO agent_sessions("
+                    "session_id, hermes_home, acp_session_id"
+                    ") VALUES (?, ?, ?)",
+                    (session_id, hermes_home, acp_sid),
+                )
+            active_runs[run_id] = (proc, acp_sid)
+            return proc, acp_sid, True
         # ACP sessions are home-specific: look up THIS home's session for the
         # thread (each collaborator has their own). Loading another home's id
         # silently fails on the agent side -> prompt to a missing session ->
@@ -274,6 +351,19 @@ class RunPrompting:
         cfg = self.app.state.config
         include_design_studio = features.enabled(cfg, features.DESIGN_STUDIO)
         prompt_text = run["prompt"]
+        if session_mode == "master" and is_fresh_session:
+            history = self._master_history(
+                db,
+                session_id,
+                current_prompt=str(run["prompt"]),
+            )
+            if history:
+                prompt_text = (
+                    "# Durable Master history\n\n"
+                    + history
+                    + "\n\n---\n\n"
+                    + prompt_text
+                )
         moodboard_references: list[dict[str, Any]] = []
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
             try:
@@ -375,6 +465,53 @@ class RunPrompting:
             )
         return prompt_text
 
+    @staticmethod
+    def _master_history(
+        db: Any,
+        session_id: int,
+        *,
+        current_prompt: str,
+    ) -> str:
+        """Render a bounded durable transcript for a fresh restricted thread."""
+        rows = [
+            dict(row)
+            for row in db.execute(
+                "SELECT role, content FROM messages "
+                "WHERE session_id = ? "
+                "AND role IN ('user', 'assistant', 'system', 'error') "
+                "ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        ]
+        if (
+            rows
+            and rows[-1]["role"] == "user"
+            and rows[-1]["content"] == current_prompt
+        ):
+            rows.pop()
+        selected: list[dict[str, str]] = []
+        used = 2
+        for row in reversed(rows):
+            item = {
+                "role": str(row["role"]),
+                "content": str(row["content"]),
+            }
+            encoded = json.dumps(
+                item, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+            if len(encoded) + used > MASTER_HISTORY_BYTES:
+                break
+            selected.append(item)
+            used += len(encoded) + 1
+        selected.reverse()
+        if not selected:
+            return ""
+        return json.dumps(
+            selected,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     async def reset_agent_session(
         self,
         run_id: int,
@@ -385,17 +522,44 @@ class RunPrompting:
         acp_sid: str,
         active_runs: dict[int, tuple[Any, str]],
         reason: str,
+        *,
+        master_dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> tuple[Any, str]:
         db = self.app.state.worker_db
         logging.getLogger("proxima.worker").warning("resetting ACP session %s for chat %s: %s", acp_sid, session_id, reason[-240:])
         with self.app.state.db_lock:
             db.execute("DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?", (session_id, hermes_home))
         try:
-            await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
+            if master_dynamic_tools is not None:
+                await self.app.state.acp_manager.recycle(
+                    spec,
+                    hermes_home,
+                    cwd,
+                    master_chat_only=True,
+                )
+            else:
+                await self.app.state.acp_manager.recycle(
+                    spec, hermes_home, cwd
+                )
         except Exception:
             logging.getLogger("proxima.worker").exception("failed to recycle agent process after ACP history error")
-        proc2 = await self.app.state.acp_manager.get(spec, hermes_home, cwd)
-        sid2 = await proc2.new_session(cwd)
+        proc2 = (
+            await self.app.state.acp_manager.get(
+                spec,
+                hermes_home,
+                cwd,
+                master_chat_only=True,
+            )
+            if master_dynamic_tools is not None
+            else await self.app.state.acp_manager.get(
+                spec, hermes_home, cwd
+            )
+        )
+        sid2 = (
+            await proc2.new_master_session(cwd, master_dynamic_tools)
+            if master_dynamic_tools is not None
+            else await proc2.new_session(cwd)
+        )
         with self.app.state.db_lock:
             db.execute(
                 "INSERT OR REPLACE INTO agent_sessions(session_id, hermes_home, acp_session_id) VALUES (?, ?, ?)",

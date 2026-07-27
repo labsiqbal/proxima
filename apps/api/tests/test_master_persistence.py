@@ -15,13 +15,16 @@ from proxima_api.master_persistence import (
 )
 from proxima_api.master_runtime import MasterToolError
 from proxima_api.migrations import current_version, run_migrations
+from proxima_api import runner_specs
+from proxima_api.runner_specs import RunnerSpec
 
 
 def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
     conn = connect(path)
     init_db(conn)
     run_migrations(conn, str(path))
-    conn.execute("DELETE FROM schema_migrations WHERE version = 31")
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 31")
+    conn.execute("DROP TABLE IF EXISTS master_tool_calls")
     conn.execute("DROP INDEX IF EXISTS idx_jobs_origin_master")
     conn.execute("DROP INDEX IF EXISTS idx_profiles_one_master")
     conn.execute("DROP INDEX IF EXISTS idx_sessions_one_master")
@@ -252,7 +255,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 31
+    assert current_version(app.state.db) == 32
     profile = app.state.db.execute(
         "SELECT id, slug, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()
@@ -402,7 +405,21 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     ).fetchone()["origin_master_session_id"] == ids["session_id"]
 
 
-def test_restart_runner_switch_and_feature_off_preserve_one_identity(tmp_path: Path):
+def test_restart_runner_switch_and_feature_off_preserve_one_identity(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setitem(
+        runner_specs.RUNNER_SPECS,
+        "master-fixture",
+        RunnerSpec(
+            id="master-fixture",
+            spawn_argv=["/usr/bin/true"],
+            home_env="MASTER_FIXTURE_HOME",
+            binary="/usr/bin/true",
+            display_name="Master fixture",
+            master_chat_only=True,
+        ),
+    )
     db_path = tmp_path / "proxima.db"
     workspace = tmp_path / "workspace"
     ids = _alpha_v30_database(db_path, workspace)
@@ -411,7 +428,7 @@ def test_restart_runner_switch_and_feature_off_preserve_one_identity(tmp_path: P
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     assert client.put(
-        "/api/settings/master", json={"runner_id": "codex"}
+        "/api/settings/master", json={"runner_id": "master-fixture"}
     ).status_code == 200
 
     restarted = _app(db_path, workspace)
@@ -423,7 +440,7 @@ def test_restart_runner_switch_and_feature_off_preserve_one_identity(tmp_path: P
     ).fetchone()["id"] == ids["session_id"]
     assert restarted.state.db.execute(
         "SELECT runner_id FROM sessions WHERE id = ?", (ids["session_id"],)
-    ).fetchone()["runner_id"] == "codex"
+    ).fetchone()["runner_id"] == "master-fixture"
 
     disabled = _app(db_path, workspace, enabled=False)
     disabled_client = TestClient(disabled)

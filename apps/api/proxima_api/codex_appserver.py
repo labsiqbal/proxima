@@ -31,14 +31,62 @@ import os
 import shutil
 from collections import deque
 from contextlib import suppress
-from typing import Any
+from typing import Any, Callable
 
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
+from .codex_master_proxy import CodexMasterModelProxy
+from .master_tool_broker import TOOL_SCHEMAS
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.codex")
 
 READ_LIMIT = 16 * 1024 * 1024
+
+MASTER_APP_SERVER_CONFIG = (
+    "approval_policy=\"never\"",
+    "sandbox_mode=\"read-only\"",
+    "web_search=\"disabled\"",
+    "features.shell_tool=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.hooks=false",
+    "features.goals=false",
+    "features.browser_use=false",
+    "features.browser_use_external=false",
+    "features.browser_use_full_cdp_access=false",
+    "features.in_app_browser=false",
+    "features.image_generation=false",
+    "features.code_mode=false",
+    "features.code_mode_host=false",
+    "features.enable_mcp_apps=false",
+    "features.request_permissions_tool=false",
+    "features.skill_search=false",
+    "features.skill_mcp_dependency_install=false",
+    "features.enable_request_compression=false",
+    "features.remote_plugin=false",
+    "features.shell_snapshot=false",
+    "features.deferred_executor=false",
+    "features.token_budget=false",
+    "features.current_time_reminder=false",
+    "skills.bundled.enabled=false",
+    "tools.experimental_request_user_input.enabled=false",
+    "orchestrator.skills.enabled=false",
+    "orchestrator.mcp.enabled=false",
+    "apps._default.enabled=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+    "include_environment_context=false",
+    "project_doc_max_bytes=0",
+    "check_for_update_on_startup=false",
+)
+
+MASTER_CODEX_BASE_INSTRUCTIONS = """You are Master, Proxima's chat-only orchestrator.
+You may chat and call only the Proxima product functions provided in this turn.
+You have no shell, filesystem, browser, skill, MCP, plugin, permission, or
+runner-native tool authority. Delegate all work through Proxima product tools.
+"""
 
 # app-server item types that map onto an ACP-style tool call for the activity feed.
 _TOOL_ITEM_TYPES = {"commandExecution", "fileChange", "mcpToolCall", "webSearch"}
@@ -52,16 +100,27 @@ _VERSION_GATE_MARKERS = ("requires a newer version of Codex", "upgrade to the la
 class CodexAppServerProcess:
     """One persistent `codex app-server` per (home, cwd), hosting many threads."""
 
-    def __init__(self, spec, home: str, cwd: str):
+    def __init__(
+        self,
+        spec,
+        home: str,
+        cwd: str,
+        *,
+        master_chat_only: bool = False,
+    ):
         self.spec = spec
         self.home = home
         self.hermes_home = home  # alias kept for parity with AcpProcess
         self.cwd = cwd
+        self.master_chat_only = master_chat_only
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._handlers: dict[str, UpdateHandler] = {}          # threadId -> update handler
         self._permission_handlers: dict[str, Any] = {}         # threadId -> on_permission
+        self._dynamic_tool_handlers: dict[
+            str, Callable[[str, Any], dict[str, Any]]
+        ] = {}
         self._perm_futures: dict[str, asyncio.Future] = {}     # request_id -> user choice
         self._perm_methods: dict[str, str] = {}                # request_id -> server method
         self._turn_done: dict[str, asyncio.Future] = {}        # threadId -> (status, error)
@@ -73,6 +132,7 @@ class CodexAppServerProcess:
         self._image_capable = False  # app-server input is text-only in this driver
         self.config_sig: tuple = ()
         self._codex_path = ""
+        self._master_proxy: CodexMasterModelProxy | None = None
 
     # ---- diagnostics -----------------------------------------------------
     def recent_stderr(self, lines: int = 15, max_chars: int = 1500) -> str:
@@ -93,23 +153,52 @@ class CodexAppServerProcess:
             os.makedirs(self.home, exist_ok=True)
         os.makedirs(self.cwd, exist_ok=True)
         argv = list(self.spec.spawn_argv)
+        if self.master_chat_only:
+            self._master_proxy = CodexMasterModelProxy(
+                protected_values=(self.home, self.cwd)
+            )
+            proxy_url = await self._master_proxy.start()
+            argv.append("--strict-config")
+            for setting in MASTER_APP_SERVER_CONFIG:
+                argv.extend(("-c", setting))
+            # Keep Codex's built-in provider so app-server preserves its
+            # authenticated Responses Lite and dynamic-tool capabilities. The
+            # base URL points only at our private request firewall.
+            argv.extend(
+                ("-c", f"openai_base_url={json.dumps(proxy_url)}")
+            )
         resolved = shutil.which(argv[0], path=env["PATH"])
         if resolved:
             self._codex_path = resolved
             argv[0] = resolved
-        self.proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=env, cwd=self.cwd, limit=READ_LIMIT,
-        )
-        self._reader = asyncio.create_task(self._read_loop())
-        self._stderr_reader = asyncio.create_task(self._read_stderr())
         try:
+            self.proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=self.cwd,
+                limit=READ_LIMIT,
+            )
+            self._reader = asyncio.create_task(self._read_loop())
+            self._stderr_reader = asyncio.create_task(self._read_stderr())
             # app-server handshake: initialize, then the required `initialized`
             # notification, before any thread/turn call.
             await asyncio.wait_for(
-                self._request("initialize", {"clientInfo": {
-                    "name": "proxima", "title": "Proxima", "version": "0.1.0"}}),
+                self._request(
+                    "initialize",
+                    {
+                        "clientInfo": {
+                            "name": "proxima",
+                            "title": "Proxima",
+                            "version": "0.1.0",
+                        },
+                        "capabilities": {
+                            "experimentalApi": self.master_chat_only,
+                        },
+                    },
+                ),
                 timeout=60,
             )
             self._notify("initialized", {})
@@ -239,6 +328,12 @@ class CodexAppServerProcess:
         method = msg.get("method") or ""
         params = msg.get("params") or {}
         tid = params.get("threadId")
+        if method == "item/tool/call":
+            handler = self._dynamic_tool_handlers.get(tid or "")
+            asyncio.create_task(
+                self._handle_dynamic_tool(msg, handler)
+            )
+            return
         handler = self._permission_handlers.get(tid or "")
         decisions = _approval_decisions(method)
         if handler and decisions:
@@ -252,6 +347,62 @@ class CodexAppServerProcess:
         # Anything else (user-input, elicitation, granular permission profiles):
         # decline politely so the turn continues rather than wedging.
         self._reply(msg["id"], None, error={"code": -32601, "message": "unsupported"})
+
+    async def _handle_dynamic_tool(
+        self,
+        msg: dict[str, Any],
+        handler: Callable[[str, Any], dict[str, Any]] | None,
+    ) -> None:
+        params = msg.get("params") or {}
+        if handler is None:
+            self._reply(
+                msg["id"],
+                {
+                    "success": False,
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": (
+                                '{"ok":false,"tool":null,"error":'
+                                '{"code":"tool_not_allowed",'
+                                '"message":"Master tool is not registered"}}'
+                            ),
+                        }
+                    ],
+                },
+            )
+            return
+        try:
+            result = handler(
+                str(params.get("tool") or ""),
+                params.get("arguments"),
+            )
+        except Exception:
+            logger.exception("Codex dynamic Master tool failed")
+            result = {
+                "ok": False,
+                "tool": str(params.get("tool") or "") or None,
+                "error": {
+                    "code": "tool_failed",
+                    "message": "Master tool failed inside Proxima",
+                },
+            }
+        self._reply(
+            msg["id"],
+            {
+                "success": True,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                ],
+            },
+        )
 
     async def _handle_permission(self, msg: dict[str, Any], handler, decisions: dict[str, str]) -> None:
         rid = str(msg.get("id"))
@@ -283,6 +434,26 @@ class CodexAppServerProcess:
             return True
         return False
 
+    def deny_permission(
+        self, request_id: str, options: list[dict[str, Any]]
+    ) -> bool:
+        reject = next(
+            (
+                option
+                for option in options
+                if str(option.get("kind") or "").startswith(
+                    ("reject", "deny", "cancel")
+                )
+            ),
+            None,
+        )
+        return bool(
+            reject
+            and self.resolve_permission(
+                request_id, str(reject["optionId"])
+            )
+        )
+
     def _reply(self, mid: Any, result: dict[str, Any] | None, error: dict[str, Any] | None = None) -> None:
         try:
             payload = {"id": mid}
@@ -299,6 +470,45 @@ class CodexAppServerProcess:
         res = await self._request("thread/start", {"cwd": cwd})
         return (res.get("thread") or {}).get("id") or res.get("threadId")
 
+    async def new_master_session(
+        self,
+        cwd: str,
+        dynamic_tools: list[dict[str, Any]],
+    ) -> str:
+        if not self.master_chat_only:
+            raise AcpError("Codex process is not configured for chat-only Master")
+        if self._master_proxy is None:
+            raise AcpError("Codex Master request firewall is not running")
+        names = {
+            str(tool.get("name") or "")
+            for tool in dynamic_tools
+            if isinstance(tool, dict)
+        }
+        if len(names) != len(dynamic_tools):
+            raise AcpError("Codex Master product tool list is invalid")
+        self._master_proxy.set_product_tools(
+            dynamic_tools,
+            required_names=set(TOOL_SCHEMAS),
+        )
+        res = await self._request(
+            "thread/start",
+            {
+                "cwd": cwd,
+                "baseInstructions": MASTER_CODEX_BASE_INSTRUCTIONS,
+                "developerInstructions": (
+                    "Call only the supplied Proxima product functions."
+                ),
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "environments": [],
+                "runtimeWorkspaceRoots": [],
+                "selectedCapabilityRoots": [],
+                "dynamicTools": dynamic_tools,
+                "ephemeral": True,
+            },
+        )
+        return (res.get("thread") or {}).get("id") or res.get("threadId")
+
     async def load_session(self, session_id: str, cwd: str) -> None:
         # Raise on failure so the caller treats it as stale and starts fresh,
         # exactly like the ACP path's load_session contract.
@@ -306,10 +516,15 @@ class CodexAppServerProcess:
 
     async def prompt(self, session_id: str, text: str, on_update: UpdateHandler,
                      on_permission=None, timeout: float = 600,
-                     images: list[tuple[bytes, str]] | None = None) -> str:
+                     images: list[tuple[bytes, str]] | None = None,
+                     on_dynamic_tool: Callable[
+                         [str, Any], dict[str, Any]
+                     ] | None = None) -> str:
         self._handlers[session_id] = on_update
         if on_permission:
             self._permission_handlers[session_id] = on_permission
+        if on_dynamic_tool:
+            self._dynamic_tool_handlers[session_id] = on_dynamic_tool
         done: asyncio.Future = asyncio.get_event_loop().create_future()
         self._turn_done[session_id] = done
         try:
@@ -332,6 +547,8 @@ class CodexAppServerProcess:
             self._active_turn.pop(session_id, None)
             if self._permission_handlers.get(session_id) is on_permission:
                 self._permission_handlers.pop(session_id, None)
+            if self._dynamic_tool_handlers.get(session_id) is on_dynamic_tool:
+                self._dynamic_tool_handlers.pop(session_id, None)
 
     def _explain_turn_error(self, error: Any) -> str:
         """Turn `turn.error` into a surfaced message. De-mislead the model
@@ -394,6 +611,9 @@ class CodexAppServerProcess:
             if task:
                 with suppress(asyncio.CancelledError):
                     await task
+        if self._master_proxy is not None:
+            await self._master_proxy.stop()
+            self._master_proxy = None
         self._started = False
 
 

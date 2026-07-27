@@ -107,15 +107,40 @@ runner.
 
 The temporary `/api/alpha` and `/api/settings/alpha` aliases are authenticated
 projections over the same records. They grant no extra access and disappear after
-the compatibility release. The current in-process orchestration runtime remains
-disabled by default until the restricted runner and typed tool broker land.
+the compatibility release.
 
-This service is an authority and consistency boundary, not an OS sandbox. Repo Tasks
+Master adds a separate enforceable runner boundary. The centralized runner spec must
+declare `master_chat_only=True`, otherwise both runner selection and message creation
+return `master_runner_not_conforming` before a turn starts. A conforming adapter gets
+one dedicated managed runner home and one empty read-only scratch. It receives no
+Container, Area, repo, Ops, Proxima source, runtime data, configuration, ordinary
+profile home, path, or bearer material. The stored selection is exactly
+`{"skills":[],"mcp":[]}` and strict application on every run prevents null or
+omitted capabilities from inheriting detected skills or MCP. Every native permission
+request is denied and every runner-native tool event fails the turn. Codex
+app-server 0.145.0 or newer proves this contract through empty execution
+environments and a loopback provider firewall. The firewall discards Codex's full
+tool set, injects only exact server-owned broker schemas, discards runner-generated
+developer context, and installs a fixed path-free developer policy. Schema drift
+fails closed, and bearer material remains only in the provider HTTP header. Other
+production adapters remain unsupported for Master. See
+[runner-conformance.md](runner-conformance.md).
+
+Master product actions cross only `MasterToolBroker`. Its closed JSON schemas accept
+bounded product IDs and text, never paths. The broker resolves owner-scoped IDs in
+trusted Proxima code and returns bounded path-free records. Delegation and start call
+`TaskDelegationService`, preserving exact Container/Area binding, dependency
+validation, atomicity, and idempotency. A streaming parser, per-turn durable envelope
+ledger, and request/result/round/output caps turn malformed, replayed, duplicate, or
+oversized calls into visible deterministic errors.
+
+The Master broker is an authority and consistency boundary, while runner conformance
+must separately prove the process boundary. Repo Tasks
 still run in the existing external worktree and require review before local merge.
 Delegated Ops Tasks still receive the physical `ops/` cwd and finish without a landing
 review, independently of Guarded or Autonomous in-run permissions. The runner process
-retains the service user's host permissions as described above; this slice does not
-claim that a cwd alone prevents `..` traversal or arbitrary host reads.
+for a Task retains the service user's host permissions as described above; a cwd alone
+does not prevent `..` traversal or arbitrary host reads.
 
 ## Script steps (hash-bound trust, honest statement)
 

@@ -254,16 +254,21 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
         owner = dict(owner_row)
         _route_deps["ensure_default_profile"](owner)
-        try:
-            ensure_master_identity(
-                app.state.db,
-                owner,
-                create_profile_for=_route_deps["create_profile_for"],
-            )
-        except MasterPersistenceError:
-            raise
-        except Exception:
-            logger.exception("Master identity provisioning failed (non-fatal)")
+        # Persistence migration remains unconditional, but operational Master
+        # provisioning is inert while the feature is off. In particular, a
+        # disabled install must not create a runner home merely by starting.
+        if cfg.get("feature_master_orchestrator", False):
+            try:
+                ensure_master_identity(
+                    app.state.db,
+                    owner,
+                    create_profile_for=_route_deps["create_profile_for"],
+                    managed_profiles_root=cfg["hermes_profiles_root"],
+                )
+            except MasterPersistenceError:
+                raise
+            except Exception:
+                logger.exception("Master identity provisioning failed (non-fatal)")
     current_user = _route_deps["current_user"]
 
     @app.get("/api/health", include_in_schema=False)

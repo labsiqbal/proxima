@@ -433,8 +433,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31]
-    assert current_version(conn) == 31
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32]
+    assert current_version(conn) == 32
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -475,8 +475,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31]
-    assert current_version(conn) == 31
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32]
+    assert current_version(conn) == 32
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }

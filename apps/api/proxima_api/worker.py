@@ -35,6 +35,10 @@ from . import turn_restore
 from .artifacts import scan_project_artifacts
 from .container_registry import container_root, ops_root
 from .message_reviews import parse_review_output, review_payload
+from .master_tool_broker import (
+    MASTER_TOOL_RESULT_BYTES,
+    master_dynamic_tools,
+)
 from .prompt_collaborations import (
     build_brainstorm_synthesis_prompt,
     build_debate_followup_prompt,
@@ -985,7 +989,23 @@ class RunWorker:
                 return
             hermes_home = run["hermes_home"] or ""
             spec = runner_spec(run["runner_id"])
+            codex_master = (
+                session_mode == "master"
+                and getattr(spec, "protocol", "acp")
+                == "codex-app-server"
+            )
+            master_tool_specs = (
+                master_dynamic_tools()
+                if codex_master
+                else None
+            )
             cwd = str(Path(cfg["workspace_root"]) / "scratch")
+            if session_mode == "master":
+                cwd = master_runtime.prepare_master_runtime(
+                    cfg,
+                    runner_id=str(run["runner_id"]),
+                    managed_home=str(hermes_home),
+                )
             project_name: str | None = None
             project_slug: str | None = None
             project_wiki: Path | None = None
@@ -1091,12 +1111,32 @@ class RunWorker:
             self._fail_run_exception(run, format_rpc_error(str(exc)[-2000:]))
             return
 
+        master_output_bytes = 0
+        master_output_limit_exceeded = False
+        master_native_tool_violation = False
+        master_dynamic_call_count = 0
+        master_dynamic_result_bytes = 0
+
         def on_update(u: dict[str, Any]) -> None:
             nonlocal tool_write_event_seen
+            nonlocal master_output_bytes
+            nonlocal master_output_limit_exceeded
+            nonlocal master_native_tool_violation
             kind = u.get("sessionUpdate")
             if kind == "agent_message_chunk":
                 text = (u.get("content") or {}).get("text", "")
                 if text:
+                    if session_mode == "master":
+                        master_output_bytes += len(text.encode("utf-8"))
+                        if (
+                            master_output_bytes
+                            > master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES
+                        ):
+                            master_output_limit_exceeded = True
+                            entry = self.active_runs.get(run_id)
+                            if entry:
+                                entry[0].cancel(entry[1])
+                            return
                     chunks.append(text)
                     with self.app.state.db_lock:
                         self.add_event(run_id, session_id, project_id, "message.delta", {"text": text})
@@ -1109,6 +1149,27 @@ class RunWorker:
                     with self.app.state.db_lock:
                         self.add_event(run_id, session_id, project_id, "reasoning.delta", {"text": text})
             elif kind == "tool_call":
+                if session_mode == "master":
+                    master_native_tool_violation = True
+                    entry = self.active_runs.get(run_id)
+                    if entry:
+                        entry[0].cancel(entry[1])
+                    with self.app.state.db_lock:
+                        self.add_event(
+                            run_id,
+                            session_id,
+                            None,
+                            "approval.denied",
+                            {
+                                "title": (
+                                    u.get("title")
+                                    or u.get("kind")
+                                    or "native tool"
+                                ),
+                                "reason": "Master is chat-only",
+                            },
+                        )
+                    return
                 # The ACP tool event is the write-journal trigger. The bounded
                 # before-snapshot lets us recover exact bytes even when a runner's
                 # event only names the tool rather than every path it will touch.
@@ -1123,6 +1184,26 @@ class RunWorker:
             # Agent asked permission for a tool (run a command, edit files, …).
             tc = params.get("toolCall") or {}
             title = tc.get("title") or params.get("title") or "Permission required"
+            if session_mode == "master":
+                entry = self.active_runs.get(run_id)
+                denied = bool(
+                    entry
+                    and hasattr(entry[0], "deny_permission")
+                    and entry[0].deny_permission(request_id, options)
+                )
+                with self.app.state.db_lock:
+                    self.add_event(
+                        run_id,
+                        session_id,
+                        None,
+                        "approval.denied",
+                        {
+                            "title": title,
+                            "reason": "Master rejects every runner-native permission",
+                            "delivered": denied,
+                        },
+                    )
+                return
             # Auto-approve (explicit opt-in): pick the allow option and resolve immediately,
             # logging an approval.auto event so the activity feed still shows what ran.
             if self._auto_approve_on(run_id):
@@ -1154,15 +1235,123 @@ class RunWorker:
                         ),
                     )
 
+        def on_dynamic_tool(name: str, arguments: Any) -> dict[str, Any]:
+            nonlocal master_dynamic_call_count
+            nonlocal master_dynamic_result_bytes
+            master_dynamic_call_count += 1
+            if master_dynamic_call_count > master_runtime.MASTER_MAX_CALLS_PER_ROUND:
+                result = {
+                    "ok": False,
+                    "tool": name or None,
+                    "error": {
+                        "code": "too_many_tool_calls",
+                        "message": (
+                            "Master emitted more than "
+                            f"{master_runtime.MASTER_MAX_CALLS_PER_ROUND} "
+                            "tool calls in one round"
+                        ),
+                    },
+                }
+            elif (
+                name
+                in {"delegate_tasks", "start_tasks", "create_attention"}
+                and master_dynamic_result_bytes
+                + MASTER_TOOL_RESULT_BYTES
+                > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
+            ):
+                result = {
+                    "ok": False,
+                    "tool": name or None,
+                    "error": {
+                        "code": "round_result_too_large",
+                        "message": (
+                            "Master tool results exceed the "
+                            f"{master_runtime.MASTER_MAX_ROUND_RESULT_BYTES}"
+                            "-byte round limit"
+                        ),
+                    },
+                }
+            else:
+                with self.app.state.db_lock:
+                    result = master_runtime.execute_master_tool_call(
+                        self.app,
+                        db,
+                        run,
+                        name,
+                        arguments,
+                    )
+                encoded = json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                if (
+                    master_dynamic_result_bytes + len(encoded)
+                    > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
+                ):
+                    result = {
+                        "ok": False,
+                        "tool": name or None,
+                        "error": {
+                            "code": "round_result_too_large",
+                            "message": (
+                                "Master tool results exceed the "
+                                f"{master_runtime.MASTER_MAX_ROUND_RESULT_BYTES}"
+                                "-byte round limit"
+                            ),
+                        },
+                    }
+                else:
+                    master_dynamic_result_bytes += len(encoded)
+            result_json = json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=2,
+            )
+            with self.app.state.db_lock:
+                db.execute(
+                    "INSERT INTO messages("
+                    "session_id, role, content, author, run_id"
+                    ") VALUES (?, 'system', ?, 'Proxima', ?)",
+                    (
+                        session_id,
+                        "Master tool result:\n```json\n"
+                        + result_json
+                        + "\n```",
+                        run_id,
+                    ),
+                )
+                db.execute(
+                    "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?",
+                    (session_id,),
+                )
+            return result
+
         try:
-            await self.prompting.refresh_credentials_if_needed(cfg, spec, hermes_home, cwd)
-            required_skills = required_skills_for_run(db, session_id, run if isinstance(run, dict) else None)
+            await self.prompting.refresh_credentials_if_needed(
+                cfg,
+                spec,
+                hermes_home,
+                cwd,
+                master_chat_only=codex_master,
+            )
+            required_skills = (
+                ()
+                if session_mode == "master"
+                else required_skills_for_run(
+                    db,
+                    session_id,
+                    run if isinstance(run, dict) else None,
+                )
+            )
             self.prompting.reapply_capabilities(
                 cfg,
                 spec,
                 hermes_home,
                 run.get("profile_id"),
                 required_skill_ids=required_skills,
+                require_explicit_empty=session_mode == "master",
             )
             proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
                 run_id,
@@ -1171,6 +1360,7 @@ class RunWorker:
                 hermes_home,
                 cwd,
                 self.active_runs,
+                master_dynamic_tools=master_tool_specs,
             )
             hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
             # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
@@ -1207,6 +1397,14 @@ class RunWorker:
                 session_mode,
                 fresh_session,
             )
+            if codex_master:
+                prompt_text += (
+                    "\n\n# Master tool protocol\n\n"
+                    "Use only the native Proxima product tools exposed to this "
+                    "turn. Do not emit XML or proxima-tool tags. You have no "
+                    "shell, files, browser, skills, MCP, plugins, subagents, "
+                    "execution environment, or permission escalation."
+                )
             vision_fallback = project_ops
             if (
                 project_container is not None
@@ -1221,7 +1419,25 @@ class RunWorker:
             )
             run_start_ts = time.time()
             try:
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
+                if codex_master:
+                    stop_reason = await proc.prompt(
+                        acp_sid,
+                        prompt_text,
+                        on_update,
+                        on_permission=on_permission,
+                        timeout=timeout,
+                        images=vision_images,
+                        on_dynamic_tool=on_dynamic_tool,
+                    )
+                else:
+                    stop_reason = await proc.prompt(
+                        acp_sid,
+                        prompt_text,
+                        on_update,
+                        on_permission=on_permission,
+                        timeout=timeout,
+                        images=vision_images,
+                    )
             except Exception as exc:
                 if not self._is_recoverable_agent_history_error(exc):
                     raise
@@ -1234,6 +1450,7 @@ class RunWorker:
                     acp_sid,
                     self.active_runs,
                     str(exc),
+                    master_dynamic_tools=master_tool_specs,
                 )
                 fresh_session = True
                 prompt_text = self.prompting.build_prompt_text(
@@ -1248,13 +1465,47 @@ class RunWorker:
                     session_mode,
                     True,
                 )
+                if codex_master:
+                    prompt_text += (
+                        "\n\n# Master tool protocol\n\n"
+                        "Use only the native Proxima product tools exposed to "
+                        "this turn. Do not emit XML or proxima-tool tags."
+                    )
                 prompt_text, vision_images = extract_vision_images(
                     prompt_text,
                     cwd,
                     vision_fallback,
                 )
                 chunks.clear()
-                stop_reason = await proc.prompt(acp_sid, prompt_text, on_update, on_permission=on_permission, timeout=timeout, images=vision_images)
+                if codex_master:
+                    stop_reason = await proc.prompt(
+                        acp_sid,
+                        prompt_text,
+                        on_update,
+                        on_permission=on_permission,
+                        timeout=timeout,
+                        images=vision_images,
+                        on_dynamic_tool=on_dynamic_tool,
+                    )
+                else:
+                    stop_reason = await proc.prompt(
+                        acp_sid,
+                        prompt_text,
+                        on_update,
+                        on_permission=on_permission,
+                        timeout=timeout,
+                        images=vision_images,
+                    )
+
+            if master_output_limit_exceeded:
+                raise RuntimeError(
+                    "master_output_too_large: Master turn exceeded the "
+                    f"{master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES}-byte output limit"
+                )
+            if master_native_tool_violation:
+                raise RuntimeError(
+                    "master_native_tool_denied: Master runner attempted a native tool"
+                )
 
             status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
             if status_row and status_row["status"] == "cancelled":
@@ -1304,7 +1555,10 @@ class RunWorker:
                 except Exception:
                     logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
             try:
-                master_runtime.handle_master_response(self.app, db, run, answer)
+                if not codex_master:
+                    master_runtime.handle_master_response(
+                        self.app, db, run, answer
+                    )
             except Exception:
                 logging.getLogger("proxima.worker").exception("Master product tool handling failed (non-fatal)")
             # Auto-name the chat from a ≤3-word recap on the first exchange (chats
@@ -1384,7 +1638,17 @@ class RunWorker:
                 try: entry[0].cancel(entry[1])
                 except Exception: pass
             try:
-                await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
+                if codex_master:
+                    await self.app.state.acp_manager.recycle(
+                        spec,
+                        hermes_home,
+                        cwd,
+                        master_chat_only=True,
+                    )
+                else:
+                    await self.app.state.acp_manager.recycle(
+                        spec, hermes_home, cwd
+                    )
             except Exception:
                 logging.getLogger("proxima.worker").exception("failed to recycle agent process after timeout")
             reason = "Hermes runner timed out"
@@ -1465,13 +1729,19 @@ class RunWorker:
         try:
             with self.app.state.db_lock:
                 row = self.app.state.worker_db.execute(
-                    "SELECT s.mode, j.origin_master_session_id FROM runs r "
+                    "SELECT s.mode, j.origin_master_session_id, j.input FROM runs r "
                     "JOIN sessions s ON s.id = r.session_id "
                     "LEFT JOIN jobs j ON j.id = s.job_id WHERE r.id = ?",
                     (run_id,),
                 ).fetchone()
-                if row and (row["mode"] == "master" or row["origin_master_session_id"] is not None):
-                    return True
+                if row and row["mode"] == "master":
+                    return False
+                if row and row["origin_master_session_id"] is not None:
+                    try:
+                        task_input = json.loads(row["input"] or "{}")
+                    except (TypeError, ValueError):
+                        return False
+                    return task_input.get("execution_policy") == "autonomous"
                 return app_settings.get_setting(self.app.state.worker_db, "auto_approve_permissions", "0") == "1"
         except Exception:
             return False

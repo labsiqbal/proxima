@@ -26,6 +26,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
+from . import features
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -79,7 +80,13 @@ def build_route_deps(
         try:
             ensure_default_profile(user)
             provision_user_workspace(db(), cfg, user)
-            ensure_master_identity(db(), user, create_profile_for=create_profile_for)
+            if features.enabled(cfg, features.MASTER_ORCHESTRATOR):
+                ensure_master_identity(
+                    db(),
+                    user,
+                    create_profile_for=create_profile_for,
+                    managed_profiles_root=cfg["hermes_profiles_root"],
+                )
         except Exception:
             logger.exception("single-user owner provisioning failed (non-fatal)")
         return user
@@ -164,6 +171,7 @@ def build_route_deps(
         is_default: bool = False,
         runner_id: str | None = None,
         instructions: str | None = None,
+        force_managed_home: bool = False,
     ) -> dict[str, Any]:
         slug = validate_slug(slug)
         runner_id = runner_id or default_runner()
@@ -171,7 +179,11 @@ def build_route_deps(
         # Live-home: point claude-code at the real ~/.claude so the agent inherits
         # the operator's full setup (skills, plugins, CLAUDE.md rules, memory, MCP).
         # No seeding — it IS the live config. Other runners keep isolated profiles.
-        if cfg.get("claude_live_home") and runner_id == "claude-code":
+        if (
+            cfg.get("claude_live_home")
+            and runner_id == "claude-code"
+            and not force_managed_home
+        ):
             home = Path(os.path.expanduser("~/.claude"))
             home.mkdir(parents=True, exist_ok=True)
         else:

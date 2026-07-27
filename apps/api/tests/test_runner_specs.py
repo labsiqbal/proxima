@@ -1,4 +1,10 @@
-from proxima_api.runner_specs import runner_spec, RUNNER_SPECS
+from types import SimpleNamespace
+
+from proxima_api.runner_specs import (
+    RUNNER_SPECS,
+    master_runner_conformance,
+    runner_spec,
+)
 
 
 def test_hermes_spec():
@@ -47,6 +53,8 @@ def test_codex_spec():
     assert s.protocol == "codex-app-server"
     assert s.home_env == "CODEX_HOME"
     assert s.binary == "codex"
+    assert s.master_chat_only is True
+    assert s.master_min_version == (0, 145, 0)
 
 
 def test_only_codex_uses_app_server_protocol():
@@ -54,6 +62,26 @@ def test_only_codex_uses_app_server_protocol():
     # native-app-server opt-in is a per-spec declaration, not run-layer logic.
     for rid, spec in RUNNER_SPECS.items():
         assert spec.protocol == ("codex-app-server" if rid == "codex" else "acp")
+
+
+def test_old_codex_fails_master_conformance_closed(monkeypatch):
+    monkeypatch.setattr(
+        "proxima_api.runner_specs.shutil.which",
+        lambda _binary: "/usr/bin/codex",
+    )
+    monkeypatch.setattr(
+        "proxima_api.runner_specs.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="codex-cli 0.144.9",
+            stderr="",
+        ),
+    )
+
+    assert master_runner_conformance("codex") == (
+        False,
+        "Codex 0.144.9 is below required 0.145.0",
+    )
 
 
 def test_removed_runner_id_falls_back_and_is_not_selectable():

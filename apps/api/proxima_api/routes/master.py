@@ -26,7 +26,11 @@ from ..master_persistence import (
     canonical_job_payload,
     legacy_alpha_payload,
 )
-from ..runner_specs import runner_is_selectable
+from ..runner_specs import (
+    RUNNER_SPECS,
+    master_runner_conformance,
+    runner_is_selectable,
+)
 from ..schemas import GraphScriptApproveRequest, JobRejectRequest
 
 
@@ -57,13 +61,32 @@ def register(app, deps):
 
     def _identity(user: dict[str, Any]):
         try:
-            return ensure_master_identity(db(), user, create_profile_for=create_profile_for)
+            return ensure_master_identity(
+                db(),
+                user,
+                create_profile_for=create_profile_for,
+                managed_profiles_root=app.state.config["hermes_profiles_root"],
+            )
         except (MasterToolError, MasterPersistenceError) as exc:
             code = exc.code if isinstance(exc, MasterToolError) else "master_identity_inconsistent"
             raise HTTPException(
                 status_code=409,
                 detail={"code": code, "message": str(exc)},
             ) from exc
+
+    def _require_conforming_runner(runner_id: str) -> None:
+        conforming, reason = master_runner_conformance(runner_id)
+        if conforming:
+            return
+        spec = RUNNER_SPECS.get(runner_id)
+        display_name = spec.display_name if spec else runner_id
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "master_runner_not_conforming",
+                "message": f"{display_name} cannot run Master because its {reason}",
+            },
+        )
 
     def _master_job_payload(row) -> dict[str, Any]:
         data = dict(row)
@@ -119,6 +142,7 @@ def register(app, deps):
     def create_master_message(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
         _require_master()
         profile, session = _identity(user)
+        _require_conforming_runner(str(profile["runner_id"]))
         content = str(payload.get("content") or "").strip()
         if not content:
             raise HTTPException(status_code=422, detail="content is required")
@@ -162,6 +186,7 @@ def register(app, deps):
         if runner_id is not None:
             if not isinstance(runner_id, str) or not runner_is_selectable(runner_id):
                 raise HTTPException(status_code=422, detail="unknown Master backing runner")
+            _require_conforming_runner(runner_id)
             app_settings.set_setting(db(), "master.runner_id", runner_id)
         for boolean_key in ("unattended", "tour_core_done"):
             if boolean_key in payload and not isinstance(payload[boolean_key], bool):

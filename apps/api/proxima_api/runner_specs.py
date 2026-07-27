@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 
 
@@ -27,6 +30,16 @@ class RunnerSpec:
     source_dir: str = ""
     seed_files: tuple[str, ...] = ()
     refresh_files: tuple[str, ...] = ()
+    # Master is a stricter surface than ordinary project runs. This flag is an
+    # adapter conformance claim, not a prompt hint: only an adapter whose process
+    # contract removes native shell, file, browser, skill, and MCP authority may
+    # set it.
+    master_chat_only: bool = False
+    master_min_version: tuple[int, int, int] | None = None
+    master_home_templates: tuple[tuple[str, str], ...] = ()
+    master_unavailable_reason: str = (
+        "adapter does not prove the chat-only boundary"
+    )
 
 
 RUNNER_SPECS: dict[str, RunnerSpec] = {
@@ -73,6 +86,13 @@ RUNNER_SPECS: dict[str, RunnerSpec] = {
         source_dir="~/.codex",
         seed_files=("auth.json", "config.toml"),
         refresh_files=("auth.json",),
+        master_chat_only=True,
+        master_min_version=(0, 145, 0),
+        master_home_templates=(("config.toml", "[mcp_servers]\n"),),
+        master_unavailable_reason=(
+            "Codex app-server 0.145.0 or newer is required for empty "
+            "environments, selected capability roots, and dynamic tools"
+        ),
     ),
     "grok": RunnerSpec(
         id="grok",
@@ -145,6 +165,43 @@ def runner_binary_names(spec: RunnerSpec) -> tuple[str, ...]:
 def runner_is_selectable(runner_id: str | None) -> bool:
     spec = RUNNER_SPECS.get(runner_id or "")
     return bool(spec and spec.has_adapter and not spec.detection_only and spec.spawn_argv)
+
+
+def master_runner_conformance(runner_id: str | None) -> tuple[bool, str]:
+    spec = RUNNER_SPECS.get(runner_id or "")
+    if not spec or not runner_is_selectable(runner_id):
+        return False, "runner is not available"
+    if not spec.master_chat_only:
+        return False, spec.master_unavailable_reason
+    if spec.master_min_version is not None:
+        binary = shutil.which(spec.binary)
+        if not binary:
+            return False, f"{spec.display_name} binary is not installed"
+        try:
+            completed = subprocess.run(
+                [binary, "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False, f"{spec.display_name} version could not be verified"
+        match = re.search(
+            r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)",
+            f"{completed.stdout}\n{completed.stderr}",
+        )
+        if completed.returncode != 0 or match is None:
+            return False, f"{spec.display_name} version could not be verified"
+        installed = tuple(int(part) for part in match.groups())
+        if installed < spec.master_min_version:
+            required = ".".join(str(part) for part in spec.master_min_version)
+            found = ".".join(str(part) for part in installed)
+            return (
+                False,
+                f"{spec.display_name} {found} is below required {required}",
+            )
+    return True, ""
 
 
 def selectable_runner_ids() -> tuple[str, ...]:
