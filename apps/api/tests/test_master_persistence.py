@@ -13,6 +13,7 @@ from proxima_api.master_persistence import (
     canonical_job_payload,
     migrate_master_persistence,
 )
+from proxima_api.master_runtime import MasterToolError
 from proxima_api.migrations import current_version, run_migrations
 
 
@@ -812,3 +813,41 @@ def test_current_schema_startup_refuses_non_master_job_origin(tmp_path: Path):
         match="points at a non-Master origin session",
     ):
         _app(db_path, workspace)
+
+
+def test_unrelated_requests_do_not_reconcile_master_identity_per_request(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "reconcile.db"
+    workspace = tmp_path / "workspace"
+
+    app = _app(db_path, workspace)
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+    ).fetchone()[0] == 1
+
+    import proxima_api.route_deps as route_deps_module
+    import proxima_api.routes.master as master_module
+
+    def _boom(*_args, **_kwargs):
+        raise MasterToolError("runner_unavailable", "no runnable agent")
+
+    monkeypatch.setattr(route_deps_module, "ensure_master_identity", _boom)
+    monkeypatch.setattr(master_module, "ensure_master_identity", _boom)
+
+    assert client.get("/api/profiles").status_code == 200
+
+    desk = client.get("/api/master/desk")
+    assert desk.status_code == 409
+    assert desk.json()["detail"]["code"] == "runner_unavailable"
+
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+    ).fetchone()[0] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+    ).fetchone()[0] == 1

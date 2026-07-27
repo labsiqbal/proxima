@@ -70,9 +70,6 @@ def build_route_deps(
             if row:
                 user = dict(row)
                 ensure_default_profile(user)
-                ensure_master_identity(
-                    db(), user, create_profile_for=create_profile_for
-                )
                 return user
             cur = db().execute(
                 "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
@@ -82,9 +79,9 @@ def build_route_deps(
         try:
             ensure_default_profile(user)
             provision_user_workspace(db(), cfg, user)
+            ensure_master_identity(db(), user, create_profile_for=create_profile_for)
         except Exception:
             logger.exception("single-user owner provisioning failed (non-fatal)")
-        ensure_master_identity(db(), user, create_profile_for=create_profile_for)
         return user
 
     def current_user(
