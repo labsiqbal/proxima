@@ -61,9 +61,11 @@ control, the mobile topbar icon, or `/new`.
 
 ![Chat in the shared workspace](screenshots/deck-chat.png)
 
-The first post-setup visit offers a four-step core tour. It explains the two ways
-to work, hands-on Chat, delegated Master work, and the Tasks plus Attention review
-loop. The same tour can be replayed later from Settings → Help & Tours.
+The first post-setup visit offers a keyboard-trapped core tour. By default it is
+four steps - the primary loop, hands-on Chat, Tasks and Workflows, and Archive;
+a fifth **delegated Master work** step appears only when the Master feature is
+enabled (see [CAPABILITIES.md](CAPABILITIES.md)). The same tour can be replayed
+later from Settings → Help & Tours.
 
 ![Core tour: two ways to work](screenshots/core-tour-work-modes.png)
 
