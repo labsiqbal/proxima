@@ -1175,6 +1175,61 @@ def _add_master_tool_call_ledger(conn: sqlite3.Connection) -> None:
     assert_master_tool_ledger(conn)
 
 
+def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
+    """Exactly-once links from authoritative state to Master chat and SSE."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_projections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          projection_key TEXT NOT NULL,
+          projection_type TEXT NOT NULL,
+          source_table TEXT NOT NULL,
+          source_id INTEGER NOT NULL,
+          task_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+          message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+          event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(owner_user_id, projection_key)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_projections_session "
+        "ON master_projections(master_session_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_projections_source "
+        "ON master_projections(source_table, source_id, projection_type)"
+    )
+    expected_columns = {
+        "id",
+        "owner_user_id",
+        "master_session_id",
+        "projection_key",
+        "projection_type",
+        "source_table",
+        "source_id",
+        "task_id",
+        "message_id",
+        "event_id",
+        "payload_json",
+        "created_at",
+        "updated_at",
+    }
+    actual_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(master_projections)"
+        ).fetchall()
+    }
+    if actual_columns != expected_columns:
+        raise RuntimeError("Master projection ledger schema is incomplete")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1220,6 +1275,11 @@ MIGRATIONS: list[Migration] = [
         32,
         "add durable per-turn Master product-tool idempotency ledger",
         _add_master_tool_call_ledger,
+    ),
+    (
+        33,
+        "add durable Master Task and supervision projection ledger",
+        _add_master_projection_ledger,
     ),
 ]
 

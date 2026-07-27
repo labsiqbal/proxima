@@ -39,6 +39,7 @@ from .master_tool_broker import (
     MASTER_TOOL_RESULT_BYTES,
     master_dynamic_tools,
 )
+from .master_runtime import master_parallel_limit
 from .prompt_collaborations import (
     build_brainstorm_synthesis_prompt,
     build_debate_followup_prompt,
@@ -248,7 +249,7 @@ class RunWorker:
                         ON master_run_job.id = master_run_session.job_id
                       WHERE master_run.status = 'running'
                         AND master_run_job.origin_master_session_id IS NOT NULL
-                    ) < 3
+                    ) < ?
                   )
                   AND (
                     ? = 1
@@ -265,6 +266,7 @@ class RunWorker:
                 ORDER BY r.id LIMIT 1
                 """,
                 (
+                    master_parallel_limit(self.app.state.config),
                     int(
                         features.enabled(
                             self.app.state.config,
@@ -368,7 +370,14 @@ class RunWorker:
         except asyncio.CancelledError as _exc:
             raise
 
-    def add_event(self, run_id: int, session_id: int, project_id: int | None, event_type: str, payload: dict[str, Any]) -> None:
+    def add_event(
+        self,
+        run_id: int,
+        session_id: int,
+        project_id: int | None,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> int | None:
         db = self.app.state.worker_db
         # MAX(seq)+1 and the insert are one critical section. Media threads, route
         # handlers, and worker tasks can otherwise allocate the same sequence.
@@ -378,16 +387,27 @@ class RunWorker:
                 (run_id, session_id),
             ).fetchone()
             if not live:
-                return
+                return None
             if event_type in {"message.delta", "reasoning.delta", "tool.start", "tool.complete", "approval.request"} and live["status"] != "running":
-                return
+                return None
             seq_row = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM events WHERE run_id = ?", (run_id,)).fetchone()
             seq = _as_int(seq_row["next_seq"])
-            db.execute(
+            cursor = db.execute(
                 "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) VALUES (?, ?, ?, ?, ?, ?)",
                 (run_id, session_id, project_id, seq, event_type, json.dumps(payload)),
             )
+            event_id = _as_int(cursor.lastrowid)
         self.app.state.hub.notify(session_id)  # wake live streams immediately
+        projection = getattr(self.app.state, "master_projection", None)
+        if projection is not None:
+            projection.observe_worker_event(
+                event_id=event_id,
+                run_id=run_id,
+                session_id=session_id,
+                event_type=event_type,
+                payload=payload,
+            )
+        return event_id
 
     def _advance_goal(self, run: dict[str, Any], answer: str) -> None:
         self.advancers.advance_goal(run, answer, self.add_event)
@@ -1225,15 +1245,31 @@ class RunWorker:
                 })
                 job = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
                 if job and job["job_id"]:
+                    source_key = f"permission:{run_id}:{request_id}"
                     db.execute(
-                        "INSERT OR REPLACE INTO attention_items(kind, title, target_json, inline_ok, actions_json, status, source_key) "
-                        "VALUES ('permission_job', ?, ?, 1, '[\"approve\",\"reject\"]', 'open', ?)",
+                        "INSERT INTO attention_items(kind, title, target_json, inline_ok, actions_json, status, source_key) "
+                        "VALUES ('permission_job', ?, ?, 1, '[\"approve\",\"reject\"]', 'open', ?) "
+                        "ON CONFLICT(source_key) DO UPDATE SET "
+                        "title = excluded.title, target_json = excluded.target_json, "
+                        "actions_json = excluded.actions_json, status = 'open', "
+                        "resolved_at = NULL",
                         (
                             title,
                             json.dumps({"view": "task", "job_id": job["job_id"], "run_id": run_id, "request_id": request_id, "options": safe_options}),
-                            f"permission:{run_id}:{request_id}",
+                            source_key,
                         ),
                     )
+                    attention = db.execute(
+                        "SELECT id FROM attention_items WHERE source_key = ?",
+                        (source_key,),
+                    ).fetchone()
+                    projection = getattr(
+                        self.app.state, "master_projection", None
+                    )
+                    if projection is not None and attention is not None:
+                        projection.safe_project_attention(
+                            int(attention["id"])
+                        )
 
         def on_dynamic_tool(name: str, arguments: Any) -> dict[str, Any]:
             nonlocal master_dynamic_call_count

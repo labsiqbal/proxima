@@ -331,6 +331,29 @@ CREATE TABLE IF NOT EXISTS master_tool_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_master_tool_calls_session
   ON master_tool_calls(master_session_id, turn_root_run_id, id);
+-- Durable chat/event projections of authoritative Task, Attention, checkpoint,
+-- supervisor, and Satpam rows. This table is an idempotency/link ledger only:
+-- lifecycle truth stays in the referenced product tables.
+CREATE TABLE IF NOT EXISTS master_projections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  projection_key TEXT NOT NULL,
+  projection_type TEXT NOT NULL,
+  source_table TEXT NOT NULL,
+  source_id INTEGER NOT NULL,
+  task_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+  message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(owner_user_id, projection_key)
+);
+CREATE INDEX IF NOT EXISTS idx_master_projections_session
+  ON master_projections(master_session_id, id);
+CREATE INDEX IF NOT EXISTS idx_master_projections_source
+  ON master_projections(source_table, source_id, projection_type);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.

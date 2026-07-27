@@ -30,6 +30,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [ui-shell.md](ui-shell.md) | Shell IA: the single-workspace flow navigation, tool rail, gates, accessibility, and extension points | by hand |
 | [workflow-graph.md](workflow-graph.md) | How the default workflow graph engine plans, executes, reviews, and corrects DAGs | by hand |
 | [task-delegation.md](task-delegation.md) | Durable scoped Task creation, replay, dependencies, recovery, and caller extension contract | by hand |
+| [master-supervision.md](master-supervision.md) | Master queue-start authority, durable Task/Satpam chat projection, and session event contract | by hand |
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |

@@ -1,5 +1,6 @@
 import React from 'react'
 import type { RunEvent } from '../types'
+import { SESSION_EVENT_TYPES } from '../lib/eventTypes'
 
 export function useEventStream(token: string, sessionId: number | null, onEvent: (event: RunEvent) => void) {
   const [connected, setConnected] = React.useState(false)
@@ -33,18 +34,7 @@ export function useEventStream(token: string, sessionId: number | null, onEvent:
     // NOTE: the server names every SSE event (`event: <type>`), so a type
     // missing here is silently dropped — it only shows up after a full
     // events refetch. Add new event families here or they won't be live.
-    const types = [
-      'run.queued', 'run.started', 'message.delta', 'reasoning.delta', 'tool.start', 'tool.complete',
-      'approval.request', 'approval.auto', 'message.complete', 'run.completed', 'run.failed', 'run.cancelled',
-      'warning', 'wiki.draft', 'workflow.draft', 'goal.update',
-      'collaboration.child.queued', 'collaboration.child.started', 'collaboration.child.delta',
-      'collaboration.child.completed', 'collaboration.child.failed', 'collaboration.child.cancelled',
-      'message_review.queued', 'message_review.started', 'message_review.completed',
-      'message_review.failed', 'message_review.applied', 'message_review.restored',
-      'graph.node.update', 'job.update',
-      'satpam.steered', 'satpam.restart.queued', 'satpam.restarted', 'satpam.escalated',
-    ]
-    for (const type of types) {
+    for (const type of SESSION_EVENT_TYPES) {
       source.addEventListener(type, event => emit((event as MessageEvent).data))
     }
     return () => {

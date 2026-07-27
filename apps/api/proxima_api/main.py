@@ -43,6 +43,7 @@ from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
 from .master_supervisor import MasterSupervisor
+from .master_projection import MasterProjectionService
 from .task_delegation import TaskDelegationService
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
@@ -99,6 +100,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         for r in orphaned:
             worker._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Interrupted by server restart")
         worker.reap_orphaned_jobs()
+        if app.state.master_projection is not None:
+            app.state.master_projection.safe_reconcile()
     except Exception as _exc:
         logging.getLogger("proxima.worker").exception("orphaned run cleanup failed")
     if cfg.get("start_worker", True):
@@ -134,7 +137,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             while True:
                 await asyncio.sleep(5)
                 try:
-                    app.state.master_supervisor.tick()
+                    supervisor = app.state.master_supervisor
+                    if supervisor is not None:
+                        supervisor.tick()
                 except Exception:
                     logging.getLogger("proxima.master").exception("Master supervisor tick failed")
         master_task = asyncio.create_task(_master_loop())
@@ -205,10 +210,17 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     migrate_legacy_ops_containers(app.state.db)
     app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
-    app.state.master_supervisor = MasterSupervisor(app)
     app.state.acp_manager = AcpManager()
     app.state.app_manager = AppManager()
     app.state.hub = EventHub()
+    if cfg.get("feature_master_orchestrator", False):
+        app.state.master_projection = MasterProjectionService(app)
+        app.state.master_supervisor = MasterSupervisor(app)
+    else:
+        # Explicitly absent operational services: persistence migration remains
+        # unconditional, but feature-off startup must not instantiate Master.
+        app.state.master_projection = None
+        app.state.master_supervisor = None
     app.state.updates = UpdateManager(cfg)
 
     register_frontend(
@@ -382,6 +394,10 @@ def _config_from_env() -> dict[str, Any]:
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["run_timeout_seconds"])),
         "run_continuation_limit": env_int("PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])),
         "run_worker_concurrency": env_int("PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])),
+        "master_max_parallel": env_int(
+            "PROXIMA_MASTER_MAX_PARALLEL",
+            int(DEFAULT_CONFIG["master_max_parallel"]),
+        ),
         "graph_node_concurrency": env_int("PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])),
         "container_registry_refresh_seconds": env_int(
             "PROXIMA_CONTAINER_REGISTRY_REFRESH_SECONDS",

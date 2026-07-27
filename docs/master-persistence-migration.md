@@ -16,8 +16,9 @@ at startup regardless of `feature_master_orchestrator`.
 
 Messages, runs, events, checkpoints, turn journals, budget counters, attention,
 Task delegations, Task dependencies, and Task worker sessions stay in their
-existing tables. `jobs` remains Task truth. No Master-specific copies of those
-ledgers exist.
+existing tables. `jobs` remains Task truth. Migration 33 adds
+`master_projections`, an idempotency and source-link ledger for concise Master
+messages and session events. It does not copy or replace lifecycle state.
 
 Checkpoint and job-input payloads are rewritten only for known ownership keys:
 `alpha_session_id` becomes `origin_master_session_id` and
@@ -65,7 +66,10 @@ also accept the former turn-restore acknowledgement and stored desk keys.
 
 The compatibility aliases do not create an Alpha identity or duplicate rows.
 They are governed by the same server feature flag and authorization checks as
-the canonical routes.
+the canonical routes. `alpha_supervisor.py` is an import-only alias to the one
+`MasterSupervisor`; it does not host another loop. New Task and Satpam projections
+append to the same migrated session and preserve the ordering and primary keys of
+the Alpha-era messages already there.
 
 ## Recovery matrix
 
@@ -81,7 +85,7 @@ the canonical routes.
 | Mixed Alpha/Master profile and session names for the same linked identity | normalize in place |
 | Dual identities, wrong profile link, or project-bound system session | refuse and roll back |
 
-Feature-off startup still migrates and validates persistence, but does not start
-the Master supervisor, resume committed Master delegation start intents, or claim
-Master and Master-owned Task runs. Enabling the flag later resumes the same
-queued rows and identity.
+Feature-off startup still migrates and validates persistence, but does not
+instantiate the Master supervisor or projection service, resume committed Master
+delegation start intents, or claim Master and Master-owned Task runs. Enabling the
+flag later resumes the same queued rows and identity.

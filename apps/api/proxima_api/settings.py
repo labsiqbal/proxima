@@ -60,6 +60,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Durable Master data is migrated unconditionally. Runtime behavior stays
     # off until the integrated Master slices pass their acceptance gate.
     "feature_master_orchestrator": False,
+    # Maximum queued/running Task-agent runs owned by Master. The supervisor
+    # and worker claim guard share this value.
+    "master_max_parallel": 3,
     # How many nodes of one graph job may be in flight at once. This is a dispatch
     # budget, not a guarantee: node runs are executed by the run worker, so
     # run_worker_concurrency above is the real ceiling. Raise both to widen a fan-out.

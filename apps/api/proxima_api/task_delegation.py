@@ -1107,6 +1107,9 @@ class TaskDelegationService:
     ) -> list[int]:
         """Refresh blockers and start every newly ready dependent exactly once."""
         conn = connection or self.db_factory()
+        projection = getattr(self.app.state, "master_projection", None)
+        if projection is not None:
+            projection.safe_project_task(prerequisite_job_id)
         dependent_ids = [
             int(row["task_id"])
             for row in conn.execute(
@@ -1124,6 +1127,8 @@ class TaskDelegationService:
             if not requested or not requested["start_requested"]:
                 continue
             result = self.start(task_id, connection=conn)
+            if projection is not None:
+                projection.safe_project_task(task_id)
             if result.started:
                 started.append(task_id)
         return started

@@ -415,14 +415,23 @@ redirected responses to the runner.
 
 Interactive Master is quiet until asked. The desk can enable unattended mode; the
 `MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock
-budgets. The optional token value is stored and shown, but current ACP events expose no
-usage counter, so turn + wall-clock are the enforced Master budgets today. Budget
-exhaustion disables unattended mode and creates an `master_budget` attention item.
+budgets and the configured `master_max_parallel` active-run limit. Dependency-blocked
+rows do not consume a start slot. The optional token value is stored and shown, but
+current ACP events expose no usage counter, so turn + wall-clock are the enforced
+Master budgets today. Budget exhaustion disables unattended mode and creates a
+`master_budget` attention item.
 Git commit/push/PR remains ordinary job work through the existing BYO environment.
 Destructive install administration is not in the unattended allowlist.
 
 Authority is singular: **Master dispatches and prioritizes; satpam alone detects,
 steers, or restarts stuck runs.** Master never calls satpam restart machinery.
+
+`MasterProjectionService` projects important Task status, checkpoint, Attention, and
+Satpam rows into the same durable Master conversation. One
+`master_projections` row links one concise `messages` row and one named Master-session
+event to the authoritative source row. Unique owner-scoped projection keys make
+retry, reconnect, and restart reconciliation idempotent. Raw streaming deltas are
+never projected. See [master-supervision.md](../master-supervision.md).
 
 ### 1. Chat turn (the core loop)
 
@@ -612,6 +621,8 @@ Work / Home / Master / future Master caller
          unmet prerequisite -> queued + explicit blocked_reason
          repo Area -> existing external worktree and review/local merge
          Ops Area -> existing physical ops/ execution
+    -> MasterProjectionService:
+         concise Master message + typed event + source-link idempotency row
 ```
 
 The service accepts a batch of client-local Task keys and dependency keys. It inserts
@@ -792,6 +803,11 @@ and adds no per-job processes. It never reads an agent stream and never calls an
 LLM; evaluation happens once per continuation turn (slice 5's chain ordinals are
 the turn boundary), so a job that finishes inside its first turn is never even
 read. Fail-quiet by contract: any internal error logs and the sweep moves on.
+For a Master-owned Task, each durable intervention also produces at most one
+Master-thread projection and one corresponding Master-session event. A failed
+owner-approved repo restart remains pending, creates one stable
+`satpam_recovery_failed` Attention row, and projects that failure once. These
+projections do not alter Satpam policy or grant control authority.
 **Decision-hold (T10 #4):** the node prompt defines the `DECISION_NEEDED: <question>`
 output-contract marker. The graph advancer parks such a node in the existing
 `review` state with the question on `node_states.question` while the JOB stays

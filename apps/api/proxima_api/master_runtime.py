@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from fastapi import HTTPException
 
@@ -256,7 +256,33 @@ def ensure_master_identity(
     return profile_dict, dict(session)
 
 
-def master_capacity(conn, origin_master_session_id: int) -> dict[str, int]:
+def master_parallel_limit(config: Mapping[str, Any] | None = None) -> int:
+    try:
+        value = int((config or {}).get("master_max_parallel", MASTER_MAX_PARALLEL))
+    except (TypeError, ValueError, OverflowError):
+        value = MASTER_MAX_PARALLEL
+    return max(1, min(64, value))
+
+
+def master_active_slots(conn, origin_master_session_id: int) -> int:
+    return _as_int(
+        conn.execute(
+            "SELECT COUNT(DISTINCT r.id) AS c FROM runs r "
+            "JOIN sessions s ON s.id = r.session_id "
+            "JOIN jobs j ON j.id = s.job_id "
+            "WHERE j.origin_master_session_id = ? "
+            "AND r.status IN ('queued', 'running')",
+            (origin_master_session_id,),
+        ).fetchone()["c"]
+    )
+
+
+def master_capacity(
+    conn,
+    origin_master_session_id: int,
+    *,
+    max_parallel: int = MASTER_MAX_PARALLEL,
+) -> dict[str, int]:
     running = conn.execute(
         "SELECT COUNT(DISTINCT r.id) AS c FROM runs r "
         "JOIN sessions s ON s.id = r.session_id JOIN jobs j ON j.id = s.job_id "
@@ -274,11 +300,12 @@ def master_capacity(conn, origin_master_session_id: int) -> dict[str, int]:
         ") AS c",
         (origin_master_session_id, origin_master_session_id),
     ).fetchone()["c"]
+    active_slots = master_active_slots(conn, origin_master_session_id)
     running_int = _as_int(running)
     return {
         "running": running_int,
-        "max": MASTER_MAX_PARALLEL,
-        "free": max(0, MASTER_MAX_PARALLEL - running_int),
+        "max": max_parallel,
+        "free": max(0, max_parallel - active_slots),
         "queued": _as_int(queued),
     }
 
@@ -703,7 +730,11 @@ def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_
                 "VALUES ('master_decision', ?, ?, 0, 'open', ?)",
                 (title[:200], json.dumps({"view": "master", "message": message}), f"master:{origin_master_session_id}:{iso_now()}"),
             )
-            data = {"attention_id": _as_int(cur.lastrowid)}
+            attention_id = _as_int(cur.lastrowid)
+            projection = getattr(app.state, "master_projection", None)
+            if projection is not None:
+                projection.safe_project_attention(attention_id)
+            data = {"attention_id": attention_id}
         else:
             raise MasterToolError("tool_not_allowed", f"Master tool {name!r} is not allowed")
         return {"ok": True, "tool": name, "result": data}
