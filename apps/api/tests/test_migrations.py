@@ -42,19 +42,20 @@ def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
     assert current_version(conn) == 0
 
 
-def test_schema_31_to_32_is_idempotent_and_preserves_replay_contract(
+def test_schema_31_to_33_is_idempotent_and_preserves_replay_contract(
     tmp_path: Path,
 ):
     db_path = tmp_path / "schema-31.db"
     conn = connect(db_path)
     init_db(conn)
     run_migrations(conn, str(db_path))
-    conn.execute("DELETE FROM schema_migrations WHERE version = 32")
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 32")
     conn.execute("DROP TABLE master_tool_calls")
+    conn.execute("DROP TABLE master_projections")
 
-    assert run_migrations(conn, str(db_path)) == [32]
+    assert run_migrations(conn, str(db_path)) == [32, 33]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 32
+    assert current_version(conn) == 33
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -68,6 +69,18 @@ def test_schema_31_to_32_is_idempotent_and_preserves_replay_contract(
         "created_at",
         "completed_at",
     }
+    assert {
+        row[1] for row in conn.execute("PRAGMA table_info(master_projections)")
+    } >= {
+        "owner_user_id",
+        "master_session_id",
+        "projection_key",
+        "projection_type",
+        "source_table",
+        "source_id",
+        "message_id",
+        "event_id",
+    }
 
 
 def test_schema_32_drift_fails_and_rolls_back_version_record(tmp_path: Path):
@@ -75,7 +88,7 @@ def test_schema_32_drift_fails_and_rolls_back_version_record(tmp_path: Path):
     conn = connect(db_path)
     init_db(conn)
     run_migrations(conn, str(db_path))
-    conn.execute("DELETE FROM schema_migrations WHERE version = 32")
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 32")
     conn.execute("DROP TABLE master_tool_calls")
     conn.execute(
         "CREATE TABLE master_tool_calls("
@@ -92,6 +105,40 @@ def test_schema_32_drift_fails_and_rolls_back_version_record(tmp_path: Path):
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {"id", "master_session_id"}
+
+
+def test_schema_33_rejects_incomplete_projection_state(tmp_path: Path):
+    db_path = tmp_path / "incomplete-projection.db"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('projection-owner', 'owner')"
+    ).lastrowid
+    profile_id = conn.execute(
+        "INSERT INTO profiles(user_id, slug, name, hermes_home, system_kind) "
+        "VALUES (?, 'master', 'Master', '/tmp/master', 'master')",
+        (owner_id,),
+    ).lastrowid
+    session_id = conn.execute(
+        "INSERT INTO sessions(title, owner_user_id, profile_id, mode) "
+        "VALUES ('Master', ?, ?, 'master')",
+        (owner_id, profile_id),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO master_projections("
+        "owner_user_id, master_session_id, projection_key, projection_type, "
+        "source_table, source_id, payload_json"
+        ") VALUES (?, ?, 'partial', 'master.attention.required', "
+        "'attention_items', 999, 'not-json')",
+        (owner_id, session_id),
+    )
+    conn.execute("DELETE FROM schema_migrations WHERE version = 33")
+
+    with pytest.raises(RuntimeError, match="projection ledger"):
+        run_migrations(conn, str(db_path))
+
+    assert current_version(conn) == 32
 
 
 def test_applies_pending_once_then_idempotent(tmp_path: Path):
@@ -488,8 +535,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32]
-    assert current_version(conn) == 32
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33]
+    assert current_version(conn) == 33
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -530,8 +577,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32]
-    assert current_version(conn) == 32
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33]
+    assert current_version(conn) == 33
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }

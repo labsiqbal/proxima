@@ -78,6 +78,18 @@ def _event_payload(row: sqlite3.Row) -> dict[str, Any]:
     return event
 
 
+def _sse_resume_cursor(after_id: int, last_event_id: str | None) -> int:
+    """Resolve browser reconnect state without trusting an unbounded header."""
+    sqlite_max_int = (1 << 63) - 1
+    query_cursor = max(0, min(int(after_id), sqlite_max_int))
+    try:
+        header_cursor = int(str(last_event_id or "").strip())
+    except (TypeError, ValueError, OverflowError):
+        header_cursor = 0
+    header_cursor = max(0, min(header_cursor, sqlite_max_int))
+    return max(query_cursor, header_cursor)
+
+
 async def _stream_session_events(
     app: Any,
     request: Request,
@@ -1160,7 +1172,17 @@ def register(app, deps):
     async def stream_events(request: Request, session_id: int, after_id: int = 0, token: str = ""):
         user = user_from_token_query(token or request.cookies.get("proxima_session", ""))
         session_for_user(session_id, user)
-        events = _stream_session_events(app, request, session_id, after_id, db)
+        resume_after = _sse_resume_cursor(
+            after_id,
+            request.headers.get("last-event-id"),
+        )
+        events = _stream_session_events(
+            app,
+            request,
+            session_id,
+            resume_after,
+            db,
+        )
         return StreamingResponse(events, media_type="text/event-stream")
 
     @app.websocket("/api/ws/terminal")
@@ -1315,11 +1337,18 @@ def register(app, deps):
         if not row:
             raise HTTPException(status_code=404, detail="run not found")
         session_for_user(row["session_id"], user)
+        job = db().execute(
+            "SELECT j.* FROM sessions s JOIN jobs j ON j.id = s.job_id "
+            "WHERE s.id = ? AND j.origin_master_session_id IS NOT NULL",
+            (row["session_id"],),
+        ).fetchone()
         changed = db().execute(
             "UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('queued','running')",
             (run_id,),
         ).rowcount > 0
         queued = []
+        job_cancelled_runs = []
+        job_cancelled = False
         collab_cancelled = []
         collab_row = None
         if changed:
@@ -1359,10 +1388,43 @@ def register(app, deps):
                         state.non_terminal(state.COLLABORATION),
                         set_extra="updated_at = CURRENT_TIMESTAMP",
                     )
+            if job is not None:
+                job_cancelled_runs = db().execute(
+                    "SELECT r.* FROM runs r JOIN sessions s "
+                    "ON s.id = r.session_id "
+                    "WHERE s.job_id = ? AND r.id != ? "
+                    "AND r.status IN ('queued', 'running')",
+                    (job["id"], run_id),
+                ).fetchall()
+                job_cancelled = db().execute(
+                    "UPDATE jobs SET status = 'cancelled', "
+                    "finished_at = CURRENT_TIMESTAMP, "
+                    "blocked_reason = NULL, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status IN ('queued', 'running')",
+                    (job["id"],),
+                ).rowcount > 0
+                if job_cancelled:
+                    db().execute(
+                        "UPDATE runs SET status = 'cancelled', "
+                        "finished_at = CURRENT_TIMESTAMP "
+                        "WHERE session_id IN ("
+                        "SELECT id FROM sessions WHERE job_id = ?"
+                        ") AND status IN ('queued', 'running')",
+                        (job["id"],),
+                    )
+                    db().execute(
+                        "UPDATE node_states SET status = 'failed', "
+                        "error = 'Task cancelled by owner', "
+                        "finished_at = CURRENT_TIMESTAMP, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE job_id = ? "
+                        "AND status IN ('pending', 'ready', 'running', 'stale')",
+                        (job["id"],),
+                    )
         if changed:
             app.state.worker.add_event(run_id, row["session_id"], row["project_id"], "run.cancelled", {})
         notified: set[int] = set()
-        for q in [*collab_cancelled, *queued]:
+        for q in [*collab_cancelled, *queued, *job_cancelled_runs]:
             qid = _as_int(q["id"])
             if qid in notified:
                 continue
@@ -1377,6 +1439,11 @@ def register(app, deps):
             app.state.worker.cancel(qid)
         if changed:
             app.state.worker.cancel(run_id)
+        if job_cancelled:
+            app.state.task_delegation.prerequisite_changed(
+                int(job["id"]),
+                connection=db(),
+            )
         fresh = db().execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
         return {"ok": True, "run_id": run_id, "status": fresh["status"] if fresh else row["status"]}
 

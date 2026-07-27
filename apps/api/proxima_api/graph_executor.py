@@ -312,7 +312,8 @@ class GraphExecutor:
                     LEFT JOIN sessions s ON s.id = j.session_id
                     LEFT JOIN profiles p
                       ON p.id = s.profile_id AND p.user_id = j.created_by
-                    WHERE j.id = ? AND j.engine = 'graph' AND j.status = 'running'
+                    WHERE j.id = ? AND j.engine = 'graph'
+                      AND j.status = 'running'
                     """,
                     (job_id,),
                 ).fetchone()
@@ -325,6 +326,61 @@ class GraphExecutor:
                     )
                 if int(job["session_owner_user_id"] or 0) != int(job["created_by"]):
                     raise GraphExecutionError("graph job session owner does not match creator")
+
+                master_capacity: int | None = None
+                if job["origin_master_session_id"] is not None:
+                    from .master_runtime import master_parallel_limit
+
+                    origin = db.execute(
+                        "SELECT id FROM sessions "
+                        "WHERE id = ? AND mode = 'master' "
+                        "AND owner_user_id = ? AND project_id IS NULL",
+                        (
+                            job["origin_master_session_id"],
+                            job["created_by"],
+                        ),
+                    ).fetchone()
+                    if origin is None:
+                        raise GraphExecutionError(
+                            "graph Task has an invalid Master owner session"
+                        )
+                    active = int(
+                        db.execute(
+                            "SELECT ("
+                            "  SELECT COUNT(*) FROM runs active_run "
+                            "  JOIN sessions active_session "
+                            "  ON active_session.id = active_run.session_id "
+                            "  JOIN jobs active_job "
+                            "  ON active_job.id = active_session.job_id "
+                            "  WHERE active_job.origin_master_session_id = ? "
+                            "  AND active_run.status IN ('queued', 'running')"
+                            ") + ("
+                            "  SELECT COUNT(*) FROM jobs reserved_job "
+                            "  WHERE reserved_job.origin_master_session_id = ? "
+                            "  AND reserved_job.status = 'running' "
+                            "  AND reserved_job.id != ? "
+                            "  AND NOT EXISTS ("
+                            "    SELECT 1 FROM sessions reserved_session "
+                            "    JOIN runs reserved_run "
+                            "    ON reserved_run.session_id = reserved_session.id "
+                            "    WHERE reserved_session.job_id = reserved_job.id "
+                            "    AND reserved_run.status IN ('queued', 'running')"
+                            "  )"
+                            ")",
+                            (
+                                job["origin_master_session_id"],
+                                job["origin_master_session_id"],
+                                job_id,
+                            ),
+                        ).fetchone()[0]
+                    )
+                    master_capacity = max(
+                        0,
+                        master_parallel_limit(self.app.state.config) - active,
+                    )
+                    if master_capacity == 0:
+                        db.execute("COMMIT")
+                        return []
 
                 graph = normalize_graph(job["graph"] or "")
                 for node in graph["nodes"]:
@@ -357,6 +413,8 @@ class GraphExecutor:
                     row["status"] in {"ready", "running"} for row in state_rows
                 )
                 capacity = max(0, self._concurrency() - active_count)
+                if master_capacity is not None:
+                    capacity = min(capacity, master_capacity)
                 if capacity == 0:
                     db.execute("COMMIT")
                     return []

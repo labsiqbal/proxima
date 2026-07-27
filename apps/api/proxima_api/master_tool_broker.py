@@ -766,4 +766,7 @@ class MasterToolBroker:
             raise MasterToolError(
                 "attention_failed", "Proxima could not create Attention"
             )
+        projection = getattr(self.app.state, "master_projection", None)
+        if projection is not None:
+            projection.safe_project_attention(_as_int(row["id"]))
         return {"attention_id": _as_int(row["id"]), "created_at": iso_now()}

@@ -211,6 +211,38 @@ def test_diamond_branches_dispatch_in_parallel_with_fresh_sessions(tmp_path):
     assert len(set(session_ids)) == len(session_ids) == 4
 
 
+def test_cancel_of_a_graph_node_run_leaves_sibling_and_job_intact(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job_id = _create_graph_job(app, _diamond_graph())
+    executor: GraphExecutor = app.state.worker.graph_executor
+
+    executor.dispatch_ready(job_id)
+    _complete_current_node(app, job_id, "collect", "facts")
+    branch_runs = executor.dispatch_ready(job_id)
+    assert _nodes_for_runs(app, branch_runs) == {"draft-a", "draft-b"}
+    cancel_run_id, sibling_run_id = branch_runs
+
+    response = client.post(f"/api/runs/{cancel_run_id}/cancel")
+    assert response.status_code == 200
+
+    db = app.state.db
+    assert db.execute(
+        "SELECT status FROM runs WHERE id = ?", (cancel_run_id,)
+    ).fetchone()["status"] == "cancelled"
+    # A non-Master graph job carries origin_master_session_id IS NULL, so the
+    # per-run cancellation must not tear down the sibling branch or the job.
+    assert db.execute(
+        "SELECT status FROM runs WHERE id = ?", (sibling_run_id,)
+    ).fetchone()["status"] == "queued"
+    assert db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "running"
+    assert db.execute(
+        "SELECT status FROM node_states WHERE run_id = ?", (sibling_run_id,)
+    ).fetchone()["status"] == "running"
+
+
 def test_node_concurrency_budget_caps_a_fan_out(tmp_path):
     app = _app(tmp_path, enabled=True, concurrency=1)
     _client(app)

@@ -50,7 +50,20 @@ A requested but unready dependent remains `queued`. `jobs.blocked_reason` and th
 delegation audit explain the exact prerequisite and current state. Completion,
 review, failure, cancellation, and owner verdict paths refresh dependents. The
 queued-to-running claim remains the concurrency mutex, so repeated notifications do
-not create a second run.
+not create a second run. Failed and cancelled prerequisites produce a stable
+`Blocked by prerequisite Task #...` reason rather than an unexplained queue item.
+
+When unattended Master mode is enabled, `MasterSupervisor` asks this service to
+start queued work. Blocked Tasks do not consume a supervisor capacity slot, and the
+supervisor does not reproduce dependency, Area, worktree, execution, or landing
+state machines. Important status changes are projected through
+`MasterProjectionService`; `jobs` and this dependency graph remain truth.
+Every Master start revalidates its canonical owner, Master session, Container, Area,
+worker session, Task-agent profile, and delegation audit. The queued job claim,
+Master capacity reservation, first linear run, and optional unattended turn
+reservation are serialized with `BEGIN IMMEDIATE`. Graph starts reserve the job
+before dispatch and limit all ready branches against the same global Master active
+slot count.
 
 ## Landing behavior
 
@@ -74,6 +87,12 @@ Linear start claims the job and inserts its first run atomically. Graph recovery
 re-enters the idempotent graph dispatcher when a process stopped after the job became
 `running` but before a node run was committed. Existing node claims are reused, and
 an all-trigger graph is finalized when no work remains.
+
+Feature-off startup does not instantiate the Master supervisor or projection
+service and does not claim Master-owned rows. Enabling the flag later reuses the
+same committed Tasks and dependency edges. A preserved legacy queued worker run is
+claimed only after its full Master scope and dependency readiness are revalidated,
+and its Task is promoted to running in the same transaction as the run claim.
 
 ## Adding another caller
 

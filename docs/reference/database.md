@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 32 tables. Applied migration version: **32**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 33 tables. Applied migration version: **33**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -212,6 +212,27 @@ SQLite (WAL mode). 32 tables. Applied migration version: **32**. This is the exa
 | `archived_at` | TEXT | yes |  |  |
 
 **Indexes:** `idx_jobs_origin_master` - (origin_master_session_id, status, created_at); `idx_jobs_archived` - (archived_at); `idx_jobs_workflow` - (workflow_id); `idx_jobs_project_status` - (project_id, status, created_at)
+
+
+### master_projections
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `owner_user_id` | INTEGER | NO |  | → `users.id` (ON DELETE CASCADE) |
+| `master_session_id` | INTEGER | NO |  | → `sessions.id` (ON DELETE CASCADE) |
+| `projection_key` | TEXT | NO |  |  |
+| `projection_type` | TEXT | NO |  |  |
+| `source_table` | TEXT | NO |  |  |
+| `source_id` | INTEGER | NO |  |  |
+| `task_id` | INTEGER | yes |  | → `jobs.id` (ON DELETE SET NULL) |
+| `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
+| `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
+| `payload_json` | TEXT | NO | `'{}'` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `uq_master_projections_event` - UNIQUE (event_id); `uq_master_projections_message` - UNIQUE (message_id); `uq_master_projections_source_type` - UNIQUE (owner_user_id, source_table, source_id, projection_type); `idx_master_projections_source` - (source_table, source_id, projection_type); `idx_master_projections_session` - (master_session_id, id)
 
 
 ### master_tool_calls
@@ -601,4 +622,4 @@ SQLite (WAL mode). 32 tables. Applied migration version: **32**. This is the exa
 
 
 ---
-_Generated 2026-07-27 05:57 UTC._
+_Generated 2026-07-27 08:10 UTC._

@@ -23,6 +23,7 @@ from .master_persistence import canonical_job_payload
 REQUIRED_DEPENDENCY_STATUSES = frozenset({"review", "done"})
 TERMINAL_FAILURE_STATUSES = frozenset({"failed", "cancelled"})
 STATUS_RANK = {"queued": 0, "running": 1, "review": 2, "done": 3}
+DEFAULT_MASTER_PARALLEL = 3
 
 
 class TaskDelegationError(RuntimeError):
@@ -178,6 +179,136 @@ class TaskDelegationService:
         if dependencies:
             payload["dependencies"] = [dict(row) for row in dependencies]
         return canonical_job_payload(payload)
+
+    def _validate_master_start_contract(
+        self,
+        conn: sqlite3.Connection,
+        job: sqlite3.Row,
+    ) -> None:
+        """Fail closed when a Master Task lost any scoped ownership link."""
+        row = conn.execute(
+            "SELECT "
+            "origin.mode AS origin_mode, "
+            "origin.owner_user_id AS origin_owner_user_id, "
+            "origin.project_id AS origin_project_id, "
+            "container.owner_user_id AS container_owner_user_id, "
+            "container.archived_at AS container_archived_at, "
+            "area.project_id AS area_project_id, "
+            "area.source AS area_source, "
+            "worker.owner_user_id AS worker_owner_user_id, "
+            "worker.project_id AS worker_project_id, "
+            "worker.job_id AS worker_job_id, "
+            "worker.mode AS worker_mode, "
+            "profile.user_id AS profile_user_id, "
+            "profile.system_kind AS profile_system_kind, "
+            "delegation.origin_session_id AS delegation_origin_session_id, "
+            "delegation.container_id AS delegation_container_id, "
+            "delegation.target_area_id AS delegation_target_area_id, "
+            "delegation.created_by AS delegation_created_by "
+            "FROM jobs task "
+            "LEFT JOIN sessions origin "
+            "ON origin.id = task.origin_master_session_id "
+            "LEFT JOIN projects container ON container.id = task.project_id "
+            "LEFT JOIN project_areas area ON area.id = task.target_area_id "
+            "LEFT JOIN sessions worker ON worker.id = task.session_id "
+            "LEFT JOIN profiles profile ON profile.id = worker.profile_id "
+            "LEFT JOIN task_delegations delegation "
+            "ON delegation.job_id = task.id "
+            "WHERE task.id = ?",
+            (job["id"],),
+        ).fetchone()
+        if row is None:
+            raise TaskDelegationError(
+                "master_task_inconsistent",
+                "Master Task ownership links are missing",
+                409,
+            )
+        owner_id = int(job["created_by"] or 0)
+        required = {
+            "origin_mode": row["origin_mode"] == "master",
+            "origin_owner": int(row["origin_owner_user_id"] or 0) == owner_id,
+            "origin_unbound": row["origin_project_id"] is None,
+            "container_owner": int(row["container_owner_user_id"] or 0)
+            == owner_id,
+            "container_active": row["container_archived_at"] is None,
+            "area_container": int(row["area_project_id"] or 0)
+            == int(job["project_id"] or 0),
+            "area_active": row["area_source"] not in {None, "excluded"},
+            "worker_owner": int(row["worker_owner_user_id"] or 0) == owner_id,
+            "worker_container": int(row["worker_project_id"] or 0)
+            == int(job["project_id"] or 0),
+            "worker_task": int(row["worker_job_id"] or 0) == int(job["id"]),
+            "worker_mode": row["worker_mode"] == "chat",
+            "profile_owner": int(row["profile_user_id"] or 0) == owner_id,
+            "profile_non_system": not str(row["profile_system_kind"] or ""),
+        }
+        failed = [name for name, valid in required.items() if not valid]
+        if failed:
+            raise TaskDelegationError(
+                "master_task_inconsistent",
+                "Master Task failed scoped ownership validation: "
+                + ", ".join(failed),
+                409,
+            )
+        if row["delegation_created_by"] is not None:
+            delegation_valid = (
+                int(row["delegation_created_by"]) == owner_id
+                and int(row["delegation_container_id"] or 0)
+                == int(job["project_id"])
+                and int(row["delegation_target_area_id"] or 0)
+                == int(job["target_area_id"])
+                and int(row["delegation_origin_session_id"] or 0)
+                == int(job["origin_master_session_id"])
+            )
+            if not delegation_valid:
+                raise TaskDelegationError(
+                    "master_task_inconsistent",
+                    "Master Task delegation audit does not match its routing",
+                    409,
+                )
+
+    def _master_parallel_limit(self) -> int:
+        try:
+            value = int(
+                self.app.state.config.get(
+                    "master_max_parallel",
+                    DEFAULT_MASTER_PARALLEL,
+                )
+            )
+        except (TypeError, ValueError, OverflowError):
+            value = DEFAULT_MASTER_PARALLEL
+        return max(1, min(64, value))
+
+    @staticmethod
+    def _master_active_slots(
+        conn: sqlite3.Connection,
+        origin_master_session_id: int,
+    ) -> int:
+        return int(
+            conn.execute(
+                "SELECT ("
+                "  SELECT COUNT(*) FROM runs active_run "
+                "  JOIN sessions active_session "
+                "  ON active_session.id = active_run.session_id "
+                "  JOIN jobs active_job "
+                "  ON active_job.id = active_session.job_id "
+                "  WHERE active_job.origin_master_session_id = ? "
+                "  AND active_run.status IN ('queued', 'running')"
+                ") + ("
+                "  SELECT COUNT(*) FROM jobs reserved_job "
+                "  WHERE reserved_job.origin_master_session_id = ? "
+                "  AND reserved_job.status = 'running' "
+                "  AND NOT EXISTS ("
+                "    SELECT 1 FROM sessions reserved_session "
+                "    JOIN runs reserved_run "
+                "    ON reserved_run.session_id = reserved_session.id "
+                "    WHERE reserved_session.job_id = reserved_job.id "
+                "    AND reserved_run.status IN ('queued', 'running')"
+                "  )"
+                ")",
+                (origin_master_session_id, origin_master_session_id),
+            ).fetchone()[0]
+        )
 
     def _validate_request(
         self,
@@ -790,6 +921,7 @@ class TaskDelegationService:
         *,
         connection: sqlite3.Connection | None = None,
         created: bool = False,
+        supervisor_budget_turns: int | None = None,
     ) -> DelegatedTask:
         conn = connection or self.db_factory()
         job_id = self._as_int(job_id, "task_id")
@@ -808,6 +940,8 @@ class TaskDelegationService:
                 started=False,
                 blocked_reason=job["blocked_reason"],
             )
+        if job["origin_master_session_id"] is not None:
+            self._validate_master_start_contract(conn, job)
         user_id = int(job["created_by"])
         if user is not None and int(user.get("id") or 0) != user_id:
             owned = conn.execute(
@@ -895,9 +1029,19 @@ class TaskDelegationService:
 
         try:
             if job["engine"] == "graph":
-                self._start_graph(conn, job, user_id)
+                self._start_graph(
+                    conn,
+                    job,
+                    user_id,
+                    supervisor_budget_turns=supervisor_budget_turns,
+                )
             else:
-                self._start_linear(conn, job, user_id)
+                self._start_linear(
+                    conn,
+                    job,
+                    user_id,
+                    supervisor_budget_turns=supervisor_budget_turns,
+                )
         except Exception as exc:
             if delegation is not None:
                 conn.execute(
@@ -921,8 +1065,42 @@ class TaskDelegationService:
             blocked_reason=None,
         )
 
+    @staticmethod
+    def _reserve_supervisor_turn(
+        conn: sqlite3.Connection,
+        budget_turns: int | None,
+    ) -> None:
+        if budget_turns is None:
+            return
+        row = conn.execute(
+            "SELECT value FROM app_settings "
+            "WHERE key = 'master.budget.turns_used'"
+        ).fetchone()
+        try:
+            turns_used = max(0, int(row["value"])) if row else 0
+        except (TypeError, ValueError, OverflowError):
+            turns_used = 0
+        if turns_used >= budget_turns:
+            raise TaskDelegationError(
+                "master_budget_exhausted",
+                "Master unattended turn budget is exhausted",
+                409,
+            )
+        conn.execute(
+            "INSERT INTO app_settings(key, value, updated_at) "
+            "VALUES ('master.budget.turns_used', ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (str(turns_used + 1),),
+        )
+
     def _start_linear(
-        self, conn: sqlite3.Connection, job: sqlite3.Row, user_id: int
+        self,
+        conn: sqlite3.Connection,
+        job: sqlite3.Row,
+        user_id: int,
+        *,
+        supervisor_budget_turns: int | None = None,
     ) -> None:
         try:
             steps = json.loads(job["steps_state"] or "[]")
@@ -971,6 +1149,19 @@ class TaskDelegationService:
         with self.app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if (
+                    job["origin_master_session_id"] is not None
+                    and self._master_active_slots(
+                        conn,
+                        int(job["origin_master_session_id"]),
+                    )
+                    >= self._master_parallel_limit()
+                ):
+                    raise TaskDelegationError(
+                        "master_capacity_full",
+                        "Master Task capacity is full",
+                        409,
+                    )
                 claimed = conn.execute(
                     "UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP, "
                     "current_step_idx = 0, blocked_reason = NULL, "
@@ -980,6 +1171,10 @@ class TaskDelegationService:
                 if claimed.rowcount == 0:
                     conn.execute("ROLLBACK")
                     return
+                self._reserve_supervisor_turn(
+                    conn,
+                    supervisor_budget_turns,
+                )
                 run_cur = conn.execute(
                     "INSERT INTO runs("
                     "session_id, project_id, user_id, profile_id, runner_id, "
@@ -1029,6 +1224,7 @@ class TaskDelegationService:
         user_id: int,
         *,
         recover_running: bool = False,
+        supervisor_budget_turns: int | None = None,
     ) -> None:
         if not features.enabled(self.app.state.config, features.WORKFLOW_GRAPH):
             raise TaskDelegationError(
@@ -1049,25 +1245,49 @@ class TaskDelegationService:
             "SELECT 1 FROM job_checkpoints WHERE job_id = ? LIMIT 1", (job["id"],)
         ).fetchone():
             create_checkpoint(conn, int(job["id"]))
-        claimed = conn.execute(
-            "UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP, "
-            "blocked_reason = NULL, updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = ? AND status = 'queued' AND engine = 'graph'",
-            (job["id"],),
-        )
-        if claimed.rowcount == 0 and not recover_running:
-            return
+        if not recover_running:
+            with self.app.state.db_lock:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if (
+                        job["origin_master_session_id"] is not None
+                        and self._master_active_slots(
+                            conn,
+                            int(job["origin_master_session_id"]),
+                        )
+                        >= self._master_parallel_limit()
+                    ):
+                        raise TaskDelegationError(
+                            "master_capacity_full",
+                            "Master Task capacity is full",
+                            409,
+                        )
+                    claimed = conn.execute(
+                        "UPDATE jobs SET status = 'running', "
+                        "started_at = CURRENT_TIMESTAMP, "
+                        "blocked_reason = NULL, "
+                        "updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'queued' "
+                        "AND engine = 'graph'",
+                        (job["id"],),
+                    )
+                    if claimed.rowcount != 1:
+                        conn.execute("ROLLBACK")
+                        return
+                    self._reserve_supervisor_turn(
+                        conn,
+                        supervisor_budget_turns,
+                    )
+                    conn.execute("COMMIT")
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
         try:
             run_ids = self.app.state.worker.graph_executor.dispatch_ready(
                 int(job["id"])
             )
         except Exception as exc:
-            if claimed.rowcount:
-                conn.execute(
-                    "UPDATE jobs SET status = 'queued', started_at = NULL, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                    (job["id"],),
-                )
             raise TaskDelegationError(
                 "graph_start_failed", str(exc), 409
             ) from exc
@@ -1107,6 +1327,9 @@ class TaskDelegationService:
     ) -> list[int]:
         """Refresh blockers and start every newly ready dependent exactly once."""
         conn = connection or self.db_factory()
+        projection = getattr(self.app.state, "master_projection", None)
+        if projection is not None:
+            projection.safe_project_task(prerequisite_job_id)
         dependent_ids = [
             int(row["task_id"])
             for row in conn.execute(
@@ -1121,9 +1344,26 @@ class TaskDelegationService:
                 "SELECT start_requested FROM task_delegations WHERE job_id = ?",
                 (task_id,),
             ).fetchone()
+            blocker = self._dependency_blocker(conn, task_id)
+            conn.execute(
+                "UPDATE jobs SET blocked_reason = ?, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = 'queued'",
+                (blocker, task_id),
+            )
+            conn.execute(
+                "UPDATE task_delegations SET start_state = ?, "
+                "blocked_reason = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE job_id = ? AND start_requested = 0",
+                ("blocked" if blocker else "pending", blocker, task_id),
+            )
+            if projection is not None:
+                projection.safe_project_task(task_id)
             if not requested or not requested["start_requested"]:
                 continue
             result = self.start(task_id, connection=conn)
+            if projection is not None:
+                projection.safe_project_task(task_id)
             if result.started:
                 started.append(task_id)
         return started

@@ -9,9 +9,9 @@ from fastapi import Depends, HTTPException
 
 from .. import app_settings, features, satpam, turn_restore
 from ..master_runtime import (
-    MASTER_MAX_PARALLEL,
     MasterToolError,
     master_capacity,
+    master_parallel_limit,
     ensure_master_identity,
 )
 from ..job_checkpoints import (
@@ -128,7 +128,11 @@ def register(app, deps):
             "jobs": jobs,
             "unattended": app_settings.get_master_settings(db())["unattended"],
             "budgets": app_settings.get_master_settings(db()),
-            "capacity": master_capacity(db(), session["id"]),
+            "capacity": master_capacity(
+                db(),
+                session["id"],
+                max_parallel=master_parallel_limit(app.state.config),
+            ),
             "attention": attention,
             "checkpoints": list_checkpoints(db(), origin_master_session_id=session["id"]),
         }
@@ -180,7 +184,11 @@ def register(app, deps):
     def get_master_settings(user: dict[str, Any] = Depends(current_user)):
         _require_master()
         profile, _session = _identity(user)
-        return {**app_settings.get_master_settings(db()), "runner_id": profile["runner_id"], "max_parallel": MASTER_MAX_PARALLEL}
+        return {
+            **app_settings.get_master_settings(db()),
+            "runner_id": profile["runner_id"],
+            "max_parallel": master_parallel_limit(app.state.config),
+        }
 
     @app.put("/api/settings/alpha", deprecated=True)
     @app.put("/api/settings/master")
@@ -215,7 +223,11 @@ def register(app, deps):
             "VALUES (?, 'master.settings.change', 'settings', 'master', ?)",
             (user["id"], json.dumps({key: value for key, value in payload.items() if key != "budget_tokens" or value is not None})),
         )
-        return {**settings, "runner_id": profile["runner_id"], "max_parallel": MASTER_MAX_PARALLEL}
+        return {
+            **settings,
+            "runner_id": profile["runner_id"],
+            "max_parallel": master_parallel_limit(app.state.config),
+        }
 
     def _checkpoint_owned(checkpoint_id: int, user: dict[str, Any]):
         row = db().execute(

@@ -123,7 +123,7 @@ def record_escalation(
     because the supervision record could not be written."""
     try:
         with app.state.db_lock:
-            record_intervention(
+            intervention_id = record_intervention(
                 app.state.worker_db, job_id, node_id,
                 ACTION_ESCALATE, detection, STATUS_APPLIED, reason,
             )
@@ -131,7 +131,13 @@ def record_escalation(
         if worker is not None:
             worker.add_event(
                 run_id, session_id, project_id, EVENT_ESCALATED,
-                {"job_id": job_id, "node_id": node_id, "detection": detection, "reason": reason},
+                {
+                    "job_id": job_id,
+                    "node_id": node_id,
+                    "detection": detection,
+                    "reason": reason,
+                    "intervention_id": intervention_id,
+                },
             )
     except Exception:
         log.exception("satpam: failed to record escalation for job %s (fail-quiet)", job_id)
@@ -377,12 +383,13 @@ class Satpam:
                 "WHERE session_id = ?",
                 (None if amended else note, session_id),
             )
-            record_intervention(
+            intervention_id = record_intervention(
                 db, int(chain["job_id"]), node_id, ACTION_STEER, detection, STATUS_APPLIED,
                 f"{what} - steered the agent with a corrective note on its next turn.",
             )
         self._emit(chain, EVENT_STEERED, {
-            "job_id": chain["job_id"], "node_id": node_id, "detection": detection,
+            "job_id": chain["job_id"], "node_id": node_id,
+            "detection": detection, "intervention_id": intervention_id,
         })
 
     def _queue_restart(self, chain: dict[str, Any], node_id: str | None, detection: str) -> None:
@@ -391,14 +398,15 @@ class Satpam:
         keeps its turns meanwhile; the continuation cap stays the backstop."""
         db = self.app.state.worker_db
         with self.app.state.db_lock:
-            record_intervention(
+            intervention_id = record_intervention(
                 db, int(chain["job_id"]), node_id, ACTION_RESTART, detection, STATUS_PENDING,
                 "Still no progress after a corrective steer. Restarting clean would "
                 "DISCARD this job's worktree (all unmerged repo work from this plan) "
                 "and re-run its repo work from a fresh cut - approve or dismiss in Tasks.",
             )
         self._emit(chain, EVENT_RESTART_QUEUED, {
-            "job_id": chain["job_id"], "node_id": node_id, "detection": detection,
+            "job_id": chain["job_id"], "node_id": node_id,
+            "detection": detection, "intervention_id": intervention_id,
         })
 
     def _restart_clean(self, chain: dict[str, Any], node_id: str | None, detection: str) -> None:
@@ -421,7 +429,7 @@ class Satpam:
                     db.execute("COMMIT")
                     return
                 db.execute("DELETE FROM satpam_watch WHERE session_id = ?", (session_id,))
-                record_intervention(
+                intervention_id = record_intervention(
                     db, job_id, node_id, ACTION_RESTART, detection, STATUS_APPLIED,
                     "Still no progress after a corrective steer - restarted this "
                     "non-repo work fresh (automatic; nothing merged or destructive).",
@@ -433,7 +441,8 @@ class Satpam:
                 raise
         self._finish_cancelled(cancelled)
         self._emit(chain, EVENT_RESTARTED, {
-            "job_id": job_id, "node_id": node_id, "detection": detection, "automatic": True,
+            "job_id": job_id, "node_id": node_id, "detection": detection,
+            "automatic": True, "intervention_id": intervention_id,
         })
         if chain["engine"] == "graph":
             self.app.state.worker.graph_executor.dispatch_ready(job_id)
@@ -488,7 +497,7 @@ class Satpam:
                     set_extra="updated_at=CURRENT_TIMESTAMP",
                 )
                 db.execute("DELETE FROM satpam_watch WHERE session_id = ?", (session_id,))
-                record_intervention(
+                intervention_id = record_intervention(
                     db, job_id, node_id, ACTION_ESCALATE, detection, STATUS_APPLIED, reason,
                 )
                 db.execute("COMMIT")
@@ -498,7 +507,8 @@ class Satpam:
                 raise
         self._finish_cancelled(cancelled)
         self._emit(chain, EVENT_ESCALATED, {
-            "job_id": job_id, "node_id": node_id, "detection": detection, "reason": reason,
+            "job_id": job_id, "node_id": node_id, "detection": detection,
+            "reason": reason, "intervention_id": intervention_id,
         })
 
     def record_cap_escalation(self, run: dict[str, Any], limit: int, timeout: int) -> None:
@@ -669,6 +679,39 @@ class Satpam:
             try:
                 worktrees.recut_job_worktree(db, self.app.state.config, job)
             except worktrees.WorktreeError as exc:
+                target = json.dumps(
+                    {
+                        "view": "task",
+                        "job_id": job_id,
+                        "container_id": job["project_id"],
+                        "origin_master_session_id": job["origin_master_session_id"],
+                        "intervention_id": intervention_id,
+                        "message": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+                db.execute(
+                    "INSERT INTO attention_items("
+                    "kind, title, target_json, inline_ok, status, source_key"
+                    ") VALUES ('satpam_recovery_failed', ?, ?, 0, 'open', ?) "
+                    "ON CONFLICT(source_key) DO UPDATE SET "
+                    "title = excluded.title, target_json = excluded.target_json, "
+                    "status = 'open', resolved_at = NULL",
+                    (
+                        f"Satpam could not restart Task #{job_id}",
+                        target,
+                        f"satpam-recovery-failed:{intervention_id}",
+                    ),
+                )
+                attention = db.execute(
+                    "SELECT id FROM attention_items WHERE source_key = ?",
+                    (f"satpam-recovery-failed:{intervention_id}",),
+                ).fetchone()
+                projection = getattr(
+                    self.app.state, "master_projection", None
+                )
+                if projection is not None and attention is not None:
+                    projection.safe_project_attention(int(attention["id"]))
                 raise SatpamRestartError(str(exc)) from exc
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -701,7 +744,13 @@ class Satpam:
             worker.add_event(
                 int(entry["id"]), int(entry["session_id"]), entry.get("project_id"),
                 EVENT_RESTARTED,
-                {"job_id": job_id, "node_id": iv["node_id"], "detection": iv["detection"], "automatic": False},
+                {
+                    "job_id": job_id,
+                    "node_id": iv["node_id"],
+                    "detection": iv["detection"],
+                    "automatic": False,
+                    "intervention_id": intervention_id,
+                },
             )
         if job["engine"] == "graph":
             self.app.state.worker.graph_executor.dispatch_ready(job_id)

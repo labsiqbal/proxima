@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from fastapi import HTTPException
 
@@ -256,7 +256,48 @@ def ensure_master_identity(
     return profile_dict, dict(session)
 
 
-def master_capacity(conn, origin_master_session_id: int) -> dict[str, int]:
+def master_parallel_limit(config: Mapping[str, Any] | None = None) -> int:
+    try:
+        value = int((config or {}).get("master_max_parallel", MASTER_MAX_PARALLEL))
+    except (TypeError, ValueError, OverflowError):
+        value = MASTER_MAX_PARALLEL
+    return max(1, min(64, value))
+
+
+def master_active_slots(conn, origin_master_session_id: int) -> int:
+    return _as_int(
+        conn.execute(
+            "SELECT ("
+            "  SELECT COUNT(*) FROM runs active_run "
+            "  JOIN sessions active_session "
+            "  ON active_session.id = active_run.session_id "
+            "  JOIN jobs active_job "
+            "  ON active_job.id = active_session.job_id "
+            "  WHERE active_job.origin_master_session_id = ? "
+            "  AND active_run.status IN ('queued', 'running')"
+            ") + ("
+            "  SELECT COUNT(*) FROM jobs reserved_job "
+            "  WHERE reserved_job.origin_master_session_id = ? "
+            "  AND reserved_job.status = 'running' "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM sessions reserved_session "
+            "    JOIN runs reserved_run "
+            "    ON reserved_run.session_id = reserved_session.id "
+            "    WHERE reserved_session.job_id = reserved_job.id "
+            "    AND reserved_run.status IN ('queued', 'running')"
+            "  )"
+            ") AS c",
+            (origin_master_session_id, origin_master_session_id),
+        ).fetchone()["c"]
+    )
+
+
+def master_capacity(
+    conn,
+    origin_master_session_id: int,
+    *,
+    max_parallel: int = MASTER_MAX_PARALLEL,
+) -> dict[str, int]:
     running = conn.execute(
         "SELECT COUNT(DISTINCT r.id) AS c FROM runs r "
         "JOIN sessions s ON s.id = r.session_id JOIN jobs j ON j.id = s.job_id "
@@ -274,11 +315,12 @@ def master_capacity(conn, origin_master_session_id: int) -> dict[str, int]:
         ") AS c",
         (origin_master_session_id, origin_master_session_id),
     ).fetchone()["c"]
+    active_slots = master_active_slots(conn, origin_master_session_id)
     running_int = _as_int(running)
     return {
         "running": running_int,
-        "max": MASTER_MAX_PARALLEL,
-        "free": max(0, MASTER_MAX_PARALLEL - running_int),
+        "max": max_parallel,
+        "free": max(0, max_parallel - active_slots),
         "queued": _as_int(queued),
     }
 
@@ -424,7 +466,14 @@ def create_master_plan(conn, app, user: dict[str, Any], origin_master_session_id
     return payload
 
 
-def start_master_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, Any]:
+def start_master_job(
+    conn,
+    app,
+    user: dict[str, Any],
+    job_id: int,
+    *,
+    supervisor_budget_turns: int | None = None,
+) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM jobs WHERE id = ? AND created_by = ? AND origin_master_session_id IS NOT NULL",
         (job_id, user["id"]),
@@ -432,7 +481,12 @@ def start_master_job(conn, app, user: dict[str, Any], job_id: int) -> dict[str, 
     if not row:
         raise MasterToolError("job_not_found", f"Master job {job_id} was not found")
     try:
-        app.state.task_delegation.start(job_id, user, connection=conn)
+        app.state.task_delegation.start(
+            job_id,
+            user,
+            connection=conn,
+            supervisor_budget_turns=supervisor_budget_turns,
+        )
     except TaskDelegationError as exc:
         raise MasterToolError(exc.code, str(exc)) from exc
     return _job_payload(conn, job_id)
@@ -609,7 +663,14 @@ def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_
                         started_jobs.append(start_master_job(conn, app, user, job["id"]))
                     except MasterToolError as exc:
                         queued = _job_payload(conn, job["id"])
-                        start_errors.append({"job_id": job["id"], "code": exc.code, "message": str(exc)})
+                        if exc.code != "master_capacity_full":
+                            start_errors.append(
+                                {
+                                    "job_id": job["id"],
+                                    "code": exc.code,
+                                    "message": str(exc),
+                                }
+                            )
                         started_jobs.append(queued)
                 jobs = started_jobs
             data = {
@@ -703,7 +764,11 @@ def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_
                 "VALUES ('master_decision', ?, ?, 0, 'open', ?)",
                 (title[:200], json.dumps({"view": "master", "message": message}), f"master:{origin_master_session_id}:{iso_now()}"),
             )
-            data = {"attention_id": _as_int(cur.lastrowid)}
+            attention_id = _as_int(cur.lastrowid)
+            projection = getattr(app.state, "master_projection", None)
+            if projection is not None:
+                projection.safe_project_attention(attention_id)
+            data = {"attention_id": attention_id}
         else:
             raise MasterToolError("tool_not_allowed", f"Master tool {name!r} is not allowed")
         return {"ok": True, "tool": name, "result": data}
