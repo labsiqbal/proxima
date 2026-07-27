@@ -64,10 +64,11 @@ One workspace, organized around two paths into durable work: **Chat or Master â†
 - **Single-user cockpit** â€” set one owner password on first run, then use a
   persistent owner session. Run it for yourself, see your work organized, never
   lose context.
-- **Master orchestration desk** - a built-in system persona backed by the runner
-  you choose, with in-process Proxima tools, live worker capacity, active queue,
-  needs-you links, and job-scoped checkpoints. Master and its workers auto-approve
-  ACP tool prompts without changing the global permission setting. Optional
+- **Master orchestration desk** - a built-in system persona backed by a conforming
+  chat-only runner, with schema-validated path-free Proxima product tools, live
+  worker capacity, active queue, needs-you links, and job-scoped checkpoints. Master
+  never auto-approves runner tool prompts; each worker Task instead follows its own
+  Guarded or Autonomous policy, without changing the global permission setting. Optional
   unattended mode starts only queued work and stops at saved turn and wall-clock
   budgets; code jobs may still commit, push, or open PRs through your existing
   `git`/`gh` setup. Satpam alone owns stuck-job recovery.

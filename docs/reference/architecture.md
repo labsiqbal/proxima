@@ -72,7 +72,9 @@ Core backend modules: `main.py` (app factory + lifespan), `db.py` (schema +
 connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
 supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
-identity + in-process tool allowlist), `master_supervisor.py` (budgeted unattended
+identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
+schema-validated, path-free product tools), `codex_master_proxy.py` (Codex loopback
+provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `job_checkpoints.py`, `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),

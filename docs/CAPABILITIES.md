@@ -372,9 +372,10 @@ Master jobs; it never dispatches work while off and never participates in stuck-
 recovery. Saved turn (1-200) and wall-clock (5 minutes-24 hours) budgets apply on the
 next tick. The optional token value is stored/readable, but current ACP runner events
 do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion turns the
-mode off cleanly and creates an `master_budget` Attention row. Unattended jobs retain
-scoped ACP auto-approval and normal BYO push/PR capability; destructive product admin
-is not in its handler set. Satpam remains the sole steer/restart authority.
+mode off cleanly and creates an `master_budget` Attention row. Unattended runs only
+start already-queued Master Tasks, each following its own Guarded or Autonomous
+execution policy for ACP approval, plus normal BYO push/PR capability; destructive
+product admin is not in its handler set. Satpam remains the sole steer/restart authority.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
 with five chapters when Master is enabled and four when it is disabled. Completion
