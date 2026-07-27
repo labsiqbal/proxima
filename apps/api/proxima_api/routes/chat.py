@@ -305,7 +305,19 @@ def register(app, deps):
     @app.get("/api/sessions/{session_id}/messages")
     def list_messages(session_id: int, user: dict[str, Any] = Depends(current_user)):
         session_for_user(session_id, user)
-        rows = db().execute("SELECT id, role, content, author, run_id, output_links, created_at FROM messages WHERE session_id = ? ORDER BY id ASC", (session_id,)).fetchall()
+        rows = db().execute(
+            "SELECT m.id, m.role, m.content, m.author, m.run_id, "
+            "m.output_links, m.created_at, "
+            "mc.focus_mode AS master_focus_mode, "
+            "mc.focus_container_id AS master_focus_container_id, "
+            "mc.target_mode AS master_target_mode, "
+            "mc.target_container_id AS master_target_container_id, "
+            "mc.target_area_id AS master_target_area_id "
+            "FROM messages m LEFT JOIN master_message_context mc "
+            "ON mc.message_id = m.id "
+            "WHERE m.session_id = ? ORDER BY m.id ASC",
+            (session_id,),
+        ).fetchall()
         # Batch activity + duration for every assistant run in one pass each
         # (avoids an N+1: previously 2 queries per assistant message).
         run_ids = sorted({_as_int(r["run_id"]) for r in rows if r["role"] == "assistant" and r["run_id"]})
@@ -354,6 +366,23 @@ def register(app, deps):
         out = []
         for row in rows:
             m = dict(row)
+            master_target_mode = m.pop("master_target_mode", None)
+            master_focus_mode = m.pop("master_focus_mode", None)
+            master_focus_container_id = m.pop(
+                "master_focus_container_id", None
+            )
+            master_target_container_id = m.pop(
+                "master_target_container_id", None
+            )
+            master_target_area_id = m.pop("master_target_area_id", None)
+            if master_target_mode is not None and master_focus_mode is not None:
+                m["master_target"] = {
+                    "focus_mode": master_focus_mode,
+                    "focus_container_id": master_focus_container_id,
+                    "target_mode": master_target_mode,
+                    "target_container_id": master_target_container_id,
+                    "target_area_id": master_target_area_id,
+                }
             try:
                 links = _decode_json(m.pop("output_links", "[]") or "[]")
             except Exception:

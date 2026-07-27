@@ -1,5 +1,6 @@
 import { Composer } from '../chat/Composer'
 import { useMasterState } from '../../master/MasterStateProvider'
+import { MasterTargetPicker } from './MasterTargetPicker'
 
 export function MasterComposer({
   token,
@@ -8,13 +9,23 @@ export function MasterComposer({
   token: string
   projectSlug?: string
 }) {
-  const { activeRun, composer, desk, actions } = useMasterState()
+  const { activeRun, composer, desk, fleet, focus, target, actions } = useMasterState()
   const busy = composer.sending || ['queued', 'running'].includes(activeRun?.status || '')
+  const targetContainer = fleet.containers.find(
+    container => container.id === target.containerId,
+  )
+  const focusedContainer = fleet.containers.find(
+    container => container.id === focus.containerId,
+  )
+  const attachmentSlug = targetContainer?.slug
+    || focusedContainer?.slug
+    || projectSlug
   return (
     <div className="master-composer-dock">
+      <MasterTargetPicker />
       <Composer
         token={token}
-        slug={projectSlug}
+        slug={attachmentSlug}
         disabled={busy}
         promptModes={false}
         generateKinds={[]}
@@ -35,8 +46,8 @@ export function MasterComposer({
         {desk?.unattended
           ? 'Master may continue already queued Tasks within your saved budgets.'
           : 'Master responds when you ask. Every delegated action remains a visible Task.'}
-        {!projectSlug
-          ? ' Select a Container in the shell only when you need attachments or file mentions.'
+        {!attachmentSlug
+          ? ' Choose a Container target when you need attachments or file mentions.'
           : ''}
       </p>
       {composer.error && (

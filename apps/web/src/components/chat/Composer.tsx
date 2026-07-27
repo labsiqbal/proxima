@@ -591,10 +591,6 @@ export function Composer({
 				onBlur={() => window.setTimeout(() => setMention(null), 120)}
 				disabled={disabled || submitting}
 				aria-autocomplete="list"
-				aria-expanded={
-					(mention != null && mentionMatches.length > 0) ||
-					commandMatches.length > 0
-				}
 				aria-controls={
 					mention && mentionMatches.length > 0
 						? mentionListId

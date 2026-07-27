@@ -22,10 +22,11 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="muted tool-pane-hint">{label}</p>
 }
 
-export function ToolDock({ token, project, onOpenSettings }: {
+export function ToolDock({ token, project, onOpenSettings, onOpenChange }: {
   token: string
   project: Project | null
   onOpenSettings: () => void
+  onOpenChange?: (open: boolean) => void
 }) {
   const [open, setOpen] = React.useState<Tool | null>(null)
   // Latch: once Terminal or Files has been opened it stays mounted (hidden when
@@ -50,8 +51,12 @@ export function ToolDock({ token, project, onOpenSettings }: {
     const shell = document.querySelector('.app-shell')
     if (!shell) return
     shell.classList.toggle('tool-open', open != null)
-    return () => { shell.classList.remove('tool-open') }
-  }, [open])
+    onOpenChange?.(open != null)
+    return () => {
+      shell.classList.remove('tool-open')
+      onOpenChange?.(false)
+    }
+  }, [onOpenChange, open])
 
   // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
   // so far-away screens ask for it with an event instead of prop-drilling

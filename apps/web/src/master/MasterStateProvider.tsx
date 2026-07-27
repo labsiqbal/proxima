@@ -4,12 +4,15 @@ import {
   saveMasterSettings,
   sendMasterMessage,
   type MasterDesk,
+  type MasterMessageContext,
   type MasterSettings,
 } from '../api/master'
+import { listContainerAreas, listContainers } from '../api/containers'
 import { listEvents } from '../api/runs'
 import { listMessages } from '../api/sessions'
 import { SESSION_EVENT_TYPES } from '../lib/eventTypes'
-import type { RunEvent } from '../types'
+import { notify } from '../lib/notify'
+import type { Container, ContainerAreas, RunEvent } from '../types'
 import {
   activeMasterRun,
   mergeMasterMessageSnapshot,
@@ -31,26 +34,36 @@ export type MasterConnectionState =
 
 export type MasterComposerSelection = { start: number; end: number }
 
-export type MasterFutureState = {
-  focus: {
-    mode: 'fleet'
-    containerId: null
-    pendingContainerId: null
-    durable: false
-  }
-  target: {
-    mode: 'auto'
-    containerId: null
-    areaId: null
-    enabled: false
-  }
-  toastQueue: readonly []
-  popup: {
-    open: false
-    presentation: 'closed'
-    preferredCorner: 'right'
-    enabled: false
-  }
+export type MasterFocusState = {
+  mode: 'fleet' | 'container'
+  containerId: number | null
+}
+
+export type MasterTargetState = {
+  mode: 'auto' | 'explicit'
+  containerId: number | null
+  areaId: number | null
+}
+
+export type MasterToast = {
+  id: number
+  sourceKey: string
+  title: string
+  body: string
+  tone: 'info' | 'success' | 'warning' | 'danger'
+  priority: 'polite' | 'assertive'
+}
+
+export type MasterPopupState = {
+  open: boolean
+  preferredCorner: 'left' | 'right'
+}
+
+export type MasterFleetState = {
+  loading: boolean
+  error: string
+  containers: Container[]
+  areasByContainer: Record<number, ContainerAreas>
 }
 
 export type MasterStateValue = {
@@ -82,7 +95,11 @@ export type MasterStateValue = {
     followTail: boolean
     anchorMessageId: number | null
   }
-  future: MasterFutureState
+  focus: MasterFocusState
+  target: MasterTargetState
+  popup: MasterPopupState
+  toasts: MasterToast[]
+  fleet: MasterFleetState
   actions: {
     setDraft: (draft: string) => void
     setSelection: (selection: MasterComposerSelection) => void
@@ -96,6 +113,15 @@ export type MasterStateValue = {
       followTail: boolean
       anchorMessageId: number | null
     }) => void
+    setFocus: (containerId: number | null) => void
+    setTargetContainer: (containerId: number | null) => void
+    setTargetArea: (areaId: number | null) => void
+    loadTargetAreas: (containerId: number) => Promise<void>
+    openPopup: () => void
+    closePopup: () => void
+    togglePopup: () => void
+    setPopupCorner: (corner: 'left' | 'right') => void
+    dismissToast: (id: number) => void
     refresh: () => Promise<void>
     updateSettings: (settings: Partial<MasterSettings>) => Promise<void>
     clearError: () => void
@@ -104,31 +130,167 @@ export type MasterStateValue = {
 
 const MasterStateContext = React.createContext<MasterStateValue | null>(null)
 
-const FUTURE_STATE: MasterFutureState = {
-  focus: {
-    mode: 'fleet',
-    containerId: null,
-    pendingContainerId: null,
-    durable: false,
-  },
-  target: {
-    mode: 'auto',
-    containerId: null,
-    areaId: null,
-    enabled: false,
-  },
-  toastQueue: [],
-  popup: {
-    open: false,
-    presentation: 'closed',
-    preferredCorner: 'right',
-    enabled: false,
-  },
-}
-
 const SIDE_COLLAPSED_KEY = 'proxima.master.sideCollapsed'
+const MASTER_FOCUS_KEY = 'proxima.master.focus'
+const MASTER_TARGET_KEY = 'proxima.master.target'
+const MASTER_POPUP_CORNER_KEY = 'proxima.master.popupCorner'
 const EVENT_DEDUPE_LIMIT = 2000
 const RECONCILE_RACE_LIMIT = 3
+const TOAST_QUEUE_LIMIT = 3
+
+const DEFAULT_FOCUS: MasterFocusState = { mode: 'fleet', containerId: null }
+const DEFAULT_TARGET: MasterTargetState = {
+  mode: 'auto',
+  containerId: null,
+  areaId: null,
+}
+
+function ownerPreferenceKey(key: string, ownerId: number): string {
+  return `${key}.${ownerId}`
+}
+
+function readFocus(ownerId: number): MasterFocusState {
+  if (typeof localStorage === 'undefined') return DEFAULT_FOCUS
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(ownerPreferenceKey(MASTER_FOCUS_KEY, ownerId)) || 'null',
+    )
+    if (
+      value?.mode === 'container'
+      && Number.isSafeInteger(value.containerId)
+      && value.containerId > 0
+    ) {
+      return { mode: 'container', containerId: value.containerId }
+    }
+  } catch {
+    // Preference recovery is best effort.
+  }
+  return DEFAULT_FOCUS
+}
+
+function readTarget(ownerId: number): MasterTargetState {
+  if (typeof localStorage === 'undefined') return DEFAULT_TARGET
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(ownerPreferenceKey(MASTER_TARGET_KEY, ownerId)) || 'null',
+    )
+    if (
+      value?.mode === 'explicit'
+      && Number.isSafeInteger(value.containerId)
+      && value.containerId > 0
+    ) {
+      return {
+        mode: 'explicit',
+        containerId: value.containerId,
+        areaId: Number.isSafeInteger(value.areaId) && value.areaId > 0
+          ? value.areaId
+          : null,
+      }
+    }
+  } catch {
+    // Preference recovery is best effort.
+  }
+  return DEFAULT_TARGET
+}
+
+function readPopupCorner(ownerId: number): 'left' | 'right' {
+  if (typeof localStorage === 'undefined') return 'right'
+  return localStorage.getItem(
+    ownerPreferenceKey(MASTER_POPUP_CORNER_KEY, ownerId),
+  ) === 'left' ? 'left' : 'right'
+}
+
+function writePreference(key: string, ownerId: number, value: unknown) {
+  try {
+    localStorage.setItem(ownerPreferenceKey(key, ownerId), JSON.stringify(value))
+  } catch {
+    // UI preference persistence is best effort.
+  }
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null
+}
+
+function toastForEvent(event: RunEvent): Omit<MasterToast, 'id'> | null {
+  const messageId = positiveInteger(event.payload.message_id)
+  const taskId = positiveInteger(event.payload.task_id)
+  if (messageId == null) return null
+  if (event.type === 'master.task.started' && taskId != null) {
+    return {
+      sourceKey: `task:${taskId}:progress`,
+      title: `Task #${taskId} started`,
+      body: 'Master is tracking its durable progress in the conversation.',
+      tone: 'info',
+      priority: 'polite',
+    }
+  }
+  const terminal: Record<string, {
+    title: string
+    body: string
+    tone: MasterToast['tone']
+  }> = {
+    'master.task.completed': {
+      title: `Task #${taskId} completed`,
+      body: 'The durable result is ready in Master.',
+      tone: 'success',
+    },
+    'master.task.failed': {
+      title: `Task #${taskId} failed`,
+      body: 'Master preserved the failure details in the conversation.',
+      tone: 'danger',
+    },
+    'master.task.cancelled': {
+      title: `Task #${taskId} cancelled`,
+      body: 'The durable Task state is available in Master.',
+      tone: 'warning',
+    },
+    'master.task.review_ready': {
+      title: `Task #${taskId} needs review`,
+      body: 'Open Master to review the durable Task result.',
+      tone: 'warning',
+    },
+    'master.task.blocked': {
+      title: `Task #${taskId} is blocked`,
+      body: 'Master recorded the prerequisite that needs attention.',
+      tone: 'warning',
+    },
+  }
+  const match = terminal[event.type]
+  if (match && taskId != null) {
+    return {
+      sourceKey: `task:${taskId}:${event.type}:${messageId}`,
+      ...match,
+      priority: match.tone === 'danger' ? 'assertive' : 'polite',
+    }
+  }
+  if (
+    event.type === 'master.attention.required'
+    || event.type === 'master.supervisor.outcome'
+  ) {
+    return {
+      sourceKey: `attention:${event.type}:${messageId}`,
+      title: 'Master needs your attention',
+      body: 'The durable decision request is ready in the conversation.',
+      tone: 'warning',
+      priority: 'assertive',
+    }
+  }
+  if (event.type.startsWith('master.satpam.')) {
+    const failed = event.type.endsWith('recovery_failed')
+      || event.type.endsWith('escalated')
+    return {
+      sourceKey: `satpam:${event.type}:${messageId}`,
+      title: failed ? 'Satpam escalated a Task' : 'Satpam updated a Task',
+      body: 'The durable supervision result is ready in Master.',
+      tone: failed ? 'danger' : 'warning',
+      priority: failed ? 'assertive' : 'polite',
+    }
+  }
+  return null
+}
 
 function rememberEventIds(
   current: ReadonlySet<number>,
@@ -191,6 +353,23 @@ function MasterStateHost({
     followTail: true,
     anchorMessageId: null as number | null,
   })
+  const [focus, setFocusState] = React.useState<MasterFocusState>(
+    () => readFocus(ownerId),
+  )
+  const [target, setTargetState] = React.useState<MasterTargetState>(
+    () => readTarget(ownerId),
+  )
+  const [popup, setPopupState] = React.useState<MasterPopupState>(() => ({
+    open: false,
+    preferredCorner: readPopupCorner(ownerId),
+  }))
+  const [toasts, setToasts] = React.useState<MasterToast[]>([])
+  const [fleet, setFleet] = React.useState<MasterFleetState>({
+    loading: enabled,
+    error: '',
+    containers: [],
+    areasByContainer: {},
+  })
   const [bootstrapRequest, setBootstrapRequest] = React.useState(0)
 
   const generationRef = React.useRef(0)
@@ -212,7 +391,14 @@ function MasterStateHost({
   const mutationRevisionRef = React.useRef(0)
   const sendLockRef = React.useRef(false)
   const tempMessageIdRef = React.useRef(0)
+  const toastIdRef = React.useRef(0)
+  const toastTransitionsRef = React.useRef(new Set<string>())
   const homeActiveRef = React.useRef(false)
+  const popupOpenRef = React.useRef(false)
+  const focusRef = React.useRef(focus)
+  const targetRef = React.useRef(target)
+  const fleetRef = React.useRef(fleet)
+  const areaRequestsRef = React.useRef(new Map<number, Promise<void>>())
   const handleEventRef = React.useRef<(event: RunEvent) => void>(() => {})
   const reconcileRef = React.useRef<(reason?: string, afterId?: number) => Promise<void>>(
     async () => {},
@@ -220,6 +406,10 @@ function MasterStateHost({
 
   React.useEffect(() => { deskRef.current = desk }, [desk])
   React.useEffect(() => { homeActiveRef.current = homeActive }, [homeActive])
+  React.useEffect(() => { popupOpenRef.current = popup.open }, [popup.open])
+  React.useEffect(() => { focusRef.current = focus }, [focus])
+  React.useEffect(() => { targetRef.current = target }, [target])
+  React.useEffect(() => { fleetRef.current = fleet }, [fleet])
 
   const setCursor = React.useCallback((cursor: number) => {
     cursorRef.current = Math.max(cursorRef.current, cursor)
@@ -250,7 +440,29 @@ function MasterStateHost({
     setHomeActiveState(false)
     homeActiveRef.current = false
     setScrollStateValue({ scrollTop: 0, followTail: true, anchorMessageId: null })
-  }, [])
+    const nextFocus = readFocus(ownerId)
+    const nextTarget = readTarget(ownerId)
+    const nextPopup = {
+      open: false,
+      preferredCorner: readPopupCorner(ownerId),
+    } satisfies MasterPopupState
+    focusRef.current = nextFocus
+    targetRef.current = nextTarget
+    popupOpenRef.current = false
+    fleetRef.current = {
+      loading: nextEnabled,
+      error: '',
+      containers: [],
+      areasByContainer: {},
+    }
+    areaRequestsRef.current.clear()
+    toastTransitionsRef.current.clear()
+    setFocusState(nextFocus)
+    setTargetState(nextTarget)
+    setPopupState(nextPopup)
+    setToasts([])
+    setFleet(fleetRef.current)
+  }, [ownerId])
 
   const reconcile = React.useCallback(async (
     reason = 'manual',
@@ -354,7 +566,11 @@ function MasterStateHost({
           messagesRef.current = nextMessages
           setDesk(projected.desk)
           setMessages(nextMessages)
-          if (!homeActiveRef.current && unreadMessageIds.size) {
+          if (
+            !homeActiveRef.current
+            && !popupOpenRef.current
+            && unreadMessageIds.size
+          ) {
             setUnreadCount(count => count + unreadMessageIds.size)
           }
           setCursor(barrier)
@@ -396,6 +612,22 @@ function MasterStateHost({
 
   reconcileRef.current = reconcile
 
+  const enqueueToast = React.useCallback((event: RunEvent) => {
+    const toast = toastForEvent(event)
+    if (!toast) return
+    const isProgress = toast.sourceKey.endsWith(':progress')
+    if (!isProgress && toastTransitionsRef.current.has(toast.sourceKey)) return
+    if (!isProgress) toastTransitionsRef.current.add(toast.sourceKey)
+    const next = { ...toast, id: ++toastIdRef.current }
+    setToasts(current => {
+      const withoutSource = current.filter(
+        item => item.sourceKey !== toast.sourceKey,
+      )
+      return [...withoutSource, next].slice(-TOAST_QUEUE_LIMIT)
+    })
+    notify(toast.title, toast.body)
+  }, [])
+
   const applyEvent = React.useCallback((event: RunEvent) => {
     const currentDesk = deskRef.current
     if (!currentDesk || event.session_id !== currentDesk.session.id) return
@@ -432,9 +664,14 @@ function MasterStateHost({
       messagesRef.current = projected.messages
       setMessages(projected.messages)
     }
-    if (projected.insertedMessageId != null && !homeActiveRef.current) {
+    if (
+      projected.insertedMessageId != null
+      && !homeActiveRef.current
+      && !popupOpenRef.current
+    ) {
       setUnreadCount(count => count + 1)
     }
+    enqueueToast(event)
 
     if (
       event.type === 'run.completed'
@@ -451,7 +688,7 @@ function MasterStateHost({
       setConnectionError('A live event gap was detected. Master is reconciling durable state.')
       void reconcileRef.current('cursor-gap', previousCursor)
     }
-  }, [setCursor])
+  }, [enqueueToast, setCursor])
 
   handleEventRef.current = applyEvent
 
@@ -473,7 +710,13 @@ function MasterStateHost({
       startTimer = 0
       void (async () => {
         try {
-          const initialDesk = await getMasterDesk(token, controller.signal)
+          const [initialDesk, fleetOutcome] = await Promise.all([
+            getMasterDesk(token, controller.signal),
+            listContainers(token, controller.signal).then(
+              result => ({ result, error: '' }),
+              error => ({ result: null, error: errorMessage(error) }),
+            ),
+          ])
           const sessionId = initialDesk.session.id
           const cursor = initialDesk.event_cursor
           const thread = await listMessages(token, sessionId, controller.signal)
@@ -481,6 +724,33 @@ function MasterStateHost({
             controller.signal.aborted
             || generation !== generationRef.current
           ) return
+          let nextFocus = focusRef.current
+          let nextTarget = targetRef.current
+          if (fleetOutcome.result) {
+            const availableIds = new Set(
+              fleetOutcome.result.containers.map(container => container.id),
+            )
+            if (
+              nextFocus.mode === 'container'
+              && !availableIds.has(nextFocus.containerId || 0)
+            ) {
+              nextFocus = DEFAULT_FOCUS
+            }
+            if (
+              nextTarget.mode === 'explicit'
+              && !availableIds.has(nextTarget.containerId || 0)
+            ) {
+              nextTarget = DEFAULT_TARGET
+            }
+          }
+          focusRef.current = nextFocus
+          targetRef.current = nextTarget
+          fleetRef.current = {
+            loading: false,
+            error: fleetOutcome.error,
+            containers: fleetOutcome.result?.containers ?? [],
+            areasByContainer: {},
+          }
           eventIdsRef.current = new Set()
           runSeqRef.current = new Map()
           deskRef.current = initialDesk
@@ -488,6 +758,9 @@ function MasterStateHost({
           cursorRef.current = cursor
           setDesk(initialDesk)
           setMessages(messagesRef.current)
+          setFocusState(nextFocus)
+          setTargetState(nextTarget)
+          setFleet(fleetRef.current)
           setResumeCursor(cursor)
           setLoading(false)
           setConnectionError('')
@@ -553,6 +826,7 @@ function MasterStateHost({
             || generation !== generationRef.current
           ) return
           setLoading(false)
+          setFleet(current => ({ ...current, loading: false, error: errorMessage(error) }))
           setConnectionState('disconnected')
           setConnectionError(errorMessage(error))
         }
@@ -586,6 +860,122 @@ function MasterStateHost({
     setFocusRequest(request => request + 1)
   }, [])
 
+  const setFocus = React.useCallback((containerId: number | null) => {
+    const next: MasterFocusState = containerId == null
+      ? DEFAULT_FOCUS
+      : { mode: 'container', containerId }
+    focusRef.current = next
+    setFocusState(next)
+    writePreference(MASTER_FOCUS_KEY, ownerId, next)
+  }, [ownerId])
+
+  const setTargetContainer = React.useCallback((containerId: number | null) => {
+    const next: MasterTargetState = containerId == null
+      ? DEFAULT_TARGET
+      : { mode: 'explicit', containerId, areaId: null }
+    targetRef.current = next
+    setTargetState(next)
+    writePreference(MASTER_TARGET_KEY, ownerId, next)
+  }, [ownerId])
+
+  const setTargetArea = React.useCallback((areaId: number | null) => {
+    const current = targetRef.current
+    if (current.mode !== 'explicit' || current.containerId == null) return
+    const next = { ...current, areaId }
+    targetRef.current = next
+    setTargetState(next)
+    writePreference(MASTER_TARGET_KEY, ownerId, next)
+  }, [ownerId])
+
+  const loadTargetAreas = React.useCallback(async (containerId: number) => {
+    if (fleetRef.current.areasByContainer[containerId]) return
+    const existing = areaRequestsRef.current.get(containerId)
+    if (existing) return existing
+    const container = fleetRef.current.containers.find(
+      item => item.id === containerId,
+    )
+    if (!container) return
+    const generation = generationRef.current
+    const request = listContainerAreas(token, container.slug)
+      .then(areas => {
+        if (generation !== generationRef.current) return
+        const validAreaIds = new Set([
+          ...areas.code_areas.map(area => area.id),
+          areas.ops_area.id,
+        ])
+        fleetRef.current = {
+          ...fleetRef.current,
+          error: '',
+          areasByContainer: {
+            ...fleetRef.current.areasByContainer,
+            [containerId]: areas,
+          },
+        }
+        setFleet(fleetRef.current)
+        const currentTarget = targetRef.current
+        if (
+          currentTarget.containerId === containerId
+          && currentTarget.areaId != null
+          && !validAreaIds.has(currentTarget.areaId)
+        ) {
+          const next = { ...currentTarget, areaId: null }
+          targetRef.current = next
+          setTargetState(next)
+          writePreference(MASTER_TARGET_KEY, ownerId, next)
+        }
+      })
+      .catch(error => {
+        if (generation !== generationRef.current) return
+        fleetRef.current = {
+          ...fleetRef.current,
+          error: errorMessage(error),
+        }
+        setFleet(fleetRef.current)
+      })
+      .finally(() => {
+        if (areaRequestsRef.current.get(containerId) === request) {
+          areaRequestsRef.current.delete(containerId)
+        }
+      })
+    areaRequestsRef.current.set(containerId, request)
+    return request
+  }, [ownerId, token])
+
+  const openPopup = React.useCallback(() => {
+    popupOpenRef.current = true
+    setPopupState(current => ({ ...current, open: true }))
+    setUnreadCount(0)
+  }, [])
+
+  const closePopup = React.useCallback(() => {
+    popupOpenRef.current = false
+    setPopupState(current => ({ ...current, open: false }))
+  }, [])
+
+  const togglePopup = React.useCallback(() => {
+    if (popupOpenRef.current) {
+      closePopup()
+    } else {
+      openPopup()
+    }
+  }, [closePopup, openPopup])
+
+  const setPopupCorner = React.useCallback((preferredCorner: 'left' | 'right') => {
+    setPopupState(current => ({ ...current, preferredCorner }))
+    try {
+      localStorage.setItem(
+        ownerPreferenceKey(MASTER_POPUP_CORNER_KEY, ownerId),
+        preferredCorner,
+      )
+    } catch {
+      // UI preference persistence is best effort.
+    }
+  }, [ownerId])
+
+  const dismissToast = React.useCallback((id: number) => {
+    setToasts(current => current.filter(toast => toast.id !== id))
+  }, [])
+
   const activeRun = activeMasterRun(desk?.master_run ?? null)
 
   const send = React.useCallback(async (content = draft) => {
@@ -603,16 +993,57 @@ function MasterStateHost({
     sendAbortRef.current?.abort()
     sendAbortRef.current = controller
     const clientId = `master-send-${++tempMessageIdRef.current}`
+    const selectedTarget = targetRef.current
+    let effectiveFocus = focusRef.current
+    if (
+      selectedTarget.mode === 'explicit'
+      && selectedTarget.containerId != null
+      && (
+        effectiveFocus.mode !== 'container'
+        || effectiveFocus.containerId !== selectedTarget.containerId
+      )
+    ) {
+      setFocus(selectedTarget.containerId)
+      effectiveFocus = {
+        mode: 'container',
+        containerId: selectedTarget.containerId,
+      }
+    }
+    const messageContext: MasterMessageContext = {
+      focus: effectiveFocus.mode === 'container'
+        ? { mode: 'container', container_id: effectiveFocus.containerId || undefined }
+        : { mode: 'fleet' },
+      target: selectedTarget.mode === 'explicit'
+        ? {
+            mode: 'explicit',
+            container_id: selectedTarget.containerId || undefined,
+            area_id: selectedTarget.areaId || undefined,
+          }
+        : { mode: 'auto' },
+    }
+    const masterTarget = {
+      focus_mode: effectiveFocus.mode,
+      focus_container_id: effectiveFocus.containerId,
+      target_mode: selectedTarget.mode,
+      target_container_id: selectedTarget.containerId,
+      target_area_id: selectedTarget.areaId,
+    } as const
     messagesRef.current = orderMasterMessages([...messagesRef.current, {
       role: 'user',
       content: text,
       author: 'You',
       clientId,
       pending: true,
+      master_target: masterTarget,
     }])
     setMessages(messagesRef.current)
     try {
-      const result = await sendMasterMessage(token, text, controller.signal)
+      const result = await sendMasterMessage(
+        token,
+        text,
+        messageContext,
+        controller.signal,
+      )
       if (
         controller.signal.aborted
         || generation !== generationRef.current
@@ -650,7 +1081,7 @@ function MasterStateHost({
       }
       if (sendAbortRef.current === controller) sendAbortRef.current = null
     }
-  }, [activeRun?.status, draft, enabled, token])
+  }, [activeRun?.status, draft, enabled, setFocus, token])
 
   const setHomeActive = React.useCallback((active: boolean) => {
     homeActiveRef.current = active
@@ -754,7 +1185,11 @@ function MasterStateHost({
       sideCollapsed,
       ...scrollState,
     },
-    future: FUTURE_STATE,
+    focus,
+    target,
+    popup,
+    toasts,
+    fleet,
     actions: {
       setDraft,
       setSelection,
@@ -764,6 +1199,15 @@ function MasterStateHost({
       markRead: () => setUnreadCount(0),
       setSideCollapsed,
       setScrollState,
+      setFocus,
+      setTargetContainer,
+      setTargetArea,
+      loadTargetAreas,
+      openPopup,
+      closePopup,
+      togglePopup,
+      setPopupCorner,
+      dismissToast,
       refresh: () => {
         if (
           !deskRef.current
@@ -786,12 +1230,19 @@ function MasterStateHost({
     connectionError,
     connectionState,
     desk,
+    dismissToast,
     draft,
     enabled,
     focusRequest,
+    focus,
+    fleet,
     homeActive,
     loading,
     messages,
+    loadTargetAreas,
+    openPopup,
+    closePopup,
+    popup,
     reconnectCount,
     resumeCursor,
     scrollState,
@@ -800,10 +1251,17 @@ function MasterStateHost({
     sendError,
     sending,
     setDraft,
+    setFocus,
     setHomeActive,
+    setPopupCorner,
     setScrollState,
     setSideCollapsed,
+    setTargetArea,
+    setTargetContainer,
     sideCollapsed,
+    target,
+    toasts,
+    togglePopup,
     unreadCount,
     updateSettings,
   ])

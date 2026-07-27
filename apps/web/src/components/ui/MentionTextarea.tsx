@@ -157,7 +157,6 @@ export function MentionTextarea({ value, onChange, items, rows = 3, placeholder,
       placeholder={placeholder}
       aria-label={ariaLabel}
       aria-autocomplete="list"
-      aria-expanded={open != null && matches.length > 0}
       aria-controls={open && matches.length > 0 ? listId : undefined}
       aria-activedescendant={open && matches.length > 0 ? `${listId}-option-${Math.min(active, matches.length - 1)}` : undefined}
       onChange={event => { onChange(event.target.value); sync(event.target) }}

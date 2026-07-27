@@ -35,7 +35,9 @@ itself keeps the counterpart label **Master** and does not expose a fake worker 
 A compact capacity strip always states running/free out of three, queued count, and the
 saved unattended budgets. One authenticated provider owns the Master session, durable
 thread, live SSE cursor, reconnect state, unread count, composer draft/selection,
-scroll anchor, and work-panel state across navigation. The main column is the Master
+Focus, target, popup, toast queue, scroll anchor, and work-panel state across
+navigation. The full-page home and floating popup are two views of that provider,
+so only one composer and one live connection exist. The main column is the Master
 thread plus one shared **Chat composer** stack (attach + `@` project file/artifact
 mentions) wired to Master's send API rather than a normal chat run; project context
 follows the shell active project (or an active Master job's project). The side column
@@ -54,6 +56,23 @@ route changes. The header New Task control and Tasks → New task entry both see
 same composer while Master is enabled. The legacy standalone Task launcher remains a
 feature-off compatibility path only. Changing the shell Container affects attachment
 and mention context but never silently changes Master Focus.
+
+The composer defaults to **Let Master route** and can explicitly target a registered
+Container. An advanced Area override appears only after a Container is explicit.
+Sent messages retain visible target metadata. If an explicit target differs from
+Master Focus, the composer warns that sending will change Focus, and the server
+records that Focus before enqueueing. The home Focus picker changes only Master
+Focus, never the shell Container.
+
+Normal authenticated surfaces show a labeled floating Master trigger with the
+`Ctrl`/`Command` + `Shift` + `M` shortcut. The popup persists at the bottom-left or
+bottom-right, avoids shell tools and safe areas, and becomes a sheet on narrow
+screens. It traps focus, closes with Escape, and returns focus to its trigger.
+Auth, onboarding, the full Master home, update application, drawers, search,
+account menus, and ToolDock panels suppress it. Durable conversation messages stay
+the completion/failure/review/Attention/Satpam truth; named durable transitions may
+also show one coalesced, keyboard-dismissible toast that never steals focus. Raw
+token, reasoning, and tool deltas never produce toasts.
 
 **Unattended** is a quick pressed toggle on the desk. Off means Master never starts work
 without an owner turn. On means the server may start already-queued Master jobs until the
@@ -204,7 +223,7 @@ step in the general core tour.
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel and Attention); the modal core tour traps focus until completed/skipped. Focus indicators use shared tokens, and reduced-motion preferences apply globally.
+The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 ## Extension points
 

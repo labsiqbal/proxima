@@ -371,6 +371,8 @@ cannot break unrelated routes. Migration ambiguity still fails closed.
 Master nav -> GET /api/master/desk -> ensure hidden Master profile + mode='master' session
       -> reject selected runner unless its spec proves master_chat_only
 owner message -> queued Master chat-only run
+      -> validate owner-scoped Focus + auto/explicit Container/Area target
+      -> store message + master_message_context + run + Focus in one transaction
       -> dedicated managed home + empty read-only non-source scratch
       -> strictly reapply {"skills":[],"mcp":[]}; deny permissions/native tools
       -> Codex firewall replaces all tools and developer context with server-owned policy
@@ -384,7 +386,9 @@ owner message -> queued Master chat-only run
       -> RunWorker claims at most 3 Master runs; every excess worker run stays visibly queued
       -> MasterProjectionService appends concise thread messages + typed session events
       -> one authenticated MasterStateProvider resumes the durable cursor
-      -> Master home updates thread + work panel; global Attention deep-links owner decisions
+      -> Master home + popup share thread, composer, Focus, target, active run, and scroll
+      -> named durable transitions may coalesce into one focus-neutral shell toast
+      -> global Attention deep-links owner decisions
 ```
 
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
@@ -448,7 +452,10 @@ existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
 The authenticated application mounts exactly one `MasterStateProvider` above
 `AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
 resume cursor, one `EventSource`, reconnect reconciliation, unread state, composer
-draft/selection, and stable scroll/panel state. Screens are view-only consumers.
+draft/selection, Focus, target, Fleet data, popup state, transient toasts, and stable
+scroll/panel state. `MasterScreen` and `MasterPopup` are view-only consumers and
+never mount their own stream, store, polling loop, or draft owner. The hidden home
+does not render a composer while another surface is active.
 Lifecycle generations plus abort controllers reject late owner/token/session
 responses, close replaced streams, and keep React StrictMode from creating two live
 connections or duplicate UI submissions. Projection and final-message events are
@@ -463,6 +470,28 @@ reconciliation is bounded and recovery-only after reconnect, cursor gap, malform
 event, or explicit retry, not a primary poll. The SSE stream
 emits an immediate comment on an idle connection so browser `EventSource.onopen`
 reports the healthy transport without waiting for the keepalive interval.
+
+Each accepted owner message gets one `master_message_context` row. The API validates
+every referenced Container against the authenticated owner and every Area against
+that Container. Explicit targeting changes the recorded Focus to the target
+Container inside the same transaction that inserts the message and run. The run's
+stored prompt remains the raw owner text; trusted routing ids are appended only
+while building the restricted runner prompt. `MasterToolBroker` overrides model
+Container/Area arguments for explicit targets and confines automatic routing to a
+Container Focus. Fleet Focus leaves the full owner Fleet available. Deleting a
+Container nulls historical ids without deleting the durable message.
+
+The shell popup is available only on ordinary authenticated surfaces. Auth,
+onboarding, the full Master home, update application, drawers, search, account
+menus, and tool panels suppress it. It persists a left/right corner preference and
+uses tokenized collision offsets for sidebar, ToolDock, mobile chrome, toast region,
+and system safe areas. The desktop presentation is a modal dialog with a focus trap,
+Escape close, and trigger focus restoration; narrow viewports use a sheet. The
+toast region maps only named projection events that carry a durable message id.
+Stable source keys coalesce Task progress, terminal source keys prevent duplicate
+completion toasts, and raw delta events are ignored. Toasts use polite or assertive
+live regions without stealing focus and preserve the existing optional background
+desktop notification path.
 
 ### 1. Chat turn (the core loop)
 

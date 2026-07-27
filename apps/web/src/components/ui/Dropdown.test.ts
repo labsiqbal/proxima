@@ -8,7 +8,7 @@ describe("dropdownOptionAriaLabel", () => {
 				label: "Auto-pick",
 				badge: "Different agent",
 			}),
-		).toBe("Auto-pick, Different agent");
+		).toBe("Auto-pick Different agent");
 	});
 
 	it("returns the bare label when there is no badge", () => {

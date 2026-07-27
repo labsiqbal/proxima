@@ -217,11 +217,10 @@ describe("HomeScreen Ops task composer", () => {
 			screen.queryByRole("button", { name: "Normal" }),
 		).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Master/ })).toBeInTheDocument();
-		// Agent dropdown trigger is named from the active profile (aria-label),
-		// not the visual "Agent" field label.
-		expect(screen.getByRole("button", { name: "Builder" })).toBeInTheDocument();
-		// Policy dropdown is named from the selected option (aria-label).
-		expect(screen.getByRole("button", { name: "Guarded" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Agent" })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Execution policy" }),
+		).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Add" }));
 		expect(
 			screen.getByRole("menuitem", { name: /Attach files/ }),

@@ -3,6 +3,7 @@ import type { Project, Runner } from '../types'
 import { MasterConversation, MasterEmpty } from '../components/master/MasterConversation'
 import { MasterComposer } from '../components/master/MasterComposer'
 import { MasterWorkPanel } from '../components/master/MasterWorkPanel'
+import { MasterFocusPicker } from '../components/master/MasterTargetPicker'
 import { IconPanelLeft } from '../components/shell/icons'
 import { useMasterState } from '../master/MasterStateProvider'
 
@@ -57,6 +58,8 @@ export function MasterScreen({
     setHomeActive(active)
     return () => setHomeActive(false)
   }, [active, setHomeActive])
+
+  if (!active) return null
 
   const updateSettings = async (settings: Parameters<typeof actions.updateSettings>[0]) => {
     if (settingBusy) return
@@ -122,6 +125,7 @@ export function MasterScreen({
           <h1 id="master-title">Master</h1>
         </div>
         <div className="master-controls code-context">
+          <MasterFocusPicker />
           <span
             className={`master-connection ${connection.state}`}
             role="status"

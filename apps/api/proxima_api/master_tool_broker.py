@@ -334,6 +334,7 @@ class MasterToolBroker:
         self.origin_message_id = (
             _as_int(origin_message_id) if origin_message_id is not None else None
         )
+        self.message_context = self._load_message_context()
         self.result_bytes = result_bytes
         self._definitions = {
             "list_containers": ToolDefinition(
@@ -367,6 +368,17 @@ class MasterToolBroker:
                 TOOL_SCHEMAS["create_attention"], self._create_attention
             ),
         }
+
+    def _load_message_context(self) -> dict[str, Any] | None:
+        if self.origin_message_id is None:
+            return None
+        row = self.conn.execute(
+            "SELECT focus_mode, focus_container_id, target_mode, "
+            "target_container_id, target_area_id "
+            "FROM master_message_context WHERE message_id = ?",
+            (self.origin_message_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def execute(self, name: str, arguments: Any) -> dict[str, Any]:
         error = _validation_error(name, arguments)
@@ -582,12 +594,50 @@ class MasterToolBroker:
         batch_key: str,
         index: int,
     ) -> TaskDelegationRequest:
-        container_id = _as_int(task["container_id"])
-        area_id = _as_int(task["area_id"])
+        requested_container_id = _as_int(task["container_id"])
+        requested_area_id = _as_int(task["area_id"])
+        container_id = requested_container_id
+        area_id = requested_area_id
+        routing_mode = "auto"
+        routing_reason = (
+            "Master resolved the requested outcome to one registered "
+            "Container Area"
+        )
+        context = self.message_context
+        if context and context["target_mode"] == "explicit":
+            container_id = _as_int(context["target_container_id"])
+            if context["target_area_id"] is not None:
+                area_id = _as_int(context["target_area_id"])
+                routing_reason = "Owner explicitly selected the Container and Area"
+            else:
+                routing_reason = (
+                    "Owner explicitly selected the Container; Master selected "
+                    "one registered Area inside it"
+                )
+            routing_mode = "explicit"
+        elif (
+            context
+            and context["target_mode"] == "auto"
+            and context["focus_mode"] == "container"
+        ):
+            container_id = _as_int(context["focus_container_id"])
+            routing_reason = (
+                "Master auto-routed inside the owner-focused Container"
+            )
         profile_id = _as_int(task["profile_id"])
         # TaskDelegationService performs the authoritative ownership, exact
         # Container/Area, profile, Recipe, and dependency validation.
         self._owned_container(container_id)
+        area = self.conn.execute(
+            "SELECT id FROM project_areas "
+            "WHERE id = ? AND project_id = ? AND source != 'excluded'",
+            (area_id, container_id),
+        ).fetchone()
+        if area is None:
+            raise MasterToolError(
+                "target_area_not_found",
+                "Target Area is not in the selected Container",
+            )
         dependencies: list[DependencyRequest] = []
         for raw in task.get("depends_on") or []:
             if isinstance(raw, dict):
@@ -625,11 +675,8 @@ class MasterToolBroker:
             dependencies=tuple(dependencies),
             origin_session_id=self.origin_master_session_id,
             origin_message_id=self.origin_message_id,
-            routing_mode="auto",
-            routing_reason=(
-                "Master resolved the requested outcome to one registered "
-                "Container Area"
-            ),
+            routing_mode=routing_mode,
+            routing_reason=routing_reason,
             idempotency_key=str(
                 task.get("idempotency_key")
                 or f"{batch_key}:{client_key}"

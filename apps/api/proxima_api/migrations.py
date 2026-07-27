@@ -1297,6 +1297,38 @@ def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
     assert_master_projection_ledger(conn)
 
 
+def _add_master_message_context(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_message_context (
+          message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          focus_mode TEXT NOT NULL CHECK(focus_mode IN ('fleet', 'container')),
+          focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+          target_mode TEXT NOT NULL CHECK(target_mode IN ('auto', 'explicit')),
+          target_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+          target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK(
+            focus_mode = 'container'
+            OR (focus_mode = 'fleet' AND focus_container_id IS NULL)
+          ),
+          CHECK(
+            target_mode = 'explicit'
+            OR (target_mode = 'auto' AND target_container_id IS NULL AND target_area_id IS NULL)
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_message_context_focus "
+        "ON master_message_context(focus_container_id, message_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_message_context_target "
+        "ON master_message_context(target_container_id, target_area_id, message_id)"
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1347,6 +1379,11 @@ MIGRATIONS: list[Migration] = [
         33,
         "add durable Master Task and supervision projection ledger",
         _add_master_projection_ledger,
+    ),
+    (
+        34,
+        "add durable Master Focus and target context per owner message",
+        _add_master_message_context,
     ),
 ]
 

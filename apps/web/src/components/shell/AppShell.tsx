@@ -11,6 +11,8 @@ import { RunningTasks } from './RunningTasks'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { CoreTour } from './CoreTour'
 import type { AttentionItem } from '../../api/master'
+import { MasterPopup } from '../master/MasterPopup'
+import { MasterToastRegion } from '../master/MasterToastRegion'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -78,6 +80,7 @@ export function AppShell(props: {
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  const [toolOpen, setToolOpen] = React.useState(false)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
   const sidebarRef = React.useRef<HTMLElement>(null)
@@ -272,7 +275,32 @@ export function AppShell(props: {
       <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
-      <ToolDock token={props.token} project={props.activeProject} onOpenSettings={() => props.onSelectView('settings')} />
+      {props.features.masterOrchestrator && (
+        <>
+          <MasterPopup
+            token={props.token}
+            available={
+              !drawerOpen
+              && !menuOpen
+              && !searchOpen
+              && !toolOpen
+              && props.currentView !== 'master'
+              && props.currentView !== 'home'
+            }
+            onOpenHome={() => props.onSelectView('master')}
+            onOpenJob={(id, engine) => props.onOpenRunningJob?.(id, engine)}
+          />
+          <MasterToastRegion
+            available={!drawerOpen && !menuOpen && !searchOpen && !toolOpen}
+          />
+        </>
+      )}
+      <ToolDock
+        token={props.token}
+        project={props.activeProject}
+        onOpenSettings={() => props.onSelectView('settings')}
+        onOpenChange={setToolOpen}
+      />
       {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
       <CoreTour token={props.token} masterEnabled={props.features.masterOrchestrator} />
     </div>

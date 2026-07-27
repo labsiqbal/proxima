@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
+from proxima_api.run_prompting import RunPrompting
 from proxima_api.job_checkpoints import create_checkpoint, restore_checkpoint
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
@@ -113,6 +114,13 @@ def test_master_message_acceptance_returns_canonical_durable_message(
         "author": "owner",
         "run_id": body["run_id"],
         "created_at": body["message"]["created_at"],
+        "master_target": {
+            "focus_mode": "fleet",
+            "focus_container_id": None,
+            "target_mode": "auto",
+            "target_container_id": None,
+            "target_area_id": None,
+        },
     }
     stored = app.state.db.execute(
         "SELECT id, run_id FROM messages WHERE id = ?",
@@ -122,7 +130,107 @@ def test_master_message_acceptance_returns_canonical_durable_message(
         "id": body["message"]["id"],
         "run_id": body["run_id"],
     }
+    context = app.state.db.execute(
+        "SELECT focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id "
+        "FROM master_message_context WHERE message_id = ?",
+        (body["message"]["id"],),
+    ).fetchone()
+    assert dict(context) == body["message"]["master_target"]
+    listed = client.get(
+        f"/api/sessions/{body['session_id']}/messages"
+    ).json()["messages"]
+    assert listed[0]["master_target"] == body["message"]["master_target"]
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
+
+
+def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
+    tmp_path: Path, monkeypatch
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    target = client.post(
+        "/api/projects",
+        json={"slug": "explicit-target", "name": "Explicit target"},
+    ).json()
+    target_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'explicit-target'"
+    ).fetchone()["id"]
+    target_area_id = app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops'",
+        (target_id,),
+    ).fetchone()["id"]
+
+    response = client.post(
+        "/api/master/messages",
+        json={
+            "content": "Route this exact work",
+            "focus": {"mode": "fleet"},
+            "target": {
+                "mode": "explicit",
+                "container_id": target_id,
+                "area_id": target_area_id,
+            },
+        },
+    )
+
+    assert target["slug"] == "explicit-target"
+    assert response.status_code == 202
+    assert response.json()["message"]["master_target"] == {
+        "focus_mode": "container",
+        "focus_container_id": target_id,
+        "target_mode": "explicit",
+        "target_container_id": target_id,
+        "target_area_id": target_area_id,
+    }
+    prompt = app.state.db.execute(
+        "SELECT prompt FROM runs WHERE id = ?",
+        (response.json()["run_id"],),
+    ).fetchone()["prompt"]
+    assert prompt == "Route this exact work"
+    routing = RunPrompting._master_routing_context(
+        app.state.db, response.json()["run_id"]
+    )
+    assert "explicitly targeted" in routing
+    assert f"Area id {target_area_id}" in routing
+
+    wrong_area = app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id != ? LIMIT 1",
+        (target_id,),
+    ).fetchone()["id"]
+    rejected = client.post(
+        "/api/master/messages",
+        json={
+            "content": "Must reject mismatched Area",
+            "target": {
+                "mode": "explicit",
+                "container_id": target_id,
+                "area_id": wrong_area,
+            },
+        },
+    )
+    assert rejected.status_code == 422
+    assert "not in the selected Container" in rejected.json()["detail"]
+
+    deleted = client.delete("/api/projects/explicit-target")
+    assert deleted.status_code == 200
+    historical_context = app.state.db.execute(
+        "SELECT focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id "
+        "FROM master_message_context WHERE message_id = ?",
+        (response.json()["message"]["id"],),
+    ).fetchone()
+    assert dict(historical_context) == {
+        "focus_mode": "container",
+        "focus_container_id": None,
+        "target_mode": "explicit",
+        "target_container_id": None,
+        "target_area_id": None,
+    }
 
 
 def test_master_desk_cursor_never_leads_the_snapshot(tmp_path: Path):

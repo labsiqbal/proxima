@@ -377,6 +377,87 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
     assert "/protected/container/root" not in json.dumps(unsafe_output)
 
 
+def test_broker_enforces_durable_owner_target_over_model_arguments(
+    tmp_path: Path,
+):
+    app, client = _client(tmp_path)
+    for slug, name in (
+        ("owner-target", "Owner target"),
+        ("model-target", "Model target"),
+    ):
+        assert client.post(
+            "/api/projects", json={"slug": slug, "name": name}
+        ).status_code == 201
+    rows = app.state.db.execute(
+        "SELECT id, slug FROM projects "
+        "WHERE slug IN ('owner-target', 'model-target')"
+    ).fetchall()
+    ids = {row["slug"]: row["id"] for row in rows}
+    areas = {
+        slug: app.state.db.execute(
+            "SELECT id FROM project_areas "
+            "WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["id"]
+        for slug, container_id in ids.items()
+    }
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
+    session_id = client.get("/api/master/desk").json()["session"]["id"]
+    message_id = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Use the owner target')",
+        (session_id,),
+    ).lastrowid
+    app.state.db.execute(
+        "INSERT INTO master_message_context("
+        "message_id, focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id"
+        ") VALUES (?, 'container', ?, 'explicit', ?, ?)",
+        (
+            message_id,
+            ids["owner-target"],
+            ids["owner-target"],
+            areas["owner-target"],
+        ),
+    )
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1},
+        session_id,
+        origin_message_id=message_id,
+    )
+
+    result = broker.execute(
+        "delegate_tasks",
+        {
+            "idempotency_key": "owner-target-wins",
+            "tasks": [{
+                "title": "Owner-routed Task",
+                "brief": "Use the durable target",
+                "container_id": ids["model-target"],
+                "area_id": areas["model-target"],
+                "profile_id": profile_id,
+            }],
+        },
+    )
+
+    assert result["ok"] is True
+    delegation = app.state.db.execute(
+        "SELECT container_id, target_area_id, routing_mode, routing_reason "
+        "FROM task_delegations WHERE origin_message_id = ?",
+        (message_id,),
+    ).fetchone()
+    assert dict(delegation) == {
+        "container_id": ids["owner-target"],
+        "target_area_id": areas["owner-target"],
+        "routing_mode": "explicit",
+        "routing_reason": "Owner explicitly selected the Container and Area",
+    }
+
+
 def test_broker_does_not_list_recipe_bound_to_another_owner(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()

@@ -1,6 +1,18 @@
 import { api } from './client'
 import type { ChatMessage, ChatSession, Job } from '../types'
 
+export type MasterMessageContext = {
+  focus: {
+    mode: 'fleet' | 'container'
+    container_id?: number
+  }
+  target: {
+    mode: 'auto' | 'explicit'
+    container_id?: number
+    area_id?: number
+  }
+}
+
 export type MasterCapacity = { running: number; max: number; free: number; queued: number }
 export type MasterBudgets = {
   unattended: boolean
@@ -97,7 +109,12 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
 
 export const getMasterDesk = async (token: string, signal?: AbortSignal): Promise<MasterDesk> =>
   normalizeMasterDesk(await api<LegacyMasterDesk>('/api/master/desk', token, { signal }))
-export const sendMasterMessage = (token: string, content: string, signal?: AbortSignal) =>
+export const sendMasterMessage = (
+  token: string,
+  content: string,
+  context: MasterMessageContext,
+  signal?: AbortSignal,
+) =>
   api<{
     run_id: number
     session_id: number
@@ -105,7 +122,7 @@ export const sendMasterMessage = (token: string, content: string, signal?: Abort
     message: ChatMessage
   }>('/api/master/messages', token, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...context }),
     signal,
   })
 export const getMasterSettings = (token: string) => api<MasterSettings>('/api/settings/master', token)
