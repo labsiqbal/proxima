@@ -64,4 +64,31 @@ describe('MasterComposer', () => {
       'Review this\n\n[report.pdf](master-project/uploads/report.pdf)',
     )
   })
+
+  it('keeps attachments retryable after a failed send and clears them after success', async () => {
+    mockState('Review this')
+    vi.mocked(uploadFile).mockResolvedValue({
+      path: 'master-project/uploads/report.pdf',
+      name: 'report.pdf',
+    } as never)
+    send.mockRejectedValueOnce(new Error('server unavailable'))
+    const { container } = render(
+      <MasterComposer token="token" projectSlug="master-project" />,
+    )
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['data'], 'report.pdf', { type: 'application/pdf' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    await waitFor(() => expect(screen.getByText('report.pdf')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Master' }))
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('report.pdf')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Master' }))
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+    expect(send).toHaveBeenLastCalledWith(
+      'Review this\n\n[report.pdf](master-project/uploads/report.pdf)',
+    )
+    await waitFor(() => expect(screen.queryByText('report.pdf')).not.toBeInTheDocument())
+  })
 })

@@ -440,12 +440,17 @@ export function Composer({
 		const content = [text, ...refs].filter(Boolean).join("\n\n");
 		const submitMode = mode;
 		setSubmitting(true);
-		if (clearOnSubmitStart) setDraft("");
+		if (clearOnSubmitStart) {
+			setDraft("");
+			setAtts([]);
+		}
 		setMention(null);
-		setAtts([]);
 		setMode("chat");
 		try {
 			await onSubmit(content, submitMode);
+			if (!clearOnSubmitStart && mountedRef.current && seq === submitSeq.current) {
+				setAtts([]);
+			}
 		} catch {
 			if (clearOnSubmitStart && mountedRef.current && seq === submitSeq.current) {
 				setDraft(text);
