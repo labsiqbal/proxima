@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -147,6 +148,57 @@ def test_idempotency_key_rejects_changed_request(tmp_path: Path):
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
 
 
+def test_idempotency_replay_returns_original_after_container_is_archived(
+    tmp_path: Path,
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    container, area = _container(client, app, "archived-replay")
+    payload = {
+        "project_id": container["id"],
+        "target_area_id": area["id"],
+        "title": "Durable replay",
+        "input": {"brief": "Return the original Task"},
+    }
+    headers = {"Idempotency-Key": "archived-container-timeout"}
+    first = client.post("/api/jobs", json=payload, headers=headers)
+    app.state.db.execute(
+        "UPDATE projects SET archived_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (container["id"],),
+    )
+
+    repeated = client.post("/api/jobs", json=payload, headers=headers)
+
+    assert first.status_code == repeated.status_code == 200
+    assert repeated.json()["id"] == first.json()["id"]
+    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_service_replay_does_not_revalidate_deleted_profile(tmp_path: Path):
+    app = _app(tmp_path)
+    client = _client(app)
+    container, area = _container(client, app, "profile-replay")
+    user, profile = _user_profile(app)
+    request = _request(
+        container_id=container["id"],
+        area_id=area["id"],
+        profile_id=profile["id"],
+        key="deleted-profile-timeout",
+    )
+    first = app.state.task_delegation.create_and_start(
+        user, request, start=False, connection=app.state.db
+    )
+    app.state.db.execute("DELETE FROM profiles WHERE id = ?", (profile["id"],))
+
+    repeated = app.state.task_delegation.create_and_start(
+        user, request, start=False, connection=app.state.db
+    )
+
+    assert repeated.job["id"] == first.job["id"]
+    assert not repeated.created
+    assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
 def test_committed_start_intent_resumes_once_after_restart(tmp_path: Path):
     database_path = tmp_path / "durable.db"
     app = _app(tmp_path, database_path=database_path)
@@ -205,6 +257,152 @@ def test_committed_start_intent_resumes_once_after_restart(tmp_path: Path):
         ).fetchone()[0]
         == 1
     )
+
+
+def test_graph_start_crash_gap_is_recovered_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    database_path = tmp_path / "graph-start-crash.db"
+    app = _app(tmp_path, database_path=database_path)
+    client = _client(app)
+    container, area = _container(client, app, "graph-start-crash")
+    user, profile = _user_profile(app)
+    workflow_id = app.state.db.execute(
+        "INSERT INTO workflows(name, description, project_id, graph, created_by) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "Crash-safe Recipe",
+            "Exercise the graph start crash gap",
+            container["id"],
+            json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "work",
+                            "name": "Work",
+                            "instruction": "Do the work",
+                        }
+                    ]
+                }
+            ),
+            user["id"],
+        ),
+    ).lastrowid
+
+    def crash_after_running_claim(_job_id: int):
+        raise SystemExit("simulated process crash")
+
+    monkeypatch.setattr(
+        app.state.worker.graph_executor,
+        "dispatch_ready",
+        crash_after_running_claim,
+    )
+    with pytest.raises(SystemExit, match="simulated process crash"):
+        app.state.task_delegation.create_and_start(
+            user,
+            TaskDelegationRequest(
+                title="Crash-safe graph Task",
+                brief="Run the Recipe",
+                container_id=container["id"],
+                area_id=area["id"],
+                profile_id=profile["id"],
+                execution_policy="guarded",
+                idempotency_key="graph-crash-gap",
+                recipe_id=workflow_id,
+            ),
+            connection=app.state.db,
+        )
+    job = app.state.db.execute(
+        "SELECT id, status FROM jobs WHERE workflow_id = ?", (workflow_id,)
+    ).fetchone()
+    assert job["status"] == "running"
+    assert app.state.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+
+    restarted = _app(tmp_path, database_path=database_path)
+
+    recovered = restarted.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job["id"],)
+    ).fetchone()
+    assert recovered["status"] == "running"
+    assert restarted.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE status = 'queued'"
+    ).fetchone()[0] == 1
+    assert restarted.state.db.execute(
+        "SELECT start_state FROM task_delegations WHERE job_id = ?", (job["id"],)
+    ).fetchone()["start_state"] == "started"
+
+
+def test_graph_recovery_keeps_running_when_a_lower_node_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    container, area = _container(client, app, "graph-active-recovery")
+    user, profile = _user_profile(app)
+    workflow_id = app.state.db.execute(
+        "INSERT INTO workflows(name, project_id, graph, created_by) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            "Active graph Recipe",
+            container["id"],
+            json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "later",
+                            "name": "Later",
+                            "instruction": "Wait for active work",
+                        },
+                        {
+                            "id": "active",
+                            "name": "Active",
+                            "instruction": "Continue active work",
+                        },
+                    ]
+                }
+            ),
+            user["id"],
+        ),
+    ).lastrowid
+    result = app.state.task_delegation.create_and_start(
+        user,
+        TaskDelegationRequest(
+            title="Recover active graph Task",
+            brief="Preserve the active node",
+            container_id=container["id"],
+            area_id=area["id"],
+            profile_id=profile["id"],
+            execution_policy="guarded",
+            idempotency_key="graph-active-recovery",
+            recipe_id=workflow_id,
+        ),
+        start=False,
+        connection=app.state.db,
+    )
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'running' WHERE id = ?",
+        (result.job["id"],),
+    )
+    app.state.db.execute(
+        "UPDATE node_states SET status = CASE node_id "
+        "WHEN 'active' THEN 'running' ELSE 'pending' END WHERE job_id = ?",
+        (result.job["id"],),
+    )
+    monkeypatch.setattr(
+        app.state.worker.graph_executor,
+        "dispatch_ready",
+        lambda _job_id: [],
+    )
+
+    recovered = app.state.task_delegation.start(
+        result.job["id"], user, connection=app.state.db
+    )
+
+    assert recovered.job["status"] == "running"
+    assert app.state.db.execute(
+        "SELECT status FROM node_states WHERE job_id = ? AND node_id = 'active'",
+        (result.job["id"],),
+    ).fetchone()["status"] == "running"
 
 
 def test_restart_reconciles_a_committed_run_with_a_starting_audit(tmp_path: Path):
@@ -691,3 +889,113 @@ def test_database_trigger_rejects_cycle_from_non_service_writer(tmp_path: Path):
             "INSERT INTO task_dependencies(task_id, depends_on_task_id) VALUES (?, ?)",
             (second.job["id"], first.job["id"]),
         )
+
+
+def test_prerequisite_cannot_be_deleted_while_a_dependent_task_exists(
+    tmp_path: Path,
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    container, area = _container(client, app, "delete-prerequisite")
+    user, profile = _user_profile(app)
+    prerequisite, dependent = app.state.task_delegation.create_batch(
+        user,
+        [
+            _request(
+                container_id=container["id"],
+                area_id=area["id"],
+                profile_id=profile["id"],
+                key="delete-prerequisite-upstream",
+                client_key="upstream",
+            ),
+            _request(
+                container_id=container["id"],
+                area_id=area["id"],
+                profile_id=profile["id"],
+                key="delete-prerequisite-dependent",
+                client_key="dependent",
+                dependencies=(DependencyRequest("upstream"),),
+            ),
+        ],
+        start=False,
+        connection=app.state.db,
+    )
+
+    response = client.delete(f"/api/jobs/{prerequisite.job['id']}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task_has_dependents"
+    assert app.state.db.execute(
+        "SELECT 1 FROM jobs WHERE id = ?", (prerequisite.job["id"],)
+    ).fetchone()
+    assert app.state.db.execute(
+        "SELECT 1 FROM jobs WHERE id = ?", (dependent.job["id"],)
+    ).fetchone()
+    assert app.state.db.execute(
+        "SELECT 1 FROM task_dependencies WHERE task_id = ? "
+        "AND depends_on_task_id = ?",
+        (dependent.job["id"], prerequisite.job["id"]),
+    ).fetchone()
+
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        app.state.db.execute(
+            "DELETE FROM jobs WHERE id = ?", (prerequisite.job["id"],)
+        )
+
+
+def test_container_delete_refuses_external_task_dependents_before_disk_change(
+    tmp_path: Path,
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    first, first_area = _container(client, app, "upstream-container")
+    second, second_area = _container(client, app, "dependent-container")
+    user, profile = _user_profile(app)
+    prerequisite = app.state.task_delegation.create_and_start(
+        user,
+        _request(
+            container_id=first["id"],
+            area_id=first_area["id"],
+            profile_id=profile["id"],
+            key="cross-container-upstream",
+        ),
+        start=False,
+        connection=app.state.db,
+    )
+    dependent = app.state.task_delegation.create_and_start(
+        user,
+        _request(
+            container_id=second["id"],
+            area_id=second_area["id"],
+            profile_id=profile["id"],
+            key="cross-container-dependent",
+            dependencies=(DependencyRequest(prerequisite.job["id"]),),
+        ),
+        start=False,
+        connection=app.state.db,
+    )
+
+    response = client.delete("/api/projects/upstream-container")
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["code"]
+        == "container_tasks_have_external_dependents"
+    )
+    assert Path(first["path"]).is_dir()
+    assert app.state.db.execute(
+        "SELECT 1 FROM task_dependencies WHERE task_id = ? "
+        "AND depends_on_task_id = ?",
+        (dependent.job["id"], prerequisite.job["id"]),
+    ).fetchone()
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM audit_log "
+        "WHERE action = 'project.delete' AND target_id = 'upstream-container'"
+    ).fetchone()[0] == 0
+
+    assert client.delete(f"/api/jobs/{dependent.job['id']}").status_code == 200
+    assert client.delete("/api/projects/upstream-container").status_code == 200
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM audit_log "
+        "WHERE action = 'project.delete' AND target_id = 'upstream-container'"
+    ).fetchone()[0] == 1

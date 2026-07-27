@@ -24,7 +24,7 @@ def _client(app):
     return client
 
 
-def test_link_completed_media_run_turns_queued_task_into_review(tmp_path):
+def test_link_completed_media_run_finishes_delegated_ops_task(tmp_path):
     app = _app(tmp_path)
     client = _client(app)
     assert client.post("/api/projects", json={"slug": "alpha", "name": "Alpha"}).status_code == 201
@@ -43,13 +43,13 @@ def test_link_completed_media_run_turns_queued_task_into_review(tmp_path):
     linked = client.post(f"/api/jobs/{job['id']}/link-run", json={"run_id": run_id})
     assert linked.status_code == 200
     body = linked.json()
-    assert body["status"] == "review"
+    assert body["status"] == "done"
     assert body["steps_state"][0]["status"] == "done"
     assert body["steps_state"][0]["run_id"] == run_id
     assert "Generated image artifact" in body["steps_state"][0]["output_summary"]
     repeated = client.post(f"/api/jobs/{job['id']}/link-run", json={"run_id": run_id})
     assert repeated.status_code == 200
-    assert repeated.json()["status"] == "review"
+    assert repeated.json()["status"] == "done"
 
 
 def test_link_run_rejects_non_media_execution(tmp_path):
@@ -109,3 +109,29 @@ def test_autonomous_task_finishes_without_final_review(tmp_path):
     completed = client.get(f"/api/jobs/{job['id']}").json()
     assert completed["status"] == "done"
     assert completed["steps_state"][0]["output_summary"] == "Finished independently"
+
+
+def test_guarded_ops_task_lands_without_final_review(tmp_path):
+    app = _app(tmp_path)
+    client = _client(app)
+    assert client.post(
+        "/api/projects", json={"slug": "ops-landing", "name": "Ops Landing"}
+    ).status_code == 201
+    job = client.post(
+        "/api/jobs",
+        json={
+            "project_slug": "ops-landing",
+            "input": {"brief": "write the report", "execution_policy": "guarded"},
+        },
+    ).json()
+
+    assert client.post(f"/api/jobs/{job['id']}/start").status_code == 200
+    run = app.state.db.execute(
+        "SELECT * FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+        (job["session_id"],),
+    ).fetchone()
+    app.state.worker._advance_job(dict(run), "Report written")
+
+    completed = client.get(f"/api/jobs/{job['id']}").json()
+    assert completed["status"] == "done"
+    assert completed["steps_state"][0]["output_summary"] == "Report written"

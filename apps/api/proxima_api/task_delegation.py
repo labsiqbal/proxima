@@ -75,9 +75,19 @@ def completed_landing_status(
 ) -> str:
     """Return the final execution status without weakening repo review.
 
-    Autonomous Ops work lands in place and may finish directly. A repo Task
-    always stops for diff review, regardless of its in-run permission policy.
+    Delegated Ops work already lands in place and therefore finishes directly.
+    A repo Task always stops for diff review, regardless of its in-run
+    permission policy. Historical unscoped jobs retain their previous guarded
+    versus autonomous behavior. Explicit Recipe gates remain separate and are
+    handled by the advancer before applying this landing status.
     """
+    if worktrees.repo_area_for_job(conn, job) is not None:
+        return "review"
+    delegated = conn.execute(
+        "SELECT 1 FROM task_delegations WHERE job_id = ?", (job["id"],)
+    ).fetchone()
+    if delegated:
+        return "done"
     try:
         inputs = json.loads(job["input"] or "{}")
     except (TypeError, json.JSONDecodeError):
@@ -85,7 +95,7 @@ def completed_landing_status(
     autonomous = (
         isinstance(inputs, dict) and inputs.get("execution_policy") == "autonomous"
     )
-    return "done" if autonomous and worktrees.repo_area_for_job(conn, job) is None else "review"
+    return "done" if autonomous else "review"
 
 
 class TaskDelegationService:
@@ -414,16 +424,21 @@ class TaskDelegationService:
             raise TaskDelegationError(
                 "invalid_batch", "A delegation batch needs 1 to 100 Tasks"
             )
-        client_keys = [request.client_key for request in batch]
+        client_keys = [request.client_key.strip() for request in batch]
         if len(client_keys) != len(set(client_keys)):
             raise TaskDelegationError(
                 "duplicate_client_key", "Client-local Task keys must be unique"
             )
-        idempotency_keys = [request.idempotency_key for request in batch]
+        idempotency_keys = [request.idempotency_key.strip() for request in batch]
         if len(idempotency_keys) != len(set(idempotency_keys)):
             raise TaskDelegationError(
                 "duplicate_idempotency_key",
                 "Each Task in a batch needs a distinct idempotency key",
+            )
+        if any(not key or len(key) > 240 for key in idempotency_keys):
+            raise TaskDelegationError(
+                "invalid_idempotency_key",
+                "idempotency key must contain 1 to 240 characters",
             )
 
         conn = connection or self.db_factory()
@@ -432,21 +447,15 @@ class TaskDelegationService:
         with self.app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                validated = [
-                    self._validate_request(conn, user, request)
-                    for request in batch
-                ]
                 existing_rows = [
                     conn.execute(
                         "SELECT * FROM task_delegations "
                         "WHERE idempotency_identity = ?",
                         (
-                            self._identity(
-                                user_id, validated_item["idempotency_key"]
-                            ),
+                            self._identity(user_id, idempotency_key),
                         ),
                     ).fetchone()
-                    for validated_item in validated
+                    for idempotency_key in idempotency_keys
                 ]
                 existing_count = sum(row is not None for row in existing_rows)
                 if existing_count:
@@ -456,8 +465,8 @@ class TaskDelegationService:
                             "A repeated batch must replay all of its Task keys",
                             409,
                         )
-                    for row, item in zip(existing_rows, validated, strict=True):
-                        if row["request_fingerprint"] != item["fingerprint"]:
+                    for row, request in zip(existing_rows, batch, strict=True):
+                        if row["request_fingerprint"] != self._fingerprint(request):
                             raise TaskDelegationError(
                                 "idempotency_conflict",
                                 "Idempotency key was already used for a different Task",
@@ -472,6 +481,10 @@ class TaskDelegationService:
                     job_ids = [int(row["job_id"]) for row in existing_rows]
                     conn.execute("COMMIT")
                 else:
+                    validated = [
+                        self._validate_request(conn, user, request)
+                        for request in batch
+                    ]
                     created = True
                     job_ids = []
                     key_to_job: dict[str, int] = {}
@@ -515,7 +528,7 @@ class TaskDelegationService:
                         )
                         job_id = int(job_cur.lastrowid)
                         job_ids.append(job_id)
-                        key_to_job[request.client_key] = job_id
+                        key_to_job[request.client_key.strip()] = job_id
                         conn.execute(
                             "UPDATE sessions SET job_id = ? WHERE id = ?",
                             (job_id, session_id),
@@ -592,7 +605,7 @@ class TaskDelegationService:
                                     "Dependency required status must be review or done",
                                 )
                             if isinstance(dependency.task, str):
-                                depends_on = key_to_job.get(dependency.task)
+                                depends_on = key_to_job.get(dependency.task.strip())
                                 if depends_on is None:
                                     raise TaskDelegationError(
                                         "dependency_key_not_found",
@@ -840,6 +853,21 @@ class TaskDelegationService:
 
         job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if job["status"] != "queued":
+            if (
+                delegation is not None
+                and job["status"] == "running"
+                and job["engine"] == "graph"
+            ):
+                try:
+                    self._start_graph(conn, job, user_id, recover_running=True)
+                except Exception as exc:
+                    conn.execute(
+                        "UPDATE task_delegations SET start_state = 'failed', "
+                        "last_start_error = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE job_id = ?",
+                        (str(exc)[:1000], job_id),
+                    )
+                    raise
             if delegation is not None:
                 conn.execute(
                     "UPDATE task_delegations SET start_state = 'started', "
@@ -984,7 +1012,12 @@ class TaskDelegationService:
         )
 
     def _start_graph(
-        self, conn: sqlite3.Connection, job: sqlite3.Row, user_id: int
+        self,
+        conn: sqlite3.Connection,
+        job: sqlite3.Row,
+        user_id: int,
+        *,
+        recover_running: bool = False,
     ) -> None:
         if not features.enabled(self.app.state.config, features.WORKFLOW_GRAPH):
             raise TaskDelegationError(
@@ -1011,27 +1044,33 @@ class TaskDelegationService:
             "WHERE id = ? AND status = 'queued' AND engine = 'graph'",
             (job["id"],),
         )
-        if claimed.rowcount == 0:
+        if claimed.rowcount == 0 and not recover_running:
             return
         try:
             run_ids = self.app.state.worker.graph_executor.dispatch_ready(
                 int(job["id"])
             )
         except Exception as exc:
-            conn.execute(
-                "UPDATE jobs SET status = 'queued', started_at = NULL, "
-                "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                (job["id"],),
-            )
+            if claimed.rowcount:
+                conn.execute(
+                    "UPDATE jobs SET status = 'queued', started_at = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                    (job["id"],),
+                )
             raise TaskDelegationError(
                 "graph_start_failed", str(exc), 409
             ) from exc
         if not run_ids:
             unfinished = conn.execute(
-                "SELECT 1 FROM node_states WHERE job_id = ? AND status != 'done' LIMIT 1",
+                "SELECT status FROM node_states "
+                "WHERE job_id = ? AND status != 'done'",
                 (job["id"],),
-            ).fetchone()
+            ).fetchall()
             if unfinished:
+                if any(
+                    row["status"] in {"ready", "running"} for row in unfinished
+                ):
+                    return
                 conn.execute(
                     "UPDATE jobs SET status = 'queued', started_at = NULL, "
                     "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",

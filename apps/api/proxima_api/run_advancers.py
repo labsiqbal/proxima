@@ -139,7 +139,7 @@ class RunAdvancers:
             gate = bool(steps[idx].get("review_required"))
             inputs = json.loads(job["input"] or "{}")
             final_status = completed_landing_status(db, job) if last else "review"
-            if last and final_status == "done":
+            if last and final_status == "done" and not gate:
                 state.guarded_transition(
                     db, "jobs", int(job["id"]), "done", ("running",),
                     set_extra="steps_state = ?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",

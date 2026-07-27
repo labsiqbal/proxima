@@ -1,6 +1,7 @@
 """Alpha system identity and in-process product-tool runtime."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -702,6 +703,21 @@ def handle_alpha_response(app, conn, run: dict[str, Any], answer: str) -> list[d
             args = call.get("arguments") or {}
             if not isinstance(args, dict):
                 raise ValueError("tool arguments must be an object")
+            if (
+                call["name"] in {"dispatch_jobs", "start_plan"}
+                and not args.get("idempotency_key")
+            ):
+                canonical = json.dumps(
+                    {"name": call["name"], "arguments": args},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                digest = hashlib.sha256(canonical.encode()).hexdigest()
+                args = {
+                    **args,
+                    "idempotency_key": f"alpha-run:{run['id']}:{digest}",
+                }
             calls.append(execute_tool(conn, app, {"id": session["owner_user_id"]}, run["session_id"], call["name"], args))
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             calls.append({"ok": False, "tool": None, "error": {"code": "invalid_tool_call", "message": str(exc)}})

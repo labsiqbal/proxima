@@ -426,8 +426,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29]
-    assert current_version(conn) == 29
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30]
+    assert current_version(conn) == 30
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -452,7 +452,7 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_v29_adds_task_delegation_and_dependency_contracts_to_schema_28(
+def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
     tmp_path: Path,
 ):
     db_path = tmp_path / "schema-28.db"
@@ -468,8 +468,8 @@ def test_v29_adds_task_delegation_and_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29]
-    assert current_version(conn) == 29
+    assert run_migrations(conn, str(db_path)) == [29, 30]
+    assert current_version(conn) == 30
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -488,4 +488,12 @@ def test_v29_adds_task_delegation_and_dependency_contracts_to_schema_28(
         "SELECT name FROM sqlite_master WHERE type = 'trigger' "
         "AND name = 'task_dependencies_no_cycle'"
     ).fetchone()
+    prerequisite_fk = next(
+        row
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(task_dependencies)"
+        ).fetchall()
+        if row[3] == "depends_on_task_id"
+    )
+    assert prerequisite_fk[6] == "RESTRICT"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

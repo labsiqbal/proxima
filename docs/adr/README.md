@@ -61,3 +61,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0001](0001-workflow-execution-model.md) | Workflow execution model — own the orchestration primitives | Accepted |
 | [0002](0002-license-agpl.md) | License — AGPL-3.0-or-later, pure commons (DCO, no CLA) | Accepted |
 | [0003](0003-evolutionary-architecture.md) | Evolutionary architecture — perpetual beta, contributor-driven | Accepted |
+| [0004](0004-durable-task-delegation-boundary.md) | Durable Task delegation is one server-owned boundary | Accepted |

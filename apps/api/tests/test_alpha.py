@@ -163,6 +163,55 @@ def test_alpha_batch_dispatch_uses_durable_idempotent_dependency_dag(
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 2
 
 
+def test_duplicate_dispatch_envelopes_in_one_turn_create_one_batch(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/alpha/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    run = dict(
+        app.state.db.execute(
+            "INSERT INTO runs(session_id, user_id, profile_id, runner_id, kind, "
+            "status, prompt) VALUES (?, 1, ?, ?, 'alpha', 'running', ?) "
+            "RETURNING *",
+            (
+                desk["session"]["id"],
+                desk["session"]["profile_id"],
+                desk["session"]["runner_id"],
+                "Delegate once",
+            ),
+        ).fetchone()
+    )
+    envelope = json.dumps(
+        {
+            "name": "dispatch_jobs",
+            "arguments": {
+                "start": False,
+                "tasks": [
+                    {
+                        "title": "One durable Task",
+                        "brief": "Create only one",
+                        "project_slug": project["slug"],
+                    }
+                ],
+            },
+        }
+    )
+
+    calls = handle_alpha_response(
+        app,
+        app.state.db,
+        run,
+        f"<proxima-tool>{envelope}</proxima-tool>\n"
+        f"<proxima-tool>{envelope}</proxima-tool>",
+    )
+
+    assert [call["ok"] for call in calls] == [True, True]
+    assert calls[0]["result"]["jobs"] == calls[1]["result"]["jobs"]
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM jobs WHERE alpha_session_id = ?",
+        (desk["session"]["id"],),
+    ).fetchone()[0] == 1
+
+
 def test_alpha_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/alpha/desk").json()

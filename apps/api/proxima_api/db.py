@@ -319,7 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_task_delegations_start
 -- including for writers that do not use TaskDelegationService.
 CREATE TABLE IF NOT EXISTS task_dependencies (
   task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  depends_on_task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  depends_on_task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE RESTRICT,
   required_status TEXT NOT NULL DEFAULT 'done'
     CHECK (required_status IN ('review', 'done')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

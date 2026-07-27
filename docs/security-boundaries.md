@@ -75,22 +75,26 @@ is rejected.
 
 Creation is transactional and idempotent. The worker session, job, delegation audit,
 and dependency edges either all commit or none do. A caller-provided idempotency key
-is bound to a fingerprint of the request; replay returns the same Task, while reuse
-for different input is rejected. Dependency edges reject duplicates, self-edges,
-cycles, inaccessible prerequisites, and prerequisites already failed or cancelled.
-SQLite cycle triggers protect the same invariant from non-service writers.
+is bound to a fingerprint of the request; replay returns the same Task before mutable
+referenced rows are revalidated, while reuse for different input is rejected.
+Dependency edges reject duplicates, self-edges, cycles, inaccessible prerequisites,
+and prerequisites already failed or cancelled. SQLite cycle triggers protect the same
+invariant from non-service writers, and a restrictive prerequisite foreign key prevents
+deletion from silently removing a required edge.
 
 Start happens only after that transaction commits. A durable start intent lets restart
-recovery retry safely. Dependency readiness is checked from live `jobs` state, and
-unmet or failed prerequisites persist a visible blocked reason rather than leaving an
-unexplained queue row. Starting still uses the existing guarded job claim, worktree,
-and run queue.
+recovery retry safely, including reconciliation of a graph Task interrupted after its
+`running` claim but before its first node run. Dependency readiness is checked from
+live `jobs` state, and unmet or failed prerequisites persist a visible blocked reason
+rather than leaving an unexplained queue row. Starting still uses the existing guarded
+job claim, worktree, and run queue.
 
 This service is an authority and consistency boundary, not an OS sandbox. Repo Tasks
 still run in the existing external worktree and require review before local merge.
-Ops Tasks still receive the physical `ops/` cwd. The runner process retains the
-service user's host permissions as described above; this slice does not claim that a
-cwd alone prevents `..` traversal or arbitrary host reads.
+Delegated Ops Tasks still receive the physical `ops/` cwd and finish without a landing
+review, independently of Guarded or Autonomous in-run permissions. The runner process
+retains the service user's host permissions as described above; this slice does not
+claim that a cwd alone prevents `..` traversal or arbitrary host reads.
 
 ## Script steps (hash-bound trust, honest statement)
 

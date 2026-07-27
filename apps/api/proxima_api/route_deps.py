@@ -318,24 +318,78 @@ def build_route_deps(
 
     def _purge_project(project: dict[str, Any]) -> None:
         """Delete a project's on-disk dir (jailed to workspace root) + its DB row."""
-        path = project.get("path")
-        root = str(Path(cfg["workspace_root"]).resolve())
-        if path:
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
             try:
-                rp = Path(path).resolve()
-                if str(rp).startswith(root + os.sep) and rp.exists():
-                    shutil.rmtree(rp)
+                external_dependents = conn.execute(
+                    "SELECT dependent.id, dependent.title "
+                    "FROM task_dependencies AS dependency "
+                    "JOIN jobs AS prerequisite "
+                    "ON prerequisite.id = dependency.depends_on_task_id "
+                    "JOIN jobs AS dependent ON dependent.id = dependency.task_id "
+                    "WHERE prerequisite.project_id = ? "
+                    "AND (dependent.project_id IS NULL OR dependent.project_id != ?) "
+                    "ORDER BY dependent.id LIMIT 20",
+                    (project["id"], project["id"]),
+                ).fetchall()
+                if external_dependents:
+                    raise http_exception(
+                        status_code=409,
+                        detail={
+                            "code": "container_tasks_have_external_dependents",
+                            "message": (
+                                "Delete dependent Tasks in other Containers first: "
+                                + ", ".join(
+                                    f"#{row['id']} {row['title']}"
+                                    for row in external_dependents
+                                )
+                            ),
+                            "dependent_task_ids": [
+                                row["id"] for row in external_dependents
+                            ],
+                        },
+                    )
+                path = project.get("path")
+                root = str(Path(cfg["workspace_root"]).resolve())
+                if path:
+                    try:
+                        rp = Path(path).resolve()
+                        if str(rp).startswith(root + os.sep) and rp.exists():
+                            shutil.rmtree(rp)
+                    except Exception:
+                        logging.getLogger("proxima.projects").exception(
+                            "project dir removal failed for %s",
+                            project.get("slug"),
+                        )
+                # Sessions only SET NULL on project delete, which would orphan every
+                # chat and task thread. Delete them first so messages/events/runs/
+                # agent_sessions cascade away cleanly.
+                # Delegated Tasks also retain a required Container/Area audit binding,
+                # so remove internal dependency edges, then the Container's jobs.
+                # Incoming edges from another Container were refused before any
+                # filesystem change.
+                conn.execute(
+                    "DELETE FROM task_dependencies WHERE "
+                    "task_id IN (SELECT id FROM jobs WHERE project_id = ?) "
+                    "AND depends_on_task_id IN "
+                    "(SELECT id FROM jobs WHERE project_id = ?)",
+                    (project["id"], project["id"]),
+                )
+                conn.execute(
+                    "DELETE FROM jobs WHERE project_id = ?", (project["id"],)
+                )
+                conn.execute(
+                    "DELETE FROM sessions WHERE project_id = ?", (project["id"],)
+                )
+                conn.execute(
+                    "DELETE FROM projects WHERE id = ?", (project["id"],)
+                )
+                conn.execute("COMMIT")
             except Exception:
-                logging.getLogger("proxima.projects").exception("project dir removal failed for %s", project.get("slug"))
-        # Sessions only SET NULL on project delete, which would orphan every chat
-        # and task thread. Delete them first so messages/events/runs/agent_sessions
-        # cascade away cleanly.
-        # Delegated Tasks also retain a required Container/Area audit binding, so
-        # remove the Container's jobs first. Their delegation and dependency rows
-        # cascade with them, matching the existing full-Container purge contract.
-        db().execute("DELETE FROM jobs WHERE project_id = ?", (project["id"],))
-        db().execute("DELETE FROM sessions WHERE project_id = ?", (project["id"],))
-        db().execute("DELETE FROM projects WHERE id = ?", (project["id"],))
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
 
     def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.

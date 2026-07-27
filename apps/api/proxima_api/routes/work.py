@@ -685,6 +685,27 @@ def register(app, deps):
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: int, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
+        dependents = db().execute(
+            "SELECT jobs.id, jobs.title FROM task_dependencies "
+            "JOIN jobs ON jobs.id = task_dependencies.task_id "
+            "WHERE task_dependencies.depends_on_task_id = ? "
+            "ORDER BY jobs.id LIMIT 20",
+            (job_id,),
+        ).fetchall()
+        if dependents:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "task_has_dependents",
+                    "message": (
+                        "Delete dependent Tasks first; this Task is still required "
+                        "by " + ", ".join(
+                            f"#{row['id']} {row['title']}" for row in dependents
+                        )
+                    ),
+                    "dependent_task_ids": [row["id"] for row in dependents],
+                },
+            )
         # Remove the run record + its threads (messages/runs/events cascade). Produced
         # artifacts (Design Studio designs, project files) are deliverables and are
         # deliberately left in place. "Threads" is plural for a graph job: every node

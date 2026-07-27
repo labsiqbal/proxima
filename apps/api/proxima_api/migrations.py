@@ -993,6 +993,128 @@ def _add_task_delegation_contracts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _protect_task_prerequisites_from_deletion(
+    conn: sqlite3.Connection,
+) -> None:
+    """Rebuild dependency edges so a prerequisite cannot disappear silently.
+
+    ``task_id`` remains cascading because deleting a dependent Task should
+    remove its outgoing requirements. ``depends_on_task_id`` is restrictive:
+    callers must remove dependents first, preserving the durable explanation
+    for why a queued Task may or may not start.
+    """
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'task_dependencies'"
+    ).fetchone():
+        return
+    prerequisite_fk = next(
+        (
+            row
+            for row in conn.execute(
+                "PRAGMA foreign_key_list(task_dependencies)"
+            ).fetchall()
+            if row[3] == "depends_on_task_id"
+        ),
+        None,
+    )
+    if prerequisite_fk is not None and str(prerequisite_fk[6]).upper() in {
+        "RESTRICT",
+        "NO ACTION",
+    }:
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _task_dependencies_new (
+              task_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+              depends_on_task_id INTEGER NOT NULL
+                REFERENCES jobs(id) ON DELETE RESTRICT,
+              required_status TEXT NOT NULL DEFAULT 'done'
+                CHECK (required_status IN ('review', 'done')),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (task_id, depends_on_task_id),
+              CHECK (task_id != depends_on_task_id)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO _task_dependencies_new("
+            "task_id, depends_on_task_id, required_status, created_at, updated_at"
+            ") SELECT task_id, depends_on_task_id, required_status, "
+            "created_at, updated_at FROM task_dependencies"
+        )
+        conn.execute("DROP TABLE task_dependencies")
+        conn.execute(
+            "ALTER TABLE _task_dependencies_new RENAME TO task_dependencies"
+        )
+        conn.execute(
+            "CREATE INDEX idx_task_dependencies_prerequisite "
+            "ON task_dependencies(depends_on_task_id, task_id)"
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER task_dependencies_no_cycle
+            BEFORE INSERT ON task_dependencies
+            BEGIN
+              SELECT RAISE(ABORT, 'task dependency cycle')
+              WHERE EXISTS (
+                WITH RECURSIVE prerequisites(task_id) AS (
+                  SELECT NEW.depends_on_task_id
+                  UNION
+                  SELECT dependency.depends_on_task_id
+                  FROM task_dependencies AS dependency
+                  JOIN prerequisites
+                    ON dependency.task_id = prerequisites.task_id
+                )
+                SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+              );
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER task_dependencies_no_cycle_update
+            BEFORE UPDATE OF task_id, depends_on_task_id ON task_dependencies
+            BEGIN
+              SELECT RAISE(ABORT, 'task dependency cycle')
+              WHERE NEW.task_id = NEW.depends_on_task_id OR EXISTS (
+                WITH RECURSIVE prerequisites(task_id) AS (
+                  SELECT NEW.depends_on_task_id
+                  UNION
+                  SELECT dependency.depends_on_task_id
+                  FROM task_dependencies AS dependency
+                  JOIN prerequisites
+                    ON dependency.task_id = prerequisites.task_id
+                  WHERE NOT (
+                    dependency.task_id = OLD.task_id
+                    AND dependency.depends_on_task_id = OLD.depends_on_task_id
+                  )
+                )
+                SELECT 1 FROM prerequisites WHERE task_id = NEW.task_id
+              );
+            END
+            """
+        )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                "task dependency FK rebuild introduced violations: "
+                f"{[tuple(row) for row in violations]}"
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        conn.execute("PRAGMA foreign_keys=ON")
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1023,6 +1145,12 @@ MIGRATIONS: list[Migration] = [
     (27, "move graph workflow inputs onto trigger nodes", _move_workflow_inputs_to_trigger),
     (28, "add Container registry and durable physical Ops migration state", _add_container_foundation),
     (29, "add durable one-Area Task delegations and dependency DAG contracts", _add_task_delegation_contracts),
+    (
+        30,
+        "protect durable Task prerequisites from silent deletion",
+        _protect_task_prerequisites_from_deletion,
+        {"no_auto_tx": True},
+    ),
 ]
 
 

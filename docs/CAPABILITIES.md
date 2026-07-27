@@ -477,7 +477,9 @@ Task-agent profile. It stores execution policy separately from landing behavior,
 supports a linear or graph Recipe with input, and writes the worker session, `jobs`
 row, `task_delegations` audit, and `task_dependencies` edges in one transaction. The
 transaction commits before start. Durable `start_requested` and idempotency identity
-let startup or a repeated request resume the same Task safely.
+let startup or a repeated request resume the same Task safely. Full replay is resolved
+before revalidating mutable referenced rows, so an archived Container or removed
+Task-agent cannot turn a previously successful create into a false "not found."
 
 Project-scoped compatibility requests that omit `target_area_id` resolve to the
 Container's physical Ops Area. Historical project-less API jobs remain scratch jobs
@@ -491,8 +493,10 @@ A requested downstream Task stays `queued` with `jobs.blocked_reason` and a dura
 delegation `start_state='blocked'` until every prerequisite reaches `review` or `done`
 as required. Failure and cancellation produce an explicit prerequisite reason.
 Prerequisite transitions retry ready dependents; the guarded queued-to-running claim
-ensures one run is created even when notifications or retries repeat. The Task
-workspace renders the stored reason.
+ensures one run is created even when notifications or retries repeat. A prerequisite
+cannot be deleted while dependents exist, including across Containers. The Task
+workspace renders the stored reason. Startup also reconciles a graph Task interrupted
+after its `running` claim but before its first node run was committed.
 
 ### Tasks screen = plans + their jobs (Phase-1 slice 3, T2)
 
@@ -541,9 +545,10 @@ parks the job in `review` with the surfaced error (worktree kept; approve again 
 resolving) - never forced. Success records `merge_commit` on the job's worktree row
 (`job_worktrees`) and tears the worktree + branch down; deleting a job also tears its
 worktree down.
-For delegated Tasks, Autonomous controls in-run permissions but never bypasses repo
-landing review. Autonomous Ops Tasks may finish directly in physical `ops/`; every
-repo Task stops in `review` for its diff and local-merge verdict.
+For delegated Tasks, Guarded or Autonomous controls in-run permissions but never
+changes landing policy. Delegated Ops Tasks finish directly in physical `ops/` because
+their work already landed in place; every repo Task stops in `review` for its diff and
+local-merge verdict. An explicit Recipe review gate remains an in-run decision.
 **Endpoints:** `GET /api/jobs/{id}/diff` (per-file status + unified patch; also
 readable after the merge), `POST /api/jobs/{id}/approve` (merge point),
 `POST /api/jobs/{id}/reject` (see below), `POST /api/jobs` (`target_area_id`). Job

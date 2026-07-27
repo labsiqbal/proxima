@@ -235,8 +235,10 @@ Scoped Work, Home, Alpha, and future orchestration creation share
 idempotency, and durable-start audit for a job. `task_dependencies` stores explicit
 Task-to-prerequisite edges with a required `review` or `done` status. A unique pair,
 self-edge check, and recursive insert/update triggers make the stored graph
-cycle-safe. `jobs.blocked_reason` is the visible reason a requested Task remains
-queued. Historical project-less Work API jobs remain an unscoped compatibility path.
+cycle-safe. The prerequisite foreign key is restrictive, so deleting a Task or
+Container cannot silently erase an edge that another Task still needs.
+`jobs.blocked_reason` is the visible reason a requested Task remains queued.
+Historical project-less Work API jobs remain an unscoped compatibility path.
 A code area with a detected git remote may opt into push-after-merge via
 `project_areas.push_on_merge` (T9, slice 11, default off); enabling pins the remote
 URL into `project_areas.push_remote_url` (audit F3) and the push refuses on a
@@ -567,10 +569,13 @@ Work / Home / Alpha / future Master caller
 
 The service accepts a batch of client-local Task keys and dependency keys. It inserts
 all jobs first, resolves edges second, and commits only if the whole DAG is valid.
-Repeated idempotency identities return the original jobs. Startup retries committed
-start intents, so interruption after commit but before start cannot duplicate a Task.
+Repeated idempotency identities return the original jobs before mutable references are
+revalidated. Startup retries committed start intents, so interruption after commit but
+before start cannot duplicate a Task. A graph start also reconciles the narrower crash
+gap where the job reached `running` before the graph dispatcher committed a node run.
 When a prerequisite reaches its required state, the dependent is retried through the
 same guarded queued-to-running claim; repeated notifications create no second run.
+Deleting a prerequisite is refused until its dependents are deleted.
 
 The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attempt in
 `node_states`, dispatches every ready node concurrently (bounded by
