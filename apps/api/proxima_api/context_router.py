@@ -226,7 +226,11 @@ class ContextRouter:
                     "id": int(row["id"]),
                     "slug": str(row["slug"]),
                     "name": str(row.get("name") or row["slug"]),
-                    "status": row.get("status") or row.get("registry_status"),
+                    "identity": row.get("identity_label"),
+                    "summary": row.get("summary"),
+                    "live": dict(row.get("live") or {}),
+                    "areas": dict(row.get("area_inventory") or {}),
+                    "health": dict(row.get("health") or {}),
                 }
             )
         return {
@@ -258,11 +262,11 @@ class ContextRouter:
             "FROM jobs j "
             "LEFT JOIN projects p ON p.id = j.project_id "
             f"WHERE {' AND '.join(where)} "
-            "AND j.status IN ('queued', 'running', 'review', 'blocked') "
+            "AND j.status IN ('queued', 'running', 'review', 'blocked', 'failed') "
             "ORDER BY "
             "CASE j.status "
             "WHEN 'running' THEN 0 WHEN 'blocked' THEN 1 "
-            "WHEN 'review' THEN 2 ELSE 3 END, "
+            "WHEN 'failed' THEN 2 WHEN 'review' THEN 3 ELSE 4 END, "
             "j.updated_at DESC, j.id DESC "
             "LIMIT ?",
             params,
