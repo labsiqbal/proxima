@@ -339,6 +339,7 @@ class CodeGraphLifecycle:
                 live_fp = None
             published_fp = row["source_fingerprint"] or None
             if live_fp and published_fp and live_fp == published_fp:
+                self._dirty_seen[area_id] = (now, signature)
                 continue
             try:
                 self.graphs.enqueue_code_rebuild(
