@@ -149,6 +149,7 @@ class KnowledgeGraphLifecycle:
         if not self._startup_audit_done:
             self._startup_audit_done = True
             self._last_audit_at = now
+            self._last_full_rebuild_at = now
             try:
                 self._audit_registered_knowledge_graphs(reason=REASON_AUDIT)
             except Exception:
@@ -440,10 +441,8 @@ def notify_ops_job_done(app: Any, job: sqlite3.Row | dict[str, Any]) -> None:
         if row is None or row["project_id"] is None:
             return
         # Only Ops-targeted work marks Knowledge stale. Repo merges use Code.
+        # Historical unscoped jobs (kind is None, no code area bound) count as Ops.
         if row["kind"] is not None and str(row["kind"]) != "ops":
-            return
-        if row["kind"] is None:
-            # Historical unscoped jobs: treat as Ops when no code area is bound.
             return
         lifecycle.on_ops_task_done(
             owner_user_id=int(row["owner_user_id"]),

@@ -420,15 +420,15 @@ class ContextRouter:
             }
         resolved_area = area_id
         if resolved_area is None:
-            row = self._db_factory().execute(
+            sample = self._db_factory().execute(
                 "SELECT id FROM project_areas "
                 "WHERE project_id = ? AND kind = 'code' AND source != 'excluded' "
                 "ORDER BY rel_path, id LIMIT 2",
                 (container_id,),
             ).fetchall()
-            if len(row) == 1:
-                resolved_area = int(row[0]["id"])
-            elif not row:
+            if len(sample) == 1:
+                resolved_area = int(sample[0]["id"])
+            elif not sample:
                 return {
                     "layer": LAYER_CODE,
                     "available": False,
@@ -442,6 +442,13 @@ class ContextRouter:
                     "provenance": [],
                 }
             else:
+                candidates = self._db_factory().execute(
+                    "SELECT id FROM project_areas "
+                    "WHERE project_id = ? AND kind = 'code' "
+                    "AND source != 'excluded' "
+                    "ORDER BY rel_path, id",
+                    (container_id,),
+                ).fetchall()
                 return {
                     "layer": LAYER_CODE,
                     "available": False,
@@ -456,7 +463,7 @@ class ContextRouter:
                     "items": [],
                     "citations": [],
                     "provenance": [],
-                    "candidate_area_ids": [int(r["id"]) for r in row],
+                    "candidate_area_ids": [int(r["id"]) for r in candidates],
                 }
         try:
             result = self.graphs.query(
