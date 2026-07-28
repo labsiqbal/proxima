@@ -142,6 +142,7 @@ from . import workflows as wf
 from . import features
 from .capabilities import (
     apply_capabilities,
+    apply_fixed_code_graph_mcp,
     parse_selection,
     remove_fixed_code_graph_mcp,
 )
@@ -166,24 +167,32 @@ class RunPrompting:
         run. Idempotent (symlinks/config write) and self-healing: newly installed host
         skills show up, and profiles created before this feature get their selection
         applied. A first-class command may require one bundled methodology for this
-        run even when the profile normally opts out. Live-home claude is a no-op
-        (home already IS the host config). Repo Task runs may receive a
-        server-managed Code graph MCP fixed to their selected Area."""
+        run even when the profile normally opts out. Live-home claude only injects or
+        removes the Area-fixed Code graph MCP (never rewrites owner MCP/skills).
+        Repo Task runs may receive a server-managed Code graph MCP fixed to their
+        selected Area."""
         if not hermes_home or profile_id in (None, 0):
             return
         if (
             not require_explicit_empty
             and cfg.get("claude_live_home")
             and getattr(spec, "id", "") == "claude-code"
-            and fixed_code_graph_path is None
         ):
-            # Live home skips full capability re-apply, but still strip any
-            # leftover Area-locked Code graph MCP from a prior Task run.
+            # Live home is the owner's real Claude config. Never rewrite full
+            # mcpServers/skills there - only inject or strip the Area-fixed
+            # Code graph MCP entry for repo Task runs.
             try:
-                remove_fixed_code_graph_mcp("claude-code", Path(hermes_home))
+                if fixed_code_graph_path is not None:
+                    apply_fixed_code_graph_mcp(
+                        "claude-code",
+                        Path(hermes_home),
+                        Path(fixed_code_graph_path),
+                    )
+                else:
+                    remove_fixed_code_graph_mcp("claude-code", Path(hermes_home))
             except Exception:
                 logging.getLogger("proxima.worker").exception(
-                    "live-home Code graph MCP cleanup failed (non-fatal)"
+                    "live-home Code graph MCP update failed (non-fatal)"
                 )
             return
         try:

@@ -10,6 +10,7 @@ import logging
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -134,6 +135,10 @@ class CodeGraphLifecycle:
         if not self.enabled():
             return
         try:
+            self._reclaim_abandoned_builds()
+        except Exception:
+            log.exception("Code graph abandoned-build reclaim failed")
+        try:
             self._drain_queue(limit=1)
         except Exception:
             log.exception("Code graph queue drain failed")
@@ -152,6 +157,68 @@ class CodeGraphLifecycle:
                 self._audit_registered_code_graphs()
             except Exception:
                 log.exception("Code graph staleness audit failed")
+
+    def _reclaim_abandoned_builds(self) -> None:
+        """Move crash-orphaned building rows back to queued so drain can resume.
+
+        In-flight lifecycle builds are tracked in ``_building`` and left alone.
+        Other ``building`` rows older than build timeout + grace (or with a
+        missing/invalid attempt timestamp) are treated as abandoned after a
+        process death or hung rebuild and re-queued without dropping any
+        follow-up rebuild intent recorded while building.
+        """
+        timeout = max(
+            1,
+            int(self.config.get("graph_build_timeout_seconds", 120)),
+        )
+        grace = max(
+            0,
+            int(self.config.get("code_graph_build_reclaim_grace_seconds", 30)),
+        )
+        max_age = float(timeout + grace)
+        now = datetime.now(timezone.utc)
+        rows = self._db_factory().execute(
+            "SELECT gs.id, gs.last_attempt_at "
+            "FROM graph_states gs "
+            "JOIN projects p ON p.id = gs.container_id "
+            "WHERE gs.kind = 'code' AND gs.state = 'building' "
+            "AND p.archived_at IS NULL"
+        ).fetchall()
+        for row in rows:
+            state_id = int(row["id"])
+            with self._guard:
+                if state_id in self._building:
+                    continue
+            raw_attempt = row["last_attempt_at"]
+            age_seconds: float | None
+            if not raw_attempt:
+                age_seconds = None
+            else:
+                try:
+                    attempted = datetime.fromisoformat(str(raw_attempt))
+                    if attempted.tzinfo is None:
+                        attempted = attempted.replace(tzinfo=timezone.utc)
+                    age_seconds = (now - attempted).total_seconds()
+                except (TypeError, ValueError):
+                    age_seconds = None
+            if age_seconds is not None and age_seconds < max_age:
+                continue
+            lock = getattr(self.app.state, "db_lock", None)
+            if lock is None:
+                self._mark_building_queued(state_id)
+            else:
+                with lock:
+                    self._mark_building_queued(state_id)
+
+    def _mark_building_queued(self, state_id: int) -> None:
+        self._db_factory().execute(
+            "UPDATE graph_states SET state = 'queued', "
+            "rebuild_reason = COALESCE(rebuild_reason, ?), "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND state = 'building'",
+            (REASON_MANUAL, state_id),
+        )
+        log.info("reclaimed abandoned Code graph build state_id=%s", state_id)
 
     def _drain_queue(self, *, limit: int = 1) -> None:
         rows = self._db_factory().execute(
