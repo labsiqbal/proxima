@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import app_settings, features, satpam, turn_restore
+from .. import app_settings, features, master_focus, satpam, turn_restore
 from ..master_runtime import (
     MasterToolError,
     master_capacity,
@@ -105,6 +105,7 @@ def register(app, deps):
     def _message_context(
         payload: dict[str, Any],
         user: dict[str, Any],
+        focus_container_id: int | None,
     ) -> dict[str, Any]:
         focus = payload.get("focus")
         target = payload.get("target")
@@ -158,9 +159,14 @@ def register(app, deps):
                 detail="Automatic Master routing cannot include an explicit target",
             )
 
-        if target_container is not None:
+        # Focus is server-owned.  The legacy per-message focus field remains
+        # validated for compatibility, but cannot overwrite durable Focus.
+        if focus_container_id is not None:
             focus_mode = "container"
-            focus_container = target_container
+            focus_container = {"id": focus_container_id}
+        else:
+            focus_mode = "fleet"
+            focus_container = None
 
         context = {
             "focus_mode": focus_mode,
@@ -174,6 +180,12 @@ def register(app, deps):
             "target_area_id": target_area_id,
         }
         return context
+
+    def _focus_http_error(exc: master_focus.MasterFocusError) -> HTTPException:
+        return HTTPException(
+            status_code=409 if exc.code == "focus_version_conflict" else 422,
+            detail={"code": exc.code, "message": str(exc)},
+        )
 
     def _master_job_payload(row) -> dict[str, Any]:
         data = dict(row)
@@ -227,6 +239,7 @@ def register(app, deps):
             ),
             "attention": attention,
             "checkpoints": list_checkpoints(db(), origin_master_session_id=session["id"]),
+            "focus": master_focus.state_payload(db(), session["id"]),
         }
 
     @app.get("/api/alpha/desk", deprecated=True)
@@ -244,58 +257,86 @@ def register(app, deps):
             raise HTTPException(status_code=422, detail="content is required")
         if len(content) > 50_000:
             raise HTTPException(status_code=422, detail="content is too long")
-        context = _message_context(payload, user)
-        active = db().execute(
-            "SELECT id FROM runs WHERE session_id = ? AND status IN ('queued','running') ORDER BY id LIMIT 1",
-            (session["id"],),
-        ).fetchone()
-        if active:
-            raise HTTPException(status_code=409, detail="Master is already working on a turn")
+        # Preserve validation precedence: malformed explicit scopes are rejected
+        # even if a previous turn is currently active.
+        _message_context(payload, user, None)
         conn = db()
-        conn.execute("SAVEPOINT create_master_turn")
-        try:
-            message_cur = conn.execute(
-                "INSERT INTO messages(session_id, role, content, author) "
-                "VALUES (?, 'user', ?, ?)",
-                (session["id"], content, user["username"]),
-            )
-            message_id = _as_int(message_cur.lastrowid)
-            conn.execute(
-                "INSERT INTO master_message_context("
-                "message_id, focus_mode, focus_container_id, target_mode, "
-                "target_container_id, target_area_id"
-                ") VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    message_id,
-                    context["focus_mode"],
-                    context["focus_container_id"],
-                    context["target_mode"],
-                    context["target_container_id"],
-                    context["target_area_id"],
-                ),
-            )
-            cur = conn.execute(
-                "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, kind, status, prompt, model, hermes_home) "
-                "VALUES (?, NULL, ?, ?, ?, 'master', 'queued', ?, ?, ?)",
-                (
-                    session["id"], user["id"], profile["id"], profile["runner_id"],
-                    content, profile["default_model"], profile["hermes_home"],
-                ),
-            )
-            run_id = _as_int(cur.lastrowid)
-            conn.execute(
-                "UPDATE messages SET run_id = ? WHERE id = ?",
-                (run_id, message_id),
-            )
-            conn.execute(
-                "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (session["id"],),
-            )
-            conn.execute("RELEASE SAVEPOINT create_master_turn")
-        except Exception:
-            conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
-            conn.execute("RELEASE SAVEPOINT create_master_turn")
-            raise
+        with app.state.db_lock:
+            conn.execute("SAVEPOINT create_master_turn")
+            try:
+                active = conn.execute(
+                    "SELECT id FROM runs WHERE session_id = ? AND status IN ('queued','running') ORDER BY id LIMIT 1",
+                    (session["id"],),
+                ).fetchone()
+                if active:
+                    raise HTTPException(status_code=409, detail="Master is already working on a turn")
+                focus = master_focus.state_payload(conn, session["id"])
+                # An explicit target is a Focus transition and enqueue in one
+                # transaction.  It never builds a prompt from the old epoch.
+                requested_target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+                target_container_id = requested_target.get("container_id") if requested_target.get("mode") == "explicit" else None
+                if target_container_id is not None:
+                    target_container = _owned_container(target_container_id, user)
+                    target_id = _as_int(target_container["id"])
+                    if focus["current_container_id"] != target_id:
+                        focus = master_focus.change_focus(
+                            conn,
+                            master_session_id=session["id"],
+                            container_id=target_id,
+                            expected_version=focus["version"],
+                        )
+                context = _message_context(payload, user, focus["current_container_id"])
+                message_cur = conn.execute(
+                    "INSERT INTO messages(session_id, role, content, author) "
+                    "VALUES (?, 'user', ?, ?)",
+                    (session["id"], content, user["username"]),
+                )
+                message_id = _as_int(message_cur.lastrowid)
+                master_focus.stamp_message(
+                    conn,
+                    message_id=message_id,
+                    focus_epoch_id=focus["current_epoch_id"],
+                )
+                conn.execute(
+                    "INSERT INTO master_message_context("
+                    "message_id, focus_mode, focus_container_id, target_mode, "
+                    "target_container_id, target_area_id"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        message_id,
+                        context["focus_mode"],
+                        context["focus_container_id"],
+                        context["target_mode"],
+                        context["target_container_id"],
+                        context["target_area_id"],
+                    ),
+                )
+                cur = conn.execute(
+                    "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, kind, status, prompt, model, hermes_home, focus_epoch_id) "
+                    "VALUES (?, NULL, ?, ?, ?, 'master', 'queued', ?, ?, ?, ?)",
+                    (
+                        session["id"], user["id"], profile["id"], profile["runner_id"],
+                        content, profile["default_model"], profile["hermes_home"], focus["current_epoch_id"],
+                    ),
+                )
+                run_id = _as_int(cur.lastrowid)
+                conn.execute(
+                    "UPDATE messages SET run_id = ? WHERE id = ?",
+                    (run_id, message_id),
+                )
+                conn.execute(
+                    "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (session["id"],),
+                )
+                conn.execute("RELEASE SAVEPOINT create_master_turn")
+            except master_focus.MasterFocusError as exc:
+                conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
+                conn.execute("RELEASE SAVEPOINT create_master_turn")
+                raise _focus_http_error(exc) from exc
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
+                conn.execute("RELEASE SAVEPOINT create_master_turn")
+                raise
         message = db().execute(
             "SELECT id, role, content, author, run_id, created_at "
             "FROM messages WHERE id = ?",
@@ -308,6 +349,50 @@ def register(app, deps):
             "status": "queued",
             "message": {**dict(message), "master_target": context},
         }
+
+    @app.put("/api/master/focus")
+    def put_master_focus(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
+        _require_master()
+        _profile, session = _identity(user)
+        if "version" not in payload:
+            raise HTTPException(status_code=422, detail="Focus version is required")
+        container_id = payload.get("container_id")
+        container = _owned_container(container_id, user) if container_id is not None else None
+        resolved_container_id = _as_int(container["id"]) if container is not None else None
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("SAVEPOINT update_master_focus")
+            try:
+                active = conn.execute(
+                    "SELECT 1 FROM runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1",
+                    (session["id"],),
+                ).fetchone()
+                if active:
+                    result = master_focus.request_pending_focus(
+                        conn,
+                        master_session_id=session["id"],
+                        container_id=resolved_container_id,
+                        expected_version=payload["version"],
+                    )
+                else:
+                    result = master_focus.change_focus(
+                        conn,
+                        master_session_id=session["id"],
+                        container_id=resolved_container_id,
+                        expected_version=payload["version"],
+                    )
+                conn.execute("RELEASE SAVEPOINT update_master_focus")
+            except master_focus.MasterFocusError as exc:
+                conn.execute("ROLLBACK TO SAVEPOINT update_master_focus")
+                conn.execute("RELEASE SAVEPOINT update_master_focus")
+                raise _focus_http_error(exc) from exc
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT update_master_focus")
+                conn.execute("RELEASE SAVEPOINT update_master_focus")
+                raise
+        if result.get("changed"):
+            app.state.hub.notify(session["id"])
+        return {"focus": {key: result[key] for key in ("current_epoch_id", "current_container_id", "pending_container_id", "version")}, "pending": bool(result.get("pending")), "changed": bool(result.get("changed"))}
 
     def _graph_policy() -> dict[str, Any]:
         """Install-visible local-only Knowledge/Code extraction policy (Group 11)."""

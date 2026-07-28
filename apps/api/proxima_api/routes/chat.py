@@ -312,9 +312,14 @@ def register(app, deps):
             "mc.focus_container_id AS master_focus_container_id, "
             "mc.target_mode AS master_target_mode, "
             "mc.target_container_id AS master_target_container_id, "
-            "mc.target_area_id AS master_target_area_id "
+            "mc.target_area_id AS master_target_area_id, "
+            "mf.message_id AS focus_message_id, "
+            "mf.focus_epoch_id AS master_focus_epoch_id, "
+            "mf.focus_container_id AS message_focus_container_id, "
+            "mf.subject_container_id AS message_subject_container_id "
             "FROM messages m LEFT JOIN master_message_context mc "
             "ON mc.message_id = m.id "
+            "LEFT JOIN message_focus mf ON mf.message_id = m.id "
             "WHERE m.session_id = ? ORDER BY m.id ASC",
             (session_id,),
         ).fetchall()
@@ -375,6 +380,10 @@ def register(app, deps):
                 "master_target_container_id", None
             )
             master_target_area_id = m.pop("master_target_area_id", None)
+            focus_message_id = m.pop("focus_message_id", None)
+            master_focus_epoch_id = m.pop("master_focus_epoch_id", None)
+            message_focus_container_id = m.pop("message_focus_container_id", None)
+            message_subject_container_id = m.pop("message_subject_container_id", None)
             if master_target_mode is not None and master_focus_mode is not None:
                 m["master_target"] = {
                     "focus_mode": master_focus_mode,
@@ -382,6 +391,12 @@ def register(app, deps):
                     "target_mode": master_target_mode,
                     "target_container_id": master_target_container_id,
                     "target_area_id": master_target_area_id,
+                }
+            if focus_message_id is not None:
+                m["message_focus"] = {
+                    "focus_epoch_id": master_focus_epoch_id,
+                    "focus_container_id": message_focus_container_id,
+                    "subject_container_id": message_subject_container_id,
                 }
             try:
                 links = _decode_json(m.pop("output_links", "[]") or "[]")

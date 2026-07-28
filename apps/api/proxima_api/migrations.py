@@ -899,7 +899,7 @@ def _add_task_delegation_contracts(conn: sqlite3.Connection) -> None:
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           origin_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
           origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
-          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
           target_area_id INTEGER NOT NULL REFERENCES project_areas(id) ON DELETE RESTRICT,
           job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
           routing_mode TEXT NOT NULL CHECK (routing_mode IN ('explicit', 'auto')),
@@ -1331,6 +1331,82 @@ def _add_master_message_context(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_master_focus_epochs(conn: sqlite3.Connection) -> None:
+    """Add durable Focus state without fabricating epochs for legacy history."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "focus_epoch_id" not in columns:
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN focus_epoch_id "
+            "INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL"
+        )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_focus_epochs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+          started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          ended_at TEXT,
+          version INTEGER NOT NULL,
+          CHECK(ended_at IS NULL OR ended_at >= started_at)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_master_focus_epoch_open "
+        "ON master_focus_epochs(master_session_id) WHERE ended_at IS NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_focus_epochs_container "
+        "ON master_focus_epochs(master_session_id, container_id, id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_focus_state (
+          master_session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          current_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+          pending_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+          version INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS message_focus (
+          message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+          focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+          subject_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_focus_epoch "
+        "ON message_focus(focus_epoch_id, message_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_focus_subject "
+        "ON message_focus(subject_container_id, message_id)"
+    )
+    # Older Master turns did not capture a Focus epoch.  Mark them explicitly
+    # as fleet-attributed rather than guessing epoch boundaries from client state.
+    session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    message_columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if {"id", "mode"} <= session_columns:
+        if "session_id" in message_columns:
+            conn.execute(
+                "INSERT OR IGNORE INTO message_focus(message_id, focus_epoch_id, focus_container_id) "
+                "SELECT m.id, NULL, NULL FROM messages m JOIN sessions s ON s.id = m.session_id "
+                "WHERE s.mode = 'master'"
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO master_focus_state("
+            "master_session_id, current_epoch_id, pending_container_id, version"
+            ") SELECT id, NULL, NULL, 0 FROM sessions WHERE mode = 'master'"
+        )
+
+
 def _add_graph_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1550,6 +1626,11 @@ MIGRATIONS: list[Migration] = [
         37,
         "add durable Ops completion Knowledge rebuild outbox",
         _add_knowledge_rebuild_outbox,
+    ),
+    (
+        38,
+        "add Master Focus epochs, state, immutable message attribution, and run epoch capture",
+        _add_master_focus_epochs,
     ),
 ]
 

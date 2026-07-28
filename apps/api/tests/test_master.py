@@ -11,6 +11,7 @@ from proxima_api.run_prompting import RunPrompting
 from proxima_api.job_checkpoints import create_checkpoint, restore_checkpoint
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
+from proxima_api import master_focus
 
 
 def _client(tmp_path: Path):
@@ -142,6 +143,93 @@ def test_master_message_acceptance_returns_canonical_durable_message(
     ).json()["messages"]
     assert listed[0]["master_target"] == body["message"]["master_target"]
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
+
+
+def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
+    tmp_path: Path, monkeypatch
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    first = client.post("/api/projects", json={"slug": "focus-one", "name": "Focus one"}).json()
+    second = client.post("/api/projects", json={"slug": "focus-two", "name": "Focus two"}).json()
+    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
+    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+
+    desk = client.get("/api/master/desk").json()
+    assert desk["focus"] == {
+        "current_epoch_id": None,
+        "current_container_id": None,
+        "pending_container_id": None,
+        "version": 0,
+    }
+    changed = client.put("/api/master/focus", json={"container_id": first_id, "version": 0})
+    assert changed.status_code == 200
+    focus = changed.json()["focus"]
+    assert focus["current_container_id"] == first_id
+    assert focus["current_epoch_id"] is not None
+    assert focus["version"] == 1
+    assert client.put("/api/master/focus", json={"container_id": second_id, "version": 0}).status_code == 409
+
+    queued = client.post("/api/master/messages", json={"content": "Stay in the first Container"})
+    assert queued.status_code == 202
+    run_id = queued.json()["run_id"]
+    assert app.state.db.execute("SELECT focus_epoch_id FROM runs WHERE id = ?", (run_id,)).fetchone()["focus_epoch_id"] == focus["current_epoch_id"]
+    pending = client.put("/api/master/focus", json={"container_id": second_id, "version": 1})
+    assert pending.status_code == 200
+    assert pending.json()["pending"] is True
+    assert pending.json()["focus"]["current_container_id"] == first_id
+    assert pending.json()["focus"]["pending_container_id"] == second_id
+    assert client.post("/api/master/messages", json={"content": "Must not queue"}).status_code == 409
+
+    app.state.db.execute("UPDATE runs SET status = 'completed' WHERE id = ?", (run_id,))
+    applied = master_focus.apply_pending_if_idle(
+        app.state.db, master_session_id=desk["session"]["id"]
+    )
+    assert applied and applied["current_container_id"] == second_id
+    assert applied["pending_container_id"] is None
+    assert applied["version"] == 3
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ? AND content LIKE 'Master Focus changed%'",
+        (desk["session"]["id"],),
+    ).fetchone()[0] == 2
+
+
+def test_master_prompt_history_never_splices_prior_focus_epoch(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    session_id = desk["session"]["id"]
+    first = client.post("/api/projects", json={"slug": "history-one", "name": "History one"}).json()
+    second = client.post("/api/projects", json={"slug": "history-two", "name": "History two"}).json()
+    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
+    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+    epoch_one = master_focus.change_focus(
+        app.state.db, master_session_id=session_id, container_id=first_id, expected_version=0
+    )["current_epoch_id"]
+    old = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) VALUES (?, 'assistant', 'HOSTILE-A-ONLY')",
+        (session_id,),
+    )
+    master_focus.stamp_message(app.state.db, message_id=old.lastrowid, focus_epoch_id=epoch_one)
+    epoch_two = master_focus.change_focus(
+        app.state.db, master_session_id=session_id, container_id=second_id, expected_version=1
+    )["current_epoch_id"]
+    current = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) VALUES (?, 'user', 'Container B request')",
+        (session_id,),
+    )
+    master_focus.stamp_message(app.state.db, message_id=current.lastrowid, focus_epoch_id=epoch_two)
+
+    history = RunPrompting._master_history(
+        app.state.db,
+        session_id,
+        current_prompt="Container B request",
+        focus_epoch_id=epoch_two,
+    )
+    assert "HOSTILE-A-ONLY" not in history
+    assert f"Container {second_id}" in history
 
 
 def test_explicit_master_target_is_validated_and_focuses_before_enqueue(

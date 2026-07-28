@@ -456,12 +456,23 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   docs. Cloud semantic egress stays off unless an explicit future captain policy
   enables a real adapter; configured cloud credentials never unlock egress.
 
-Focus epochs, history projection, and safe-self-update remain later delivery
-groups.
+**Focus epochs and prompt isolation:** Master begins in fleet mode with no Focus
+epoch. `master_focus_state` durably records the one current or pending Container
+Focus, while immutable `message_focus` and `runs.focus_epoch_id` capture the
+epoch that actually owned each user turn, response, tool result, and projection.
+An idle Focus change uses an optimistic version check, closes and opens epochs,
+adds a boundary message, and emits `master.focus.changed`. A running turn can
+only record one pending Focus; sends return 409 until it closes, then the pending
+Focus applies exactly once. Explicit cross-Container sends change Focus and
+enqueue in the same transaction. The restricted Master runner process is rebuilt
+for every Master turn and its durable history is limited to the captured epoch,
+so prior Container ACP/model context cannot cross a boundary. History projection
+UI and safe-self-update remain later delivery groups.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
 `POST /api/containers/{slug}/graphs/rebuild`,
-`GET /api/settings/master` (includes `graph_policy`).
+`GET /api/settings/master` (includes `graph_policy`), and
+`PUT /api/master/focus` (versioned current or pending Focus).
 
 `delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
 or start jobs directly. A Master batch may name client-local Task keys and

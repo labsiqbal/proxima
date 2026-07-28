@@ -13,6 +13,7 @@ import sqlite3
 from typing import Any, Mapping
 
 from .event_types import MASTER_PROJECTION_EVENT_TYPES
+from . import master_focus
 
 log = logging.getLogger("proxima.master_projection")
 MAX_PROJECTION_PAYLOAD_BYTES = 16 * 1024
@@ -522,6 +523,30 @@ class MasterProjectionService:
                     (master_session_id, content[:2000]),
                 )
                 message_id = _as_int(message_cursor.lastrowid)
+                focus_epoch_id = None
+                subject_container_id = payload.get("container_id")
+                if task_id is not None:
+                    source = conn.execute(
+                        "SELECT origin_message_id, container_id FROM task_delegations "
+                        "WHERE job_id = ?",
+                        (task_id,),
+                    ).fetchone()
+                    if source is not None:
+                        subject_container_id = source["container_id"]
+                        captured = conn.execute(
+                            "SELECT focus_epoch_id FROM message_focus WHERE message_id = ?",
+                            (source["origin_message_id"],),
+                        ).fetchone()
+                        if captured is not None:
+                            focus_epoch_id = captured["focus_epoch_id"]
+                # Notifications retain originating Focus while their subject
+                # Container remains separate. They never swap current Focus.
+                master_focus.stamp_message(
+                    conn,
+                    message_id=message_id,
+                    focus_epoch_id=focus_epoch_id,
+                    subject_container_id=subject_container_id,
+                )
                 event_payload = {
                     "projection_id": projection_id,
                     "projection_key": projection_key,

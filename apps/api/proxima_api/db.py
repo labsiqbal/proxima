@@ -213,6 +213,36 @@ CREATE INDEX IF NOT EXISTS idx_master_message_context_focus
   ON master_message_context(focus_container_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_master_message_context_target
   ON master_message_context(target_container_id, target_area_id, message_id);
+CREATE TABLE IF NOT EXISTS master_focus_epochs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at TEXT,
+  version INTEGER NOT NULL,
+  CHECK(ended_at IS NULL OR ended_at >= started_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_master_focus_epoch_open
+  ON master_focus_epochs(master_session_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_master_focus_epochs_container
+  ON master_focus_epochs(master_session_id, container_id, id);
+CREATE TABLE IF NOT EXISTS master_focus_state (
+  master_session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  current_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+  pending_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  version INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS message_focus (
+  message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+  focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  subject_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_message_focus_epoch
+  ON message_focus(focus_epoch_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_message_focus_subject
+  ON message_focus(subject_container_id, message_id);
 CREATE TABLE IF NOT EXISTS message_reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -264,6 +294,7 @@ CREATE TABLE IF NOT EXISTS runs (
   -- reads high counts as a confused-agent signal.
   continued_from_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
   continuation_count INTEGER NOT NULL DEFAULT 0,
+  focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS prompt_collaborations (

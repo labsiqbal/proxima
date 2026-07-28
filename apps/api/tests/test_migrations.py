@@ -57,9 +57,9 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
     conn.execute("DROP TABLE knowledge_rebuild_intents")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 37
+    assert current_version(conn) == 38
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -552,8 +552,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37]
-    assert current_version(conn) == 37
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
+    assert current_version(conn) == 38
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -594,8 +594,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37]
-    assert current_version(conn) == 37
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
+    assert current_version(conn) == 38
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -800,9 +800,9 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
 def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
-    assert run_migrations(conn, str(db_path)) == [36, 37]
+    assert run_migrations(conn, str(db_path)) == [36, 37, 38]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 37
+    assert current_version(conn) == 38
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")

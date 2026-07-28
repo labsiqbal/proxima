@@ -464,7 +464,17 @@ checks, so a source that became part of a nested repository after publication is
 refused. There is no public graph query route; the Master broker returns validated
 Ops/Area-relative citation paths but never absolute host or internal graph paths.
 
-Focus epochs, history projection, and safe-self-update remain later groups.
+Focus is a durable context-isolation boundary. Fleet mode has no epoch; a
+Container Focus has one open `master_focus_epochs` row and a versioned
+`master_focus_state` record. Focus transitions are optimistic, append a boundary
+message and `master.focus.changed` event, and stamp the captured epoch on the
+user message, run, response, tool result, and Master projection. While a turn is
+active the only allowed Focus mutation is one durable pending Container, applied
+once after the last turn closes. An explicit Container send performs transition
+and enqueue atomically. Every restricted Master turn recycles its ACP process and
+rebuilds history solely from its captured epoch, preventing old Container context
+from surviving in runner or model caches. History projection UI and safe-self-
+update remain later groups.
 
 ### Native artifact review flow
 
@@ -610,12 +620,15 @@ event, or explicit retry, not a primary poll. The SSE stream
 emits an immediate comment on an idle connection so browser `EventSource.onopen`
 reports the healthy transport without waiting for the keepalive interval.
 
-Each accepted owner message gets one `master_message_context` row. The API validates
+Each accepted owner message gets one `master_message_context` row plus immutable
+`message_focus` attribution. The API validates
 every referenced Container against the authenticated owner and every Area against
-that Container. Explicit targeting changes the recorded Focus to the target
-Container inside the same transaction that inserts the message and run. The run's
-stored prompt remains the raw owner text; trusted routing ids are appended only
-while building the restricted runner prompt. `MasterToolBroker` overrides model
+that Container. Explicit targeting changes the durable current Focus to the target
+Container inside the same transaction that inserts the message and run; the run
+captures that epoch before it can execute. The run's stored prompt remains the raw
+owner text; trusted routing ids are appended only while building the restricted
+runner prompt. The runner process is recycled and its bounded durable history is
+filtered to that captured epoch before every Master turn. `MasterToolBroker` overrides model
 Container/Area arguments for explicit targets and confines automatic routing to a
 Container Focus. Fleet Focus leaves the full owner Fleet available. Deleting a
 Container nulls historical ids without deleting the durable message.
