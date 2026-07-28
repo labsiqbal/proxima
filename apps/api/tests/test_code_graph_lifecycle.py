@@ -445,3 +445,30 @@ def test_mcp_main_requires_fixed_path(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("PROXIMA_CODE_GRAPH_PATH", raising=False)
     with pytest.raises(SystemExit):
         mcp_main()
+
+
+def test_incremental_sources_reject_untracked_detect_only_files(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    project, area_ids = _container_with_areas(
+        api,
+        headers,
+        tmp_path,
+        area_count=1,
+    )
+    graphs = api.app.state.graph_context
+    scope = graphs.resolve_scope(
+        owner_user_id=1,
+        container_slug="life-one",
+        kind="code",
+        area_id=area_ids[0],
+    )
+    head = graphs.repo_head_sha(scope.root)
+    assert head
+    assert graphs.incremental_sources_covered_by_commit(scope, head)
+
+    # Untracked code is detected by Graphify but is outside the commit tree.
+    (scope.root / "untracked_extra.py").write_text(
+        "class Extra:\n    pass\n",
+        encoding="utf-8",
+    )
+    assert not graphs.incremental_sources_covered_by_commit(scope, head)

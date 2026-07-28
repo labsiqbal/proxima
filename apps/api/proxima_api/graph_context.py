@@ -950,6 +950,56 @@ class GraphContextService:
             digest.update(b"\n")
         return digest.hexdigest()
 
+    def incremental_sources_covered_by_commit(
+        self,
+        scope: GraphScope,
+        commit: str,
+    ) -> bool:
+        """True when every live Graphify source is in the claimed commit tree.
+
+        Incremental merge only extracts ``base..head``. Untracked or otherwise
+        detect-only sources would be fingerprinted from the live tree but never
+        extracted, so eligibility and pre-publish must fail closed to full
+        rebuild when any live source is missing from the commit tree.
+        """
+        head = str(commit or "").strip()
+        if not head or scope.kind != "code":
+            return False
+        if not (scope.root / ".git").exists():
+            return False
+        listed = _git(
+            scope.root,
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            head,
+            check=False,
+        )
+        if listed.returncode != 0:
+            return False
+        tree_paths = {
+            part.replace("\\", "/")
+            for part in listed.stdout.split("\0")
+            if part.strip()
+        }
+        cache = Path(tempfile.mkdtemp(prefix=".proxima-inc-cover-"))
+        try:
+            try:
+                rel_paths, errors = _select_graphify_sources(
+                    scope.root,
+                    scope.kind,
+                    cache,
+                    scope.excluded_roots,
+                )
+            except GraphBuildError:
+                return False
+            if errors:
+                return False
+            return all(rel in tree_paths for rel in rel_paths)
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
+
     def changed_files_between(
         self,
         root: Path,
@@ -1876,6 +1926,10 @@ class GraphContextService:
                     and live_head is not None
                     and live_head == head
                     and self.tracked_dirty_signature(scope.root) is None
+                    and self.incremental_sources_covered_by_commit(
+                        scope,
+                        str(head),
+                    )
                 )
                 if tool_ok and base and head and tree_stable:
                     changed, deleted, unsafe = self.changed_files_between(
@@ -1906,6 +1960,10 @@ class GraphContextService:
                     or live_head is None
                     or live_head != incremental_head
                     or self.tracked_dirty_signature(scope.root) is not None
+                    or not self.incremental_sources_covered_by_commit(
+                        scope,
+                        str(incremental_head),
+                    )
                 ):
                     raise GraphValidationError(
                         "live tree drifted during incremental rebuild; "
