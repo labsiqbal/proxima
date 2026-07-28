@@ -327,9 +327,8 @@ class KnowledgeGraphLifecycle:
                 )
             except GraphContextError:
                 continue
-            if not signature:
-                self._dirty_seen.pop(container_id, None)
-                self._dirty_enqueued.pop(container_id, None)
+            if signature is None:
+                # Incomplete walk - do not clear enqueue memory or pretend empty.
                 continue
             published = row["source_fingerprint"] or None
             if published and signature == published:
@@ -374,8 +373,11 @@ class KnowledgeGraphLifecycle:
                 )
             except GraphContextError:
                 continue
-            fingerprint_changed = bool(fingerprint) and fingerprint != (
-                row["source_fingerprint"] or None
+            published = row["source_fingerprint"] or None
+            # Empty allowlist (distinct fingerprint) vs prior non-empty content
+            # must mark stale. Incomplete scans (None) are ignored.
+            fingerprint_changed = (
+                fingerprint is not None and fingerprint != published
             )
             generation = int(row["generation"] or 0)
             graph_path_raw = None

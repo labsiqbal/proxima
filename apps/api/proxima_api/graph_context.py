@@ -53,16 +53,18 @@ KNOWLEDGE_DIR_EXTENSIONS: dict[str, frozenset[str]] = {
     # Curated notes and decisions (living logs / generated catalogs stay out).
     "wiki": frozenset({".md"}),
     "reports": frozenset({".md", ".txt", ".html", ".json", ".rst"}),
-    # Durable artifact *metadata* only - never binary media or caches.
-    "artifacts": frozenset({".md", ".json"}),
+    # Durable artifact *metadata only* - never deliverable bodies or media.
+    # Explicit convention: ``*.meta.json`` or ``METADATA.md`` under artifacts/.
+    "artifacts": frozenset({".json", ".md"}),
 }
+KNOWLEDGE_ARTIFACT_META_JSON_SUFFIX = ".meta.json"
+KNOWLEDGE_ARTIFACT_META_NAMES = frozenset({"metadata.md"})
 KNOWLEDGE_WIKI_EXCLUDED = frozenset({"index.md", "log.md"})
+KNOWLEDGE_VCS_DIR_NAMES = frozenset({".git", ".hg", ".svn"})
 KNOWLEDGE_EXCLUDED_DIR_NAMES = frozenset(
     {
         "graphify-out",
-        ".git",
-        ".hg",
-        ".svn",
+        *KNOWLEDGE_VCS_DIR_NAMES,
         "node_modules",
         "__pycache__",
         ".cache",
@@ -76,6 +78,11 @@ KNOWLEDGE_EXCLUDED_DIR_NAMES = frozenset(
         ".proxima",
     }
 )
+# Distinct fingerprint for a successful allowlist walk with zero sources.
+# Must not be confused with ``None`` (scan failed / incomplete).
+EMPTY_KNOWLEDGE_FINGERPRINT = hashlib.sha256(
+    b"proxima-knowledge-empty-allowlist-v1"
+).hexdigest()
 _KNOWLEDGE_SECRET_NAME_RE = re.compile(
     r"(^|[/_.-])("
     r"secret|secrets|credential|credentials|password|passwd|token|apikey|api[_-]?key|"
@@ -461,6 +468,25 @@ def _is_knowledge_secret_path(rel_path: str) -> bool:
     return bool(_KNOWLEDGE_SECRET_NAME_RE.search(rel_path.replace("\\", "/")))
 
 
+def _is_vcs_tree(path: Path) -> bool:
+    """True when path is a VCS metadata dir or a nested repo root."""
+    if path.name in KNOWLEDGE_VCS_DIR_NAMES:
+        return True
+    try:
+        if not path.is_dir() or path.is_symlink():
+            return False
+    except OSError:
+        return False
+    for marker in KNOWLEDGE_VCS_DIR_NAMES:
+        candidate = path / marker
+        try:
+            if candidate.exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _knowledge_path_allowed(rel_path: str) -> bool:
     """True when a scope-relative path is on the durable Knowledge allowlist."""
     normalized = rel_path.replace("\\", "/").strip().strip("/")
@@ -486,6 +512,12 @@ def _knowledge_path_allowed(rel_path: str) -> bool:
         name = pure.name
         if name in KNOWLEDGE_WIKI_EXCLUDED or pure.as_posix().endswith("/log.md"):
             return False
+    if top == "artifacts":
+        # Explicit durable metadata convention only - never deliverable bodies.
+        name = pure.name.lower()
+        if name in KNOWLEDGE_ARTIFACT_META_NAMES:
+            return True
+        return name.endswith(KNOWLEDGE_ARTIFACT_META_JSON_SUFFIX)
     suffix = pure.suffix.lower()
     return suffix in KNOWLEDGE_DIR_EXTENSIONS[top]
 
@@ -544,6 +576,9 @@ def _select_knowledge_sources(
             continue
         if not base.is_dir():
             continue
+        # A nested repository rooted at an allowlisted top-level dir is out.
+        if _is_vcs_tree(base):
+            continue
         stack = [base]
         while stack:
             current = stack.pop()
@@ -566,7 +601,7 @@ def _select_knowledge_sources(
                 try:
                     if entry.is_dir():
                         # Nested VCS / runtime trees never enter the allowlist.
-                        if (entry / ".git").exists() or entry.name == ".git":
+                        if _is_vcs_tree(entry):
                             continue
                         stack.append(entry)
                     elif entry.is_file():
@@ -1279,13 +1314,39 @@ class GraphContextService:
         owner_user_id: int,
         container_slug: str,
     ) -> str | None:
-        """Fingerprint allowlisted Knowledge sources for debounce and audit."""
-        return self.live_source_fingerprint(
+        """Fingerprint allowlisted Knowledge sources for debounce and audit.
+
+        Returns:
+        - a content fingerprint when allowlisted sources exist
+        - ``EMPTY_KNOWLEDGE_FINGERPRINT`` when the walk succeeds with zero sources
+        - ``None`` when the walk is incomplete or the scope is unavailable
+        """
+        scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
             kind="knowledge",
             area_id=None,
+            create_output=False,
         )
+        cache = Path(tempfile.mkdtemp(prefix=".proxima-kfp-"))
+        try:
+            rel_paths, errors = _select_graphify_sources(
+                scope.root,
+                "knowledge",
+                cache,
+                scope.excluded_roots,
+            )
+            if errors:
+                return None
+            if not rel_paths:
+                return EMPTY_KNOWLEDGE_FINGERPRINT
+            return _fingerprint_files(
+                scope.root,
+                rel_paths,
+                scope.excluded_roots,
+            )
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
 
     def _owned_container(
         self,
@@ -1330,7 +1391,57 @@ class GraphContextService:
                 )
                 rel_path = None
                 resolved_area_id = None
+                # Fail closed when legacy Ops (rel_path='.') still shares the
+                # Container root with registered Code Areas - allowlisted-looking
+                # repo files must not enter Knowledge.
+                ops_row = self._db_factory().execute(
+                    "SELECT rel_path FROM project_areas "
+                    "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded' "
+                    "ORDER BY id LIMIT 1",
+                    (container["id"],),
+                ).fetchone()
+                ops_rel = (
+                    str(ops_row["rel_path"] or "").strip() if ops_row is not None else ""
+                )
+                code_area_ids = [
+                    int(row["id"])
+                    for row in self._db_factory().execute(
+                        "SELECT id FROM project_areas "
+                        "WHERE project_id = ? AND kind = 'code' "
+                        "AND source != 'excluded'",
+                        (container["id"],),
+                    ).fetchall()
+                ]
+                if ops_rel in {"", "."} and code_area_ids:
+                    raise GraphScopeError(
+                        "Knowledge graph requires physical Ops separation from "
+                        "Code Areas; legacy Ops root still overlaps Code scope"
+                    )
                 excluded_roots: tuple[Path, ...] = ()
+                if code_area_ids:
+                    try:
+                        area_roots = container_registry.validated_area_roots(
+                            self._db_factory(),
+                            container,
+                        )
+                    except container_registry.ContainerBoundaryError:
+                        area_roots = {}
+                    resolved_ops = root.resolve(strict=True)
+                    excluded_list: list[Path] = []
+                    for code_id in code_area_ids:
+                        candidate = area_roots.get(code_id)
+                        if candidate is None:
+                            continue
+                        try:
+                            resolved_code = candidate.resolve(strict=True)
+                        except (OSError, RuntimeError):
+                            continue
+                        if (
+                            resolved_code == resolved_ops
+                            or _contains(resolved_ops, resolved_code)
+                        ):
+                            excluded_list.append(resolved_code)
+                    excluded_roots = tuple(excluded_list)
             else:
                 if area_id is None:
                     raise GraphScopeError("Code graph scope requires an Area id")
@@ -2410,6 +2521,30 @@ class GraphContextService:
                 message="No validated graph generation is available.",
             )
 
+        # Integrity: refuse tampered canonical bytes before any graph walk.
+        expected_sha = str(row["graph_sha256"] or "").strip().lower()
+        if expected_sha:
+            try:
+                actual_sha = hashlib.sha256(
+                    scope.graph_path.read_bytes()
+                ).hexdigest()
+            except OSError:
+                return self._unavailable_result(
+                    scope=scope,
+                    row=row,
+                    budgets=budgets,
+                    code="graph_tampered",
+                    message="Canonical graph could not be verified.",
+                )
+            if actual_sha != expected_sha:
+                return self._unavailable_result(
+                    scope=scope,
+                    row=row,
+                    budgets=budgets,
+                    code="graph_tampered",
+                    message="Canonical graph no longer matches its published digest.",
+                )
+
         published_backend = str(
             row["semantic_backend"] or SEMANTIC_BACKEND_LOCAL
         )
@@ -2474,7 +2609,20 @@ class GraphContextService:
         finally:
             result_queue.close()
         if outcome.get("ok"):
-            return dict(outcome["result"])
+            result = dict(outcome["result"])
+            if scope.kind == "knowledge" and not self._knowledge_result_allowed(
+                result
+            ):
+                return self._unavailable_result(
+                    scope=scope,
+                    row=row,
+                    budgets=budgets,
+                    code="graph_tampered",
+                    message=(
+                        "Knowledge query cited paths outside the Ops allowlist"
+                    ),
+                )
+            return result
         return self._unavailable_result(
             scope=scope,
             row=row,
@@ -2485,3 +2633,27 @@ class GraphContextService:
                 outcome.get("error") or "Graph query failed.",
             ),
         )
+
+    @staticmethod
+    def _knowledge_result_allowed(result: Mapping[str, Any]) -> bool:
+        """Refuse Knowledge results that cite non-allowlisted Ops paths."""
+        paths: list[str] = []
+        for citation in result.get("citations") or []:
+            if isinstance(citation, Mapping) and citation.get("path"):
+                paths.append(str(citation["path"]))
+        for item in result.get("items") or []:
+            if not isinstance(item, Mapping):
+                continue
+            for citation in item.get("citations") or []:
+                if isinstance(citation, Mapping) and citation.get("path"):
+                    paths.append(str(citation["path"]))
+            source = item.get("source_file") or item.get("path")
+            if source:
+                paths.append(str(source))
+        for path in paths:
+            normalized = path.replace("\\", "/").strip().strip("/")
+            if not normalized:
+                continue
+            if not _knowledge_path_allowed(normalized):
+                return False
+        return True

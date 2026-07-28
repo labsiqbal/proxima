@@ -54,6 +54,10 @@ def test_classify_layers_routes_intents():
     assert "fleet" in classify_layers("Which containers do I have?")
     assert "knowledge" in classify_layers("What do we know about Acme?")
     assert "code" in classify_layers("What calls BillingService?")
+    assert "code" in classify_layers(
+        "What would changing BillingService impact?"
+    )
+    assert "code" in classify_layers("blast radius of the auth module")
     mixed = classify_layers(
         "What is running and what do we know about Acme code structure?"
     )

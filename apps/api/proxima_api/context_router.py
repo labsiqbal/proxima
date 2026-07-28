@@ -46,7 +46,10 @@ _KNOWLEDGE_RE = re.compile(
 _CODE_RE = re.compile(
     r"\b(function|class|symbol|import|call graph|code structure|"
     r"who calls|what calls|impact of|module|method|repo structure|"
-    r"source code|implementation)\b",
+    r"source code|implementation|"
+    r"impact|impacts|impacting|blast[- ]?radius|"
+    r"what would (?:changing|editing|modifying)|"
+    r"ripple effects?|callers? of)\b",
     re.IGNORECASE,
 )
 
