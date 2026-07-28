@@ -263,6 +263,11 @@ def test_real_master_path_contains_hostile_fixture_runner(
         encoding="utf-8",
     )
     python_root = Path(sys.executable).resolve().parent.parent
+    nix_store_bind = (
+        ["--ro-bind", "/nix/store", "/nix/store"]
+        if Path("/nix/store").exists()
+        else []
+    )
     spawn = [
         str(BWRAP),
         "--unshare-all",
@@ -270,9 +275,7 @@ def test_real_master_path_contains_hostile_fixture_runner(
         "--new-session",
         "--tmpfs",
         "/",
-        "--ro-bind",
-        "/nix/store",
-        "/nix/store",
+        *nix_store_bind,
         "--ro-bind",
         str(python_root),
         "/python",

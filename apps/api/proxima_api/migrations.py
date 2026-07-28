@@ -1430,6 +1430,14 @@ def _add_code_graph_lifecycle_columns(conn: sqlite3.Connection) -> None:
 
 
 def _add_knowledge_rebuild_outbox(conn: sqlite3.Connection) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {"jobs", "projects", "project_areas"}.issubset(tables):
+        return
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS knowledge_rebuild_intents (
