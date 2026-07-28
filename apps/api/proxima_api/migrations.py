@@ -899,7 +899,7 @@ def _add_task_delegation_contracts(conn: sqlite3.Connection) -> None:
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           origin_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
           origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
-          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
           target_area_id INTEGER NOT NULL REFERENCES project_areas(id) ON DELETE RESTRICT,
           job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
           routing_mode TEXT NOT NULL CHECK (routing_mode IN ('explicit', 'auto')),
@@ -1407,6 +1407,186 @@ def _add_master_focus_epochs(conn: sqlite3.Connection) -> None:
         )
 
 
+def _harden_master_focus_contracts(conn: sqlite3.Connection) -> None:
+    """Preserve epoch identity and enforce attribution at message persistence."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    required = {
+        "master_focus_epochs",
+        "master_focus_state",
+        "message_focus",
+        "messages",
+        "runs",
+        "sessions",
+    }
+    if not required.issubset(tables):
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        state_columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(master_focus_state)"
+            ).fetchall()
+        }
+        if "pending_focus" not in state_columns:
+            conn.execute(
+                "ALTER TABLE master_focus_state ADD COLUMN pending_focus "
+                "INTEGER NOT NULL DEFAULT 0 CHECK(pending_focus IN (0, 1))"
+            )
+        conn.execute(
+            "UPDATE master_focus_state SET pending_focus = 1 "
+            "WHERE pending_container_id IS NOT NULL "
+            "OR (current_epoch_id IS NOT NULL AND version > COALESCE(("
+            "SELECT version FROM master_focus_epochs "
+            "WHERE id = current_epoch_id"
+            "), version))"
+        )
+        conn.execute(
+            "UPDATE master_focus_state SET pending_container_id = NULL, "
+            "pending_focus = 0 WHERE pending_container_id = ("
+            "SELECT container_id FROM master_focus_epochs "
+            "WHERE id = current_epoch_id"
+            ")"
+        )
+
+        container_fk = next(
+            (
+                row
+                for row in conn.execute(
+                    "PRAGMA foreign_key_list(master_focus_epochs)"
+                ).fetchall()
+                if str(row[3]) == "container_id"
+            ),
+            None,
+        )
+        if container_fk is not None:
+            conn.execute(
+                """
+                CREATE TABLE master_focus_epochs_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  master_session_id INTEGER NOT NULL
+                    REFERENCES sessions(id) ON DELETE CASCADE,
+                  container_id INTEGER NOT NULL,
+                  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  ended_at TEXT,
+                  version INTEGER NOT NULL,
+                  CHECK(ended_at IS NULL OR ended_at >= started_at)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO master_focus_epochs_new("
+                "id, master_session_id, container_id, started_at, ended_at, version"
+                ") SELECT id, master_session_id, container_id, started_at, "
+                "ended_at, version FROM master_focus_epochs"
+            )
+            conn.execute("DROP TABLE master_focus_epochs")
+            conn.execute(
+                "ALTER TABLE master_focus_epochs_new "
+                "RENAME TO master_focus_epochs"
+            )
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_master_focus_epoch_open "
+            "ON master_focus_epochs(master_session_id) WHERE ended_at IS NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_master_focus_epochs_container "
+            "ON master_focus_epochs(master_session_id, container_id, id)"
+        )
+        message_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        run_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        session_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if (
+            {"id", "session_id", "run_id"} <= message_columns
+            and {"id", "session_id", "focus_epoch_id"} <= run_columns
+            and {"id", "mode"} <= session_columns
+        ):
+            conn.execute(
+                "INSERT OR IGNORE INTO message_focus("
+                "message_id, focus_epoch_id, focus_container_id, "
+                "subject_container_id"
+                ") SELECT message.id, run.focus_epoch_id, "
+                "epoch.container_id, NULL "
+                "FROM messages AS message "
+                "JOIN sessions AS session ON session.id = message.session_id "
+                "JOIN runs AS run ON run.id = message.run_id "
+                "LEFT JOIN master_focus_epochs AS epoch "
+                "ON epoch.id = run.focus_epoch_id "
+                "WHERE session.mode = 'master' "
+                "AND run.session_id = message.session_id"
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS messages_master_focus_insert
+                AFTER INSERT ON messages
+                WHEN NEW.run_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM sessions
+                    WHERE id = NEW.session_id AND mode = 'master'
+                  )
+                BEGIN
+                  INSERT OR IGNORE INTO message_focus(
+                    message_id, focus_epoch_id, focus_container_id,
+                    subject_container_id
+                  )
+                  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+                  FROM runs AS run
+                  LEFT JOIN master_focus_epochs AS epoch
+                    ON epoch.id = run.focus_epoch_id
+                  WHERE run.id = NEW.run_id
+                    AND run.session_id = NEW.session_id;
+                END
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS messages_master_focus_run_update
+                AFTER UPDATE OF run_id ON messages
+                WHEN NEW.run_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM sessions
+                    WHERE id = NEW.session_id AND mode = 'master'
+                  )
+                BEGIN
+                  INSERT OR IGNORE INTO message_focus(
+                    message_id, focus_epoch_id, focus_container_id,
+                    subject_container_id
+                  )
+                  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+                  FROM runs AS run
+                  LEFT JOIN master_focus_epochs AS epoch
+                    ON epoch.id = run.focus_epoch_id
+                  WHERE run.id = NEW.run_id
+                    AND run.session_id = NEW.session_id;
+                END
+                """
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def _add_graph_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1631,6 +1811,12 @@ MIGRATIONS: list[Migration] = [
         38,
         "add Master Focus epochs, state, immutable message attribution, and run epoch capture",
         _add_master_focus_epochs,
+    ),
+    (
+        39,
+        "preserve Master Focus epoch identity and enforce message attribution",
+        _harden_master_focus_contracts,
+        {"no_auto_tx": True},
     ),
 ]
 

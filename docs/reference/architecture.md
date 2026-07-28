@@ -630,8 +630,12 @@ owner text; trusted routing ids are appended only while building the restricted
 runner prompt. The runner process is recycled and its bounded durable history is
 filtered to that captured epoch before every Master turn. `MasterToolBroker` overrides model
 Container/Area arguments for explicit targets and confines automatic routing to a
-Container Focus. Fleet Focus leaves the full owner Fleet available. Deleting a
-Container nulls historical ids without deleting the durable message.
+Container Focus. Fleet Focus discards model-supplied Container and Area graph
+scope, so automatic routing can read only Fleet and Live layers. Deleting an idle
+focused Container first closes its epoch and transitions durable Focus; the
+historical epoch keeps its immutable numeric Container identity while optional
+message and target links null safely. An active Master turn refuses deletion before
+any filesystem change.
 
 The shell popup is available only on ordinary authenticated surfaces. Auth,
 onboarding, the full Master home, update application, drawers, search, account

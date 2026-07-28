@@ -37,6 +37,7 @@ from .. import kinds
 from .. import scripts_library
 from .. import state
 from .. import image_providers
+from .. import master_focus
 from .. import wiki_memory
 from .. import workflows as wf
 from ..prompt_collaborations import collaboration_card_payload
@@ -587,6 +588,14 @@ def register(app, deps):
             for r in active:
                 app.state.worker.add_event(_as_int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
                 app.state.worker.cancel(_as_int(r["id"]))
+            if session["mode"] == "master":
+                with app.state.db_lock:
+                    changed_focus = master_focus.apply_pending_if_idle(
+                        db(),
+                        master_session_id=session_id,
+                    )
+                if changed_focus:
+                    app.state.hub.notify(session_id)
         lr = db().execute("SELECT id FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
         if lr:
             app.state.worker.add_event(_as_int(lr["id"]), session_id, session["project_id"], "goal.update", {"status": "cancelled"})
@@ -1492,6 +1501,18 @@ def register(app, deps):
                 int(job["id"]),
                 connection=db(),
             )
+        session = db().execute(
+            "SELECT mode FROM sessions WHERE id = ?",
+            (row["session_id"],),
+        ).fetchone()
+        if changed and session and session["mode"] == "master":
+            with app.state.db_lock:
+                changed_focus = master_focus.apply_pending_if_idle(
+                    db(),
+                    master_session_id=row["session_id"],
+                )
+            if changed_focus:
+                app.state.hub.notify(row["session_id"])
         fresh = db().execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
         return {"ok": True, "run_id": run_id, "status": fresh["status"] if fresh else row["status"]}
 

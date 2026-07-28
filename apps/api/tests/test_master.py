@@ -163,6 +163,7 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
         "current_epoch_id": None,
         "current_container_id": None,
         "pending_container_id": None,
+        "pending": False,
         "version": 0,
     }
     changed = client.put("/api/master/focus", json={"container_id": first_id, "version": 0})
@@ -182,6 +183,7 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
     assert pending.json()["pending"] is True
     assert pending.json()["focus"]["current_container_id"] == first_id
     assert pending.json()["focus"]["pending_container_id"] == second_id
+    assert pending.json()["focus"]["pending"] is True
     assert client.post("/api/master/messages", json={"content": "Must not queue"}).status_code == 409
 
     app.state.db.execute("UPDATE runs SET status = 'completed' WHERE id = ?", (run_id,))
@@ -190,11 +192,42 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
     )
     assert applied and applied["current_container_id"] == second_id
     assert applied["pending_container_id"] is None
+    assert applied["pending"] is False
     assert applied["version"] == 3
+
+    fleet_turn = client.post(
+        "/api/master/messages",
+        json={"content": "Finish in Fleet mode"},
+    )
+    assert fleet_turn.status_code == 202
+    fleet_pending = client.put(
+        "/api/master/focus",
+        json={"container_id": None, "version": 3},
+    )
+    assert fleet_pending.status_code == 200
+    assert fleet_pending.json()["focus"] == {
+        "current_epoch_id": applied["current_epoch_id"],
+        "current_container_id": second_id,
+        "pending_container_id": None,
+        "pending": True,
+        "version": 4,
+    }
+    cancelled = client.post(
+        f"/api/runs/{fleet_turn.json()['run_id']}/cancel"
+    )
+    assert cancelled.status_code == 200
+    after_cancel = client.get("/api/master/desk").json()["focus"]
+    assert after_cancel == {
+        "current_epoch_id": None,
+        "current_container_id": None,
+        "pending_container_id": None,
+        "pending": False,
+        "version": 5,
+    }
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM messages WHERE session_id = ? AND content LIKE 'Master Focus changed%'",
         (desk["session"]["id"],),
-    ).fetchone()[0] == 2
+    ).fetchone()[0] == 3
 
 
 def test_master_prompt_history_never_splices_prior_focus_epoch(tmp_path: Path):
@@ -304,6 +337,14 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
     assert rejected.status_code == 422
     assert "not in the selected Container" in rejected.json()["detail"]
 
+    blocked_delete = client.delete("/api/projects/explicit-target")
+    assert blocked_delete.status_code == 409
+    assert Path(target["path"]).exists()
+    app.state.db.execute(
+        "UPDATE runs SET status = 'completed' WHERE id = ?",
+        (response.json()["run_id"],),
+    )
+    epoch_id = response.json()["focus"]["current_epoch_id"]
     deleted = client.delete("/api/projects/explicit-target")
     assert deleted.status_code == 200
     historical_context = app.state.db.execute(
@@ -318,6 +359,54 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
         "target_mode": "explicit",
         "target_container_id": None,
         "target_area_id": None,
+    }
+    epoch = app.state.db.execute(
+        "SELECT container_id, ended_at FROM master_focus_epochs WHERE id = ?",
+        (epoch_id,),
+    ).fetchone()
+    assert epoch["container_id"] == target_id
+    assert epoch["ended_at"] is not None
+    assert client.get("/api/master/desk").json()["focus"][
+        "current_container_id"
+    ] is None
+
+
+def test_master_run_messages_are_attributed_at_persistence_boundary(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    container_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'master-project'"
+    ).fetchone()["id"]
+    desk = client.get("/api/master/desk").json()
+    focused = client.put(
+        "/api/master/focus",
+        json={"container_id": container_id, "version": 0},
+    ).json()["focus"]
+    turn = client.post(
+        "/api/master/messages",
+        json={"content": "Keep failures in this Focus"},
+    ).json()
+
+    message = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, run_id) "
+        "VALUES (?, 'error', 'Run failed safely', ?)",
+        (desk["session"]["id"], turn["run_id"]),
+    )
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (message.lastrowid,),
+    ).fetchone()
+
+    assert dict(attribution) == {
+        "focus_epoch_id": focused["current_epoch_id"],
+        "focus_container_id": container_id,
     }
 
 

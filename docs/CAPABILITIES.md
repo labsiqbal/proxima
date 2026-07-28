@@ -457,8 +457,9 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   enables a real adapter; configured cloud credentials never unlock egress.
 
 **Focus epochs and prompt isolation:** Master begins in fleet mode with no Focus
-epoch. `master_focus_state` durably records the one current or pending Container
-Focus, while immutable `message_focus` and `runs.focus_epoch_id` capture the
+epoch. `master_focus_state` durably records the current Focus plus one pending
+Fleet or Container Focus, while immutable `message_focus` and
+`runs.focus_epoch_id` capture the
 epoch that actually owned each user turn, response, tool result, and projection.
 An idle Focus change uses an optimistic version check, closes and opens epochs,
 adds a boundary message, and emits `master.focus.changed`. A running turn can
@@ -468,6 +469,13 @@ enqueue in the same transaction. The restricted Master runner process is rebuilt
 for every Master turn and its durable history is limited to the captured epoch,
 so prior Container ACP/model context cannot cross a boundary. History projection
 UI and safe-self-update remain later delivery groups.
+
+The shared provider bootstraps Focus and its optimistic version from the Master
+desk, writes picker changes through the durable Focus endpoint, and consumes
+`master.focus.changed` on the existing session stream. Focus is never restored
+from local storage. Deleting an idle focused Container closes its epoch and moves
+Master safely onward while retaining the historical epoch identity; deletion is
+refused before filesystem changes while that Master turn is active.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
 `POST /api/containers/{slug}/graphs/rebuild`,

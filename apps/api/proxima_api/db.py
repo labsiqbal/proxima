@@ -216,7 +216,7 @@ CREATE INDEX IF NOT EXISTS idx_master_message_context_target
 CREATE TABLE IF NOT EXISTS master_focus_epochs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  container_id INTEGER NOT NULL,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ended_at TEXT,
   version INTEGER NOT NULL,
@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS master_focus_state (
   master_session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   current_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
   pending_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  pending_focus INTEGER NOT NULL DEFAULT 0 CHECK(pending_focus IN (0, 1)),
   version INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -297,6 +298,38 @@ CREATE TABLE IF NOT EXISTS runs (
   focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TRIGGER IF NOT EXISTS messages_master_focus_insert
+AFTER INSERT ON messages
+WHEN NEW.run_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = NEW.session_id AND mode = 'master'
+  )
+BEGIN
+  INSERT OR IGNORE INTO message_focus(
+    message_id, focus_epoch_id, focus_container_id, subject_container_id
+  )
+  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+  FROM runs AS run
+  LEFT JOIN master_focus_epochs AS epoch ON epoch.id = run.focus_epoch_id
+  WHERE run.id = NEW.run_id AND run.session_id = NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_master_focus_run_update
+AFTER UPDATE OF run_id ON messages
+WHEN NEW.run_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = NEW.session_id AND mode = 'master'
+  )
+BEGIN
+  INSERT OR IGNORE INTO message_focus(
+    message_id, focus_epoch_id, focus_container_id, subject_container_id
+  )
+  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+  FROM runs AS run
+  LEFT JOIN master_focus_epochs AS epoch ON epoch.id = run.focus_epoch_id
+  WHERE run.id = NEW.run_id AND run.session_id = NEW.session_id;
+END;
 CREATE TABLE IF NOT EXISTS prompt_collaborations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

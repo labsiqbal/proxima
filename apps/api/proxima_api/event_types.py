@@ -32,6 +32,8 @@ MASTER_PROJECTION_EVENT_TYPES = (
     MASTER_TASK_EVENT_TYPES | MASTER_SUPERVISION_EVENT_TYPES
 )
 
+MASTER_FOCUS_EVENT_TYPES = frozenset({"master.focus.changed"})
+
 GRAPH_STATE_EVENT_TYPES = frozenset(
     {
         "graph.state.missing",

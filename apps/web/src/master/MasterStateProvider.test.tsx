@@ -2,7 +2,11 @@ import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getMasterDesk, sendMasterMessage } from '../api/master'
+import {
+  getMasterDesk,
+  sendMasterMessage,
+  updateMasterFocus,
+} from '../api/master'
 import { listContainerAreas, listContainers } from '../api/containers'
 import { listEvents } from '../api/runs'
 import { listMessages } from '../api/sessions'
@@ -14,6 +18,7 @@ import {
 vi.mock('../api/master', () => ({
   getMasterDesk: vi.fn(),
   sendMasterMessage: vi.fn(),
+  updateMasterFocus: vi.fn(),
   saveMasterSettings: vi.fn(),
 }))
 vi.mock('../api/runs', () => ({ listEvents: vi.fn() }))
@@ -59,6 +64,13 @@ const desk = {
   capacity: { running: 0, max: 3, free: 3, queued: 0 },
   attention: [],
   checkpoints: [],
+  focus: {
+    current_epoch_id: null,
+    current_container_id: null,
+    pending_container_id: null,
+    pending: false,
+    version: 0,
+  },
 }
 
 class FakeEventSource {
@@ -147,6 +159,12 @@ function Probe() {
       <button type="button" onClick={() => void state.actions.send().catch(() => {})}>Send</button>
       <button type="button" onClick={() => void state.actions.refresh()}>Refresh</button>
       <button type="button" onClick={() => state.actions.setTargetContainer(21)}>Target Acme</button>
+      <button
+        type="button"
+        onClick={() => void state.actions.setFocus(21).catch(() => {})}
+      >
+        Focus Acme
+      </button>
       <button type="button" onClick={state.actions.openPopup}>Open popup</button>
       <button type="button" onClick={state.actions.closePopup}>Close popup</button>
       <button
@@ -237,6 +255,18 @@ describe('MasterStateProvider', () => {
         run_id: 40,
         created_at: '2026-07-27T10:02:00Z',
       },
+      focus: desk.focus,
+    })
+    vi.mocked(updateMasterFocus).mockResolvedValue({
+      focus: {
+        current_epoch_id: 31,
+        current_container_id: 21,
+        pending_container_id: null,
+        pending: false,
+        version: 1,
+      },
+      pending: false,
+      changed: true,
     })
   })
 
@@ -288,8 +318,18 @@ describe('MasterStateProvider', () => {
   it('keeps the durable thread live when the optional Fleet registry is unavailable', async () => {
     localStorage.setItem(
       'proxima.master.focus.1',
-      JSON.stringify({ mode: 'container', containerId: 21 }),
+      JSON.stringify({ mode: 'container', containerId: 999 }),
     )
+    vi.mocked(getMasterDesk).mockResolvedValue({
+      ...desk,
+      focus: {
+        current_epoch_id: 31,
+        current_container_id: 21,
+        pending_container_id: null,
+        pending: false,
+        version: 1,
+      },
+    } as never)
     vi.mocked(listContainers).mockRejectedValue(new Error('fleet unavailable'))
 
     renderProvider()
@@ -298,7 +338,45 @@ describe('MasterStateProvider', () => {
     expect(screen.getAllByTestId('connection')[0]).not.toHaveTextContent('disconnected')
     expect(screen.getAllByTestId('fleet-error')[0]).toHaveTextContent('fleet unavailable')
     expect(screen.getAllByTestId('fleet-count')[0]).toHaveTextContent('0')
-    expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    await waitFor(() => {
+      expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    })
+  })
+
+  it('persists Focus through the versioned API and applies its durable event', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Focus Acme' })[0])
+
+    await waitFor(() => expect(updateMasterFocus).toHaveBeenCalledWith(
+      'token-a',
+      21,
+      0,
+      expect.any(AbortSignal),
+    ))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    })
+
+    act(() => FakeEventSource.instances[0].emit('master.focus.changed', {
+      id: 13,
+      seq: 1,
+      type: 'master.focus.changed',
+      run_id: 0,
+      session_id: 9,
+      payload: {
+        message_id: 61,
+        focus_epoch_id: null,
+        container_id: null,
+        version: 2,
+      },
+      created_at: '2026-07-27T10:03:00Z',
+    }))
+
+    expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('fleet:fleet')
+    expect(screen.getAllByTestId('messages')[0])
+      .toHaveTextContent('Master Focus changed to Fleet mode.')
   })
 
   it('retries a failed bootstrap without remounting the authenticated app', async () => {
@@ -742,13 +820,35 @@ describe('MasterStateProvider', () => {
   })
 
   it('focuses the explicit target before one enqueue and preserves it across route consumers', async () => {
+    vi.mocked(sendMasterMessage).mockResolvedValueOnce({
+      run_id: 40,
+      session_id: 9,
+      status: 'queued',
+      message: {
+        id: 41,
+        role: 'user',
+        content: 'Keep this draft',
+        author: 'owner',
+        run_id: 40,
+        created_at: '2026-07-27T10:02:00Z',
+      },
+      focus: {
+        current_epoch_id: 31,
+        current_container_id: 21,
+        pending_container_id: null,
+        pending: false,
+        version: 1,
+      },
+    })
     const view = renderProvider({ strict: true })
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     fireEvent.click(screen.getAllByRole('button', { name: 'Target Acme' })[0])
     fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
     fireEvent.click(screen.getAllByRole('button', { name: 'Send' })[0])
 
-    expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    await waitFor(() => {
+      expect(screen.getAllByTestId('focus')[0]).toHaveTextContent('container:21')
+    })
     expect(sendMasterMessage).toHaveBeenCalledTimes(1)
     expect(sendMasterMessage).toHaveBeenCalledWith(
       'token-a',
@@ -761,9 +861,11 @@ describe('MasterStateProvider', () => {
     )
 
     view.rerender(
-      <MasterStateProvider token="token-a" ownerId={1} enabled>
-        <Probe />
-      </MasterStateProvider>,
+      <React.StrictMode>
+        <MasterStateProvider token="token-a" ownerId={1} enabled>
+          <Probe />
+        </MasterStateProvider>
+      </React.StrictMode>,
     )
     expect(screen.getByTestId('focus')).toHaveTextContent('container:21')
     expect(screen.getByTestId('target')).toHaveTextContent('explicit:21:any')
@@ -862,6 +964,7 @@ describe('MasterStateProvider', () => {
         run_id: 40,
         created_at: '2026-07-27T10:02:00Z',
       },
+      focus: desk.focus,
     }))
     await waitFor(() => expect(screen.getAllByTestId('draft')[0]).toHaveTextContent(''))
     expect(screen.getAllByTestId('sending')[0]).toHaveTextContent('false')
@@ -924,6 +1027,7 @@ describe('MasterStateProvider', () => {
         run_id: 40,
         created_at: '2026-07-27T10:02:00Z',
       },
+      focus: desk.focus,
     }))
     await waitFor(() => expect(screen.getAllByTestId('draft')[0]).toHaveTextContent(''))
     expect(screen.getAllByTestId('message-ids')[0].textContent).toBe('41')

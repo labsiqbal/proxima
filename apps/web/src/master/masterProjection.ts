@@ -296,6 +296,52 @@ export function projectMasterEvent(
         created_at: event.created_at,
       }])
     }
+  } else if (event.type === 'master.focus.changed') {
+    const payload = isRecord(event.payload) ? event.payload : {}
+    const messageId = positiveInteger(payload.message_id)
+    const epochId = payload.focus_epoch_id == null
+      ? null
+      : positiveInteger(payload.focus_epoch_id)
+    const containerId = payload.container_id == null
+      ? null
+      : positiveInteger(payload.container_id)
+    const version = typeof payload.version === 'number'
+      && Number.isSafeInteger(payload.version)
+      && payload.version >= 0
+        ? payload.version
+        : null
+    if (
+      messageId != null
+      && version != null
+      && (payload.focus_epoch_id == null || epochId != null)
+      && (payload.container_id == null || containerId != null)
+    ) {
+      if (version >= nextDesk.focus.version) {
+        nextDesk = {
+          ...nextDesk,
+          focus: {
+            current_epoch_id: epochId,
+            current_container_id: containerId,
+            pending_container_id: null,
+            pending: false,
+            version,
+          },
+        }
+      }
+      if (!messages.some(message => message.id === messageId)) {
+        insertedMessageId = messageId
+        nextMessages = orderMasterMessages([...messages, {
+          id: messageId,
+          role: 'system',
+          author: 'Proxima',
+          content: containerId == null
+            ? 'Master Focus changed to Fleet mode.'
+            : `Master Focus changed to Container ${containerId}.`,
+          run_id: null,
+          created_at: event.created_at,
+        }])
+      }
+    }
   } else if (isMasterProjectionEvent(event.type)) {
     const payload = isRecord(event.payload) ? event.payload : {}
     const messageId = positiveInteger(payload.message_id)

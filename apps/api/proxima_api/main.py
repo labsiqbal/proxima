@@ -51,6 +51,7 @@ from .master_projection import (
     MasterProjectionService,
     assert_master_projection_ledger,
 )
+from . import master_focus
 from .task_delegation import TaskDelegationService
 from .scheduler import _scheduler_tick, archive_old_jobs
 from .routes import (
@@ -107,6 +108,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             ).fetchall()]
         for r in orphaned:
             worker._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Interrupted by server restart")
+        with app.state.db_lock:
+            focus_sessions = master_focus.reconcile_pending_focuses(
+                app.state.worker_db
+            )
+        for session_id in focus_sessions:
+            app.state.hub.notify(session_id)
         worker.reap_orphaned_jobs()
         if app.state.master_projection is not None:
             app.state.master_projection.safe_reconcile()

@@ -14,6 +14,13 @@ export type MasterMessageContext = {
 }
 
 export type MasterCapacity = { running: number; max: number; free: number; queued: number }
+export type MasterFocusSnapshot = {
+  current_epoch_id: number | null
+  current_container_id: number | null
+  pending_container_id: number | null
+  pending: boolean
+  version: number
+}
 export type MasterBudgets = {
   unattended: boolean
   budget_turns: number
@@ -56,6 +63,7 @@ export type MasterDesk = {
   capacity: MasterCapacity
   attention: AttentionItem[]
   checkpoints: MasterCheckpoint[]
+  focus: MasterFocusSnapshot
 }
 export type GraphPolicy = {
   semantic_egress_enabled: boolean
@@ -69,10 +77,11 @@ export type MasterSettings = MasterBudgets & {
   graph_policy?: GraphPolicy
 }
 
-type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs'> & {
+type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs' | 'focus'> & {
   master_run?: MasterDesk['master_run']
   alpha_run?: MasterDesk['master_run']
   event_cursor?: number
+  focus?: MasterFocusSnapshot
   jobs: (MasterJob & { alpha_session_id?: number | null })[]
 }
 
@@ -99,6 +108,13 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
       delete (normalized as { alpha_session_id?: number | null }).alpha_session_id
       return normalized
     }),
+    focus: payload.focus ?? {
+      current_epoch_id: null,
+      current_container_id: null,
+      pending_container_id: null,
+      pending: false,
+      version: 0,
+    },
     attention: payload.attention.map(item => {
       const target = {
         ...item.target,
@@ -130,9 +146,25 @@ export const sendMasterMessage = (
     session_id: number
     status: string
     message: ChatMessage
+    focus: MasterFocusSnapshot
   }>('/api/master/messages', token, {
     method: 'POST',
     body: JSON.stringify({ content, ...context }),
+    signal,
+  })
+export const updateMasterFocus = (
+  token: string,
+  containerId: number | null,
+  version: number,
+  signal?: AbortSignal,
+) =>
+  api<{
+    focus: MasterFocusSnapshot
+    pending: boolean
+    changed: boolean
+  }>('/api/master/focus', token, {
+    method: 'PUT',
+    body: JSON.stringify({ container_id: containerId, version }),
     signal,
   })
 export const getMasterSettings = (token: string) => api<MasterSettings>('/api/settings/master', token)

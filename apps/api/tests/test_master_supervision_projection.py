@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import app_settings, satpam, worktrees
+from proxima_api import app_settings, master_focus, satpam, worktrees
 from proxima_api.db import connect
 from proxima_api.graph import normalize_graph
 from proxima_api.main import create_app
@@ -1269,13 +1269,34 @@ def test_projection_refuses_forged_taskless_attention_owner(tmp_path: Path):
 def test_retried_attention_tool_projects_one_action_required_message(
     tmp_path: Path,
 ):
-    app, client, _project = _app_and_client(tmp_path)
+    app, client, project = _app_and_client(tmp_path)
     desk = client.get("/api/master/desk").json()
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?",
+        (project["slug"],),
+    ).fetchone()["id"]
+    focus = master_focus.change_focus(
+        app.state.db,
+        master_session_id=desk["session"]["id"],
+        container_id=project_id,
+        expected_version=0,
+    )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Ask for a decision')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=focus["current_epoch_id"],
+    )
     broker = MasterToolBroker(
         app.state.db,
         app,
         {"id": 1},
         desk["session"]["id"],
+        origin_message_id=origin.lastrowid,
     )
     args = {
         "title": "Choose a direction",
@@ -1299,6 +1320,16 @@ def test_retried_attention_tool_projects_one_action_required_message(
     ]
     assert len(attention_events) == 1
     assert attention_events[0]["payload"]["attention_required"] is True
+    projection_message_id = attention_events[0]["payload"]["message_id"]
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (projection_message_id,),
+    ).fetchone()
+    assert dict(attribution) == {
+        "focus_epoch_id": focus["current_epoch_id"],
+        "focus_container_id": project_id,
+    }
 
 
 def test_projection_summaries_exclude_untrusted_paths_commands_and_secrets(

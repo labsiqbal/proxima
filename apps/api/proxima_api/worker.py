@@ -929,8 +929,9 @@ class RunWorker:
                 self._fail_collaboration_run(run_id, session_id, project_id, detail)
                 return True
             cur = db.execute(
-                "INSERT INTO messages(session_id, role, content) VALUES (?, 'error', ?)",
-                (session_id, f"Run failed: {detail}"),
+                "INSERT INTO messages(session_id, role, content, run_id) "
+                "VALUES (?, 'error', ?, ?)",
+                (session_id, f"Run failed: {detail}", run_id),
             )
             self.add_event(
                 run_id,

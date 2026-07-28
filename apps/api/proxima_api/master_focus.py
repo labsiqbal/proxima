@@ -28,10 +28,20 @@ def _as_int(value: Any) -> int:
 
 def ensure_state(conn: sqlite3.Connection, master_session_id: int) -> None:
     """Create fleet-mode state for the one existing Master session if absent."""
+    session = conn.execute(
+        "SELECT mode FROM sessions WHERE id = ?",
+        (master_session_id,),
+    ).fetchone()
+    if session is None or session["mode"] != "master":
+        raise MasterFocusError(
+            "focus_session_invalid",
+            "Master Focus requires the canonical Master session",
+        )
     conn.execute(
         "INSERT OR IGNORE INTO master_focus_state("
-        "master_session_id, current_epoch_id, pending_container_id, version"
-        ") VALUES (?, NULL, NULL, 0)",
+        "master_session_id, current_epoch_id, pending_container_id, "
+        "pending_focus, version"
+        ") VALUES (?, NULL, NULL, 0, 0)",
         (master_session_id,),
     )
 
@@ -39,7 +49,8 @@ def ensure_state(conn: sqlite3.Connection, master_session_id: int) -> None:
 def state_payload(conn: sqlite3.Connection, master_session_id: int) -> dict[str, Any]:
     ensure_state(conn, master_session_id)
     row = conn.execute(
-        "SELECT state.current_epoch_id, state.pending_container_id, state.version, "
+        "SELECT state.current_epoch_id, state.pending_container_id, "
+        "state.pending_focus, state.version, "
         "epoch.container_id AS current_container_id "
         "FROM master_focus_state state "
         "LEFT JOIN master_focus_epochs epoch ON epoch.id = state.current_epoch_id "
@@ -52,6 +63,7 @@ def state_payload(conn: sqlite3.Connection, master_session_id: int) -> dict[str,
         "current_epoch_id": row["current_epoch_id"],
         "current_container_id": row["current_container_id"],
         "pending_container_id": row["pending_container_id"],
+        "pending": bool(row["pending_focus"]),
         "version": _as_int(row["version"]),
     }
 
@@ -102,9 +114,23 @@ def stamp_message(
         container_id = _as_int(row["container_id"])
     conn.execute(
         "INSERT INTO message_focus(message_id, focus_epoch_id, focus_container_id, subject_container_id) "
-        "VALUES (?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING",
         (message_id, focus_epoch_id, container_id, subject_container_id),
     )
+    stored = conn.execute(
+        "SELECT focus_epoch_id, focus_container_id, subject_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (message_id,),
+    ).fetchone()
+    if stored is None or (
+        stored["focus_epoch_id"],
+        stored["focus_container_id"],
+        stored["subject_container_id"],
+    ) != (focus_epoch_id, container_id, subject_container_id):
+        raise MasterFocusError(
+            "message_focus_conflict",
+            "Master message Focus attribution is already immutable",
+        )
 
 
 def stamp_message_for_run(
@@ -183,7 +209,7 @@ def change_focus(
     expected_version = _as_int(expected_version)
     if current["version"] != expected_version:
         raise MasterFocusError("focus_version_conflict", "Master Focus changed elsewhere; refresh and retry")
-    if current["current_container_id"] == container_id and current["pending_container_id"] is None:
+    if current["current_container_id"] == container_id and not current["pending"]:
         return {**current, "changed": False, "boundary_message_id": None, "event_id": None}
 
     old_epoch_id = current["current_epoch_id"]
@@ -202,7 +228,8 @@ def change_focus(
         )
         new_epoch_id = _as_int(epoch.lastrowid)
     updated = conn.execute(
-        "UPDATE master_focus_state SET current_epoch_id = ?, pending_container_id = NULL, "
+        "UPDATE master_focus_state SET current_epoch_id = ?, "
+        "pending_container_id = NULL, pending_focus = 0, "
         "version = version + 1, updated_at = CURRENT_TIMESTAMP "
         "WHERE master_session_id = ? AND version = ?",
         (new_epoch_id, master_session_id, expected_version),
@@ -234,18 +261,44 @@ def request_pending_focus(
 ) -> dict[str, Any]:
     ensure_state(conn, master_session_id)
     expected_version = _as_int(expected_version)
+    current = state_payload(conn, master_session_id)
+    if current["version"] != expected_version:
+        raise MasterFocusError(
+            "focus_version_conflict",
+            "Master Focus changed elsewhere; refresh and retry",
+        )
+    if current["current_container_id"] == container_id:
+        if not current["pending"]:
+            return {**current, "changed": False}
+        updated = conn.execute(
+            "UPDATE master_focus_state SET pending_container_id = NULL, "
+            "pending_focus = 0, version = version + 1, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE master_session_id = ? AND version = ?",
+            (master_session_id, expected_version),
+        )
+        if updated.rowcount != 1:
+            raise MasterFocusError(
+                "focus_version_conflict",
+                "Master Focus changed elsewhere; refresh and retry",
+            )
+        return {**state_payload(conn, master_session_id), "changed": False}
     updated = conn.execute(
-        "UPDATE master_focus_state SET pending_container_id = ?, version = version + 1, "
+        "UPDATE master_focus_state SET pending_container_id = ?, "
+        "pending_focus = 1, version = version + 1, "
         "updated_at = CURRENT_TIMESTAMP WHERE master_session_id = ? AND version = ?",
         (container_id, master_session_id, expected_version),
     )
     if updated.rowcount != 1:
         raise MasterFocusError("focus_version_conflict", "Master Focus changed elsewhere; refresh and retry")
-    return {**state_payload(conn, master_session_id), "pending": True}
+    return {**state_payload(conn, master_session_id), "changed": False}
 
 
-def apply_pending_if_idle(conn: sqlite3.Connection, *, master_session_id: int) -> dict[str, Any] | None:
-    """Apply exactly once after the last queued/running Master run closes."""
+def _apply_pending_if_idle(
+    conn: sqlite3.Connection,
+    *,
+    master_session_id: int,
+) -> dict[str, Any] | None:
     active = conn.execute(
         "SELECT 1 FROM runs WHERE session_id = ? AND status IN ('queued', 'running') LIMIT 1",
         (master_session_id,),
@@ -253,11 +306,68 @@ def apply_pending_if_idle(conn: sqlite3.Connection, *, master_session_id: int) -
     if active is not None:
         return None
     state = state_payload(conn, master_session_id)
-    if state["pending_container_id"] is None:
+    if not state["pending"]:
         return None
     return change_focus(
         conn,
         master_session_id=master_session_id,
-        container_id=_as_int(state["pending_container_id"]),
+        container_id=(
+            _as_int(state["pending_container_id"])
+            if state["pending_container_id"] is not None
+            else None
+        ),
         expected_version=state["version"],
     )
+
+
+def apply_pending_if_idle(
+    conn: sqlite3.Connection,
+    *,
+    master_session_id: int,
+) -> dict[str, Any] | None:
+    """Apply exactly once in one transaction after the last active turn closes."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        result = _apply_pending_if_idle(
+            conn,
+            master_session_id=master_session_id,
+        )
+        if owns_transaction:
+            conn.execute("COMMIT")
+        return result
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def reconcile_pending_focuses(conn: sqlite3.Connection) -> list[int]:
+    """Apply every idle pending Master Focus during deterministic startup."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    changed_sessions: list[int] = []
+    try:
+        rows = conn.execute(
+            "SELECT state.master_session_id "
+            "FROM master_focus_state AS state "
+            "JOIN sessions AS session ON session.id = state.master_session_id "
+            "WHERE state.pending_focus = 1 AND session.mode = 'master' "
+            "ORDER BY state.master_session_id"
+        ).fetchall()
+        for row in rows:
+            session_id = _as_int(row["master_session_id"])
+            if _apply_pending_if_idle(
+                conn,
+                master_session_id=session_id,
+            ) is not None:
+                changed_sessions.append(session_id)
+        if owns_transaction:
+            conn.execute("COMMIT")
+        return changed_sessions
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise

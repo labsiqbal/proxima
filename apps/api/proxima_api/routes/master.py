@@ -261,9 +261,15 @@ def register(app, deps):
         # even if a previous turn is currently active.
         _message_context(payload, user, None)
         conn = db()
+        focus_changed = False
         with app.state.db_lock:
-            conn.execute("SAVEPOINT create_master_turn")
+            conn.execute("BEGIN IMMEDIATE")
             try:
+                reconciled = master_focus.apply_pending_if_idle(
+                    conn,
+                    master_session_id=session["id"],
+                )
+                focus_changed = reconciled is not None
                 active = conn.execute(
                     "SELECT id FROM runs WHERE session_id = ? AND status IN ('queued','running') ORDER BY id LIMIT 1",
                     (session["id"],),
@@ -284,6 +290,9 @@ def register(app, deps):
                             master_session_id=session["id"],
                             container_id=target_id,
                             expected_version=focus["version"],
+                        )
+                        focus_changed = focus_changed or bool(
+                            focus.get("changed")
                         )
                 context = _message_context(payload, user, focus["current_container_id"])
                 message_cur = conn.execute(
@@ -328,15 +337,17 @@ def register(app, deps):
                     "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (session["id"],),
                 )
-                conn.execute("RELEASE SAVEPOINT create_master_turn")
+                conn.execute("COMMIT")
             except master_focus.MasterFocusError as exc:
-                conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
-                conn.execute("RELEASE SAVEPOINT create_master_turn")
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise _focus_http_error(exc) from exc
             except Exception:
-                conn.execute("ROLLBACK TO SAVEPOINT create_master_turn")
-                conn.execute("RELEASE SAVEPOINT create_master_turn")
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise
+        if focus_changed:
+            app.state.hub.notify(session["id"])
         message = db().execute(
             "SELECT id, role, content, author, run_id, created_at "
             "FROM messages WHERE id = ?",
@@ -348,6 +359,16 @@ def register(app, deps):
             "session_id": session["id"],
             "status": "queued",
             "message": {**dict(message), "master_target": context},
+            "focus": {
+                key: focus[key]
+                for key in (
+                    "current_epoch_id",
+                    "current_container_id",
+                    "pending_container_id",
+                    "pending",
+                    "version",
+                )
+            },
         }
 
     @app.put("/api/master/focus")
@@ -357,12 +378,22 @@ def register(app, deps):
         if "version" not in payload:
             raise HTTPException(status_code=422, detail="Focus version is required")
         container_id = payload.get("container_id")
-        container = _owned_container(container_id, user) if container_id is not None else None
-        resolved_container_id = _as_int(container["id"]) if container is not None else None
+        if container_id is not None:
+            container_id = _as_int(container_id)
         conn = db()
         with app.state.db_lock:
-            conn.execute("SAVEPOINT update_master_focus")
+            conn.execute("BEGIN IMMEDIATE")
             try:
+                container = (
+                    _owned_container(container_id, user)
+                    if container_id is not None
+                    else None
+                )
+                resolved_container_id = (
+                    _as_int(container["id"])
+                    if container is not None
+                    else None
+                )
                 active = conn.execute(
                     "SELECT 1 FROM runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1",
                     (session["id"],),
@@ -381,18 +412,31 @@ def register(app, deps):
                         container_id=resolved_container_id,
                         expected_version=payload["version"],
                     )
-                conn.execute("RELEASE SAVEPOINT update_master_focus")
+                conn.execute("COMMIT")
             except master_focus.MasterFocusError as exc:
-                conn.execute("ROLLBACK TO SAVEPOINT update_master_focus")
-                conn.execute("RELEASE SAVEPOINT update_master_focus")
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise _focus_http_error(exc) from exc
             except Exception:
-                conn.execute("ROLLBACK TO SAVEPOINT update_master_focus")
-                conn.execute("RELEASE SAVEPOINT update_master_focus")
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
                 raise
         if result.get("changed"):
             app.state.hub.notify(session["id"])
-        return {"focus": {key: result[key] for key in ("current_epoch_id", "current_container_id", "pending_container_id", "version")}, "pending": bool(result.get("pending")), "changed": bool(result.get("changed"))}
+        return {
+            "focus": {
+                key: result[key]
+                for key in (
+                    "current_epoch_id",
+                    "current_container_id",
+                    "pending_container_id",
+                    "pending",
+                    "version",
+                )
+            },
+            "pending": bool(result["pending"]),
+            "changed": bool(result.get("changed")),
+        }
 
     def _graph_policy() -> dict[str, Any]:
         """Install-visible local-only Knowledge/Code extraction policy (Group 11)."""

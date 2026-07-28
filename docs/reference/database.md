@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 39 tables. Applied migration version: **38**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 39 tables. Applied migration version: **39**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -260,7 +260,7 @@ SQLite (WAL mode). 39 tables. Applied migration version: **38**. This is the exa
 | --- | --- | --- | --- | --- |
 | `id` | INTEGER | yes |  | PK |
 | `master_session_id` | INTEGER | NO |  | → `sessions.id` (ON DELETE CASCADE) |
-| `container_id` | INTEGER | NO |  | → `projects.id` (ON DELETE CASCADE) |
+| `container_id` | INTEGER | NO |  |  |
 | `started_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `ended_at` | TEXT | yes |  |  |
 | `version` | INTEGER | NO |  |  |
@@ -275,6 +275,7 @@ SQLite (WAL mode). 39 tables. Applied migration version: **38**. This is the exa
 | `master_session_id` | INTEGER | yes |  | PK → `sessions.id` (ON DELETE CASCADE) |
 | `current_epoch_id` | INTEGER | yes |  | → `master_focus_epochs.id` (ON DELETE SET NULL) |
 | `pending_container_id` | INTEGER | yes |  | → `projects.id` (ON DELETE SET NULL) |
+| `pending_focus` | INTEGER | NO | `0` |  |
 | `version` | INTEGER | NO | `0` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
@@ -715,4 +716,4 @@ SQLite (WAL mode). 39 tables. Applied migration version: **38**. This is the exa
 
 
 ---
-_Generated 2026-07-28 18:12 UTC._
+_Generated 2026-07-28 18:53 UTC._

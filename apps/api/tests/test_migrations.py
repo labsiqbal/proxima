@@ -57,9 +57,9 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
     conn.execute("DROP TABLE knowledge_rebuild_intents")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38, 39]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 38
+    assert current_version(conn) == 39
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -552,8 +552,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
-    assert current_version(conn) == 38
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+    assert current_version(conn) == 39
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -594,8 +594,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
-    assert current_version(conn) == 38
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+    assert current_version(conn) == 39
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -622,6 +622,14 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         if row[3] == "depends_on_task_id"
     )
     assert prerequisite_fk[6] == "RESTRICT"
+    delegation_container_fk = next(
+        row
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(task_delegations)"
+        ).fetchall()
+        if row[3] == "container_id"
+    )
+    assert delegation_container_fk[6] == "RESTRICT"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -800,9 +808,9 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
 def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
-    assert run_migrations(conn, str(db_path)) == [36, 37, 38]
+    assert run_migrations(conn, str(db_path)) == [36, 37, 38, 39]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 38
+    assert current_version(conn) == 39
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -829,3 +837,102 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
         "SELECT name FROM sqlite_master WHERE type = 'trigger' "
         "AND name = 'jobs_ops_done_knowledge_rebuild'"
     ).fetchone()
+
+
+def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "schema-38-focus.db"
+    conn = connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE projects(id INTEGER PRIMARY KEY);
+        CREATE TABLE sessions(
+          id INTEGER PRIMARY KEY,
+          mode TEXT NOT NULL
+        );
+        CREATE TABLE master_focus_epochs(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          master_session_id INTEGER NOT NULL
+            REFERENCES sessions(id) ON DELETE CASCADE,
+          container_id INTEGER NOT NULL
+            REFERENCES projects(id) ON DELETE RESTRICT,
+          started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          ended_at TEXT,
+          version INTEGER NOT NULL
+        );
+        CREATE TABLE master_focus_state(
+          master_session_id INTEGER PRIMARY KEY
+            REFERENCES sessions(id) ON DELETE CASCADE,
+          current_epoch_id INTEGER
+            REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+          pending_container_id INTEGER
+            REFERENCES projects(id) ON DELETE SET NULL,
+          version INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE runs(
+          id INTEGER PRIMARY KEY,
+          session_id INTEGER NOT NULL,
+          focus_epoch_id INTEGER
+        );
+        CREATE TABLE messages(
+          id INTEGER PRIMARY KEY,
+          session_id INTEGER NOT NULL,
+          run_id INTEGER
+        );
+        CREATE TABLE message_focus(
+          message_id INTEGER PRIMARY KEY,
+          focus_epoch_id INTEGER,
+          focus_container_id INTEGER,
+          subject_container_id INTEGER
+        );
+        INSERT INTO projects(id) VALUES (7);
+        INSERT INTO sessions(id, mode) VALUES (3, 'master');
+        INSERT INTO master_focus_epochs(
+          id, master_session_id, container_id, version
+        ) VALUES (11, 3, 7, 1);
+        INSERT INTO master_focus_state(
+          master_session_id, current_epoch_id, pending_container_id, version
+        ) VALUES (3, 11, NULL, 2);
+        INSERT INTO runs(id, session_id, focus_epoch_id)
+        VALUES (13, 3, 11);
+        INSERT INTO messages(id, session_id, run_id)
+        VALUES (17, 3, 13);
+        """
+    )
+    current_version(conn)
+    conn.executemany(
+        "INSERT INTO schema_migrations(version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [(version, f"schema {version}") for version in range(1, 39)],
+    )
+
+    assert run_migrations(conn, str(db_path)) == [39]
+    assert current_version(conn) == 39
+    state = conn.execute(
+        "SELECT pending_focus, pending_container_id "
+        "FROM master_focus_state WHERE master_session_id = 3"
+    ).fetchone()
+    assert dict(state) == {
+        "pending_focus": 1,
+        "pending_container_id": None,
+    }
+    assert all(
+        row[3] != "container_id"
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(master_focus_epochs)"
+        ).fetchall()
+    )
+    attribution = conn.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = 17"
+    ).fetchone()
+    assert dict(attribution) == {
+        "focus_epoch_id": 11,
+        "focus_container_id": 7,
+    }
+    conn.execute("DELETE FROM projects WHERE id = 7")
+    assert conn.execute(
+        "SELECT container_id FROM master_focus_epochs WHERE id = 11"
+    ).fetchone()["container_id"] == 7

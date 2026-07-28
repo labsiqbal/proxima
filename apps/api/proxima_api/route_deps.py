@@ -26,7 +26,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
-from . import features
+from . import features, master_focus
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -335,6 +335,7 @@ def build_route_deps(
     def _purge_project(project: dict[str, Any]) -> None:
         """Delete a project's on-disk dir (jailed to workspace root) + its DB row."""
         conn = db()
+        focus_notifications: list[int] = []
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -366,6 +367,63 @@ def build_route_deps(
                             ],
                         },
                     )
+                focus_rows = conn.execute(
+                    "SELECT state.master_session_id "
+                    "FROM master_focus_state AS state "
+                    "LEFT JOIN master_focus_epochs AS epoch "
+                    "ON epoch.id = state.current_epoch_id "
+                    "WHERE epoch.container_id = ? "
+                    "OR (state.pending_focus = 1 "
+                    "AND state.pending_container_id = ?) "
+                    "ORDER BY state.master_session_id",
+                    (project["id"], project["id"]),
+                ).fetchall()
+                for focus_row in focus_rows:
+                    master_session_id = int(focus_row["master_session_id"])
+                    active = conn.execute(
+                        "SELECT 1 FROM runs WHERE session_id = ? "
+                        "AND status IN ('queued', 'running') LIMIT 1",
+                        (master_session_id,),
+                    ).fetchone()
+                    if active is not None:
+                        raise http_exception(
+                            status_code=409,
+                            detail={
+                                "code": "container_is_master_focus",
+                                "message": (
+                                    "Wait for the active Master turn or cancel it "
+                                    "before deleting this Container"
+                                ),
+                            },
+                        )
+                    state = master_focus.state_payload(
+                        conn,
+                        master_session_id,
+                    )
+                    if state["pending_container_id"] == project["id"]:
+                        state = master_focus.request_pending_focus(
+                            conn,
+                            master_session_id=master_session_id,
+                            container_id=state["current_container_id"],
+                            expected_version=state["version"],
+                        )
+                    elif state["pending"]:
+                        changed = master_focus.apply_pending_if_idle(
+                            conn,
+                            master_session_id=master_session_id,
+                        )
+                        if changed is not None:
+                            focus_notifications.append(master_session_id)
+                            state = changed
+                    if state["current_container_id"] == project["id"]:
+                        changed = master_focus.change_focus(
+                            conn,
+                            master_session_id=master_session_id,
+                            container_id=None,
+                            expected_version=state["version"],
+                        )
+                        if changed.get("changed"):
+                            focus_notifications.append(master_session_id)
                 path = project.get("path")
                 root = str(Path(cfg["workspace_root"]).resolve())
                 if path:
@@ -406,6 +464,8 @@ def build_route_deps(
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
+        for session_id in set(focus_notifications):
+            app.state.hub.notify(session_id)
 
     def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.

@@ -434,6 +434,7 @@ class MasterProjectionService:
         content: str,
         payload: dict[str, Any],
         task_id: int | None = None,
+        origin_message_id: int | None = None,
     ) -> dict[str, Any]:
         if projection_type not in MASTER_PROJECTION_EVENT_TYPES:
             raise ValueError(f"unknown Master projection type {projection_type!r}")
@@ -525,7 +526,22 @@ class MasterProjectionService:
                 message_id = _as_int(message_cursor.lastrowid)
                 focus_epoch_id = None
                 subject_container_id = payload.get("container_id")
-                if task_id is not None:
+                if origin_message_id is not None:
+                    captured = conn.execute(
+                        "SELECT focus.focus_epoch_id "
+                        "FROM message_focus AS focus "
+                        "JOIN messages AS message "
+                        "ON message.id = focus.message_id "
+                        "WHERE focus.message_id = ? "
+                        "AND message.session_id = ?",
+                        (origin_message_id, master_session_id),
+                    ).fetchone()
+                    if captured is None:
+                        raise ValueError(
+                            "projection Focus origin is unavailable"
+                        )
+                    focus_epoch_id = captured["focus_epoch_id"]
+                elif task_id is not None:
                     source = conn.execute(
                         "SELECT origin_message_id, container_id FROM task_delegations "
                         "WHERE job_id = ?",
@@ -796,6 +812,7 @@ class MasterProjectionService:
             if len(parts) >= 3 and parts[0] == "master":
                 master_session_id = parts[1]
         task_id = target.get("job_id")
+        origin_message_id = target.get("origin_message_id")
         task = None
         if task_id is not None:
             task = self.conn.execute(
@@ -825,6 +842,11 @@ class MasterProjectionService:
         if master_session_id is None:
             return None
         master_session_id = _as_int(master_session_id)
+        origin_message_id_value = (
+            _as_int(origin_message_id)
+            if origin_message_id is not None
+            else None
+        )
         if task is None:
             valid_source = (
                 row["kind"] == "master_decision"
@@ -887,6 +909,7 @@ class MasterProjectionService:
             source_table="attention_items",
             source_id=attention_id,
             task_id=task_id_value,
+            origin_message_id=origin_message_id_value,
             content=content,
             payload={
                 "attention_id": attention_id,

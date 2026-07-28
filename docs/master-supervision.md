@@ -100,6 +100,10 @@ Supervision events:
 - `master.satpam.recovery_failed`
 - `master.satpam.escalated`
 
+Focus events:
+
+- `master.focus.changed`
+
 These are named events on
 `GET /api/sessions/{master_session_id}/events/stream`. The existing global
 `events.id` cursor remains the resume key. The stream accepts either `after_id` or
@@ -134,6 +138,13 @@ message, replacing the pending row with its durable id before streamed replies a
 ordered. Lifecycle generations and abort controllers ignore late responses, close
 replaced streams, and clear all owner-scoped state on token/owner change,
 feature-off, logout, onboarding, or update application.
+
+Focus is server-owned state, not a browser preference. Bootstrap reads the
+current epoch, pending request, and optimistic version from the desk. The picker
+writes through `PUT /api/master/focus`, explicit message targets transition Focus
+inside the message transaction, and `master.focus.changed` updates every live
+consumer from the durable boundary event. Local storage is used only for
+presentation preferences and the independent per-message target picker.
 
 ## Compatibility
 
