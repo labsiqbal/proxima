@@ -344,6 +344,49 @@ def _installed_graphify_version() -> str | None:
         return None
 
 
+def _published_graph_tool_version(graph_path: Path) -> str | None:
+    """Return tool_version from the last successfully published graph.
+
+    Reads canonical graph.json metadata only. Failed rebuilds must not rewrite
+    this pin; graph_states.tool_version is not authoritative for incremental
+    eligibility because transitions overwrite it with the installed pin.
+    """
+    if graph_path.is_symlink() or not graph_path.is_file():
+        return None
+    try:
+        data = json.loads(graph_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    graph_meta = data.get("graph")
+    if not isinstance(graph_meta, dict):
+        return None
+    metadata = graph_meta.get(GRAPH_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        return None
+    tool_version = metadata.get("tool_version")
+    if not isinstance(tool_version, str) or not tool_version:
+        return None
+    return tool_version
+
+
+def _coalesce_pending_range(
+    existing_base: str | None,
+    existing_head: str | None,
+    new_base: str | None,
+    new_head: str | None,
+) -> tuple[str | None, str | None]:
+    """Widen an unapplied pending commit window instead of replacing it.
+
+    Keep the earliest non-null base (widest coverage), advance head when a newer
+    head arrives, and never let a no-range enqueue clear an existing range.
+    """
+    base = existing_base if existing_base is not None else new_base
+    head = new_head if new_head is not None else existing_head
+    return base, head
+
+
 def _select_graphify_sources(
     root: Path,
     kind: str,
@@ -1593,43 +1636,36 @@ class GraphContextService:
             state_id = int(state_row["id"])
             current_state = str(state_row["state"] or "")
             building = current_state == "building"
-            if building:
-                # Keep building; only record follow-up intent for after publish/fail.
-                if "rebuild_reason" in columns:
+            if "rebuild_reason" in columns:
+                try:
                     existing_base = state_row["pending_base_commit"]
+                except (IndexError, KeyError, TypeError):
+                    existing_base = None
+                try:
                     existing_head = state_row["pending_head_commit"]
-                    new_base = (
-                        pending_base_commit
-                        if pending_base_commit is not None
-                        else existing_base
-                    )
-                    new_head = (
-                        pending_head_commit
-                        if pending_head_commit is not None
-                        else existing_head
-                    )
+                except (IndexError, KeyError, TypeError):
+                    existing_head = None
+                new_base, new_head = _coalesce_pending_range(
+                    existing_base,
+                    existing_head,
+                    pending_base_commit,
+                    pending_head_commit,
+                )
+                if building:
+                    # Keep building; only record follow-up intent for after publish/fail.
                     self._db_factory().execute(
                         "UPDATE graph_states SET rebuild_reason = ?, "
                         "pending_base_commit = ?, pending_head_commit = ?, "
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (reason, new_base, new_head, state_id),
                     )
-                row = self._db_factory().execute(
-                    "SELECT * FROM graph_states WHERE id = ?",
-                    (state_id,),
-                ).fetchone()
-            elif "rebuild_reason" in columns:
-                self._db_factory().execute(
-                    "UPDATE graph_states SET state = 'queued', rebuild_reason = ?, "
-                    "pending_base_commit = ?, pending_head_commit = ?, "
-                    "last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        reason,
-                        pending_base_commit,
-                        pending_head_commit,
-                        state_id,
-                    ),
-                )
+                else:
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET state = 'queued', rebuild_reason = ?, "
+                        "pending_base_commit = ?, pending_head_commit = ?, "
+                        "last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (reason, new_base, new_head, state_id),
+                    )
                 row = self._db_factory().execute(
                     "SELECT * FROM graph_states WHERE id = ?",
                     (state_id,),
@@ -1681,12 +1717,10 @@ class GraphContextService:
             raise GraphBuildError("this graph scope is already building")
         generation_dir: Path | None = None
         state_id = int(state_row["id"])
-        # Last published tool_version must be captured before any building/queued
-        # transition overwrites it with the currently installed Graphify pin.
-        try:
-            prior_tool_version = state_row["tool_version"]
-        except (IndexError, KeyError, TypeError):
-            prior_tool_version = None
+        # Last-success tool pin comes from the published graph, not graph_states:
+        # failed/queued/building transitions overwrite the DB column with the
+        # installed pin and would otherwise bypass the full-rebuild guard.
+        prior_tool_version = _published_graph_tool_version(scope.graph_path)
         try:
             self._transition(scope, state_id, "queued")
             installed = _installed_graphify_version()
@@ -1788,9 +1822,7 @@ class GraphContextService:
                 and scope.graph_path.is_file()
                 and int(state_row["generation"] or 0) > 0
             ):
-                tool_ok = (
-                    (prior_tool_version or GRAPHIFY_VERSION) == GRAPHIFY_VERSION
-                )
+                tool_ok = prior_tool_version == GRAPHIFY_VERSION
                 base = pending_base_commit
                 if base is None:
                     try:
