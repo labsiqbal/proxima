@@ -144,31 +144,71 @@ def _graph_path(root: Path, *, create: bool) -> Path:
     return graph
 
 
-def ensure_graphify_gitignore(root: Path) -> None:
-    """Keep generated graph artifacts as ignored build outputs inside the repo."""
-    path = root / ".gitignore"
+def _repo_exclude_path(root: Path) -> Path | None:
+    """Return this checkout's repo-local exclude file when git metadata is present."""
+    git_meta = root / ".git"
+    if git_meta.is_dir():
+        return git_meta / "info" / "exclude"
+    if not git_meta.is_file():
+        return None
     try:
-        if path.is_symlink():
-            return
-        existing = ""
-        if path.is_file():
-            existing = path.read_text(encoding="utf-8")
-            for line in existing.splitlines():
-                if line.strip() in {
-                    "graphify-out/",
-                    "graphify-out",
-                    "/graphify-out/",
-                    "/graphify-out",
-                }:
-                    return
-        suffix = "" if not existing or existing.endswith("\n") else "\n"
-        path.write_text(
-            f"{existing}{suffix}# Proxima Code graph build output\n"
-            f"{GRAPHIFY_GITIGNORE_LINE}\n",
-            encoding="utf-8",
-        )
+        text = git_meta.read_text(encoding="utf-8")
     except OSError:
-        log.warning("could not ensure graphify-out gitignore under %s", root)
+        return None
+    for line in text.splitlines():
+        if line.lower().startswith("gitdir:"):
+            raw = line.split(":", 1)[1].strip()
+            if not raw:
+                return None
+            gitdir = Path(raw)
+            if not gitdir.is_absolute():
+                gitdir = (root / gitdir).resolve()
+            return gitdir / "info" / "exclude"
+    return None
+
+
+def _is_graphify_ignore_path(rel_path: str) -> bool:
+    normalized = rel_path.replace("\\", "/").strip().strip("/")
+    if normalized in {".gitignore", "graphify-out"}:
+        return True
+    return normalized.startswith("graphify-out/")
+
+
+def _ensure_ignore_line(path: Path) -> None:
+    if path.is_symlink():
+        return
+    existing = ""
+    if path.is_file():
+        existing = path.read_text(encoding="utf-8")
+        for line in existing.splitlines():
+            if line.strip() in {
+                "graphify-out/",
+                "graphify-out",
+                "/graphify-out/",
+                "/graphify-out",
+            }:
+                return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = "" if not existing or existing.endswith("\n") else "\n"
+    path.write_text(
+        f"{existing}{suffix}# Proxima Code graph build output\n"
+        f"{GRAPHIFY_GITIGNORE_LINE}\n",
+        encoding="utf-8",
+    )
+
+
+def ensure_graphify_gitignore(root: Path) -> None:
+    """Keep generated graph artifacts as ignored build outputs inside the repo.
+
+    Prefer the repo-local exclude file so Proxima never dirties a tracked
+    ``.gitignore`` (which would loop Code graph dirty-tree rebuilds forever).
+    Fall back to ``.gitignore`` only when this path is not a git checkout.
+    """
+    path = _repo_exclude_path(root) or (root / ".gitignore")
+    try:
+        _ensure_ignore_line(path)
+    except OSError:
+        log.warning("could not ensure graphify-out ignore under %s", root)
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -817,13 +857,27 @@ class GraphContextService:
         return head or None
 
     def tracked_dirty_signature(self, root: Path) -> str | None:
-        """Fingerprint dirty tracked paths only (ignores untracked noise)."""
+        """Fingerprint dirty tracked paths only (ignores untracked noise).
+
+        ``.gitignore`` / ``graphify-out`` bootstrap noise is excluded so the
+        lifecycle never rebuilds solely because Proxima ensured ignores.
+        """
         if not (root / ".git").exists():
             return None
         res = _git(root, "status", "--porcelain", "--untracked-files=no", check=False)
         if res.returncode != 0:
             return None
-        lines = [line for line in res.stdout.splitlines() if line.strip()]
+        lines: list[str] = []
+        for line in res.stdout.splitlines():
+            if not line.strip():
+                continue
+            path_part = line[3:] if len(line) >= 4 else line
+            if " -> " in path_part:
+                path_part = path_part.split(" -> ", 1)[1]
+            path_part = path_part.strip().strip('"')
+            if _is_graphify_ignore_path(path_part):
+                continue
+            lines.append(line)
         if not lines:
             return None
         digest = hashlib.sha256()
@@ -1178,6 +1232,61 @@ class GraphContextService:
         self._emit(scope, row)
         return row
 
+    def _fail_or_requeue_rebuild(
+        self,
+        scope: GraphScope,
+        state_id: int,
+        *,
+        error: str,
+    ) -> sqlite3.Row:
+        """Mark failed, or re-queue when a newer rebuild intent arrived mid-build."""
+        with self.app.state.db_lock:
+            columns = {
+                row[1]
+                for row in self._db_factory().execute(
+                    "PRAGMA table_info(graph_states)"
+                ).fetchall()
+            }
+            current = self._db_factory().execute(
+                "SELECT * FROM graph_states WHERE id = ?",
+                (state_id,),
+            ).fetchone()
+            assert current is not None
+            follow_up = bool(
+                "rebuild_reason" in columns and current["rebuild_reason"]
+            )
+            if follow_up:
+                self._db_factory().execute(
+                    "UPDATE graph_states SET state = 'queued', last_error = ?, "
+                    "last_attempt_at = ?, tool_version = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        error,
+                        iso_now(),
+                        _installed_graphify_version(),
+                        state_id,
+                    ),
+                )
+            else:
+                self._db_factory().execute(
+                    "UPDATE graph_states SET state = 'failed', last_error = ?, "
+                    "last_attempt_at = ?, tool_version = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        error,
+                        iso_now(),
+                        _installed_graphify_version(),
+                        state_id,
+                    ),
+                )
+            row = self._db_factory().execute(
+                "SELECT * FROM graph_states WHERE id = ?",
+                (state_id,),
+            ).fetchone()
+        assert row is not None
+        self._emit(scope, row)
+        return row
+
     def list_states(
         self,
         *,
@@ -1365,26 +1474,56 @@ class GraphContextService:
                         "PRAGMA table_info(graph_states)"
                     ).fetchall()
                 }
+                current = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_row["id"],),
+                ).fetchone()
+                assert current is not None
+                follow_up = bool(
+                    "rebuild_reason" in columns and current["rebuild_reason"]
+                )
+                next_state = "queued" if follow_up else "fresh"
                 if "repo_head" in columns:
-                    self._db_factory().execute(
-                        "UPDATE graph_states SET state = 'fresh', generation = ?, "
-                        "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                        "semantic_backend = 'disabled', last_success_at = ?, "
-                        "last_attempt_at = ?, last_error = NULL, "
-                        "repo_head = ?, pending_base_commit = NULL, "
-                        "pending_head_commit = NULL, rebuild_reason = NULL, "
-                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (
-                            expected_metadata["generation"],
-                            expected_metadata["source_fingerprint"],
-                            graph_sha256,
-                            GRAPHIFY_VERSION,
-                            now,
-                            now,
-                            repo_head,
-                            state_row["id"],
-                        ),
-                    )
+                    if follow_up:
+                        self._db_factory().execute(
+                            "UPDATE graph_states SET state = ?, generation = ?, "
+                            "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
+                            "semantic_backend = 'disabled', last_success_at = ?, "
+                            "last_attempt_at = ?, last_error = NULL, "
+                            "repo_head = ?, "
+                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (
+                                next_state,
+                                expected_metadata["generation"],
+                                expected_metadata["source_fingerprint"],
+                                graph_sha256,
+                                GRAPHIFY_VERSION,
+                                now,
+                                now,
+                                repo_head,
+                                state_row["id"],
+                            ),
+                        )
+                    else:
+                        self._db_factory().execute(
+                            "UPDATE graph_states SET state = 'fresh', generation = ?, "
+                            "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
+                            "semantic_backend = 'disabled', last_success_at = ?, "
+                            "last_attempt_at = ?, last_error = NULL, "
+                            "repo_head = ?, pending_base_commit = NULL, "
+                            "pending_head_commit = NULL, rebuild_reason = NULL, "
+                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (
+                                expected_metadata["generation"],
+                                expected_metadata["source_fingerprint"],
+                                graph_sha256,
+                                GRAPHIFY_VERSION,
+                                now,
+                                now,
+                                repo_head,
+                                state_row["id"],
+                            ),
+                        )
                 else:
                     self._db_factory().execute(
                         "UPDATE graph_states SET state = 'fresh', generation = ?, "
@@ -1428,8 +1567,14 @@ class GraphContextService:
         pending_base_commit: str | None = None,
         pending_head_commit: str | None = None,
     ) -> dict[str, Any]:
-        """Create state if needed, optionally mark stale, and queue a rebuild."""
+        """Create state if needed, optionally mark stale, and queue a rebuild.
+
+        When a build is already in flight, persist rebuild intent (reason +
+        pending commit range) without clobbering ``building``. Publish/fail
+        re-queues when that follow-up intent is still present.
+        """
         del mode  # selection happens at drain time from pending commits + reason
+        del mark_stale  # queued (or building+intent) is the durable stale marker
         scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
@@ -1437,23 +1582,6 @@ class GraphContextService:
             area_id=area_id,
             create_output=True,
         )
-        state_row = self._state_row(scope)
-        state_id = int(state_row["id"])
-        if state_row["state"] == "building":
-            # A concurrent build owns the scope; leave a stale marker for a later audit.
-            if mark_stale and int(state_row["generation"] or 0) > 0:
-                return self._payload(
-                    scope,
-                    self._transition(
-                        scope,
-                        state_id,
-                        "stale",
-                        error=None,
-                    ),
-                )
-            return self._payload(scope, state_row)
-        if mark_stale and int(state_row["generation"] or 0) > 0:
-            state_row = self._transition(scope, state_id, "stale")
         columns = {
             row[1]
             for row in self._db_factory().execute(
@@ -1461,7 +1589,36 @@ class GraphContextService:
             ).fetchall()
         }
         with self.app.state.db_lock:
-            if "rebuild_reason" in columns:
+            state_row = self._state_row(scope)
+            state_id = int(state_row["id"])
+            current_state = str(state_row["state"] or "")
+            building = current_state == "building"
+            if building:
+                # Keep building; only record follow-up intent for after publish/fail.
+                if "rebuild_reason" in columns:
+                    existing_base = state_row["pending_base_commit"]
+                    existing_head = state_row["pending_head_commit"]
+                    new_base = (
+                        pending_base_commit
+                        if pending_base_commit is not None
+                        else existing_base
+                    )
+                    new_head = (
+                        pending_head_commit
+                        if pending_head_commit is not None
+                        else existing_head
+                    )
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET rebuild_reason = ?, "
+                        "pending_base_commit = ?, pending_head_commit = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (reason, new_base, new_head, state_id),
+                    )
+                row = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_id,),
+                ).fetchone()
+            elif "rebuild_reason" in columns:
                 self._db_factory().execute(
                     "UPDATE graph_states SET state = 'queued', rebuild_reason = ?, "
                     "pending_base_commit = ?, pending_head_commit = ?, "
@@ -1473,16 +1630,20 @@ class GraphContextService:
                         state_id,
                     ),
                 )
+                row = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_id,),
+                ).fetchone()
             else:
                 self._db_factory().execute(
                     "UPDATE graph_states SET state = 'queued', last_error = NULL, "
                     "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (state_id,),
                 )
-            row = self._db_factory().execute(
-                "SELECT * FROM graph_states WHERE id = ?",
-                (state_id,),
-            ).fetchone()
+                row = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_id,),
+                ).fetchone()
         assert row is not None
         self._emit(scope, row)
         return self._payload(scope, row)
@@ -1519,8 +1680,15 @@ class GraphContextService:
         if not lock.acquire(blocking=False):
             raise GraphBuildError("this graph scope is already building")
         generation_dir: Path | None = None
+        state_id = int(state_row["id"])
+        # Last published tool_version must be captured before any building/queued
+        # transition overwrites it with the currently installed Graphify pin.
         try:
-            self._transition(scope, int(state_row["id"]), "queued")
+            prior_tool_version = state_row["tool_version"]
+        except (IndexError, KeyError, TypeError):
+            prior_tool_version = None
+        try:
+            self._transition(scope, state_id, "queued")
             installed = _installed_graphify_version()
             if installed is None:
                 message = (
@@ -1528,7 +1696,7 @@ class GraphContextService:
                 )
                 row = self._transition(
                     scope,
-                    int(state_row["id"]),
+                    state_id,
                     "missing",
                     error=message,
                 )
@@ -1544,11 +1712,53 @@ class GraphContextService:
                 raise GraphBuildError(
                     "semantic model egress is not implemented in this delivery group"
                 )
-            state_row = self._transition(
-                scope,
-                int(state_row["id"]),
-                "building",
-            )
+            # Claim any queued intent before the building transition clears pending.
+            claimed_base: str | None
+            claimed_head: str | None
+            with self.app.state.db_lock:
+                pre_build = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_id,),
+                ).fetchone()
+                assert pre_build is not None
+                try:
+                    claimed_base = pre_build["pending_base_commit"]
+                except (IndexError, KeyError, TypeError):
+                    claimed_base = None
+                try:
+                    claimed_head = pre_build["pending_head_commit"]
+                except (IndexError, KeyError, TypeError):
+                    claimed_head = None
+                columns = {
+                    row[1]
+                    for row in self._db_factory().execute(
+                        "PRAGMA table_info(graph_states)"
+                    ).fetchall()
+                }
+                if "rebuild_reason" in columns:
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET state = 'building', last_error = NULL, "
+                        "last_attempt_at = ?, tool_version = ?, "
+                        "rebuild_reason = NULL, pending_base_commit = NULL, "
+                        "pending_head_commit = NULL, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (iso_now(), installed, state_id),
+                    )
+                else:
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET state = 'building', last_error = NULL, "
+                        "last_attempt_at = ?, tool_version = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (iso_now(), installed, state_id),
+                    )
+                state_row = self._db_factory().execute(
+                    "SELECT * FROM graph_states WHERE id = ?",
+                    (state_id,),
+                ).fetchone()
+            assert state_row is not None
+            self._emit(scope, state_row)
+            pending_base_commit = claimed_base or pending_base_commit
+            pending_head_commit = claimed_head or pending_head_commit
             generation = int(state_row["generation"]) + 1
             if _graph_path(scope.root, create=True) != scope.graph_path:
                 raise GraphValidationError("registered graph output scope changed")
@@ -1579,7 +1789,7 @@ class GraphContextService:
                 and int(state_row["generation"] or 0) > 0
             ):
                 tool_ok = (
-                    (state_row["tool_version"] or GRAPHIFY_VERSION) == GRAPHIFY_VERSION
+                    (prior_tool_version or GRAPHIFY_VERSION) == GRAPHIFY_VERSION
                 )
                 base = pending_base_commit
                 if base is None:
@@ -1631,10 +1841,9 @@ class GraphContextService:
             return self._payload(scope, row)
         except GraphContextError as exc:
             error = self._safe_error(scope, exc)
-            row = self._transition(
+            row = self._fail_or_requeue_rebuild(
                 scope,
-                int(state_row["id"]),
-                "failed",
+                state_id,
                 error=error,
             )
             if isinstance(exc, GraphBuildError):
@@ -1642,10 +1851,9 @@ class GraphContextService:
             raise GraphBuildError(error) from exc
         except Exception as exc:
             error = self._safe_error(scope, exc)
-            self._transition(
+            self._fail_or_requeue_rebuild(
                 scope,
-                int(state_row["id"]),
-                "failed",
+                state_id,
                 error=error,
             )
             raise GraphBuildError(error) from exc

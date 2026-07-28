@@ -14,13 +14,21 @@ from typing import Any
 
 
 def _fixed_graph_path() -> Path:
+    """Return the configured fixed path without requiring the graph file yet."""
     raw = (os.environ.get("PROXIMA_CODE_GRAPH_PATH") or "").strip()
     if not raw:
         raise SystemExit("PROXIMA_CODE_GRAPH_PATH is required")
-    path = Path(raw)
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit("fixed Code graph path is missing or not a regular file")
-    return path.resolve(strict=True)
+    return Path(raw)
+
+
+def _resolve_graph_file(path: Path) -> Path | None:
+    """Lazy-validate the fixed graph; missing/building graphs are non-fatal."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return path.resolve(strict=True)
+    except OSError:
+        return None
 
 
 def _load_graph(path: Path) -> dict[str, Any]:
@@ -204,23 +212,34 @@ def main() -> None:
             if name != "query_graph":
                 text = f"Unknown tool: {name}"
             else:
-                try:
-                    data = _load_graph(graph_path)
-                    text = _query(
-                        data,
-                        str(arguments.get("question") or ""),
-                        depth=int(arguments.get("depth") or 2),
-                        limit=int(arguments.get("limit") or 40),
+                resolved = _resolve_graph_file(graph_path)
+                if resolved is None:
+                    text = (
+                        "Code graph is unavailable "
+                        "(still building or missing)"
                     )
-                except Exception as exc:
-                    text = f"Error executing query_graph: {exc}"
+                else:
+                    try:
+                        data = _load_graph(resolved)
+                        text = _query(
+                            data,
+                            str(arguments.get("question") or ""),
+                            depth=int(arguments.get("depth") or 2),
+                            limit=int(arguments.get("limit") or 40),
+                        )
+                    except Exception as exc:
+                        text = f"Error executing query_graph: {exc}"
             _write_message(
                 {
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "result": {
                         "content": [{"type": "text", "text": text}],
-                        "isError": text.startswith("Error ") or text.startswith("Unknown "),
+                        "isError": (
+                            text.startswith("Error ")
+                            or text.startswith("Unknown ")
+                            or text.startswith("Code graph is unavailable")
+                        ),
                     },
                 }
             )

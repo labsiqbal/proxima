@@ -140,7 +140,11 @@ def extract_vision_images(
     return clean, images
 from . import workflows as wf
 from . import features
-from .capabilities import apply_capabilities, parse_selection
+from .capabilities import (
+    apply_capabilities,
+    parse_selection,
+    remove_fixed_code_graph_mcp,
+)
 from .profile_seed import refresh_agent_credentials
 
 
@@ -173,6 +177,14 @@ class RunPrompting:
             and getattr(spec, "id", "") == "claude-code"
             and fixed_code_graph_path is None
         ):
+            # Live home skips full capability re-apply, but still strip any
+            # leftover Area-locked Code graph MCP from a prior Task run.
+            try:
+                remove_fixed_code_graph_mcp("claude-code", Path(hermes_home))
+            except Exception:
+                logging.getLogger("proxima.worker").exception(
+                    "live-home Code graph MCP cleanup failed (non-fatal)"
+                )
             return
         try:
             row = self.app.state.worker_db.execute(

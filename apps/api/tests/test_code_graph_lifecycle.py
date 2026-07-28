@@ -148,9 +148,9 @@ def test_multiple_areas_receive_distinct_paths_state_and_generations(
     for row in rows:
         graph_path = Path(row["graph_path"])
         assert graph_path.is_file()
-        gitignore = graph_path.parent.parent / ".gitignore"
-        assert gitignore.is_file()
-        assert GRAPHIFY_GITIGNORE_LINE in gitignore.read_text(encoding="utf-8")
+        exclude = graph_path.parent.parent / ".git" / "info" / "exclude"
+        assert exclude.is_file()
+        assert GRAPHIFY_GITIGNORE_LINE in exclude.read_text(encoding="utf-8")
     public = api.get(
         "/api/containers/life-one/graphs",
         headers=headers,
