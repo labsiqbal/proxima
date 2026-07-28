@@ -1,9 +1,10 @@
 """Scoped Graphify adapter and safe graph-generation storage.
 
 Public callers select a Container plus an optional Area database id. Filesystem
-roots and graph paths are resolved only inside this module. Group 9 intentionally
-provides explicit rebuilds only: automatic Code/Knowledge lifecycle triggers and
-Master context routing belong to later delivery groups.
+roots and graph paths are resolved only inside this module. Group 9 supplied the
+path-free adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
+(enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Knowledge lifecycle
+and Master context routing remain later delivery groups.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -37,12 +39,14 @@ GRAPH_STATES = frozenset(
 )
 GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
+GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
 GraphStateRow: TypeAlias = Mapping[str, Any] | sqlite3.Row
 
 _MAX_ERROR_CHARS = 1000
 _MAX_LABEL_CHARS = 500
 _MAX_ID_CHARS = 1000
 _MAX_SOURCE_FILES = 200_000
+_GIT_TIMEOUT_SECONDS = 30
 log = logging.getLogger("proxima.graph_context")
 
 
@@ -129,6 +133,7 @@ def _graph_path(root: Path, *, create: bool) -> Path:
         raise GraphScopeError("graph output path is not a directory")
     if create:
         output.mkdir(parents=False, exist_ok=True)
+        ensure_graphify_gitignore(root)
     if output.exists():
         resolved_output = output.resolve(strict=True)
         if not _contains(root, resolved_output):
@@ -137,6 +142,66 @@ def _graph_path(root: Path, *, create: bool) -> Path:
     if graph.is_symlink():
         raise GraphScopeError("canonical graph cannot be a symlink")
     return graph
+
+
+def ensure_graphify_gitignore(root: Path) -> None:
+    """Keep generated graph artifacts as ignored build outputs inside the repo."""
+    path = root / ".gitignore"
+    try:
+        if path.is_symlink():
+            return
+        existing = ""
+        if path.is_file():
+            existing = path.read_text(encoding="utf-8")
+            for line in existing.splitlines():
+                if line.strip() in {
+                    "graphify-out/",
+                    "graphify-out",
+                    "/graphify-out/",
+                    "/graphify-out",
+                }:
+                    return
+        suffix = "" if not existing or existing.endswith("\n") else "\n"
+        path.write_text(
+            f"{existing}{suffix}# Proxima Code graph build output\n"
+            f"{GRAPHIFY_GITIGNORE_LINE}\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning("could not ensure graphify-out gitignore under %s", root)
+
+
+def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        res = subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise GraphScopeError("git is not installed or not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GraphScopeError("git timed out while inspecting the Code Area") from exc
+    if check and res.returncode != 0:
+        detail = (res.stderr or res.stdout or "").strip()[-300:]
+        raise GraphScopeError(f"git {' '.join(args[:2])} failed: {detail}")
+    return res
+
+
+def _is_worktree_path(path: Path, workspace_root: Path | None) -> bool:
+    if workspace_root is None:
+        return False
+    try:
+        worktrees = (workspace_root / "worktrees").resolve()
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return resolved == worktrees or worktrees in resolved.parents
 
 
 def _safe_rel_source(value: Any) -> PurePosixPath:
@@ -287,9 +352,14 @@ def _build_graphify_worker(
     kind: str,
     metadata: dict[str, Any],
     excluded_root_texts: list[str],
+    mode: str = "full",
+    base_graph_text: str | None = None,
+    changed_rel_paths: list[str] | None = None,
+    deleted_rel_paths: list[str] | None = None,
 ) -> None:
     try:
         import graphify
+        from graphify.build import build_merge
 
         root = Path(root_text).resolve(strict=True)
         excluded_roots = tuple(
@@ -309,18 +379,60 @@ def _build_graphify_worker(
         fingerprint = _fingerprint_files(root, rel_paths, excluded_roots)
         expected = dict(metadata)
         expected["source_fingerprint"] = fingerprint
-        sources = [root.joinpath(*PurePosixPath(rel).parts) for rel in rel_paths]
-        extracted = graphify.extract(
-            sources,
-            cache_root=stage.parent,
-            root=root,
-            parallel=True,
-        )
-        graph = graphify.build_from_json(
-            extracted,
-            directed=True,
-            root=root,
-        )
+
+        if mode == "incremental":
+            if not base_graph_text:
+                raise GraphBuildError("incremental rebuild requires a base graph")
+            base_graph = Path(base_graph_text)
+            if base_graph.is_symlink() or not base_graph.is_file():
+                raise GraphBuildError("incremental base graph is unavailable")
+            changed = list(changed_rel_paths or [])
+            deleted = list(deleted_rel_paths or [])
+            if not changed and not deleted:
+                raise GraphBuildError("incremental rebuild has no changed files")
+            # Only extract paths that still exist in the current scope.
+            extract_rels = [
+                rel for rel in changed if rel in set(rel_paths)
+            ]
+            sources = [
+                root.joinpath(*PurePosixPath(rel).parts) for rel in extract_rels
+            ]
+            if sources:
+                extracted = graphify.extract(
+                    sources,
+                    cache_root=stage.parent,
+                    root=root,
+                    parallel=True,
+                )
+                chunks = extracted if isinstance(extracted, list) else [extracted]
+            else:
+                chunks = [{"nodes": [], "edges": [], "hyperedges": []}]
+            merge_base = stage.parent / "base-graph.json"
+            shutil.copy2(base_graph, merge_base)
+            graph = build_merge(
+                chunks,
+                graph_path=merge_base,
+                prune_sources=[
+                    str(root.joinpath(*PurePosixPath(rel).parts)) for rel in deleted
+                ]
+                or None,
+                directed=True,
+                root=root,
+            )
+        else:
+            sources = [root.joinpath(*PurePosixPath(rel).parts) for rel in rel_paths]
+            extracted = graphify.extract(
+                sources,
+                cache_root=stage.parent,
+                root=root,
+                parallel=True,
+            )
+            graph = graphify.build_from_json(
+                extracted,
+                directed=True,
+                root=root,
+            )
+
         if graph.number_of_nodes() <= 0:
             raise GraphBuildError("Graphify produced an empty graph")
         if not graphify.to_json(
@@ -343,6 +455,7 @@ def _build_graphify_worker(
                 "source_fingerprint": fingerprint,
                 "nodes": graph.number_of_nodes(),
                 "edges": graph.number_of_edges(),
+                "mode": mode,
             }
         )
     except BaseException as exc:
@@ -686,10 +799,110 @@ class GraphContextService:
     def config(self) -> Mapping[str, Any]:
         return getattr(self.app.state, "config", {}) or {}
 
+    def expected_tool_version(self) -> str:
+        return GRAPHIFY_VERSION
+
     def _lock_for(self, scope: GraphScope) -> threading.Lock:
         key = (scope.container_id, scope.kind, scope.area_id)
         with self._locks_guard:
             return self._locks.setdefault(key, threading.Lock())
+
+    def repo_head_sha(self, root: Path) -> str | None:
+        if not (root / ".git").exists():
+            return None
+        res = _git(root, "rev-parse", "HEAD", check=False)
+        if res.returncode != 0:
+            return None
+        head = res.stdout.strip()
+        return head or None
+
+    def tracked_dirty_signature(self, root: Path) -> str | None:
+        """Fingerprint dirty tracked paths only (ignores untracked noise)."""
+        if not (root / ".git").exists():
+            return None
+        res = _git(root, "status", "--porcelain", "--untracked-files=no", check=False)
+        if res.returncode != 0:
+            return None
+        lines = [line for line in res.stdout.splitlines() if line.strip()]
+        if not lines:
+            return None
+        digest = hashlib.sha256()
+        for line in sorted(lines):
+            digest.update(line.encode("utf-8", "replace"))
+            digest.update(b"\n")
+        return digest.hexdigest()
+
+    def changed_files_between(
+        self,
+        root: Path,
+        base: str,
+        head: str,
+    ) -> tuple[list[str], list[str], str | None]:
+        """Return (changed_rel_paths, deleted_rel_paths, full_rebuild_reason)."""
+        if not base or not head:
+            return [], [], "missing commit range"
+        merge_base = _git(root, "merge-base", base, head, check=False)
+        if merge_base.returncode != 0:
+            return [], [], "unknown history"
+        if merge_base.stdout.strip() != base:
+            return [], [], "force-push or non-fast-forward history"
+        names = _git(
+            root,
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+            f"{base}..{head}",
+            check=False,
+        )
+        deleted = _git(
+            root,
+            "diff",
+            "--name-only",
+            "--diff-filter=D",
+            f"{base}..{head}",
+            check=False,
+        )
+        if names.returncode != 0 or deleted.returncode != 0:
+            return [], [], "diff failed"
+        changed = [
+            line.strip().replace("\\", "/")
+            for line in names.stdout.splitlines()
+            if line.strip()
+        ]
+        removed = [
+            line.strip().replace("\\", "/")
+            for line in deleted.stdout.splitlines()
+            if line.strip()
+        ]
+        return changed, removed, None
+
+    def live_source_fingerprint(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        area_id: int,
+    ) -> str | None:
+        scope = self.resolve_scope(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="code",
+            area_id=area_id,
+            create_output=False,
+        )
+        cache = Path(tempfile.mkdtemp(prefix=".proxima-fp-"))
+        try:
+            rel_paths, errors = _select_graphify_sources(
+                scope.root,
+                "code",
+                cache,
+                scope.excluded_roots,
+            )
+            if errors or not rel_paths:
+                return None
+            return _fingerprint_files(scope.root, rel_paths, scope.excluded_roots)
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
 
     def _owned_container(
         self,
@@ -764,14 +977,21 @@ class GraphContextService:
                 resolved_area_id = int(row["id"])
         except container_registry.ContainerBoundaryError as exc:
             raise GraphScopeError(str(exc)) from exc
+        resolved_root = root.resolve(strict=True)
+        workspace = self.config.get("workspace_root")
+        workspace_root = Path(str(workspace)) if workspace else None
+        if _is_worktree_path(resolved_root, workspace_root):
+            raise GraphScopeError(
+                "Task worktree graphs cannot be promoted as canonical"
+            )
         return GraphScope(
             container_id=int(container["id"]),
             container_slug=str(container["slug"]),
             kind=kind,
             area_id=resolved_area_id,
             area_rel_path=rel_path,
-            root=root.resolve(strict=True),
-            graph_path=_graph_path(root, create=create_output),
+            root=resolved_root,
+            graph_path=_graph_path(resolved_root, create=create_output),
             excluded_roots=excluded_roots,
         )
 
@@ -839,7 +1059,7 @@ class GraphContextService:
         return text[:_MAX_ERROR_CHARS]
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
-        return {
+        payload = {
             "state": row["state"],
             "generation": int(row["generation"]),
             "source_fingerprint": row["source_fingerprint"],
@@ -850,6 +1070,13 @@ class GraphContextService:
             "last_attempt_at": row["last_attempt_at"],
             "last_error": row["last_error"],
         }
+        # Lifecycle columns are optional until migration 36; omit when absent.
+        keys = set(row.keys()) if hasattr(row, "keys") else set()
+        if "repo_head" in keys:
+            payload["repo_head"] = row["repo_head"]
+        if "rebuild_reason" in keys:
+            payload["rebuild_reason"] = row["rebuild_reason"]
+        return payload
 
     def _payload(
         self,
@@ -992,6 +1219,10 @@ class GraphContextService:
         stage: Path,
         metadata: dict[str, Any],
         timeout_seconds: int,
+        mode: str = "full",
+        base_graph: Path | None = None,
+        changed_rel_paths: list[str] | None = None,
+        deleted_rel_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue(maxsize=1)
@@ -1006,6 +1237,10 @@ class GraphContextService:
                 "excluded_root_texts": [
                     str(path) for path in scope.excluded_roots
                 ],
+                "mode": mode,
+                "base_graph_text": str(base_graph) if base_graph else None,
+                "changed_rel_paths": list(changed_rel_paths or []),
+                "deleted_rel_paths": list(deleted_rel_paths or []),
             },
         )
         process.start()
@@ -1116,24 +1351,57 @@ class GraphContextService:
         finally:
             os.close(directory_fd)
         now = iso_now()
+        repo_head = None
+        if scope.kind == "code":
+            try:
+                repo_head = self.repo_head_sha(scope.root)
+            except GraphScopeError:
+                repo_head = None
         try:
             with self.app.state.db_lock:
-                self._db_factory().execute(
-                    "UPDATE graph_states SET state = 'fresh', generation = ?, "
-                    "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                    "semantic_backend = 'disabled', last_success_at = ?, "
-                    "last_attempt_at = ?, last_error = NULL, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        expected_metadata["generation"],
-                        expected_metadata["source_fingerprint"],
-                        graph_sha256,
-                        GRAPHIFY_VERSION,
-                        now,
-                        now,
-                        state_row["id"],
-                    ),
-                )
+                columns = {
+                    row[1]
+                    for row in self._db_factory().execute(
+                        "PRAGMA table_info(graph_states)"
+                    ).fetchall()
+                }
+                if "repo_head" in columns:
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET state = 'fresh', generation = ?, "
+                        "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
+                        "semantic_backend = 'disabled', last_success_at = ?, "
+                        "last_attempt_at = ?, last_error = NULL, "
+                        "repo_head = ?, pending_base_commit = NULL, "
+                        "pending_head_commit = NULL, rebuild_reason = NULL, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            expected_metadata["generation"],
+                            expected_metadata["source_fingerprint"],
+                            graph_sha256,
+                            GRAPHIFY_VERSION,
+                            now,
+                            now,
+                            repo_head,
+                            state_row["id"],
+                        ),
+                    )
+                else:
+                    self._db_factory().execute(
+                        "UPDATE graph_states SET state = 'fresh', generation = ?, "
+                        "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
+                        "semantic_backend = 'disabled', last_success_at = ?, "
+                        "last_attempt_at = ?, last_error = NULL, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            expected_metadata["generation"],
+                            expected_metadata["source_fingerprint"],
+                            graph_sha256,
+                            GRAPHIFY_VERSION,
+                            now,
+                            now,
+                            state_row["id"],
+                        ),
+                    )
                 row = self._db_factory().execute(
                     "SELECT * FROM graph_states WHERE id = ?",
                     (state_row["id"],),
@@ -1148,6 +1416,77 @@ class GraphContextService:
         self._emit(scope, row)
         return row
 
+    def enqueue_code_rebuild(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        area_id: int,
+        reason: str,
+        mode: str = "full",
+        mark_stale: bool = False,
+        pending_base_commit: str | None = None,
+        pending_head_commit: str | None = None,
+    ) -> dict[str, Any]:
+        """Create state if needed, optionally mark stale, and queue a rebuild."""
+        del mode  # selection happens at drain time from pending commits + reason
+        scope = self.resolve_scope(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="code",
+            area_id=area_id,
+            create_output=True,
+        )
+        state_row = self._state_row(scope)
+        state_id = int(state_row["id"])
+        if state_row["state"] == "building":
+            # A concurrent build owns the scope; leave a stale marker for a later audit.
+            if mark_stale and int(state_row["generation"] or 0) > 0:
+                return self._payload(
+                    scope,
+                    self._transition(
+                        scope,
+                        state_id,
+                        "stale",
+                        error=None,
+                    ),
+                )
+            return self._payload(scope, state_row)
+        if mark_stale and int(state_row["generation"] or 0) > 0:
+            state_row = self._transition(scope, state_id, "stale")
+        columns = {
+            row[1]
+            for row in self._db_factory().execute(
+                "PRAGMA table_info(graph_states)"
+            ).fetchall()
+        }
+        with self.app.state.db_lock:
+            if "rebuild_reason" in columns:
+                self._db_factory().execute(
+                    "UPDATE graph_states SET state = 'queued', rebuild_reason = ?, "
+                    "pending_base_commit = ?, pending_head_commit = ?, "
+                    "last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        reason,
+                        pending_base_commit,
+                        pending_head_commit,
+                        state_id,
+                    ),
+                )
+            else:
+                self._db_factory().execute(
+                    "UPDATE graph_states SET state = 'queued', last_error = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (state_id,),
+                )
+            row = self._db_factory().execute(
+                "SELECT * FROM graph_states WHERE id = ?",
+                (state_id,),
+            ).fetchone()
+        assert row is not None
+        self._emit(scope, row)
+        return self._payload(scope, row)
+
     def rebuild(
         self,
         *,
@@ -1155,8 +1494,20 @@ class GraphContextService:
         container_slug: str,
         kind: str,
         area_id: int | None = None,
+        mode: str = "full",
+        pending_base_commit: str | None = None,
+        pending_head_commit: str | None = None,
+        rebuild_reason: str | None = None,
     ) -> dict[str, Any]:
+        if rebuild_reason:
+            log.info(
+                "code graph rebuild reason=%s container=%s area=%s",
+                rebuild_reason,
+                container_slug,
+                area_id,
+            )
         scope = self.resolve_scope(
+
             owner_user_id=owner_user_id,
             container_slug=container_slug,
             kind=kind,
@@ -1216,12 +1567,56 @@ class GraphContextService:
                     int(self.config.get("graph_build_timeout_seconds", 120)),
                 ),
             )
-            build_result = self._run_builder(
-                scope=scope,
-                stage=stage,
-                metadata=placeholder_metadata,
-                timeout_seconds=timeout_seconds,
-            )
+
+            build_mode = "full"
+            changed: list[str] = []
+            deleted: list[str] = []
+            base_graph: Path | None = None
+            if (
+                mode == "incremental"
+                and scope.kind == "code"
+                and scope.graph_path.is_file()
+                and int(state_row["generation"] or 0) > 0
+            ):
+                tool_ok = (
+                    (state_row["tool_version"] or GRAPHIFY_VERSION) == GRAPHIFY_VERSION
+                )
+                base = pending_base_commit
+                if base is None:
+                    try:
+                        base = state_row["repo_head"]
+                    except (IndexError, KeyError, TypeError):
+                        base = None
+                head = pending_head_commit or self.repo_head_sha(scope.root)
+                if tool_ok and base and head:
+                    changed, deleted, unsafe = self.changed_files_between(
+                        scope.root,
+                        str(base),
+                        str(head),
+                    )
+                    if unsafe is None and (changed or deleted):
+                        build_mode = "incremental"
+                        base_graph = scope.graph_path
+                # tool/version/history mismatch or empty diff falls back to full
+
+            try:
+                build_result = self._run_builder(
+                    scope=scope,
+                    stage=stage,
+                    metadata=placeholder_metadata,
+                    timeout_seconds=timeout_seconds,
+                    mode=build_mode,
+                    base_graph=base_graph,
+                    changed_rel_paths=changed,
+                    deleted_rel_paths=deleted,
+                )
+            except GraphBuildError:
+                if build_mode == "incremental":
+                    raise GraphBuildError(
+                        "incremental update failed; fallback_full required"
+                    ) from None
+                raise
+
             expected_metadata = scope.metadata(
                 generation,
                 str(build_result["source_fingerprint"]),

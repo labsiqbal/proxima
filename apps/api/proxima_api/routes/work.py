@@ -591,6 +591,14 @@ def register(app, deps):
                         merged = worktrees.merge_job_worktree(db(), job, wt)
                     except worktrees.WorktreeError as exc:
                         raise HTTPException(status_code=409, detail=f"merge blocked - job stays in review: {exc}") from exc
+                    # Group 10: mark this Area's Code graph stale and enqueue rebuild.
+                    try:
+                        from ..code_graph_lifecycle import notify_task_merged
+                        notify_task_merged(app, merged)
+                    except Exception:
+                        logging.getLogger("proxima.work").exception(
+                            "Code graph post-merge hook failed (job stays merged)"
+                        )
                     # T9 (slice 11): push the merged main line AFTER the local
                     # merge, only when the area's toggle is explicitly ON. A
                     # failed push never un-merges and never fails the approve -

@@ -122,6 +122,12 @@ CREATE TABLE IF NOT EXISTS graph_states (
   last_success_at TEXT,
   last_attempt_at TEXT,
   last_error TEXT,
+  -- Group 10 Code graph lifecycle: last published HEAD, pending merge range,
+  -- and why a rebuild was enqueued. Knowledge rows leave these NULL.
+  repo_head TEXT,
+  pending_base_commit TEXT,
+  pending_head_commit TEXT,
+  rebuild_reason TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK(

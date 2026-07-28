@@ -1510,6 +1510,34 @@ class RunWorker:
                     run if isinstance(run, dict) else None,
                 )
             )
+            fixed_code_graph_path = None
+            if (
+                session_mode != "master"
+                and is_job
+                and jrow
+                and jrow["target_kind"] == "code"
+                and features.enabled(cfg, features.MASTER_ORCHESTRATOR)
+            ):
+                try:
+                    area_row = db.execute(
+                        "SELECT j.target_area_id, p.slug, p.owner_user_id "
+                        "FROM jobs j JOIN projects p ON p.id = j.project_id "
+                        "WHERE j.id = ?",
+                        (jrow["job_id"],),
+                    ).fetchone()
+                    if area_row and area_row["target_area_id"] is not None:
+                        scope = self.app.state.graph_context.resolve_scope(
+                            owner_user_id=int(area_row["owner_user_id"]),
+                            container_slug=str(area_row["slug"]),
+                            kind="code",
+                            area_id=int(area_row["target_area_id"]),
+                            create_output=True,
+                        )
+                        fixed_code_graph_path = str(scope.graph_path)
+                except Exception:
+                    logging.getLogger("proxima.worker").exception(
+                        "Code graph MCP scope resolve failed (non-fatal)"
+                    )
             self.prompting.reapply_capabilities(
                 cfg,
                 spec,
@@ -1517,6 +1545,7 @@ class RunWorker:
                 run.get("profile_id"),
                 required_skill_ids=required_skills,
                 require_explicit_empty=session_mode == "master",
+                fixed_code_graph_path=fixed_code_graph_path,
             )
             proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
                 run_id,

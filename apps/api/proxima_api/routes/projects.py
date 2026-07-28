@@ -6,6 +6,7 @@ sharing, invites, or visibility — those were the multi-user surface.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -23,6 +24,45 @@ from ..schemas import ProjectAreaAddRequest, ProjectAreaUpdateRequest, ProjectCr
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+
+    def _notify_code_graphs(
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        project_id: int,
+        added_rels: list[str] | None = None,
+    ) -> None:
+        """Enqueue Code graph builds for newly registered Areas (Group 10)."""
+        lifecycle = getattr(app.state, "code_graph_lifecycle", None)
+        if lifecycle is None:
+            return
+        try:
+            if added_rels is not None:
+                if not added_rels:
+                    return
+                rows = db().execute(
+                    "SELECT id FROM project_areas "
+                    "WHERE project_id = ? AND kind = 'code' AND source != 'excluded' "
+                    "AND rel_path IN (" + ",".join("?" * len(added_rels)) + ")",
+                    (project_id, *added_rels),
+                ).fetchall()
+            else:
+                rows = db().execute(
+                    "SELECT id FROM project_areas "
+                    "WHERE project_id = ? AND kind = 'code' AND source != 'excluded'",
+                    (project_id,),
+                ).fetchall()
+            if not rows:
+                return
+            lifecycle.on_code_areas_registered(
+                owner_user_id=owner_user_id,
+                container_slug=container_slug,
+                area_ids=[int(row["id"]) for row in rows],
+            )
+        except Exception:
+            logging.getLogger("proxima.projects").exception(
+                "Code graph registration hook failed (non-fatal)"
+            )
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     project_payload = deps["project_payload"]
@@ -150,11 +190,17 @@ def register(app, deps):
             # Container areas (T1): register the ops area + auto-detect code areas.
             ensure_ops_area(db(), pid, rel_path=".")
             container_registry.migrate_container_ops(db(), pid)
-            sync_code_areas(db(), pid, target)
+            summary = sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
                 (user["id"], audit_action, slug, json.dumps({"path": str(target), "mkdir": made_dir})),
+            )
+            _notify_code_graphs(
+                owner_user_id=int(user["id"]),
+                container_slug=slug,
+                project_id=int(pid),
+                added_rels=list(summary.get("added") or []),
             )
             row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
             return project_payload(row)
@@ -175,9 +221,15 @@ def register(app, deps):
         )
         project_id = cur.lastrowid
         ensure_ops_area(db(), project_id)
-        sync_code_areas(db(), project_id, path)
+        summary = sync_code_areas(db(), project_id, path)
         container_registry.refresh_registry_projection(db(), project_id)
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.create', 'project', ?)", (user["id"], payload.slug))
+        _notify_code_graphs(
+            owner_user_id=int(user["id"]),
+            container_slug=payload.slug,
+            project_id=int(project_id),
+            added_rels=list(summary.get("added") or []),
+        )
         row = dict(db().execute("SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?", (user["username"], project_id)).fetchone())
         return project_payload(row)
 
@@ -277,6 +329,13 @@ def register(app, deps):
         except Exception:
             db().execute("ROLLBACK")
             raise
+        if area_id is not None:
+            _notify_code_graphs(
+                owner_user_id=int(user["id"]),
+                container_slug=slug,
+                project_id=int(project["id"]),
+                added_rels=[rel],
+            )
         return {"id": area_id, "rel_path": rel, "source": "manual"}
 
     @app.patch("/api/projects/{slug}/areas/{area_id}")
@@ -346,4 +405,10 @@ def register(app, deps):
         project = visible_project(slug, user)
         ensure_ops_area(db(), project["id"])
         summary = sync_code_areas(db(), project["id"], project["path"])
+        _notify_code_graphs(
+            owner_user_id=int(user["id"]),
+            container_slug=slug,
+            project_id=int(project["id"]),
+            added_rels=list(summary.get("added") or []),
+        )
         return {**_with_remotes(project, areas_payload(db(), project["id"])), "detect": summary}

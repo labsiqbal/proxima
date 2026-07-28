@@ -156,9 +156,17 @@ Build output is confined to a validated `graphify-out` directory inside that sco
 A symlinked output directory, incomplete walk, escaped citation, malformed JSON,
 wrong scope, timeout, or killed worker fails before atomic publication and leaves
 the prior canonical graph unchanged. Public state and events omit internal paths.
-Graphify performs only local structural extraction in Group 9. Semantic model
-egress defaults off, Ops content is never sent to a cloud model, and enabling the
-future egress switch makes Knowledge rebuild fail closed.
+Graphify performs only local structural extraction. Semantic model egress defaults
+off, Ops content is never sent to a cloud model, and enabling the future egress
+switch makes Knowledge rebuild fail closed.
+
+Code graph lifecycle (Group 10) never promotes a Task worktree graph as canonical.
+Rebuilds and audits only touch registered Area roots for that Container. Repo
+Task-agents may receive a server-managed Graphify MCP entry locked to exactly their
+selected Area; the proxy strips or ignores arbitrary `project_path`, so a prompt
+cannot retarget another Area's graph through MCP parameters. Master runs do not
+receive this MCP entry. Graph absence or rebuild failure never blocks Task
+execution or SQLite Live state reads.
 
 ## Script steps (hash-bound trust, honest statement)
 

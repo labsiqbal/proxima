@@ -1102,6 +1102,13 @@ def register(app, deps):
             if wt and wt["status"] in ("active", "conflict", "merging"):
                 try:
                     merged = worktrees.merge_job_worktree(db(), job, wt)
+                    try:
+                        from ..code_graph_lifecycle import notify_task_merged
+                        notify_task_merged(app, merged)
+                    except Exception:
+                        logging.getLogger("proxima.graph").exception(
+                            "Code graph post-merge hook failed (plan stays merged)"
+                        )
                 except worktrees.WorktreeError as exc:
                     raise HTTPException(
                         status_code=409,

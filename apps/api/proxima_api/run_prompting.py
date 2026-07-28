@@ -156,19 +156,22 @@ class RunPrompting:
         profile_id: Any,
         required_skill_ids: Iterable[str] = (),
         require_explicit_empty: bool = False,
+        fixed_code_graph_path: str | Path | None = None,
     ) -> None:
         """Re-activate the run's profile skill/MCP selection into its home before the
         run. Idempotent (symlinks/config write) and self-healing: newly installed host
         skills show up, and profiles created before this feature get their selection
         applied. A first-class command may require one bundled methodology for this
         run even when the profile normally opts out. Live-home claude is a no-op
-        (home already IS the host config)."""
+        (home already IS the host config). Repo Task runs may receive a
+        server-managed Code graph MCP fixed to their selected Area."""
         if not hermes_home or profile_id in (None, 0):
             return
         if (
             not require_explicit_empty
             and cfg.get("claude_live_home")
             and getattr(spec, "id", "") == "claude-code"
+            and fixed_code_graph_path is None
         ):
             return
         try:
@@ -200,6 +203,8 @@ class RunPrompting:
                 custom_roots = _app_settings.get_custom_skill_roots(self.app.state.worker_db)
             except Exception:
                 custom_roots = []
+            # Master must never receive the Code graph MCP entry.
+            graph_path = None if require_explicit_empty else fixed_code_graph_path
             applied = apply_capabilities(
                 spec,
                 Path(hermes_home),
@@ -208,6 +213,7 @@ class RunPrompting:
                 bundle_dir=cfg.get("bundled_skills_dir"),
                 custom_roots=custom_roots,
                 strict=require_explicit_empty,
+                fixed_code_graph_path=graph_path,
             )
             if require_explicit_empty and applied != {
                 "skills": [],

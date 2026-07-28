@@ -374,17 +374,31 @@ state and request one explicit rebuild. The adapter pins Graphify `0.9.28`, reso
 all roots from registered Container and Area identities, excludes nested Areas from
 a root-repository Code graph, and enforces server ceilings for build/query time,
 depth, tokens, result count, and graph bytes. Every internal query result carries
-exact scope, generation, freshness, citations, and provenance. There is no caller
-path, Graphify shell command, raw MCP project path, watcher, scheduled rebuild,
-Focus epoch, lifecycle automation, or Master context routing in this group.
+exact scope, generation, freshness, citations, and provenance.
 
-Builds are staged in a temporary same-filesystem generation directory and must pass
-complete JSON, scope, fingerprint, citation, provenance, and symlink containment
-validation before atomic canonical replacement. Failed or missing builds preserve
-the prior canonical graph byte-for-byte and publish explicit `failed` or `missing`
-state events without affecting Tasks or Live state. Structural extraction is local;
-semantic model egress defaults off and Knowledge builds refuse that future mode in
-Group 9.
+Group 10 adds the **Code graph lifecycle** on top of that adapter:
+
+- One distinct Code graph state row and canonical
+  `<repo-area>/graphify-out/graph.json` per registered repo Area (never a Task
+  worktree). Generated output is gitignored by default.
+- Initial full build is enqueued when a code Area is registered (create, link,
+  detect, or manual add).
+- A successful Proxima Task merge marks **only that Area's** Code graph `stale`
+  immediately, then enqueues a rebuild (incremental when the base→merge range is
+  safe; full rebuild for unknown history, force-push, tool-version mismatch,
+  manifest mismatch, or failed incremental).
+- External canonical HEAD or tracked-source fingerprint drift is detected by a
+  scheduled audit that only walks already-registered Code graph Areas.
+- Stable working-tree dirty tracked changes are debounced and then enqueued.
+- Failed, interrupted, ENOSPC, malformed, or incomplete rebuilds preserve
+  last-good bytes and leave Tasks / SQLite Live state unaffected.
+- Repo Task-agent homes receive one server-managed `proxima-code-graph` MCP entry
+  fixed to exactly their selected Area; arbitrary `project_path` is ignored.
+  The Master does not inherit this MCP entry.
+
+Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
+context routing remain later delivery groups. Structural extraction stays local;
+semantic model egress defaults off.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
 `POST /api/containers/{slug}/graphs/rebuild`.

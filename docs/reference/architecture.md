@@ -349,11 +349,11 @@ or model setting.
 and Code to one exact active code Area after canonical symlink resolution. A
 root-repository Code scope excludes every nested registered Area, including Ops.
 Source discovery rejects symlinks, traversal, escaped roots, incomplete walks, and
-scope changes during a build. Graphify `0.9.28` runs as a local Python library in a
-killable worker with server ceilings for time and output bytes. Group 9 extracts
-only structural Code and the curated `ops/container.md` Knowledge source. It does
-not add filesystem watchers, scheduled rebuilds, Code or Knowledge lifecycle
-automation, Focus epochs, history projection, or Master context routing.
+scope changes during a build. Task worktree paths cannot be promoted as canonical
+graph roots. Graphify `0.9.28` runs as a local Python library in a killable worker
+with server ceilings for time and output bytes. Structural Code extraction and the
+curated `ops/container.md` Knowledge seed are local; semantic model egress defaults
+off.
 
 Each build writes to a same-filesystem temporary generation directory. Proxima
 validates the complete JSON shape, exact scope metadata, source citations, edge
@@ -363,16 +363,37 @@ generation cannot replace the canonical graph. A successful replacement preserve
 the previous bytes as `graph.last-good.json`; a database finalization failure
 restores those prior bytes. Missing Graphify records an explicit `missing` state,
 and all other failures record `failed`, without affecting Tasks, Fleet, or Live
-state.
+state. Generated `graphify-out/` artifacts are treated as ignored build outputs
+inside the Area path unless a future project policy opts into version control.
 
-The service's internal query contract is typed and path-free, clamps depth, elapsed
-time, approximate tokens, and result count to server limits, and returns exact
-scope, generation, freshness, citations, and provenance even for unavailable
-results. There is deliberately no public graph query route and
-`MasterToolBroker.query_context` remains `feature_unavailable` until the later
-context-routing group. Graph state transitions use the existing Master session
-event stream. Structural extraction is local, semantic model egress defaults off,
-and Group 9 refuses Knowledge builds if that future egress switch is enabled.
+#### Code graph lifecycle (Group 10)
+
+`CodeGraphLifecycle` owns Code graph freshness only:
+
+| Trigger | Action |
+|---|---|
+| repo Area registered | ensure state row + enqueue full build |
+| repo Task merged | mark that Area `stale` immediately, enqueue incremental when safe |
+| external HEAD / tracked fingerprint | scheduled audit marks stale + enqueues full rebuild |
+| stable dirty tracked working tree | debounce, then mark stale + enqueue |
+| tool-version / history / incremental failure | full rebuild |
+
+Incremental rebuilds use changed-file extraction plus Graphify `build_merge` when
+the recorded base is an ancestor of HEAD and tool versions match; otherwise a full
+rebuild runs. Rebuild workers never publish from a Task worktree. A background tick
+(when Master is enabled) drains the `queued` Code rows, runs the dirty-tree debounce,
+and periodically audits only already-registered Code graph Areas so unrelated
+Containers are not scanned.
+
+Repo Task-agent capability activation injects a server-managed
+`proxima-code-graph` MCP entry (`graphify_area_mcp`) fixed to that Task's selected
+Area graph path. The proxy ignores arbitrary `project_path`. Master capability
+activation remains empty and never receives this entry.
+
+Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
+context routing remain later groups. The internal query contract is still typed and
+path-free; there is no public graph query route and
+`MasterToolBroker.query_context` remains `feature_unavailable` until context routing.
 
 ### Native artifact review flow
 
