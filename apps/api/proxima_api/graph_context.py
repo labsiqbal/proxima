@@ -1795,7 +1795,6 @@ class GraphContextService:
                     "semantic model egress is not implemented in this delivery group"
                 )
             # Claim any queued intent before the building transition clears pending.
-            claimed_base: str | None
             claimed_head: str | None
             with self.app.state.db_lock:
                 pre_build = self._db_factory().execute(
@@ -1803,10 +1802,6 @@ class GraphContextService:
                     (state_id,),
                 ).fetchone()
                 assert pre_build is not None
-                try:
-                    claimed_base = pre_build["pending_base_commit"]
-                except (IndexError, KeyError, TypeError):
-                    claimed_base = None
                 try:
                     claimed_head = pre_build["pending_head_commit"]
                 except (IndexError, KeyError, TypeError):
@@ -1839,7 +1834,6 @@ class GraphContextService:
                 ).fetchone()
             assert state_row is not None
             self._emit(scope, state_row)
-            pending_base_commit = claimed_base or pending_base_commit
             pending_head_commit = claimed_head or pending_head_commit
             generation = int(state_row["generation"]) + 1
             if _graph_path(scope.root, create=True) != scope.graph_path:
@@ -1871,12 +1865,10 @@ class GraphContextService:
                 and int(state_row["generation"] or 0) > 0
             ):
                 tool_ok = prior_tool_version == GRAPHIFY_VERSION
-                base = pending_base_commit
-                if base is None:
-                    try:
-                        base = state_row["repo_head"]
-                    except (IndexError, KeyError, TypeError):
-                        base = None
+                try:
+                    base = state_row["repo_head"] or None
+                except (IndexError, KeyError, TypeError):
+                    base = None
                 head = pending_head_commit or self.repo_head_sha(scope.root)
                 live_head = self.repo_head_sha(scope.root)
                 tree_stable = (
