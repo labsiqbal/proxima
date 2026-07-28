@@ -1863,6 +1863,7 @@ class GraphContextService:
             changed: list[str] = []
             deleted: list[str] = []
             base_graph: Path | None = None
+            incremental_head: str | None = None
             if (
                 mode == "incremental"
                 and scope.kind == "code"
@@ -1877,7 +1878,14 @@ class GraphContextService:
                     except (IndexError, KeyError, TypeError):
                         base = None
                 head = pending_head_commit or self.repo_head_sha(scope.root)
-                if tool_ok and base and head:
+                live_head = self.repo_head_sha(scope.root)
+                tree_stable = (
+                    head is not None
+                    and live_head is not None
+                    and live_head == head
+                    and self.tracked_dirty_signature(scope.root) is None
+                )
+                if tool_ok and base and head and tree_stable:
                     changed, deleted, unsafe = self.changed_files_between(
                         scope.root,
                         str(base),
@@ -1886,7 +1894,7 @@ class GraphContextService:
                     if unsafe is None and (changed or deleted):
                         build_mode = "incremental"
                         base_graph = scope.graph_path
-                # tool/version/history mismatch or empty diff falls back to full
+                        incremental_head = str(head)
 
             build_result = self._run_builder(
                 scope=scope,
@@ -1898,6 +1906,19 @@ class GraphContextService:
                 changed_rel_paths=changed,
                 deleted_rel_paths=deleted,
             )
+
+            if build_mode == "incremental":
+                live_head = self.repo_head_sha(scope.root)
+                if (
+                    incremental_head is None
+                    or live_head is None
+                    or live_head != incremental_head
+                    or self.tracked_dirty_signature(scope.root) is not None
+                ):
+                    raise GraphValidationError(
+                        "live tree drifted during incremental rebuild; "
+                        "fallback_full required"
+                    )
 
             expected_metadata = scope.metadata(
                 generation,
