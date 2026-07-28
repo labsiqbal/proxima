@@ -396,6 +396,40 @@ def test_fixed_code_graph_mcp_ignores_project_path(tmp_path: Path, monkeypatch):
     assert CODE_GRAPH_MCP_NAME not in (cfg.get("mcpServers") or {})
 
 
+def test_fixed_code_graph_mcp_live_home_uses_sibling_claude_json(tmp_path: Path):
+    """Live CLAUDE_CONFIG_DIR=~/.claude must mutate sibling ~/.claude.json."""
+    from proxima_api.acp import config_sig
+
+    graph = tmp_path / "graphify-out" / "graph.json"
+    graph.parent.mkdir(parents=True)
+    graph.write_text("{}", encoding="utf-8")
+    fake_home = tmp_path / "owner"
+    live_dir = fake_home / ".claude"
+    live_dir.mkdir(parents=True)
+    sibling = fake_home / ".claude.json"
+    sibling.write_text(
+        json.dumps({"mcpServers": {"personal": {"command": "keep-me"}}}),
+        encoding="utf-8",
+    )
+
+    applied = apply_fixed_code_graph_mcp("claude-code", live_dir, graph)
+    assert applied == CODE_GRAPH_MCP_NAME
+    assert not (live_dir / ".claude.json").exists()
+    cfg = json.loads(sibling.read_text(encoding="utf-8"))
+    assert set(cfg["mcpServers"]) == {"personal", CODE_GRAPH_MCP_NAME}
+    assert cfg["mcpServers"][CODE_GRAPH_MCP_NAME]["env"]["PROXIMA_CODE_GRAPH_PATH"] == str(
+        graph.resolve()
+    )
+    # config_sig must watch the sibling host file Claude actually reads.
+    assert config_sig(str(live_dir))[3] == round(sibling.stat().st_mtime, 3)
+
+    remove_fixed_code_graph_mcp("claude-code", live_dir)
+    cfg = json.loads(sibling.read_text(encoding="utf-8"))
+    assert list(cfg["mcpServers"]) == ["personal"]
+    assert CODE_GRAPH_MCP_NAME not in cfg["mcpServers"]
+    assert config_sig(str(live_dir))[3] == round(sibling.stat().st_mtime, 3)
+
+
 def test_worktree_path_cannot_become_canonical_scope(tmp_path: Path):
     from proxima_api.graph_context import _is_worktree_path
 

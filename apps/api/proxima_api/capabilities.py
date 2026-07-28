@@ -320,10 +320,22 @@ def detect_bundled_skills(bundle_dir: str | Path | None) -> list[dict[str, Any]]
 
 # ── MCP detection (per-runner config format) ─────────────────────────────────
 
+def claude_config_json(home: Path) -> Path:
+    """Resolve Claude's mcpServers config file for a profile or live home.
+
+    Live home sets CLAUDE_CONFIG_DIR to ~/.claude; Claude still reads the sibling
+    ~/.claude.json. Managed profile homes keep .claude.json inside the home.
+    """
+    home = Path(home)
+    if home.name == ".claude":
+        return home.parent / ".claude.json"
+    return home / ".claude.json"
+
+
 def _mcp_from_claude(host: Path) -> list[dict[str, Any]]:
     """Claude's global MCP servers live in ~/.claude.json (sibling of ~/.claude),
     under top-level `mcpServers`."""
-    cfg = host.parent / ".claude.json"  # host is ~/.claude → ~/.claude.json
+    cfg = claude_config_json(host)
     if not cfg.is_file():
         return []
     try:
@@ -614,7 +626,7 @@ def apply_fixed_code_graph_mcp(
     home = Path(home)
     try:
         if runner_id == "claude-code":
-            cfg_path = home / ".claude.json"
+            cfg_path = claude_config_json(home)
             data: dict[str, Any] = {}
             if cfg_path.is_file():
                 raw = json.loads(cfg_path.read_text(encoding="utf-8", errors="ignore"))
@@ -625,7 +637,7 @@ def apply_fixed_code_graph_mcp(
                 servers = {}
             servers[CODE_GRAPH_MCP_NAME] = entry
             data["mcpServers"] = servers
-            home.mkdir(parents=True, exist_ok=True)
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
             cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             return CODE_GRAPH_MCP_NAME
         if runner_id in ("codex", "grok"):
@@ -677,7 +689,7 @@ def remove_fixed_code_graph_mcp(runner_id: str, home: Path) -> None:
     home = Path(home)
     try:
         if runner_id == "claude-code":
-            cfg_path = home / ".claude.json"
+            cfg_path = claude_config_json(home)
             if not cfg_path.is_file():
                 return
             data = json.loads(cfg_path.read_text(encoding="utf-8", errors="ignore"))
@@ -782,11 +794,11 @@ def _rmdir_if_empty(p: Path) -> None:
 
 def _apply_claude_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
                       spec: Any) -> list[str]:
-    """Rewrite <home>/.claude.json mcpServers to the selected subset. The full host
-    .claude.json is copied in by seeding (all servers); this filters it to the
+    """Rewrite the profile home Claude mcpServers to the selected subset. The full
+    host .claude.json is copied in by seeding (all servers); this filters it to the
     profile's selection so each profile can carry a different MCP set."""
-    host_cfg = _host_dir(spec, source_override).parent / ".claude.json"
-    home_cfg = home / ".claude.json"
+    host_cfg = claude_config_json(_host_dir(spec, source_override))
+    home_cfg = claude_config_json(home)
     try:
         host_data = json.loads(host_cfg.read_text(encoding="utf-8", errors="ignore")) if host_cfg.is_file() else {}
     except (OSError, json.JSONDecodeError):

@@ -37,9 +37,15 @@ def config_sig(hermes_home: str) -> tuple:
     # (which mutates these in the profile home) recycles the cached agent process:
     #   hermes -> config.yaml; claude -> skills/ + .claude.json;
     #   codex/grok -> config.toml.
+    # Live Claude home is CLAUDE_CONFIG_DIR=~/.claude but mcpServers live in the
+    # sibling ~/.claude.json (same rule as capabilities.claude_config_json).
     for rel in ("config.yaml", "skills", ".skills_prompt_snapshot.json", ".claude.json", "config.toml"):
         try:
-            sig.append(round((base / rel).stat().st_mtime, 3))
+            if rel == ".claude.json" and base.name == ".claude":
+                path = base.parent / ".claude.json"
+            else:
+                path = base / rel
+            sig.append(round(path.stat().st_mtime, 3))
         except OSError:
             sig.append(0.0)
     return tuple(sig)
