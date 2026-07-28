@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -354,6 +355,55 @@ def hashlib_sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+class _ConnectionProxy:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+
+class _FailSelectAfterGraphStateUpdate(_ConnectionProxy):
+    def __init__(self, connection):
+        super().__init__(connection)
+        self.graph_state_updated = False
+
+    def execute(self, sql, parameters=()):
+        normalized = " ".join(sql.split())
+        if (
+            self.graph_state_updated
+            and normalized.startswith(
+                "SELECT * FROM graph_states WHERE id = ?"
+            )
+        ):
+            self.graph_state_updated = False
+            raise sqlite3.OperationalError(
+                "simulated post-update SELECT failure"
+            )
+        cursor = self.connection.execute(sql, parameters)
+        if (
+            normalized.startswith("UPDATE graph_states SET")
+            and "graph_sha256 = ?" in normalized
+        ):
+            self.graph_state_updated = True
+        return cursor
+
+
+class _FailAfterCommit(_ConnectionProxy):
+    def __init__(self, connection):
+        super().__init__(connection)
+        self.failed = False
+
+    def execute(self, sql, parameters=()):
+        cursor = self.connection.execute(sql, parameters)
+        if sql.strip().upper() == "COMMIT" and not self.failed:
+            self.failed = True
+            raise sqlite3.OperationalError(
+                "simulated ambiguous COMMIT result"
+            )
+        return cursor
+
+
 def test_successful_replacement_retains_previous_last_good_generation(
     tmp_path: Path,
     monkeypatch,
@@ -401,6 +451,125 @@ def test_successful_replacement_retains_previous_last_good_generation(
         == first_bytes
     )
     assert not graph_path.with_name("graph.publish-pending.json").exists()
+
+
+def test_post_update_select_failure_rolls_back_database_and_canonical(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    project, area_id = _container(api, headers)
+    assert area_id is not None
+    first = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    row = api.app.state.db.execute(
+        "SELECT graph_path, graph_sha256 FROM graph_states WHERE id = ?",
+        (first["id"],),
+    ).fetchone()
+    graph_path = Path(row["graph_path"])
+    first_bytes = graph_path.read_bytes()
+    first_sha256 = str(row["graph_sha256"])
+    Path(project["path"], "app.py").write_text(
+        "class BillingService:\n"
+        "    def refund(self):\n"
+        "        return 'refunded'\n",
+        encoding="utf-8",
+    )
+    service = api.app.state.graph_context
+    connection = _FailSelectAfterGraphStateUpdate(api.app.state.db)
+    monkeypatch.setattr(service, "_db_factory", lambda: connection)
+
+    failed = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "code", "area_id": area_id},
+    )
+
+    assert failed.status_code == 409, failed.text
+    current = api.app.state.db.execute(
+        "SELECT generation, graph_sha256 FROM graph_states WHERE id = ?",
+        (first["id"],),
+    ).fetchone()
+    assert current["generation"] == first["generation"]
+    assert current["graph_sha256"] == first_sha256
+    assert graph_path.read_bytes() == first_bytes
+    assert not graph_path.with_name("graph.publish-pending.json").exists()
+    result = service.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+        question="BillingService",
+    )
+    assert result["error"] is None
+
+
+def test_ambiguous_commit_reconciles_new_digest_and_canonical(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    project, area_id = _container(api, headers)
+    assert area_id is not None
+    first = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    row = api.app.state.db.execute(
+        "SELECT graph_path, graph_sha256 FROM graph_states WHERE id = ?",
+        (first["id"],),
+    ).fetchone()
+    graph_path = Path(row["graph_path"])
+    first_bytes = graph_path.read_bytes()
+    first_sha256 = str(row["graph_sha256"])
+    Path(project["path"], "app.py").write_text(
+        "class BillingService:\n"
+        "    def refund(self):\n"
+        "        return 'refunded'\n",
+        encoding="utf-8",
+    )
+    service = api.app.state.graph_context
+    connection = _FailAfterCommit(api.app.state.db)
+    monkeypatch.setattr(service, "_db_factory", lambda: connection)
+
+    failed = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "code", "area_id": area_id},
+    )
+
+    assert failed.status_code == 409, failed.text
+    current = api.app.state.db.execute(
+        "SELECT generation, graph_sha256 FROM graph_states WHERE id = ?",
+        (first["id"],),
+    ).fetchone()
+    replacement = graph_path.read_bytes()
+    journal_path = graph_path.with_name("graph.publish-pending.json")
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert current["generation"] == first["generation"] + 1
+    assert current["graph_sha256"] == hashlib_sha256(replacement)
+    assert replacement != first_bytes
+    assert journal["expected_sha256"] == first_sha256
+    assert journal["replacement_sha256"] == current["graph_sha256"]
+
+    result = service.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+        question="BillingService",
+    )
+
+    assert result["error"] is None
+    assert result["items"]
+    assert graph_path.read_bytes() == replacement
+    assert not journal_path.exists()
 
 
 def test_query_recovers_interrupted_publish_from_last_good(

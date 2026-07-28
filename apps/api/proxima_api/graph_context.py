@@ -43,7 +43,7 @@ GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
 GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
 GRAPH_PUBLISH_JOURNAL_NAME = "graph.publish-pending.json"
-GRAPH_PUBLISH_JOURNAL_SCHEMA = 1
+GRAPH_PUBLISH_JOURNAL_SCHEMA = 2
 GRAPH_PUBLISH_JOURNAL_MAX_BYTES = 4096
 # Local structural extraction only. Cloud model egress requires an explicit
 # future captain policy and a separate adapter; credentials alone never enable it.
@@ -491,6 +491,50 @@ def _read_regular_file_bounded(
     finally:
         os.close(descriptor)
     return bytes(payload), digest.hexdigest()
+
+
+def _hash_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> str:
+    descriptor, before = _open_regular_file_bounded(
+        path,
+        max_bytes=max_bytes,
+    )
+    total_bytes = 0
+    digest = hashlib.sha256()
+    try:
+        while True:
+            remaining = max_bytes - total_bytes
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, remaining + 1),
+            )
+            if not block:
+                break
+            total_bytes += len(block)
+            if total_bytes > max_bytes:
+                raise GraphValidationError(
+                    "graph file exceeds its byte budget"
+                )
+            digest.update(block)
+        after = os.fstat(descriptor)
+        if not _regular_file_snapshot_matches(
+            before,
+            after,
+            total_bytes,
+        ):
+            raise GraphValidationError(
+                "graph file changed while being hashed"
+            )
+    except OSError as exc:
+        raise GraphValidationError(
+            "graph file could not be hashed"
+        ) from exc
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest()
 
 
 def _copy_regular_file_bounded(
@@ -1910,30 +1954,78 @@ class GraphContextService:
             return row
         if not isinstance(pending, Mapping):
             return row
+        schema = pending.get("schema")
         expected_sha256 = str(
             pending.get("expected_sha256") or ""
         ).strip().lower()
+        replacement_sha256 = str(
+            pending.get("replacement_sha256") or ""
+        ).strip().lower()
         if (
-            pending.get("schema") != GRAPH_PUBLISH_JOURNAL_SCHEMA
+            schema not in {1, GRAPH_PUBLISH_JOURNAL_SCHEMA}
             or pending.get("state_id") != int(row["id"])
-            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+            or (
+                expected_sha256
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    expected_sha256,
+                )
+                is None
+            )
+            or (
+                schema == 1
+                and not expected_sha256
+            )
+            or (
+                schema == GRAPH_PUBLISH_JOURNAL_SCHEMA
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    replacement_sha256,
+                )
+                is None
+            )
         ):
             return row
         published_sha256 = str(
             row["graph_sha256"] or ""
         ).strip().lower()
         try:
-            if published_sha256 == expected_sha256:
+            if expected_sha256 and published_sha256 == expected_sha256:
                 _copy_regular_file_bounded(
                     scope.graph_path.with_name("graph.last-good.json"),
                     scope.graph_path,
                     max_bytes=max_bytes,
                     expected_sha256=expected_sha256,
                 )
+            elif (
+                schema == GRAPH_PUBLISH_JOURNAL_SCHEMA
+                and published_sha256 == replacement_sha256
+            ):
+                if (
+                    _hash_regular_file_bounded(
+                        scope.graph_path,
+                        max_bytes=max_bytes,
+                    )
+                    != replacement_sha256
+                ):
+                    return row
+            elif schema == 1 and published_sha256:
+                if (
+                    _hash_regular_file_bounded(
+                        scope.graph_path,
+                        max_bytes=max_bytes,
+                    )
+                    != published_sha256
+                ):
+                    return row
+            elif not published_sha256 and not expected_sha256:
+                _unlink_fsync(scope.graph_path)
+            else:
+                return row
             _unlink_fsync(journal)
         except (GraphValidationError, OSError):
             return row
-        if published_sha256 == expected_sha256:
+        if expected_sha256 and published_sha256 == expected_sha256:
             log.warning(
                 "recovered interrupted graph publication "
                 "container=%s kind=%s area=%s",
@@ -1961,6 +2053,18 @@ class GraphContextService:
             )
         finally:
             lock.release()
+
+    def _graph_state_sha256(self, state_id: int) -> str | None:
+        try:
+            row = self._db_factory().execute(
+                "SELECT graph_sha256 FROM graph_states WHERE id = ?",
+                (state_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        return str(row["graph_sha256"] or "").strip().lower()
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {
@@ -2320,21 +2424,17 @@ class GraphContextService:
             os.replace(prior_backup, last_good)
             os.link(last_good, prior_backup)
             rollback_path = prior_backup
-        if (
-            rollback_path is not None
-            and int(state_row["generation"] or 0) > 0
-            and expected_prior_sha256
-        ):
-            _write_bytes_fsync(
-                journal,
-                _json_bytes(
-                    {
-                        "schema": GRAPH_PUBLISH_JOURNAL_SCHEMA,
-                        "state_id": int(state_row["id"]),
-                        "expected_sha256": expected_prior_sha256,
-                    }
-                ),
-            )
+        _write_bytes_fsync(
+            journal,
+            _json_bytes(
+                {
+                    "schema": GRAPH_PUBLISH_JOURNAL_SCHEMA,
+                    "state_id": int(state_row["id"]),
+                    "expected_sha256": expected_prior_sha256 or None,
+                    "replacement_sha256": graph_sha256,
+                }
+            ),
+        )
         os.replace(stage, canonical)
         directory_fd = os.open(canonical.parent, os.O_RDONLY)
         try:
@@ -2348,58 +2448,83 @@ class GraphContextService:
                 repo_head = self.repo_head_sha(scope.root)
             except GraphScopeError:
                 repo_head = None
+        connection = self._db_factory()
         try:
             with self.app.state.db_lock:
-                columns = {
-                    row[1]
-                    for row in self._db_factory().execute(
-                        "PRAGMA table_info(graph_states)"
-                    ).fetchall()
-                }
-                current = self._db_factory().execute(
-                    "SELECT * FROM graph_states WHERE id = ?",
-                    (state_row["id"],),
-                ).fetchone()
-                assert current is not None
-                follow_up = bool(
-                    str(current["state"] or "") == "building"
-                    and "rebuild_reason" in columns
-                    and current["rebuild_reason"]
-                )
-                next_state = "queued" if follow_up else "fresh"
-                backend = str(
-                    expected_metadata.get("semantic_backend") or SEMANTIC_BACKEND_LOCAL
-                )
-                if "repo_head" in columns:
-                    if follow_up:
-                        self._db_factory().execute(
-                            "UPDATE graph_states SET state = ?, generation = ?, "
-                            "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                            "semantic_backend = ?, last_success_at = ?, "
-                            "last_attempt_at = ?, last_error = NULL, "
-                            "repo_head = ?, "
-                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (
-                                next_state,
-                                expected_metadata["generation"],
-                                expected_metadata["source_fingerprint"],
-                                graph_sha256,
-                                GRAPHIFY_VERSION,
-                                backend,
-                                now,
-                                now,
-                                repo_head,
-                                state_row["id"],
-                            ),
-                        )
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    columns = {
+                        item[1]
+                        for item in connection.execute(
+                            "PRAGMA table_info(graph_states)"
+                        ).fetchall()
+                    }
+                    current = connection.execute(
+                        "SELECT * FROM graph_states WHERE id = ?",
+                        (state_row["id"],),
+                    ).fetchone()
+                    assert current is not None
+                    follow_up = bool(
+                        str(current["state"] or "") == "building"
+                        and "rebuild_reason" in columns
+                        and current["rebuild_reason"]
+                    )
+                    next_state = "queued" if follow_up else "fresh"
+                    backend = str(
+                        expected_metadata.get("semantic_backend")
+                        or SEMANTIC_BACKEND_LOCAL
+                    )
+                    if "repo_head" in columns:
+                        if follow_up:
+                            connection.execute(
+                                "UPDATE graph_states SET state = ?, generation = ?, "
+                                "source_fingerprint = ?, graph_sha256 = ?, "
+                                "tool_version = ?, semantic_backend = ?, "
+                                "last_success_at = ?, last_attempt_at = ?, "
+                                "last_error = NULL, repo_head = ?, "
+                                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (
+                                    next_state,
+                                    expected_metadata["generation"],
+                                    expected_metadata["source_fingerprint"],
+                                    graph_sha256,
+                                    GRAPHIFY_VERSION,
+                                    backend,
+                                    now,
+                                    now,
+                                    repo_head,
+                                    state_row["id"],
+                                ),
+                            )
+                        else:
+                            connection.execute(
+                                "UPDATE graph_states SET state = 'fresh', "
+                                "generation = ?, source_fingerprint = ?, "
+                                "graph_sha256 = ?, tool_version = ?, "
+                                "semantic_backend = ?, last_success_at = ?, "
+                                "last_attempt_at = ?, last_error = NULL, "
+                                "repo_head = ?, pending_base_commit = NULL, "
+                                "pending_head_commit = NULL, "
+                                "rebuild_reason = NULL, "
+                                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (
+                                    expected_metadata["generation"],
+                                    expected_metadata["source_fingerprint"],
+                                    graph_sha256,
+                                    GRAPHIFY_VERSION,
+                                    backend,
+                                    now,
+                                    now,
+                                    repo_head,
+                                    state_row["id"],
+                                ),
+                            )
                     else:
-                        self._db_factory().execute(
+                        connection.execute(
                             "UPDATE graph_states SET state = 'fresh', generation = ?, "
                             "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
                             "semantic_backend = ?, last_success_at = ?, "
                             "last_attempt_at = ?, last_error = NULL, "
-                            "repo_head = ?, pending_base_commit = NULL, "
-                            "pending_head_commit = NULL, rebuild_reason = NULL, "
                             "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             (
                                 expected_metadata["generation"],
@@ -2409,35 +2534,30 @@ class GraphContextService:
                                 backend,
                                 now,
                                 now,
-                                repo_head,
                                 state_row["id"],
                             ),
                         )
-                else:
-                    self._db_factory().execute(
-                        "UPDATE graph_states SET state = 'fresh', generation = ?, "
-                        "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                        "semantic_backend = ?, last_success_at = ?, "
-                        "last_attempt_at = ?, last_error = NULL, "
-                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (
-                            expected_metadata["generation"],
-                            expected_metadata["source_fingerprint"],
-                            graph_sha256,
-                            GRAPHIFY_VERSION,
-                            backend,
-                            now,
-                            now,
-                            state_row["id"],
-                        ),
-                    )
-                row = self._db_factory().execute(
-                    "SELECT * FROM graph_states WHERE id = ?",
-                    (state_row["id"],),
-                ).fetchone()
+                    row = connection.execute(
+                        "SELECT * FROM graph_states WHERE id = ?",
+                        (state_row["id"],),
+                    ).fetchone()
+                    assert row is not None
+                    connection.execute("COMMIT")
+                except Exception:
+                    if connection.in_transaction:
+                        try:
+                            connection.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                    raise
         except Exception:
+            database_sha256 = self._graph_state_sha256(
+                int(state_row["id"])
+            )
+            if database_sha256 != expected_prior_sha256:
+                raise
             if rollback_path is None:
-                canonical.unlink(missing_ok=True)
+                _unlink_fsync(canonical)
             else:
                 os.replace(rollback_path, canonical)
                 directory_fd = os.open(

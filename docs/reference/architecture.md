@@ -370,18 +370,20 @@ validates the complete JSON shape, exact scope metadata, source citations, edge
 provenance, source fingerprint, graph size, and resolved source containment before
 an atomic canonical replacement. A killed, incomplete, malformed, or wrong-scope
 generation cannot replace the canonical graph. A successful replacement preserves
-the previous bytes as `graph.last-good.json`; a database finalization failure
-restores those prior bytes. Before canonical replacement, a fsynced publication
-journal records the prior database digest. The next query or rebuild holds the
-scope lock, validates that digest against `graph.last-good.json`, and restores it
-atomically when publication was interrupted before database finalization.
-Canonical metadata inspection and last-good copying use descriptor snapshots
-bounded by `graph_max_bytes`, and last-good publication is atomic without
-buffering the prior graph in the API process. Missing Graphify records an explicit
-`missing` state, and all other failures record `failed`, without affecting Tasks,
-Fleet, or Live state. Generated `graphify-out/` artifacts are treated as ignored
-build outputs inside the Area path unless a future project policy opts into
-version control.
+the previous bytes as `graph.last-good.json`; a confirmed pre-commit database
+finalization failure restores those prior bytes. Before canonical replacement, a
+fsynced publication journal records both the prior and replacement digests.
+Graph-state finalization runs its update and final read in one explicit
+transaction. If the commit outcome is ambiguous, the error path leaves canonical
+and journal bytes untouched; the next query or rebuild holds the scope lock and
+compares SQLite with both journal digests before accepting the replacement or
+atomically restoring last-good.
+Canonical digest checks and last-good copying use descriptor snapshots bounded by
+`graph_max_bytes`, and publication never buffers the prior graph in the API
+process. Missing Graphify records an explicit `missing` state, and all other
+failures record `failed`, without affecting Tasks, Fleet, or Live state. Generated
+`graphify-out/` artifacts are treated as ignored build outputs inside the Area
+path unless a future project policy opts into version control.
 
 #### Code graph lifecycle (Group 10)
 

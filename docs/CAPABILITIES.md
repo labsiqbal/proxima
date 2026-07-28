@@ -401,8 +401,10 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
   metadata reads and last-good preservation use descriptor snapshots bounded by
   `graph_max_bytes`; the prior generation is copied and replaced atomically
   without buffering it in the API process. A fsynced publication journal records
-  the prior database digest before replacement, so a query or rebuild after a
-  process interruption restores the matching last-good generation atomically.
+  the prior and replacement digests before replacement. Graph-state finalization
+  commits its update and final read in one transaction; an ambiguous commit
+  result leaves the journal for the next query or rebuild to reconcile against
+  SQLite before restoring old bytes or accepting the replacement.
 - Repo Task-agent homes receive one server-managed `proxima-code-graph` MCP entry
   fixed to exactly their selected Area; arbitrary `project_path` is ignored.
   The Master does not inherit this MCP entry.
