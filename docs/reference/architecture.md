@@ -51,7 +51,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
-│  MasterToolBroker  typed, schema-validated, bounded path-free product tools      │
+│  MasterToolBroker  typed, schema-validated, filesystem-isolated product tools    │
 │  GraphContextService  scoped, bounded Graphify generations and query results     │
 │  CodeGraphLifecycle  Code rebuild queue, audit, dirty debounce (never worktree) │
 │  Master runtime chat-only conformance, read-only scratch, deny native tools      │
@@ -75,7 +75,7 @@ connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
 supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
 identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
-schema-validated, path-free product tools), `codex_master_proxy.py` (Codex loopback
+schema-validated, filesystem-isolated product tools), `codex_master_proxy.py` (Codex loopback
 provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `graph_context.py` (scoped Graphify adapter),
 `code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
@@ -400,15 +400,16 @@ activation remains empty and never receives this entry.
 
 `KnowledgeGraphLifecycle` owns at most one Knowledge graph per Container Ops area.
 Sources are an Ops-root allowlist only: `container.md`, `design.md`, curated wiki
-notes, reports, and durable artifact metadata. Secret-like names, symlinks, nested
-repos, `graphify-out`, Task transcripts, scripts, uploads, exports, caches, and
-binary media never enter the walk.
+notes, reports, and durable artifact metadata named `METADATA.md` or
+`*.meta.json` under `artifacts/`. Other artifact files, secret-like names,
+symlinks, nested repos, `graphify-out`, Task transcripts, scripts, uploads,
+exports, caches, and binary media never enter the walk.
 
 | Trigger | Action |
 |---|---|
 | Container create / link | ensure Knowledge state + enqueue full build |
 | Ops Task finishes | mark only that Container Knowledge graph stale + enqueue |
-| owner edits allowlisted Ops files | debounce stable fingerprint, then enqueue |
+| owner edits allowlisted Ops files | cheap metadata marker gates a full fingerprint and debounce |
 | startup + scheduled audit | fingerprint / tool / missing-graph drift on registered rows only |
 | scheduled full rebuild | re-queue every registered Knowledge graph |
 
@@ -428,8 +429,12 @@ last-good bytes.
 
 Mixed requests call a bounded set of exact layers and never merge fleet-wide graphs.
 Focused Knowledge/Code results are scope-checked so another Container's nodes cannot
-appear. Live state remains correct when every graph is missing or stale. There is no
-public graph query route; the Master uses the path-free broker tool only.
+appear. Durable explicit targets and Container Focus are authoritative over
+model-supplied scope; conflicts fail before routing. Unmatched focused questions use
+Knowledge, while unmatched fleet questions use Fleet and Live. Live state remains
+correct when every graph is missing or stale. There is no public graph query route;
+the Master broker returns validated Ops/Area-relative citation paths but never
+absolute host or internal graph paths.
 
 Focus epochs, history projection, and safe-self-update remain later groups.
 
@@ -483,7 +488,7 @@ owner message -> queued Master chat-only run
       -> Codex firewall replaces all tools and developer context with server-owned policy
       -> assistant calls a native dynamic Proxima product function
       -> schema validation + per-turn call ledger
-      -> MasterToolBroker executes a bounded path-free product handler in process
+      -> MasterToolBroker executes a bounded filesystem-isolated handler in process
       -> trusted bounded result returns through app-server dynamic dispatch
       -> delegate_tasks/start_tasks call TaskDelegationService
       -> atomic jobs + delegation audits + dependency edges

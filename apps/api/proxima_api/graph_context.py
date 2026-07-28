@@ -2,7 +2,7 @@
 
 Public callers select a Container plus an optional Area database id. Filesystem
 roots and graph paths are resolved only inside this module. Group 9 supplied the
-path-free adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
+filesystem-isolated adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
 (enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Group 11 expands the
 Ops Knowledge allowlist, Knowledge lifecycle helpers, and local-only semantic
 policy labels. Master context routing lives in ``context_router``.
@@ -126,6 +126,10 @@ class GraphValidationError(GraphBuildError):
 
 class GraphQueryTimeout(GraphContextError):
     code = "graph_query_timeout"
+
+
+class GraphTamperedError(GraphContextError):
+    code = "graph_tampered"
 
 
 @dataclass(frozen=True)
@@ -867,7 +871,11 @@ def _citation(
         return None
     rel, _ = _resolve_source(root, source, excluded_roots)
     line = str(node.get("source_location") or "").strip()[:80]
-    return {"path": rel, "location": line}
+    return {
+        "path": rel,
+        "path_kind": "scope_relative",
+        "location": line,
+    }
 
 
 def _query_graph_data(
@@ -875,6 +883,7 @@ def _query_graph_data(
     *,
     root: Path,
     expected_metadata: Mapping[str, Any],
+    expected_sha256: str,
     max_bytes: int,
     question: str,
     budgets: GraphQueryBudgets,
@@ -889,13 +898,17 @@ def _query_graph_data(
         if time.monotonic() > deadline:
             raise GraphQueryTimeout("graph query exceeded its time budget")
 
-    data, _ = _validate_graph_data(
+    data, actual_sha256 = _validate_graph_data(
         path,
         root=root,
         expected_metadata=expected_metadata,
         max_bytes=max_bytes,
         excluded_roots=excluded_roots,
     )
+    if actual_sha256 != expected_sha256:
+        raise GraphTamperedError(
+            "canonical graph no longer matches its published digest"
+        )
     check_time()
     nodes = data["nodes"]
     links = data.get("links", data.get("edges", []))
@@ -1101,7 +1114,7 @@ def _query_worker(result_queue: Any, kwargs: dict[str, Any]) -> None:
 
 
 class GraphContextService:
-    """One path-free boundary for Graphify state, rebuild, and bounded query."""
+    """One filesystem-isolated boundary for Graphify state, rebuild, and query."""
 
     def __init__(self, app: Any, db_factory: Callable[[], sqlite3.Connection]):
         self.app = app
@@ -1348,6 +1361,45 @@ class GraphContextService:
         finally:
             shutil.rmtree(cache, ignore_errors=True)
 
+    def knowledge_source_marker(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+    ) -> str | None:
+        scope = self.resolve_scope(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+            create_output=False,
+            deep_ops_scan=False,
+        )
+        rel_paths, errors = _select_knowledge_sources(
+            scope.root,
+            scope.excluded_roots,
+        )
+        if errors:
+            return None
+        digest = hashlib.sha256()
+        for rel_text in rel_paths:
+            try:
+                rel, source = _resolve_source(
+                    scope.root,
+                    rel_text,
+                    scope.excluded_roots,
+                )
+                stat = source.stat()
+            except (GraphContextError, OSError):
+                return None
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(stat.st_size).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(str(stat.st_mtime_ns).encode("ascii"))
+            digest.update(b"\0")
+        return digest.hexdigest()
+
     def _owned_container(
         self,
         *,
@@ -1371,6 +1423,7 @@ class GraphContextService:
         kind: str,
         area_id: int | None = None,
         create_output: bool = False,
+        deep_ops_scan: bool = True,
     ) -> GraphScope:
         if kind not in GRAPH_KINDS:
             raise GraphScopeError("unknown graph kind")
@@ -1387,7 +1440,7 @@ class GraphContextService:
                 root = container_registry.ops_root(
                     self._db_factory(),
                     container,
-                    deep_ops_scan=True,
+                    deep_ops_scan=deep_ops_scan,
                 )
                 rel_path = None
                 resolved_area_id = None
@@ -2523,27 +2576,34 @@ class GraphContextService:
 
         # Integrity: refuse tampered canonical bytes before any graph walk.
         expected_sha = str(row["graph_sha256"] or "").strip().lower()
-        if expected_sha:
-            try:
-                actual_sha = hashlib.sha256(
-                    scope.graph_path.read_bytes()
-                ).hexdigest()
-            except OSError:
-                return self._unavailable_result(
-                    scope=scope,
-                    row=row,
-                    budgets=budgets,
-                    code="graph_tampered",
-                    message="Canonical graph could not be verified.",
-                )
-            if actual_sha != expected_sha:
-                return self._unavailable_result(
-                    scope=scope,
-                    row=row,
-                    budgets=budgets,
-                    code="graph_tampered",
-                    message="Canonical graph no longer matches its published digest.",
-                )
+        if not expected_sha:
+            return self._unavailable_result(
+                scope=scope,
+                row=row,
+                budgets=budgets,
+                code="graph_tampered",
+                message="Canonical graph has no published digest.",
+            )
+        try:
+            actual_sha = hashlib.sha256(
+                scope.graph_path.read_bytes()
+            ).hexdigest()
+        except OSError:
+            return self._unavailable_result(
+                scope=scope,
+                row=row,
+                budgets=budgets,
+                code="graph_tampered",
+                message="Canonical graph could not be verified.",
+            )
+        if actual_sha != expected_sha:
+            return self._unavailable_result(
+                scope=scope,
+                row=row,
+                budgets=budgets,
+                code="graph_tampered",
+                message="Canonical graph no longer matches its published digest.",
+            )
 
         published_backend = str(
             row["semantic_backend"] or SEMANTIC_BACKEND_LOCAL
@@ -2563,6 +2623,7 @@ class GraphContextService:
                     "path": str(scope.graph_path),
                     "root": str(scope.root),
                     "expected_metadata": expected_metadata,
+                    "expected_sha256": expected_sha,
                     "max_bytes": max(
                         1024,
                         int(self.config.get("graph_max_bytes", 0)),

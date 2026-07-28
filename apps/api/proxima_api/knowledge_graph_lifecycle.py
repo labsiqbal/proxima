@@ -46,8 +46,9 @@ class KnowledgeGraphLifecycle:
         self.graphs = graphs
         self._guard = threading.Lock()
         self._building: set[int] = set()
-        # container_id -> (first_dirty_monotonic, last_signature)
-        self._dirty_seen: dict[int, tuple[float, str]] = {}
+        self._source_markers: dict[int, str] = {}
+        # container_id -> (first_dirty_monotonic, marker, content_signature)
+        self._dirty_seen: dict[int, tuple[float, str, str]] = {}
         # container_id -> signature already enqueued while still mismatched
         self._dirty_enqueued: dict[int, str] = {}
         self._last_audit_at = 0.0
@@ -321,14 +322,44 @@ class KnowledgeGraphLifecycle:
             if row["state"] in {"queued", "building"}:
                 continue
             try:
-                signature = self.graphs.knowledge_source_signature(
+                marker = self.graphs.knowledge_source_marker(
                     owner_user_id=int(row["owner_user_id"]),
                     container_slug=str(row["slug"]),
                 )
             except GraphContextError:
                 continue
-            if signature is None:
-                # Incomplete walk - do not clear enqueue memory or pretend empty.
+            if marker is None:
+                continue
+            previous_marker = self._source_markers.get(container_id)
+            self._source_markers[container_id] = marker
+            seen = self._dirty_seen.get(container_id)
+            if previous_marker is None:
+                continue
+            if marker == previous_marker:
+                if seen is None or seen[1] != marker:
+                    continue
+                if now - seen[0] < debounce:
+                    continue
+                signature = seen[2]
+            else:
+                try:
+                    signature = self.graphs.knowledge_source_signature(
+                        owner_user_id=int(row["owner_user_id"]),
+                        container_slug=str(row["slug"]),
+                    )
+                except GraphContextError:
+                    continue
+                if signature is None:
+                    continue
+                published = row["source_fingerprint"] or None
+                if published and signature == published:
+                    self._dirty_seen.pop(container_id, None)
+                    self._dirty_enqueued.pop(container_id, None)
+                    continue
+                if self._dirty_enqueued.get(container_id) == signature:
+                    self._dirty_seen.pop(container_id, None)
+                    continue
+                self._dirty_seen[container_id] = (now, marker, signature)
                 continue
             published = row["source_fingerprint"] or None
             if published and signature == published:
@@ -337,12 +368,6 @@ class KnowledgeGraphLifecycle:
                 continue
             if self._dirty_enqueued.get(container_id) == signature:
                 self._dirty_seen.pop(container_id, None)
-                continue
-            seen = self._dirty_seen.get(container_id)
-            if seen is None or seen[1] != signature:
-                self._dirty_seen[container_id] = (now, signature)
-                continue
-            if now - seen[0] < debounce:
                 continue
             try:
                 self.graphs.enqueue_knowledge_rebuild(

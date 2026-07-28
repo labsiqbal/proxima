@@ -4,10 +4,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.context_router import classify_layers
-from proxima_api.graph_context import SEMANTIC_BACKEND_LOCAL
+from proxima_api.graph_context import (
+    GraphContextError,
+    GraphScopeError,
+    SEMANTIC_BACKEND_LOCAL,
+)
 from proxima_api.main import create_app
 from proxima_api.master_tool_broker import MasterToolBroker
 
@@ -51,9 +56,11 @@ def _container(api: TestClient, headers: dict[str, str], slug: str) -> dict:
 
 def test_classify_layers_routes_intents():
     assert classify_layers("What is running?") == ["live"]
+    assert classify_layers("Are any tasks failing?") == ["live"]
     assert "fleet" in classify_layers("Which containers do I have?")
     assert "knowledge" in classify_layers("What do we know about Acme?")
     assert "code" in classify_layers("What calls BillingService?")
+    assert classify_layers("Where is BillingService defined?") == ["code"]
     assert "code" in classify_layers(
         "What would changing BillingService impact?"
     )
@@ -64,6 +71,156 @@ def test_classify_layers_routes_intents():
     assert "live" in mixed
     assert "knowledge" in mixed
     assert "code" in mixed
+    assert classify_layers(
+        "Summarize the current context",
+        container_scoped=True,
+    ) == ["knowledge"]
+    assert classify_layers("Give me an update") == ["fleet", "live"]
+
+
+def test_query_context_uses_durable_scope_and_rejects_model_overrides(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    owner = _container(api, headers, "owner-scope")
+    other = _container(api, headers, "model-scope")
+    owner_area_id = int(
+        api.app.state.db.execute(
+            "SELECT id FROM project_areas "
+            "WHERE project_id = ? AND kind = 'ops'",
+            (owner["id"],),
+        ).fetchone()["id"]
+    )
+    other_area_id = int(
+        api.app.state.db.execute(
+            "SELECT id FROM project_areas "
+            "WHERE project_id = ? AND kind = 'ops'",
+            (other["id"],),
+        ).fetchone()["id"]
+    )
+    session_id = api.get("/api/master/desk", headers=headers).json()["session"][
+        "id"
+    ]
+    explicit_message_id = api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Use my explicit target')",
+        (session_id,),
+    ).lastrowid
+    api.app.state.db.execute(
+        "INSERT INTO master_message_context("
+        "message_id, focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id"
+        ") VALUES (?, 'container', ?, 'explicit', ?, ?)",
+        (
+            explicit_message_id,
+            owner["id"],
+            owner["id"],
+            owner_area_id,
+        ),
+    )
+    explicit_broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        session_id,
+        origin_message_id=explicit_message_id,
+    )
+
+    conflict = explicit_broker.execute(
+        "query_context",
+        {
+            "query": "What do we know?",
+            "container_id": int(other["id"]),
+            "area_id": other_area_id,
+        },
+    )
+    assert conflict["error"]["code"] == "context_scope_conflict"
+
+    accepted = explicit_broker.execute(
+        "query_context",
+        {"query": "What do we know?"},
+    )
+    assert accepted["ok"] is True
+    knowledge = accepted["result"]["results"][0]
+    assert knowledge["scope"]["container_id"] == int(owner["id"])
+
+    focus_message_id = api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Use my focused Container')",
+        (session_id,),
+    ).lastrowid
+    api.app.state.db.execute(
+        "INSERT INTO master_message_context("
+        "message_id, focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id"
+        ") VALUES (?, 'container', ?, 'auto', NULL, NULL)",
+        (focus_message_id, owner["id"]),
+    )
+    focus_broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        session_id,
+        origin_message_id=focus_message_id,
+    )
+    area_override = focus_broker.execute(
+        "query_context",
+        {
+            "query": "Where is BillingService defined?",
+            "container_id": int(owner["id"]),
+            "area_id": owner_area_id,
+        },
+    )
+    assert area_override["error"]["code"] == "context_scope_conflict"
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        (
+            GraphScopeError("ops/private-note.md"),
+            "graph_scope_invalid",
+            "Graph scope is unavailable.",
+        ),
+        (
+            GraphContextError("ops/private-note.md"),
+            "graph_context_error",
+            "Graph context is unavailable.",
+        ),
+    ],
+)
+def test_query_context_maps_graph_errors_to_path_free_public_failures(
+    tmp_path: Path,
+    monkeypatch,
+    error: GraphContextError,
+    code: str,
+    message: str,
+):
+    api, headers = _api(tmp_path)
+    project = _container(api, headers, "graph-error")
+    desk = api.get("/api/master/desk", headers=headers).json()
+    broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        desk["session"]["id"],
+    )
+
+    def fail_query(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(api.app.state.graph_context, "query", fail_query)
+    result = broker.execute(
+        "query_context",
+        {
+            "query": "What do we know?",
+            "container_id": int(project["id"]),
+        },
+    )
+
+    public_error = result["result"]["results"][0]["error"]
+    assert public_error == {"code": code, "message": message}
+    assert "private-note" not in json.dumps(result)
 
 
 def test_what_is_running_is_correct_with_missing_graphs(tmp_path: Path):

@@ -14,6 +14,7 @@ from proxima_api.graph_context import (
     _select_knowledge_sources,
 )
 from proxima_api.knowledge_graph_lifecycle import (
+    REASON_OPS_CONTENT_CHANGED,
     REASON_OPS_TASK_DONE,
     KnowledgeGraphLifecycle,
 )
@@ -277,6 +278,61 @@ def test_ops_task_done_marks_only_that_container_stale(tmp_path: Path):
     assert rows[a_id]["state"] == "queued"
     assert rows[a_id]["rebuild_reason"] == REASON_OPS_TASK_DONE
     assert rows[b_id]["state"] == "fresh"
+
+
+def test_content_debounce_hashes_only_after_cheap_marker_changes(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    project = _container(api, headers)
+    root = Path(project["path"])
+    _seed_ops(root)
+    rebuilt = api.post(
+        "/api/containers/know-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "knowledge"},
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    service = api.app.state.graph_context
+    lifecycle: KnowledgeGraphLifecycle = api.app.state.knowledge_graph_lifecycle
+    original_signature = service.knowledge_source_signature
+    signature_calls = 0
+
+    def counted_signature(**kwargs):
+        nonlocal signature_calls
+        signature_calls += 1
+        return original_signature(**kwargs)
+
+    now = [100.0]
+    monkeypatch.setattr(service, "knowledge_source_signature", counted_signature)
+    monkeypatch.setattr(
+        "proxima_api.knowledge_graph_lifecycle.time.monotonic",
+        lambda: now[0],
+    )
+
+    lifecycle._debounce_ops_content()
+    now[0] = 101.0
+    lifecycle._debounce_ops_content()
+    assert signature_calls == 0
+
+    (root / "ops" / "container.md").write_text(
+        "# Acme\n\nClient for billing and collections work.\n",
+        encoding="utf-8",
+    )
+    now[0] = 102.0
+    lifecycle._debounce_ops_content()
+    assert signature_calls == 1
+
+    now[0] = 104.0
+    lifecycle._debounce_ops_content()
+    assert signature_calls == 1
+    row = api.app.state.db.execute(
+        "SELECT state, rebuild_reason FROM graph_states "
+        "WHERE kind = 'knowledge'"
+    ).fetchone()
+    assert row["state"] == "queued"
+    assert row["rebuild_reason"] == REASON_OPS_CONTENT_CHANGED
 
 
 def test_semantic_egress_opt_in_still_fails_closed(tmp_path: Path):

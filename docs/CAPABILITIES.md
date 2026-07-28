@@ -365,11 +365,12 @@ server-owned handler in the API process. Supported reads are `list_containers`,
 `list_recipes`. Supported mutations are `delegate_tasks`, `start_tasks`, and
 `create_attention`.
 `query_context` routes Fleet / Live / Knowledge / Code layers through the scoped
-context router (Group 11) with budgets and provenance. No tool accepts or returns
-filesystem paths, credentials, runner homes, configuration, or arbitrary tool
-input.
+context router (Group 11) with budgets and provenance. No tool accepts filesystem
+path inputs or returns absolute host paths, credentials, runner homes,
+configuration, or arbitrary tool input. `query_context` citations intentionally
+carry validated paths relative to the selected Ops or Code Area scope.
 
-Group 9 supplies the path-free graph state boundary beneath that future tool.
+Group 9 supplies the host-path-free graph state boundary beneath that tool.
 With Master enabled, authenticated owners can read exact Container and Area graph
 state and request one explicit rebuild. The adapter pins Graphify `0.9.28`, resolves
 all roots from registered Container and Area identities, excludes nested Areas from
@@ -403,14 +404,16 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   `<container>/ops/graphify-out/graph.json`, with state in `graph_states`.
 - Builds read only the resolved Ops allowlist: `container.md`, `design.md`,
   curated `wiki/**/*.md` (not `index.md` / `log.md`), `reports/**` text docs, and
-  durable artifact metadata (`.md` / `.json` under `artifacts/`). Repo Areas,
-  secrets, caches, graph outputs, Task transcripts, scripts, uploads, exports,
-  and runtime data are excluded. Symlinks and nested VCS trees are skipped.
+  durable artifact metadata named `METADATA.md` or `*.meta.json` under
+  `artifacts/`. Other artifact files, Repo Areas, secrets, caches, graph outputs,
+  Task transcripts, scripts, uploads, exports, and runtime data are excluded.
+  Symlinks and nested VCS trees are skipped.
 - Container create/link enqueues the initial Knowledge build. An Ops Task that
   finishes marks **only that Container's** Knowledge graph stale and queues a
-  rebuild. Owner edits of allowlisted Ops content are debounced; startup and
-  scheduled audits detect fingerprint or tool drift; a scheduled full rebuild
-  re-walks registered Knowledge graphs only.
+  rebuild. Debounce ticks compare cheap allowlisted file metadata markers and
+  hash file contents only after a marker changes. Startup and scheduled audits
+  still verify full content fingerprints and tool drift; a scheduled full
+  rebuild re-walks registered Knowledge graphs only.
 - Failed, interrupted, ENOSPC, malformed, or incomplete Knowledge rebuilds keep
   last-good bytes. Tasks and SQLite Live state never depend on graph availability.
 - `query_context` routes through `context_router`: Fleet questions to the Fleet
@@ -418,7 +421,10 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   decisions to one Knowledge graph, code structure and impact to one Code graph.
   Mixed requests call only the needed layers with budgets and never merge
   fleet-wide graphs. Focused graph results cannot include another Container's
-  nodes. Every graph layer keeps generation, freshness, citations, and provenance.
+  nodes. Durable explicit targets and Container Focus override model scope, and
+  conflicting model scope is rejected. Unmatched focused questions use Knowledge;
+  unmatched fleet questions use Fleet and Live. Every graph layer keeps generation,
+  freshness, scope-relative citations, and provenance.
 - Local-only structural extraction is the default and is visible in Master
   settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and
   docs. Cloud semantic egress stays off unless an explicit future captain policy
@@ -1372,7 +1378,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 + **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated path-free product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
++ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.

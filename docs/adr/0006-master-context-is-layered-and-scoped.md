@@ -15,7 +15,8 @@ that rebuilds after the fact.
 - independently fresh slices of durable knowledge
 - no cross-Container context burial ("ketiban")
 - Live state always current and independent of graph availability
-- path-free, budgeted queries with provenance
+- no absolute host paths, plus budgeted queries with scope-relative citations and
+  provenance
 - local-only structural extraction by default; no cloud semantic egress without
   an explicit future captain policy
 

@@ -10,6 +10,9 @@ from proxima_api import graph_context
 from proxima_api.graph_context import (
     GRAPHIFY_VERSION,
     GraphBuildTimeout,
+    GraphQueryBudgets,
+    GraphTamperedError,
+    _query_graph_data,
 )
 from proxima_api.main import create_app
 
@@ -414,6 +417,59 @@ def test_query_revalidates_symlinks_and_never_reads_outside_registered_area(
     assert result["error"]["code"] == "graph_validation_failed"
     assert str(outside) not in json.dumps(result)
     assert "SECRET_OUTSIDE_SCOPE" not in json.dumps(result)
+
+
+def test_query_worker_rejects_bytes_that_do_not_match_published_digest(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    _, area_id = _container(api, headers)
+    assert area_id is not None
+    rebuilt = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    service = api.app.state.graph_context
+    scope = service.resolve_scope(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+    )
+    row = api.app.state.db.execute(
+        "SELECT source_fingerprint, semantic_backend "
+        "FROM graph_states WHERE id = ?",
+        (rebuilt["id"],),
+    ).fetchone()
+    expected_metadata = scope.metadata(
+        rebuilt["generation"],
+        str(row["source_fingerprint"]),
+        semantic_backend=str(row["semantic_backend"]),
+    )
+
+    with pytest.raises(
+        GraphTamperedError,
+        match="published digest",
+    ):
+        _query_graph_data(
+            scope.graph_path,
+            root=scope.root,
+            expected_metadata=expected_metadata,
+            expected_sha256="0" * 64,
+            max_bytes=api.app.state.config["graph_max_bytes"],
+            question="BillingService",
+            budgets=GraphQueryBudgets(
+                depth=1,
+                timeout_ms=5000,
+                token_budget=1000,
+                result_limit=10,
+            ),
+            scope=scope.public(),
+            freshness={"generation": rebuilt["generation"]},
+            excluded_roots=scope.excluded_roots,
+        )
 
 
 def test_registered_area_symlink_escape_fails_closed_before_state_read(

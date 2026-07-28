@@ -34,7 +34,8 @@ _FLEET_RE = re.compile(
 _LIVE_RE = re.compile(
     r"\b(running|blocked|green|status|queued|in review|live state|"
     r"what is running|what's running|whats running|currently running|"
-    r"attention|stuck|failed jobs?)\b",
+    r"attention|stuck|failed (?:jobs?|tasks?)|"
+    r"(?:jobs?|tasks?) (?:are )?(?:failing|failed))\b",
     re.IGNORECASE,
 )
 _KNOWLEDGE_RE = re.compile(
@@ -46,7 +47,8 @@ _KNOWLEDGE_RE = re.compile(
 _CODE_RE = re.compile(
     r"\b(function|class|symbol|import|call graph|code structure|"
     r"who calls|what calls|impact of|module|method|repo structure|"
-    r"source code|implementation|"
+    r"source code|implementation|implemented|defined|definition|"
+    r"declared|declaration|"
     r"impact|impacts|impacting|blast[- ]?radius|"
     r"what would (?:changing|editing|modifying)|"
     r"ripple effects?|callers? of)\b",
@@ -60,7 +62,7 @@ _LAYER_EMIT_ORDER = (LAYER_FLEET, LAYER_LIVE, LAYER_KNOWLEDGE, LAYER_CODE)
 _LAYER_KEEP_PRIORITY = (LAYER_CODE, LAYER_KNOWLEDGE, LAYER_LIVE, LAYER_FLEET)
 
 
-def classify_layers(query: str) -> list[str]:
+def classify_layers(query: str, *, container_scoped: bool = False) -> list[str]:
     """Return ordered layers for a natural-language query (bounded, mixed OK)."""
     text = (query or "").strip()
     if not text:
@@ -74,9 +76,12 @@ def classify_layers(query: str) -> list[str]:
         layers.append(LAYER_KNOWLEDGE)
     if _CODE_RE.search(text):
         layers.append(LAYER_CODE)
-    # Default: a bare question with a container leans Knowledge; otherwise Fleet.
     if not layers:
-        layers.append(LAYER_KNOWLEDGE)
+        layers.extend(
+            [LAYER_KNOWLEDGE]
+            if container_scoped
+            else [LAYER_FLEET, LAYER_LIVE]
+        )
     matched = set(layers)
     return [layer for layer in _LAYER_EMIT_ORDER if layer in matched]
 
@@ -124,15 +129,18 @@ class ContextRouter:
         token_budget: int | None = None,
         result_limit: int | None = None,
     ) -> dict[str, Any]:
-        matched = classify_layers(query)
+        resolved_container_id = container_id
+        if resolved_container_id is None and focus_container_id is not None:
+            resolved_container_id = focus_container_id
+
+        matched = classify_layers(
+            query,
+            container_scoped=resolved_container_id is not None,
+        )
         # Cap mixed requests so one turn cannot open every graph in the fleet.
         # Prefer specific layers (code/knowledge) over broad ones (fleet) when trimming.
         max_layers = max(1, min(4, int(self.config.get("context_router_max_layers", 3))))
         layers = select_layers(matched, max_layers)
-
-        resolved_container_id = container_id
-        if resolved_container_id is None and focus_container_id is not None:
-            resolved_container_id = focus_container_id
 
         budget = self._token_budget(token_budget)
         limit = self._result_limit(result_limit)
@@ -382,7 +390,7 @@ class ContextRouter:
                 "layer": LAYER_KNOWLEDGE,
                 "available": False,
                 "source": "knowledge_graph",
-                "error": {"code": exc.code, "message": str(exc)},
+                "error": self._public_graph_error(LAYER_KNOWLEDGE, exc),
                 "items": [],
                 "citations": [],
                 "provenance": [],
@@ -392,7 +400,7 @@ class ContextRouter:
                 "layer": LAYER_KNOWLEDGE,
                 "available": False,
                 "source": "knowledge_graph",
-                "error": {"code": exc.code, "message": str(exc)},
+                "error": self._public_graph_error(LAYER_KNOWLEDGE, exc),
                 "items": [],
                 "citations": [],
                 "provenance": [],
@@ -508,7 +516,7 @@ class ContextRouter:
                 "layer": LAYER_CODE,
                 "available": False,
                 "source": "code_graph",
-                "error": {"code": exc.code, "message": str(exc)},
+                "error": self._public_graph_error(LAYER_CODE, exc),
                 "items": [],
                 "citations": [],
                 "provenance": [],
@@ -518,7 +526,7 @@ class ContextRouter:
                 "layer": LAYER_CODE,
                 "available": False,
                 "source": "code_graph",
-                "error": {"code": exc.code, "message": str(exc)},
+                "error": self._public_graph_error(LAYER_CODE, exc),
                 "items": [],
                 "citations": [],
                 "provenance": [],
@@ -528,6 +536,27 @@ class ContextRouter:
             result=result,
             container_id=container_id,
         )
+
+    @staticmethod
+    def _public_graph_error(
+        layer: str,
+        exc: GraphContextError,
+    ) -> dict[str, str]:
+        log.warning(
+            "context router graph failure layer=%s type=%s",
+            layer,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        if isinstance(exc, GraphScopeError):
+            return {
+                "code": GraphScopeError.code,
+                "message": "Graph scope is unavailable.",
+            }
+        return {
+            "code": GraphContextError.code,
+            "message": "Graph context is unavailable.",
+        }
 
     def _graph_layer_payload(
         self,

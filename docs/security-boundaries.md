@@ -130,11 +130,13 @@ production adapters remain unsupported for Master. See
 
 Master product actions cross only `MasterToolBroker`. Its closed JSON schemas accept
 bounded product IDs and text, never paths. The broker resolves owner-scoped IDs in
-trusted Proxima code and returns bounded path-free records. Delegation and start call
-`TaskDelegationService`, preserving exact Container/Area binding, dependency
-validation, atomicity, and idempotency. A streaming parser, per-turn durable envelope
-ledger, and request/result/round/output caps turn malformed, replayed, duplicate, or
-oversized calls into visible deterministic errors.
+trusted Proxima code and returns bounded records without absolute host or internal
+graph paths. `query_context` is the narrow exception that returns validated
+scope-relative source citations. Delegation and start call `TaskDelegationService`,
+preserving exact Container/Area binding, dependency validation, atomicity, and
+idempotency. A streaming parser, per-turn durable envelope ledger, and
+request/result/round/output caps turn malformed, replayed, duplicate, or oversized
+calls into visible deterministic errors.
 
 The Master broker is an authority and consistency boundary, while runner conformance
 must separately prove the process boundary. Repo Tasks
@@ -150,7 +152,7 @@ accepts a shell command, absolute or relative path, Graphify CLI argument, raw M
 project path, or semantic backend. Knowledge resolves to the physical Ops boundary;
 Code resolves to one exact active code Area after symlink resolution and excludes
 all nested registered Areas. Source citations are re-resolved and revalidated at
-build and query time.
+build and query time, then returned only as paths relative to that validated scope.
 
 Build output is confined to a validated `graphify-out` directory inside that scope.
 A symlinked output directory, incomplete walk, escaped citation, malformed JSON,

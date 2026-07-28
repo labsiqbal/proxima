@@ -1,9 +1,11 @@
-"""Schema-validated, path-free product tools available to Master.
+"""Schema-validated, filesystem-isolated product tools available to Master.
 
 This module is the complete authority surface exposed to a Master model. It
 accepts IDs and bounded product text, resolves those IDs inside trusted Proxima
-code, and returns small product records. It never accepts or returns filesystem
-paths, credentials, runner homes, configuration, or arbitrary MCP/native tools.
+code, and returns small product records. It never accepts filesystem paths or
+returns absolute host paths, credentials, runner homes, configuration, or
+arbitrary MCP/native tools. Graph citations are validated scope-relative
+references.
 """
 from __future__ import annotations
 
@@ -592,25 +594,76 @@ class MasterToolBroker:
                 "code": "feature_unavailable",
                 "message": "Scoped graph context is not available in this release",
             }
-        container_id = args.get("container_id")
-        area_id = args.get("area_id")
-        if container_id is not None:
-            self._owned_container(_as_int(container_id))
-            container_id = _as_int(container_id)
-        if area_id is not None:
-            area_id = _as_int(area_id)
-        focus_container_id = None
+        requested_container_id = (
+            _as_int(args["container_id"])
+            if args.get("container_id") is not None
+            else None
+        )
+        requested_area_id = (
+            _as_int(args["area_id"])
+            if args.get("area_id") is not None
+            else None
+        )
+        container_id = requested_container_id
+        area_id = requested_area_id
         context = self.message_context
-        if context and context.get("focus_mode") == "container":
-            raw_focus = context.get("focus_container_id")
-            if raw_focus is not None:
-                focus_container_id = _as_int(raw_focus)
+        durable_scope = False
+        if context and context.get("target_mode") == "explicit":
+            durable_scope = True
+            raw_container = context.get("target_container_id")
+            if raw_container is None:
+                raise MasterToolError(
+                    "context_scope_unavailable",
+                    "The owner-selected context is no longer available",
+                )
+            container_id = _as_int(raw_container)
+            area_id = (
+                _as_int(context["target_area_id"])
+                if context.get("target_area_id") is not None
+                else None
+            )
+        elif context and context.get("focus_mode") == "container":
+            durable_scope = True
+            raw_container = context.get("focus_container_id")
+            if raw_container is None:
+                raise MasterToolError(
+                    "context_scope_unavailable",
+                    "The owner-selected context is no longer available",
+                )
+            container_id = _as_int(raw_container)
+            area_id = None
+        if durable_scope and (
+            (
+                requested_container_id is not None
+                and requested_container_id != container_id
+            )
+            or (
+                requested_area_id is not None
+                and requested_area_id != area_id
+            )
+        ):
+            raise MasterToolError(
+                "context_scope_conflict",
+                "query_context scope conflicts with owner-selected context",
+            )
+        if container_id is not None:
+            self._owned_container(container_id)
+        if area_id is not None:
+            area = self.conn.execute(
+                "SELECT id FROM project_areas "
+                "WHERE id = ? AND project_id = ? AND source != 'excluded'",
+                (area_id, container_id),
+            ).fetchone()
+            if area is None:
+                raise MasterToolError(
+                    "context_scope_invalid",
+                    "Query Area is not in the selected Container",
+                )
         return router.route(
             owner_user_id=self.user_id,
             query=str(args["query"]),
             container_id=container_id,
             area_id=area_id,
-            focus_container_id=focus_container_id,
         )
 
     def _task_request(
