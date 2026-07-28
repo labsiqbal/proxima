@@ -161,11 +161,12 @@ the prior canonical graph unchanged. Canonical reads use no-follow descriptor
 snapshots bounded by `graph_max_bytes`; last-good backup is a bounded streaming
 copy with atomic replacement. A fsynced publication journal stores both prior and
 replacement digests, while SQLite finalization updates and re-reads graph state in
-one transaction. Ambiguous commit errors preserve the journal and canonical bytes;
-the next locked query or rebuild accepts or restores bytes only after matching a
-journal digest to the published database digest. Knowledge traversal streams
-directory entries with `os.scandir()` and caps visited entries and directories
-before extraction. Public state and events omit internal paths.
+one transaction. An ambiguous commit is accepted only when SQLite and a bounded
+canonical hash both match the replacement digest; otherwise journal and canonical
+bytes remain for locked reconciliation. Failure cleanup cannot overwrite a graph
+state that has already committed as `fresh` or `queued`. Knowledge traversal
+streams directory entries with `os.scandir()` and caps visited entries and
+directories before extraction. Public state and events omit internal paths.
 Graphify performs only local structural extraction. Semantic model egress defaults
 off, Ops content is never sent to a cloud model, and enabling the future egress
 switch makes Knowledge rebuild fail closed. Local-only policy is visible in Master

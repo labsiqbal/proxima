@@ -2054,17 +2054,18 @@ class GraphContextService:
         finally:
             lock.release()
 
-    def _graph_state_sha256(self, state_id: int) -> str | None:
+    def _graph_state_by_id(
+        self,
+        state_id: int,
+    ) -> sqlite3.Row | None:
         try:
             row = self._db_factory().execute(
-                "SELECT graph_sha256 FROM graph_states WHERE id = ?",
+                "SELECT * FROM graph_states WHERE id = ?",
                 (state_id,),
             ).fetchone()
         except Exception:
             return None
-        if row is None:
-            return None
-        return str(row["graph_sha256"] or "").strip().lower()
+        return row
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {
@@ -2206,9 +2207,10 @@ class GraphContextService:
                 (state_id,),
             ).fetchone()
             assert current is not None
+            if str(current["state"] or "") != "building":
+                return current
             follow_up = bool(
-                str(current["state"] or "") == "building"
-                and "rebuild_reason" in columns
+                "rebuild_reason" in columns
                 and current["rebuild_reason"]
             )
             if follow_up:
@@ -2551,28 +2553,45 @@ class GraphContextService:
                             pass
                     raise
         except Exception:
-            database_sha256 = self._graph_state_sha256(
+            database_row = self._graph_state_by_id(
                 int(state_row["id"])
             )
-            if database_sha256 != expected_prior_sha256:
-                raise
-            if rollback_path is None:
-                _unlink_fsync(canonical)
-            else:
-                os.replace(rollback_path, canonical)
-                directory_fd = os.open(
-                    canonical.parent,
-                    os.O_RDONLY,
-                )
+            database_sha256 = (
+                str(database_row["graph_sha256"] or "").strip().lower()
+                if database_row is not None
+                else None
+            )
+            if database_sha256 == graph_sha256:
                 try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            try:
-                _unlink_fsync(journal)
-            except OSError:
-                pass
-            raise
+                    canonical_sha256 = _hash_regular_file_bounded(
+                        canonical,
+                        max_bytes=max_bytes,
+                    )
+                except GraphValidationError:
+                    raise
+                if canonical_sha256 != graph_sha256:
+                    raise
+                row = database_row
+            elif database_sha256 != expected_prior_sha256:
+                raise
+            else:
+                if rollback_path is None:
+                    _unlink_fsync(canonical)
+                else:
+                    os.replace(rollback_path, canonical)
+                    directory_fd = os.open(
+                        canonical.parent,
+                        os.O_RDONLY,
+                    )
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                try:
+                    _unlink_fsync(journal)
+                except OSError:
+                    pass
+                raise
         assert row is not None
         try:
             _unlink_fsync(journal)
@@ -2793,9 +2812,16 @@ class GraphContextService:
                 )
                 return self._payload(scope, row)
             if installed != GRAPHIFY_VERSION:
-                raise GraphBuildError(
+                message = (
                     f"Graphify version mismatch: expected {GRAPHIFY_VERSION}, got {installed}"
                 )
+                self._transition(
+                    scope,
+                    state_id,
+                    "failed",
+                    error=message,
+                )
+                raise GraphBuildError(message)
             # Cloud semantic extraction never runs from credentials alone.
             # Even an explicit egress opt-in fails closed until a future policy
             # ships a real local-or-cloud adapter.
@@ -2807,10 +2833,17 @@ class GraphContextService:
                     container_slug,
                     backend,
                 )
-                raise GraphBuildError(
+                message = (
                     "semantic model egress is not implemented; "
                     "Knowledge graphs remain local-structural only"
                 )
+                self._transition(
+                    scope,
+                    state_id,
+                    "failed",
+                    error=message,
+                )
+                raise GraphBuildError(message)
             # Claim any queued intent before the building transition clears pending.
             claimed_head: str | None
             with self.app.state.db_lock:

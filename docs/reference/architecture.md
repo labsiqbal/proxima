@@ -374,16 +374,20 @@ the previous bytes as `graph.last-good.json`; a confirmed pre-commit database
 finalization failure restores those prior bytes. Before canonical replacement, a
 fsynced publication journal records both the prior and replacement digests.
 Graph-state finalization runs its update and final read in one explicit
-transaction. If the commit outcome is ambiguous, the error path leaves canonical
-and journal bytes untouched; the next query or rebuild holds the scope lock and
-compares SQLite with both journal digests before accepting the replacement or
-atomically restoring last-good.
+transaction. If the commit outcome is ambiguous but SQLite and the bounded
+canonical digest both match the replacement, publication returns the committed
+`fresh` or `queued` row as success. This preserves a queued follow-up rebuild for
+the lifecycle drain. Unresolved outcomes leave canonical and journal bytes
+untouched for the next locked query or rebuild to reconcile. Generic rebuild
+failure handling only transitions a row that is still `building`, so it cannot
+overwrite a committed `fresh` or `queued` outcome.
 Canonical digest checks and last-good copying use descriptor snapshots bounded by
 `graph_max_bytes`, and publication never buffers the prior graph in the API
-process. Missing Graphify records an explicit `missing` state, and all other
-failures record `failed`, without affecting Tasks, Fleet, or Live state. Generated
-`graphify-out/` artifacts are treated as ignored build outputs inside the Area
-path unless a future project policy opts into version control.
+process. Missing Graphify records an explicit `missing` state. A failed build
+records `failed` unless a newer durable intent keeps it `queued`, without
+affecting Tasks, Fleet, or Live state. Generated `graphify-out/` artifacts are
+treated as ignored build outputs inside the Area path unless a future project
+policy opts into version control.
 
 #### Code graph lifecycle (Group 10)
 

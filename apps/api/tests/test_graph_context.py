@@ -527,7 +527,6 @@ def test_ambiguous_commit_reconciles_new_digest_and_canonical(
     ).fetchone()
     graph_path = Path(row["graph_path"])
     first_bytes = graph_path.read_bytes()
-    first_sha256 = str(row["graph_sha256"])
     Path(project["path"], "app.py").write_text(
         "class BillingService:\n"
         "    def refund(self):\n"
@@ -537,26 +536,42 @@ def test_ambiguous_commit_reconciles_new_digest_and_canonical(
     service = api.app.state.graph_context
     connection = _FailAfterCommit(api.app.state.db)
     monkeypatch.setattr(service, "_db_factory", lambda: connection)
+    original_builder = service._run_builder
 
-    failed = api.post(
+    def build_with_follow_up(**kwargs):
+        result = original_builder(**kwargs)
+        service.enqueue_code_rebuild(
+            owner_user_id=1,
+            container_slug="graph-one",
+            area_id=area_id,
+            reason="test_follow_up",
+        )
+        return result
+
+    monkeypatch.setattr(service, "_run_builder", build_with_follow_up)
+
+    response = api.post(
         "/api/containers/graph-one/graphs/rebuild",
         headers=headers,
         json={"kind": "code", "area_id": area_id},
     )
 
-    assert failed.status_code == 409, failed.text
+    assert response.status_code == 200, response.text
+    published = response.json()
     current = api.app.state.db.execute(
-        "SELECT generation, graph_sha256 FROM graph_states WHERE id = ?",
+        "SELECT state, generation, graph_sha256, rebuild_reason "
+        "FROM graph_states WHERE id = ?",
         (first["id"],),
     ).fetchone()
     replacement = graph_path.read_bytes()
     journal_path = graph_path.with_name("graph.publish-pending.json")
-    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert published["state"] == "queued"
+    assert current["state"] == "queued"
     assert current["generation"] == first["generation"] + 1
     assert current["graph_sha256"] == hashlib_sha256(replacement)
+    assert current["rebuild_reason"] == "test_follow_up"
     assert replacement != first_bytes
-    assert journal["expected_sha256"] == first_sha256
-    assert journal["replacement_sha256"] == current["graph_sha256"]
+    assert not journal_path.exists()
 
     result = service.query(
         owner_user_id=1,
@@ -570,6 +585,43 @@ def test_ambiguous_commit_reconciles_new_digest_and_canonical(
     assert result["items"]
     assert graph_path.read_bytes() == replacement
     assert not journal_path.exists()
+
+
+def test_failure_transition_preserves_committed_queued_state(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    _, area_id = _container(api, headers)
+    assert area_id is not None
+    rebuilt = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    service = api.app.state.graph_context
+    service.enqueue_code_rebuild(
+        owner_user_id=1,
+        container_slug="graph-one",
+        area_id=area_id,
+        reason="test_follow_up",
+    )
+    scope = service.resolve_scope(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+    )
+
+    row = service._fail_or_requeue_rebuild(
+        scope,
+        rebuilt["id"],
+        error="late failure",
+    )
+
+    assert row["state"] == "queued"
+    assert row["rebuild_reason"] == "test_follow_up"
+    assert row["last_error"] is None
 
 
 def test_query_recovers_interrupted_publish_from_last_good(
