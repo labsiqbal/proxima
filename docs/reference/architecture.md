@@ -504,9 +504,10 @@ owner message -> queued Master chat-only run
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
 nested, oversized, duplicate, unknown, and disallowed envelopes with stable errors
 written to the Master thread. The broker's closed JSON schemas admit only bounded
-product IDs and text, and its results never include paths, runner homes, bearer
-material, or configuration. Request, result, round, call, and aggregate output caps
-fail before a truncated envelope can become a hidden action. The
+product IDs and text. Results never include absolute host or internal graph paths,
+runner homes, bearer material, or configuration; `query_context` may include
+validated scope-relative citations as provenance. Request, result, round, call, and
+aggregate output caps fail before a truncated envelope can become a hidden action. The
 `master_tool_calls` ledger binds each envelope hash to the durable root turn; mutation
 idempotency is derived from that identity.
 

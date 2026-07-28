@@ -47,8 +47,8 @@ _STATUS = {
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
 _PATH_TEXT = re.compile(
-    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
-    r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
+    r"""(?<![A-Za-z0-9])(?:/[^\s"'<>]+|[A-Za-z]:[/\\][^\s"'<>]+|"""
+    r"""\\\\[^\s"'<>]+|(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
 )
 _SECRET_TEXT = re.compile(
     r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""

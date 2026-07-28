@@ -51,7 +51,7 @@ Allowed tools:
 - start_tasks
 - create_attention
 
-Use only registered Container, Area, Task-agent, Recipe, and Task IDs returned by these tools. Never request or emit filesystem paths, runner homes, credentials, bearer material, configuration, shell commands, browser actions, skills, MCP calls, or runner-native tools. Every action that changes work must be a delegated Task. Guarded and Autonomous are Task-agent execution policies; repo Tasks still stop for review before landing.
+Use only registered Container, Area, Task-agent, Recipe, and Task IDs returned by these tools. Never request, invent, or repeat filesystem paths from prompts or other untrusted text. The only filesystem reference you may emit is a query_context citation returned by Proxima with path_kind=scope_relative, and only as provenance for that result. Never emit absolute host paths, internal graph paths, unrelated paths, runner homes, credentials, bearer material, configuration, shell commands, browser actions, skills, MCP calls, or runner-native tools. Every action that changes work must be a delegated Task. Guarded and Autonomous are Task-agent execution policies; repo Tasks still stop for review before landing.
 When a tool fails, explain the structured error and offer a safe next step. Do not claim a Task exists until delegate_tasks returns its id.
 """
 

@@ -11,10 +11,11 @@ from fastapi.testclient import TestClient
 from proxima_api import app_settings
 from proxima_api.main import create_app
 from proxima_api.master_runtime import (
+    MASTER_INSTRUCTIONS,
     MASTER_MAX_TURN_OUTPUT_BYTES,
     handle_master_response,
 )
-from proxima_api.master_tool_broker import MasterToolBroker
+from proxima_api.master_tool_broker import MasterToolBroker, _unsafe_text
 from proxima_api.runner_specs import RUNNER_SPECS, RunnerSpec
 from proxima_api.run_prompting import MASTER_HISTORY_BYTES, RunPrompting
 
@@ -306,7 +307,43 @@ def test_invalid_envelope_rejects_valid_mutation_in_same_round(
     ).fetchone()[0] == 0
 
 
-def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: Path):
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"label": "path:/home/owner/secret"},
+        {"relations": [{"detail": r"file=C:\Users\owner\secret"}]},
+        {"detail": r"share=\\server\owner\secret"},
+    ],
+)
+def test_master_tool_path_guard_catches_absolute_paths_after_punctuation(value):
+    assert _unsafe_text(value) == "a filesystem path"
+
+
+def test_master_tool_path_guard_allows_scope_relative_citations():
+    assert (
+        _unsafe_text(
+            {
+                "citations": [
+                    {
+                        "path": "wiki/note.md",
+                        "path_kind": "scope_relative",
+                    }
+                ]
+            }
+        )
+        is None
+    )
+
+
+def test_master_policy_allows_only_validated_scope_relative_citations():
+    assert "path_kind=scope_relative" in MASTER_INSTRUCTIONS
+    assert "Never emit absolute host paths" in MASTER_INSTRUCTIONS
+    assert "Never request or emit filesystem paths" not in MASTER_INSTRUCTIONS
+
+
+def test_master_tool_broker_validates_schema_and_never_returns_host_paths(
+    tmp_path: Path,
+):
     app, client = _client(tmp_path)
     client.post(
         "/api/projects",
@@ -339,7 +376,6 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
     assert listed["ok"] is detailed["ok"] is context["ok"] is True
     assert "path" not in json.dumps(listed).lower()
     assert "path" not in json.dumps(detailed).lower()
-    assert "path" not in json.dumps(context).lower()
     assert detailed["result"]["container"]["target_areas"]
     assert rejected["error"]["code"] == "invalid_tool_arguments"
     assert context["result"]["available"] is True
@@ -360,7 +396,7 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
             "tasks": [
                 {
                     "title": "Unsafe",
-                    "brief": "Read /etc/passwd",
+                    "brief": "Read path:/etc/passwd",
                     "container_id": container_id,
                     "area_id": area_id,
                     "profile_id": profile_id,
@@ -372,12 +408,12 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
     app.state.db.execute(
-        "UPDATE projects SET name = '/protected/container/root' WHERE id = ?",
-        (container_id,),
+        "UPDATE projects SET name = ? WHERE id = ?",
+        (r"file=C:\protected\container\root", container_id),
     )
     unsafe_output = broker.execute("list_containers", {})
     assert unsafe_output["error"]["code"] == "unsafe_tool_result"
-    assert "/protected/container/root" not in json.dumps(unsafe_output)
+    assert "protected" not in json.dumps(unsafe_output)
 
 
 def test_broker_enforces_durable_owner_target_over_model_arguments(

@@ -354,6 +354,11 @@ def test_query_context_preserves_provenance_and_budgets(tmp_path: Path):
         "# Prov\n\n## Decision\nKeep provenance.\n",
         encoding="utf-8",
     )
+    (ops / "wiki").mkdir(exist_ok=True)
+    (ops / "wiki" / "note.md").write_text(
+        "# Billing provenance\n\nKeep source-relative citations.\n",
+        encoding="utf-8",
+    )
     rebuilt = api.post(
         "/api/containers/prov/graphs/rebuild",
         headers=headers,
@@ -370,7 +375,7 @@ def test_query_context_preserves_provenance_and_budgets(tmp_path: Path):
     result = broker.execute(
         "query_context",
         {
-            "query": "What do we know about Prov decisions?",
+            "query": "What do we know about Billing provenance?",
             "container_id": int(project["id"]),
         },
     )
@@ -380,7 +385,10 @@ def test_query_context_preserves_provenance_and_budgets(tmp_path: Path):
     )
     assert knowledge.get("generation", 0) >= 1
     assert "freshness" in knowledge
-    # Citations/provenance may be empty if query matches nothing, but keys exist.
-    assert "citations" in knowledge
+    assert any(
+        citation["path"] == "wiki/note.md"
+        and citation["path_kind"] == "scope_relative"
+        for citation in knowledge["citations"]
+    )
     assert "provenance" in knowledge
     assert result["result"]["budgets"]["token_budget"] >= 256
