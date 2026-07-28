@@ -331,17 +331,20 @@ def test_master_tool_broker_validates_schema_and_never_returns_paths(tmp_path: P
         "get_container",
         {"container_id": container_id, "path": "/etc/passwd"},
     )
-    unavailable = broker.execute(
+    context = broker.execute(
         "query_context",
         {"container_id": container_id, "query": "What do we know?"},
     )
 
-    assert listed["ok"] is detailed["ok"] is unavailable["ok"] is True
+    assert listed["ok"] is detailed["ok"] is context["ok"] is True
     assert "path" not in json.dumps(listed).lower()
     assert "path" not in json.dumps(detailed).lower()
+    assert "path" not in json.dumps(context).lower()
     assert detailed["result"]["container"]["target_areas"]
     assert rejected["error"]["code"] == "invalid_tool_arguments"
-    assert unavailable["result"]["code"] == "feature_unavailable"
+    assert context["result"]["available"] is True
+    assert context["result"]["policy"]["local_only"] is True
+    assert "graphify-out" not in json.dumps(context)
 
     area_id = app.state.db.execute(
         "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",

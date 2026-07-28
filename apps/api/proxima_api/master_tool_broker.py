@@ -120,6 +120,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "query_context": _object(
         {
             "container_id": _ID,
+            "area_id": _ID,
             "query": {
                 "type": "string",
                 "minLength": 1,
@@ -182,7 +183,10 @@ _TOOL_DESCRIPTIONS = {
     "list_tasks": "List bounded owner-visible Tasks.",
     "list_task_agents": "List Task-agent profiles available for delegation.",
     "list_recipes": "List active Recipes available to the owner.",
-    "query_context": "Report scoped context availability for a query.",
+    "query_context": (
+        "Route a question to Fleet, Live state, one Knowledge graph, "
+        "and/or one Code graph with provenance and budgets."
+    ),
     "delegate_tasks": "Atomically create an idempotent Task batch or dependency DAG.",
     "start_tasks": "Start existing Master-owned Tasks through the delegation service.",
     "create_attention": "Create one idempotent owner Attention item.",
@@ -580,12 +584,34 @@ class MasterToolBroker:
         ).fetchall()
         return {"recipes": [dict(row) for row in rows]}
 
-    def _query_context(self, _args: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "available": False,
-            "code": "feature_unavailable",
-            "message": "Scoped graph context is not available in this release",
-        }
+    def _query_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        router = getattr(self.app.state, "context_router", None)
+        if router is None:
+            return {
+                "available": False,
+                "code": "feature_unavailable",
+                "message": "Scoped graph context is not available in this release",
+            }
+        container_id = args.get("container_id")
+        area_id = args.get("area_id")
+        if container_id is not None:
+            self._owned_container(_as_int(container_id))
+            container_id = _as_int(container_id)
+        if area_id is not None:
+            area_id = _as_int(area_id)
+        focus_container_id = None
+        context = self.message_context
+        if context and context.get("focus_mode") == "container":
+            raw_focus = context.get("focus_container_id")
+            if raw_focus is not None:
+                focus_container_id = _as_int(raw_focus)
+        return router.route(
+            owner_user_id=self.user_id,
+            query=str(args["query"]),
+            container_id=container_id,
+            area_id=area_id,
+            focus_container_id=focus_container_id,
+        )
 
     def _task_request(
         self,

@@ -357,8 +357,8 @@ Source discovery rejects symlinks, traversal, escaped roots, incomplete walks, a
 scope changes during a build. Task worktree paths cannot be promoted as canonical
 graph roots. Graphify `0.9.28` runs as a local Python library in a killable worker
 with server ceilings for time and output bytes. Structural Code extraction and the
-curated `ops/container.md` Knowledge seed are local; semantic model egress defaults
-off.
+Ops Knowledge allowlist (container identity, curated wiki/decisions, reports, and
+durable artifact metadata) are local-structural; semantic model egress defaults off.
 
 Each build writes to a same-filesystem temporary generation directory. Proxima
 validates the complete JSON shape, exact scope metadata, source citations, edge
@@ -396,10 +396,42 @@ Repo Task-agent capability activation injects a server-managed
 Area graph path. The proxy ignores arbitrary `project_path`. Master capability
 activation remains empty and never receives this entry.
 
-Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
-context routing remain later groups. The internal query contract is still typed and
-path-free; there is no public graph query route and
-`MasterToolBroker.query_context` remains `feature_unavailable` until context routing.
+#### Knowledge graph lifecycle and context router (Group 11)
+
+`KnowledgeGraphLifecycle` owns at most one Knowledge graph per Container Ops area.
+Sources are an Ops-root allowlist only: `container.md`, `design.md`, curated wiki
+notes, reports, and durable artifact metadata. Secret-like names, symlinks, nested
+repos, `graphify-out`, Task transcripts, scripts, uploads, exports, caches, and
+binary media never enter the walk.
+
+| Trigger | Action |
+|---|---|
+| Container create / link | ensure Knowledge state + enqueue full build |
+| Ops Task finishes | mark only that Container Knowledge graph stale + enqueue |
+| owner edits allowlisted Ops files | debounce stable fingerprint, then enqueue |
+| startup + scheduled audit | fingerprint / tool / missing-graph drift on registered rows only |
+| scheduled full rebuild | re-queue every registered Knowledge graph |
+
+Builds remain local-structural (`semantic_backend=local-structural`). The
+`graph_semantic_egress_enabled` opt-in is visible in settings, state, and logs, but
+cloud extraction is still refused until a future adapter ships. Failed builds keep
+last-good bytes.
+
+`ContextRouter` implements Master `query_context` (ADR-6):
+
+| Intent | Source |
+|---|---|
+| fleet / which Containers | Fleet registry |
+| running / green / blocked / status | SQLite Live state |
+| facts / decisions about a Container | that Container's Knowledge graph |
+| code structure / impact | one named Code graph Area |
+
+Mixed requests call a bounded set of exact layers and never merge fleet-wide graphs.
+Focused Knowledge/Code results are scope-checked so another Container's nodes cannot
+appear. Live state remains correct when every graph is missing or stale. There is no
+public graph query route; the Master uses the path-free broker tool only.
+
+Focus epochs, history projection, and safe-self-update remain later groups.
 
 ### Native artifact review flow
 

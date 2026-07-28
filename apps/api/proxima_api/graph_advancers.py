@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -464,6 +465,20 @@ class GraphAdvancers:
                 self.app.state.task_delegation.prerequisite_changed(
                     _as_int(attempt["job_id"]), connection=db
                 )
+            if job_status == "done":
+                try:
+                    from .knowledge_graph_lifecycle import notify_ops_job_done
+
+                    job_row = db.execute(
+                        "SELECT * FROM jobs WHERE id = ?",
+                        (attempt["job_id"],),
+                    ).fetchone()
+                    if job_row is not None:
+                        notify_ops_job_done(self.app, job_row)
+                except Exception:
+                    logging.getLogger("proxima.knowledge_graph_lifecycle").exception(
+                        "Knowledge graph post-Ops-done hook failed (non-fatal)"
+                    )
 
         if dispatch_job_id is not None:
             self.executor.dispatch_ready(dispatch_job_id)

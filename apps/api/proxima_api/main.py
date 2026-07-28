@@ -40,6 +40,8 @@ from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
 from .code_graph_lifecycle import CodeGraphLifecycle
+from .knowledge_graph_lifecycle import KnowledgeGraphLifecycle
+from .context_router import ContextRouter
 from .frontend_static import register_frontend
 from .features import public_flags
 from .route_deps import build_route_deps
@@ -139,6 +141,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         registry_task = asyncio.create_task(_registry_loop())
     code_graph_task: asyncio.Task | None = None
+    knowledge_graph_task: asyncio.Task | None = None
     if cfg.get("start_worker", True) and cfg.get("feature_master_orchestrator", False):
         async def _master_loop() -> None:
             while True:
@@ -169,6 +172,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     )
 
         code_graph_task = asyncio.create_task(_code_graph_loop())
+
+        knowledge_graph_interval = max(
+            1.0,
+            float(cfg.get("knowledge_graph_tick_seconds", 5)),
+        )
+
+        async def _knowledge_graph_loop() -> None:
+            while True:
+                await asyncio.sleep(knowledge_graph_interval)
+                try:
+                    lifecycle = getattr(app.state, "knowledge_graph_lifecycle", None)
+                    if lifecycle is not None:
+                        await asyncio.to_thread(lifecycle.tick)
+                except Exception:
+                    logging.getLogger("proxima.knowledge_graph_lifecycle").exception(
+                        "Knowledge graph lifecycle tick failed"
+                    )
+
+        knowledge_graph_task = asyncio.create_task(_knowledge_graph_loop())
     if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
         async def _scheduler_loop() -> None:
             while True:
@@ -213,6 +235,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         code_graph_task.cancel()
         with suppress(asyncio.CancelledError):
             await code_graph_task
+    if knowledge_graph_task:
+        knowledge_graph_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await knowledge_graph_task
     if update_task:
         update_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -279,6 +305,16 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     app.state.task_delegation = TaskDelegationService(app, db)
     app.state.graph_context = GraphContextService(app, db)
     app.state.code_graph_lifecycle = CodeGraphLifecycle(
+        app,
+        db,
+        app.state.graph_context,
+    )
+    app.state.knowledge_graph_lifecycle = KnowledgeGraphLifecycle(
+        app,
+        db,
+        app.state.graph_context,
+    )
+    app.state.context_router = ContextRouter(
         app,
         db,
         app.state.graph_context,

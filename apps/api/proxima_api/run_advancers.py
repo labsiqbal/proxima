@@ -149,6 +149,14 @@ class RunAdvancers:
                 self.app.state.task_delegation.prerequisite_changed(
                     int(job["id"]), connection=db
                 )
+                try:
+                    from .knowledge_graph_lifecycle import notify_ops_job_done
+
+                    notify_ops_job_done(self.app, job)
+                except Exception:
+                    logging.getLogger("proxima.knowledge_graph_lifecycle").exception(
+                        "Knowledge graph post-Ops-done hook failed (non-fatal)"
+                    )
                 return
             if last or gate:
                 state.guarded_transition(

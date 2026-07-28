@@ -130,7 +130,9 @@ def test_graph_routes_are_authenticated_feature_gated_and_path_free(
     by_kind = {item["scope"]["kind"]: item for item in graphs}
     # Knowledge remains missing until its later lifecycle group; Code is enqueued
     # at Area registration (Group 10).
-    assert by_kind["knowledge"]["state"] == "missing"
+    # Container registration enqueues Knowledge (Group 11); Code Areas enqueue
+    # Code graphs (Group 10). Either may still be missing when Graphify is absent.
+    assert by_kind["knowledge"]["state"] in {"missing", "queued", "building", "fresh"}
     assert by_kind["code"]["state"] in {"queued", "missing", "building", "fresh"}
     assert all(
         item["freshness"]["semantic_backend"] == "disabled"
@@ -221,14 +223,22 @@ def test_code_rebuild_and_query_include_scope_freshness_citations_and_provenance
     )
 
 
-def test_knowledge_rebuild_is_local_and_limited_to_container_seed(
+def test_knowledge_rebuild_is_local_and_limited_to_allowlist(
     tmp_path: Path,
 ):
+    from proxima_api.graph_context import SEMANTIC_BACKEND_LOCAL
+
     api, headers = _api(tmp_path)
     project, _ = _container(api, headers, with_code=False)
     root = Path(project["path"])
-    (root / "ops" / "wiki" / "private.md").write_text(
-        "# Private\n\nDo not include this before the Knowledge lifecycle.",
+    (root / "ops" / "wiki").mkdir(exist_ok=True)
+    (root / "ops" / "wiki" / "note.md").write_text(
+        "# Note\n\nCurated knowledge.\n",
+        encoding="utf-8",
+    )
+    (root / "ops" / "tasks").mkdir(exist_ok=True)
+    (root / "ops" / "tasks" / "transcript.md").write_text(
+        "# Transcript\n\nDo not include.\n",
         encoding="utf-8",
     )
 
@@ -239,7 +249,7 @@ def test_knowledge_rebuild_is_local_and_limited_to_container_seed(
     )
     assert response.status_code == 200, response.text
     state = response.json()
-    assert state["freshness"]["semantic_backend"] == "disabled"
+    assert state["freshness"]["semantic_backend"] == SEMANTIC_BACKEND_LOCAL
 
     graph_path = Path(
         api.app.state.db.execute(
@@ -247,12 +257,15 @@ def test_knowledge_rebuild_is_local_and_limited_to_container_seed(
         ).fetchone()["graph_path"]
     )
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
-    assert {
+    sources = {
         node.get("source_file")
         for node in graph["nodes"]
         if node.get("source_file")
-    } == {"container.md"}
-    assert graph["graph"]["proxima"]["semantic_backend"] == "disabled"
+    }
+    assert "container.md" in sources
+    assert "wiki/note.md" in sources
+    assert "tasks/transcript.md" not in sources
+    assert graph["graph"]["proxima"]["semantic_backend"] == SEMANTIC_BACKEND_LOCAL
     assert graph["graph"]["proxima"]["tool_version"] == GRAPHIFY_VERSION
     assert api.app.state.config["graph_semantic_egress_enabled"] is False
 
@@ -501,7 +514,7 @@ def test_graph_state_events_use_master_stream_without_paths(
     )
 
 
-def test_graph_semantic_egress_opt_in_is_refused_in_group_nine(
+def test_graph_semantic_egress_opt_in_is_refused_without_cloud_adapter(
     tmp_path: Path,
 ):
     api, headers = _api(
@@ -516,5 +529,5 @@ def test_graph_semantic_egress_opt_in_is_refused_in_group_nine(
         json={"kind": "knowledge"},
     )
     assert response.status_code == 409, response.text
-    assert "not implemented in this delivery group" in response.text
+    assert "not implemented" in response.text
     assert "graphify-out" not in response.text

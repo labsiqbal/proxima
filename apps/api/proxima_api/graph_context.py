@@ -3,8 +3,9 @@
 Public callers select a Container plus an optional Area database id. Filesystem
 roots and graph paths are resolved only inside this module. Group 9 supplied the
 path-free adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
-(enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Knowledge lifecycle
-and Master context routing remain later delivery groups.
+(enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Group 11 expands the
+Ops Knowledge allowlist, Knowledge lifecycle helpers, and local-only semantic
+policy labels. Master context routing lives in ``context_router``.
 """
 from __future__ import annotations
 
@@ -40,7 +41,49 @@ GRAPH_STATES = frozenset(
 GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
 GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
+# Local structural extraction only. Cloud model egress requires an explicit
+# future captain policy and a separate adapter; credentials alone never enable it.
+SEMANTIC_BACKEND_LOCAL = "local-structural"
+SEMANTIC_BACKEND_DISABLED = "disabled"
 GraphStateRow: TypeAlias = Mapping[str, Any] | sqlite3.Row
+
+# Knowledge graph reads ONLY these durable Ops paths (under the Ops root).
+KNOWLEDGE_ROOT_FILES = frozenset({"container.md", "design.md"})
+KNOWLEDGE_DIR_EXTENSIONS: dict[str, frozenset[str]] = {
+    # Curated notes and decisions (living logs / generated catalogs stay out).
+    "wiki": frozenset({".md"}),
+    "reports": frozenset({".md", ".txt", ".html", ".json", ".rst"}),
+    # Durable artifact *metadata* only - never binary media or caches.
+    "artifacts": frozenset({".md", ".json"}),
+}
+KNOWLEDGE_WIKI_EXCLUDED = frozenset({"index.md", "log.md"})
+KNOWLEDGE_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        "graphify-out",
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".cache",
+        "cache",
+        "tmp",
+        "temp",
+        "tasks",
+        "scripts",
+        "uploads",
+        "exports",
+        ".proxima",
+    }
+)
+_KNOWLEDGE_SECRET_NAME_RE = re.compile(
+    r"(^|[/_.-])("
+    r"secret|secrets|credential|credentials|password|passwd|token|apikey|api[_-]?key|"
+    r"private[_-]?key|id_rsa|id_ed25519|\.pem|\.key|\.env|dotenv"
+    r")([/_.-]|$)",
+    re.IGNORECASE,
+)
+_MAX_KNOWLEDGE_FILE_BYTES = 2 * 1024 * 1024
 
 _MAX_ERROR_CHARS = 1000
 _MAX_LABEL_CHARS = 500
@@ -98,7 +141,13 @@ class GraphScope:
             "area_rel_path": self.area_rel_path,
         }
 
-    def metadata(self, generation: int, source_fingerprint: str) -> dict[str, Any]:
+    def metadata(
+        self,
+        generation: int,
+        source_fingerprint: str,
+        *,
+        semantic_backend: str = SEMANTIC_BACKEND_LOCAL,
+    ) -> dict[str, Any]:
         return {
             "schema": GRAPH_METADATA_SCHEMA,
             "container_id": self.container_id,
@@ -107,7 +156,7 @@ class GraphScope:
             "generation": generation,
             "source_fingerprint": source_fingerprint,
             "tool_version": GRAPHIFY_VERSION,
-            "semantic_backend": "disabled",
+            "semantic_backend": semantic_backend,
             "complete": True,
         }
 
@@ -408,6 +457,126 @@ def _coalesce_rebuild_reason(
     return incoming
 
 
+def _is_knowledge_secret_path(rel_path: str) -> bool:
+    return bool(_KNOWLEDGE_SECRET_NAME_RE.search(rel_path.replace("\\", "/")))
+
+
+def _knowledge_path_allowed(rel_path: str) -> bool:
+    """True when a scope-relative path is on the durable Knowledge allowlist."""
+    normalized = rel_path.replace("\\", "/").strip().strip("/")
+    if not normalized or normalized.startswith("../") or "/../" in f"/{normalized}/":
+        return False
+    if any(
+        part in KNOWLEDGE_EXCLUDED_DIR_NAMES
+        for part in PurePosixPath(normalized).parts
+    ):
+        return False
+    if _is_graphify_ignore_path(normalized) or _is_knowledge_secret_path(normalized):
+        return False
+    if normalized in KNOWLEDGE_ROOT_FILES:
+        return True
+    pure = PurePosixPath(normalized)
+    if not pure.parts:
+        return False
+    top = pure.parts[0]
+    if top not in KNOWLEDGE_DIR_EXTENSIONS:
+        return False
+    if top == "wiki":
+        # Generated catalog and living session log are not durable knowledge.
+        name = pure.name
+        if name in KNOWLEDGE_WIKI_EXCLUDED or pure.as_posix().endswith("/log.md"):
+            return False
+    suffix = pure.suffix.lower()
+    return suffix in KNOWLEDGE_DIR_EXTENSIONS[top]
+
+
+def _select_knowledge_sources(
+    root: Path,
+    excluded_roots: tuple[Path, ...] = (),
+) -> tuple[list[str], list[str]]:
+    """Walk only allowlisted durable Ops knowledge; fail closed on incomplete scans."""
+    errors: list[str] = []
+    rel_paths: list[str] = []
+    try:
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return [], [f"Knowledge Ops root is unavailable: {exc}"]
+
+    def consider(path: Path) -> None:
+        if path.is_symlink():
+            return
+        try:
+            if not path.is_file():
+                return
+            resolved = path.resolve(strict=True)
+            if not _contains(resolved_root, resolved):
+                errors.append("Knowledge source escaped the Ops root")
+                return
+            if any(_contains(excluded, resolved) for excluded in excluded_roots):
+                return
+            rel = resolved.relative_to(resolved_root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            errors.append("Knowledge source could not be resolved inside Ops")
+            return
+        if not _knowledge_path_allowed(rel):
+            return
+        try:
+            size = resolved.stat().st_size
+        except OSError:
+            errors.append("Knowledge source became unreadable during scan")
+            return
+        if size <= 0 or size > _MAX_KNOWLEDGE_FILE_BYTES:
+            # Oversized or empty files are skipped, not fatal - still fail if
+            # the walk itself is incomplete.
+            return
+        rel_paths.append(rel)
+        if len(rel_paths) > _MAX_SOURCE_FILES:
+            raise GraphBuildError("graph source count exceeds the server limit")
+
+    for name in sorted(KNOWLEDGE_ROOT_FILES):
+        candidate = resolved_root / name
+        if candidate.exists() or candidate.is_symlink():
+            consider(candidate)
+
+    for dirname in sorted(KNOWLEDGE_DIR_EXTENSIONS):
+        base = resolved_root / dirname
+        if base.is_symlink():
+            continue
+        if not base.is_dir():
+            continue
+        stack = [base]
+        while stack:
+            current = stack.pop()
+            if current.is_symlink():
+                continue
+            try:
+                entries = list(current.iterdir())
+            except OSError:
+                errors.append("Knowledge directory walk was incomplete")
+                continue
+            for entry in entries:
+                if entry.is_symlink():
+                    continue
+                if entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
+                    continue
+                if entry.name.startswith(".") and entry.name not in {".md"}:
+                    # Hidden dirs/files are never durable Knowledge sources.
+                    if entry.is_dir() or entry.is_file():
+                        continue
+                try:
+                    if entry.is_dir():
+                        # Nested VCS / runtime trees never enter the allowlist.
+                        if (entry / ".git").exists() or entry.name == ".git":
+                            continue
+                        stack.append(entry)
+                    elif entry.is_file():
+                        consider(entry)
+                except OSError:
+                    errors.append("Knowledge directory walk was incomplete")
+
+    return sorted(set(rel_paths)), errors
+
+
 def _select_graphify_sources(
     root: Path,
     kind: str,
@@ -416,10 +585,7 @@ def _select_graphify_sources(
 ) -> tuple[list[str], list[str]]:
     """Return exact scope-relative source paths and incomplete-scan diagnostics."""
     if kind == "knowledge":
-        seed = root / "container.md"
-        if seed.is_symlink() or not seed.is_file():
-            return [], []
-        return ["container.md"], []
+        return _select_knowledge_sources(root, excluded_roots)
 
     from graphify.detect import detect
 
@@ -446,6 +612,15 @@ def _select_graphify_sources(
         if len(rel_paths) > _MAX_SOURCE_FILES:
             raise GraphBuildError("graph source count exceeds the server limit")
     return sorted(set(rel_paths)), errors
+
+
+def semantic_backend_label(*, kind: str, egress_enabled: bool) -> str:
+    """Record which extraction backend a generation used (or refused)."""
+    del kind  # Code and Knowledge both stay local-structural in this group.
+    if egress_enabled:
+        # Explicit opt-in is visible, but cloud extraction is still refused.
+        return SEMANTIC_BACKEND_DISABLED
+    return SEMANTIC_BACKEND_LOCAL
 
 
 def _build_graphify_worker(
@@ -1074,12 +1249,13 @@ class GraphContextService:
         *,
         owner_user_id: int,
         container_slug: str,
-        area_id: int,
+        area_id: int | None = None,
+        kind: str = "code",
     ) -> str | None:
         scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
-            kind="code",
+            kind=kind,
             area_id=area_id,
             create_output=False,
         )
@@ -1087,7 +1263,7 @@ class GraphContextService:
         try:
             rel_paths, errors = _select_graphify_sources(
                 scope.root,
-                "code",
+                kind,
                 cache,
                 scope.excluded_roots,
             )
@@ -1096,6 +1272,20 @@ class GraphContextService:
             return _fingerprint_files(scope.root, rel_paths, scope.excluded_roots)
         finally:
             shutil.rmtree(cache, ignore_errors=True)
+
+    def knowledge_source_signature(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+    ) -> str | None:
+        """Fingerprint allowlisted Knowledge sources for debounce and audit."""
+        return self.live_source_fingerprint(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+        )
 
     def _owned_container(
         self,
@@ -1626,12 +1816,15 @@ class GraphContextService:
                     and current["rebuild_reason"]
                 )
                 next_state = "queued" if follow_up else "fresh"
+                backend = str(
+                    expected_metadata.get("semantic_backend") or SEMANTIC_BACKEND_LOCAL
+                )
                 if "repo_head" in columns:
                     if follow_up:
                         self._db_factory().execute(
                             "UPDATE graph_states SET state = ?, generation = ?, "
                             "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                            "semantic_backend = 'disabled', last_success_at = ?, "
+                            "semantic_backend = ?, last_success_at = ?, "
                             "last_attempt_at = ?, last_error = NULL, "
                             "repo_head = ?, "
                             "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -1641,6 +1834,7 @@ class GraphContextService:
                                 expected_metadata["source_fingerprint"],
                                 graph_sha256,
                                 GRAPHIFY_VERSION,
+                                backend,
                                 now,
                                 now,
                                 repo_head,
@@ -1651,7 +1845,7 @@ class GraphContextService:
                         self._db_factory().execute(
                             "UPDATE graph_states SET state = 'fresh', generation = ?, "
                             "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                            "semantic_backend = 'disabled', last_success_at = ?, "
+                            "semantic_backend = ?, last_success_at = ?, "
                             "last_attempt_at = ?, last_error = NULL, "
                             "repo_head = ?, pending_base_commit = NULL, "
                             "pending_head_commit = NULL, rebuild_reason = NULL, "
@@ -1661,6 +1855,7 @@ class GraphContextService:
                                 expected_metadata["source_fingerprint"],
                                 graph_sha256,
                                 GRAPHIFY_VERSION,
+                                backend,
                                 now,
                                 now,
                                 repo_head,
@@ -1671,7 +1866,7 @@ class GraphContextService:
                     self._db_factory().execute(
                         "UPDATE graph_states SET state = 'fresh', generation = ?, "
                         "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                        "semantic_backend = 'disabled', last_success_at = ?, "
+                        "semantic_backend = ?, last_success_at = ?, "
                         "last_attempt_at = ?, last_error = NULL, "
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (
@@ -1679,6 +1874,7 @@ class GraphContextService:
                             expected_metadata["source_fingerprint"],
                             graph_sha256,
                             GRAPHIFY_VERSION,
+                            backend,
                             now,
                             now,
                             state_row["id"],
@@ -1710,6 +1906,51 @@ class GraphContextService:
         pending_base_commit: str | None = None,
         pending_head_commit: str | None = None,
     ) -> dict[str, Any]:
+        """Create state if needed, optionally mark stale, and queue a Code rebuild."""
+        return self._enqueue_rebuild(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="code",
+            area_id=area_id,
+            reason=reason,
+            mode=mode,
+            mark_stale=mark_stale,
+            pending_base_commit=pending_base_commit,
+            pending_head_commit=pending_head_commit,
+        )
+
+    def enqueue_knowledge_rebuild(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        reason: str,
+        mark_stale: bool = False,
+    ) -> dict[str, Any]:
+        """Create Knowledge state if needed and queue a full Ops rebuild."""
+        return self._enqueue_rebuild(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+            reason=reason,
+            mode="full",
+            mark_stale=mark_stale,
+        )
+
+    def _enqueue_rebuild(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        kind: str,
+        area_id: int | None,
+        reason: str,
+        mode: str = "full",
+        mark_stale: bool = False,
+        pending_base_commit: str | None = None,
+        pending_head_commit: str | None = None,
+    ) -> dict[str, Any]:
         """Create state if needed, optionally mark stale, and queue a rebuild.
 
         When a build is already in flight, persist rebuild intent (reason +
@@ -1721,7 +1962,7 @@ class GraphContextService:
         scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
-            kind="code",
+            kind=kind,
             area_id=area_id,
             create_output=True,
         )
@@ -1804,15 +2045,21 @@ class GraphContextService:
         pending_head_commit: str | None = None,
         rebuild_reason: str | None = None,
     ) -> dict[str, Any]:
+        egress_enabled = bool(self.config.get("graph_semantic_egress_enabled"))
+        backend = semantic_backend_label(
+            kind=kind,
+            egress_enabled=egress_enabled,
+        )
         if rebuild_reason:
             log.info(
-                "code graph rebuild reason=%s container=%s area=%s",
+                "%s graph rebuild reason=%s container=%s area=%s semantic_backend=%s",
+                kind,
                 rebuild_reason,
                 container_slug,
                 area_id,
+                backend,
             )
         scope = self.resolve_scope(
-
             owner_user_id=owner_user_id,
             container_slug=container_slug,
             kind=kind,
@@ -1850,12 +2097,20 @@ class GraphContextService:
                 raise GraphBuildError(
                     f"Graphify version mismatch: expected {GRAPHIFY_VERSION}, got {installed}"
                 )
-            if (
-                scope.kind == "knowledge"
-                and bool(self.config.get("graph_semantic_egress_enabled"))
-            ):
+            # Cloud semantic extraction never runs from credentials alone.
+            # Even an explicit egress opt-in fails closed until a future policy
+            # ships a real local-or-cloud adapter.
+            if scope.kind == "knowledge" and egress_enabled:
+                log.warning(
+                    "knowledge graph rebuild refused: semantic egress opt-in is "
+                    "set but cloud extraction is not implemented "
+                    "(container=%s backend=%s)",
+                    container_slug,
+                    backend,
+                )
                 raise GraphBuildError(
-                    "semantic model egress is not implemented in this delivery group"
+                    "semantic model egress is not implemented; "
+                    "Knowledge graphs remain local-structural only"
                 )
             # Claim any queued intent before the building transition clears pending.
             claimed_head: str | None
@@ -1908,7 +2163,11 @@ class GraphContextService:
                 )
             )
             stage = generation_dir / "graph.json"
-            placeholder_metadata = scope.metadata(generation, "")
+            placeholder_metadata = scope.metadata(
+                generation,
+                "",
+                semantic_backend=backend,
+            )
             timeout_seconds = min(
                 600,
                 max(
@@ -1986,6 +2245,16 @@ class GraphContextService:
             expected_metadata = scope.metadata(
                 generation,
                 str(build_result["source_fingerprint"]),
+                semantic_backend=backend,
+            )
+            log.info(
+                "%s graph published container=%s generation=%s semantic_backend=%s "
+                "sources=%s",
+                scope.kind,
+                scope.container_slug,
+                generation,
+                backend,
+                len(build_result.get("source_files") or []),
             )
             row = self._publish_generation(
                 scope=scope,
@@ -2141,9 +2410,13 @@ class GraphContextService:
                 message="No validated graph generation is available.",
             )
 
+        published_backend = str(
+            row["semantic_backend"] or SEMANTIC_BACKEND_LOCAL
+        )
         expected_metadata = scope.metadata(
             int(row["generation"]),
             str(row["source_fingerprint"]),
+            semantic_backend=published_backend,
         )
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue(maxsize=1)

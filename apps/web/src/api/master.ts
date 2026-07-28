@@ -57,7 +57,17 @@ export type MasterDesk = {
   attention: AttentionItem[]
   checkpoints: MasterCheckpoint[]
 }
-export type MasterSettings = MasterBudgets & { runner_id: string; max_parallel: number }
+export type GraphPolicy = {
+  semantic_egress_enabled: boolean
+  local_only: boolean
+  semantic_backend_default: string
+  description: string
+}
+export type MasterSettings = MasterBudgets & {
+  runner_id: string
+  max_parallel: number
+  graph_policy?: GraphPolicy
+}
 
 type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs'> & {
   master_run?: MasterDesk['master_run']

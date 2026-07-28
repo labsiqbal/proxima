@@ -158,7 +158,9 @@ wrong scope, timeout, or killed worker fails before atomic publication and leave
 the prior canonical graph unchanged. Public state and events omit internal paths.
 Graphify performs only local structural extraction. Semantic model egress defaults
 off, Ops content is never sent to a cloud model, and enabling the future egress
-switch makes Knowledge rebuild fail closed.
+switch makes Knowledge rebuild fail closed. Local-only policy is visible in Master
+settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and docs.
+Configured cloud credentials alone never enable egress.
 
 Code graph lifecycle (Group 10) never promotes a Task worktree graph as canonical.
 Rebuilds and audits only touch registered Area roots for that Container. Repo
@@ -167,6 +169,14 @@ selected Area; the proxy strips or ignores arbitrary `project_path`, so a prompt
 cannot retarget another Area's graph through MCP parameters. Master runs do not
 receive this MCP entry. Graph absence or rebuild failure never blocks Task
 execution or SQLite Live state reads.
+
+Knowledge graph lifecycle (Group 11) never reads outside the resolved Ops allowlist
+for that Container. Secret-like names, symlinks, nested repositories, graph
+outputs, Task transcripts, and runtime data are rejected before extraction. Only
+the affected Container is marked stale after included Ops changes. The Master
+context router never merges fleet-wide graphs; focused Knowledge/Code results are
+scope-checked so another Container's graph nodes cannot appear. "What is running?"
+always answers from SQLite Live state even when every graph is missing or stale.
 
 ## Script steps (hash-bound trust, honest statement)
 

@@ -364,9 +364,10 @@ server-owned handler in the API process. Supported reads are `list_containers`,
 `get_container`, `get_live_state`, `list_tasks`, `list_task_agents`, and
 `list_recipes`. Supported mutations are `delegate_tasks`, `start_tasks`, and
 `create_attention`.
-`query_context` has a stable typed `feature_unavailable` result until the later
-graph/context slice. No tool accepts or returns filesystem paths, credentials,
-runner homes, configuration, or arbitrary tool input.
+`query_context` routes Fleet / Live / Knowledge / Code layers through the scoped
+context router (Group 11) with budgets and provenance. No tool accepts or returns
+filesystem paths, credentials, runner homes, configuration, or arbitrary tool
+input.
 
 Group 9 supplies the path-free graph state boundary beneath that future tool.
 With Master enabled, authenticated owners can read exact Container and Area graph
@@ -396,12 +397,39 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
   fixed to exactly their selected Area; arbitrary `project_path` is ignored.
   The Master does not inherit this MCP entry.
 
-Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
-context routing remain later delivery groups. Structural extraction stays local;
-semantic model egress defaults off.
+Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**:
+
+- At most one Knowledge graph per Container Ops area at
+  `<container>/ops/graphify-out/graph.json`, with state in `graph_states`.
+- Builds read only the resolved Ops allowlist: `container.md`, `design.md`,
+  curated `wiki/**/*.md` (not `index.md` / `log.md`), `reports/**` text docs, and
+  durable artifact metadata (`.md` / `.json` under `artifacts/`). Repo Areas,
+  secrets, caches, graph outputs, Task transcripts, scripts, uploads, exports,
+  and runtime data are excluded. Symlinks and nested VCS trees are skipped.
+- Container create/link enqueues the initial Knowledge build. An Ops Task that
+  finishes marks **only that Container's** Knowledge graph stale and queues a
+  rebuild. Owner edits of allowlisted Ops content are debounced; startup and
+  scheduled audits detect fingerprint or tool drift; a scheduled full rebuild
+  re-walks registered Knowledge graphs only.
+- Failed, interrupted, ENOSPC, malformed, or incomplete Knowledge rebuilds keep
+  last-good bytes. Tasks and SQLite Live state never depend on graph availability.
+- `query_context` routes through `context_router`: Fleet questions to the Fleet
+  registry, running/green/blocked/status to SQLite Live state, Container facts and
+  decisions to one Knowledge graph, code structure and impact to one Code graph.
+  Mixed requests call only the needed layers with budgets and never merge
+  fleet-wide graphs. Focused graph results cannot include another Container's
+  nodes. Every graph layer keeps generation, freshness, citations, and provenance.
+- Local-only structural extraction is the default and is visible in Master
+  settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and
+  docs. Cloud semantic egress stays off unless an explicit future captain policy
+  enables a real adapter; configured cloud credentials never unlock egress.
+
+Focus epochs, history projection, and safe-self-update remain later delivery
+groups.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
-`POST /api/containers/{slug}/graphs/rebuild`.
+`POST /api/containers/{slug}/graphs/rebuild`,
+`GET /api/settings/master` (includes `graph_policy`).
 
 `delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
 or start jobs directly. A Master batch may name client-local Task keys and
