@@ -349,11 +349,12 @@ credential. Its stored capability selection is exactly
 Every runner-native permission request and native tool event is rejected. Codex
 uses empty execution environments plus a private loopback provider firewall that
 replaces its complete tool carrier with exact server-owned broker schemas and
-replaces runner-generated developer context with a fixed path-free policy. The
-firewall rejects schema drift, encoded or ambiguous transport, redirects, and
-oversized responses before releasing provider bytes. Codex's carrier-free HTTP
-fallback is accepted only after exact dynamic schemas are attested on the same
-ephemeral thread. Host paths and bearer material stay out of model input. See
+replaces runner-generated developer context with a fixed filesystem-isolated
+policy. The firewall rejects schema drift, encoded or ambiguous transport,
+redirects, and oversized responses before releasing provider bytes. Codex's
+carrier-free HTTP fallback is accepted only after exact dynamic schemas are
+attested on the same ephemeral thread. Host paths and bearer material stay out of
+model input. See
 [Runner conformance](runner-conformance.md) for the adapter matrix.
 
 Codex Master calls native dynamic Proxima functions; the compatibility harness

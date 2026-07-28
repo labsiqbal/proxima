@@ -14,6 +14,7 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from fastapi import HTTPException
@@ -46,9 +47,17 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
-_PATH_TEXT = re.compile(
-    r"""(?<![A-Za-z0-9])(?:/[^\s"'<>]+|[A-Za-z]:[/\\][^\s"'<>]+|"""
-    r"""\\\\[^\s"'<>]+|(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
+_NON_FILE_URI_TEXT = re.compile(
+    r"""(?i)\b(?!file:)[a-z][a-z0-9+.-]*://[^\s"'<>]+"""
+)
+_ABSOLUTE_PATH_TEXT = re.compile(
+    r"""(?ix)(?<![A-Za-z0-9])(?:file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
+    r"""[A-Za-z]:[/\\][^\s"'<>]+|\\\\[^\s"'<>]+|/[^\s"'<>]+|"""
+    r"""(?:\.\.?[/\\]|~[/\\])[^\s"'<>]*)"""
+)
+_RELATIVE_PATH_TEXT = re.compile(
+    r"""(?<![A-Za-z0-9._-])(?:[A-Za-z0-9._-]+[/\\])+"""
+    r"""[A-Za-z0-9._-]+(?![A-Za-z0-9._-])"""
 )
 _SECRET_TEXT = re.compile(
     r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
@@ -236,7 +245,7 @@ def _validation_error(name: str, arguments: Any) -> MasterToolError | None:
         ),
     )
     if not errors:
-        unsafe = _unsafe_text(arguments)
+        unsafe = _unsafe_input_text(arguments)
         if unsafe is not None:
             return MasterToolError(
                 "unsafe_tool_text",
@@ -266,21 +275,98 @@ def validate_master_tool_call(
     }
 
 
-def _unsafe_text(value: Any) -> str | None:
+def _unsafe_string(value: str) -> str | None:
+    without_uris = _NON_FILE_URI_TEXT.sub("", value)
+    if (
+        _ABSOLUTE_PATH_TEXT.search(without_uris)
+        or _RELATIVE_PATH_TEXT.search(without_uris)
+    ):
+        return "a filesystem path"
+    if _SECRET_TEXT.search(value):
+        return "credential-like material"
+    return None
+
+
+def _unsafe_input_text(value: Any) -> str | None:
     if isinstance(value, str):
-        if _PATH_TEXT.search(value):
-            return "a filesystem path"
-        if _SECRET_TEXT.search(value):
-            return "credential-like material"
-        return None
+        return _unsafe_string(value)
     if isinstance(value, dict):
         for nested in value.values():
-            unsafe = _unsafe_text(nested)
+            unsafe = _unsafe_input_text(nested)
             if unsafe is not None:
                 return unsafe
     elif isinstance(value, list):
         for nested in value:
-            unsafe = _unsafe_text(nested)
+            unsafe = _unsafe_input_text(nested)
+            if unsafe is not None:
+                return unsafe
+    return None
+
+
+def _valid_scope_relative_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 4_000:
+        return False
+    if (
+        "\\" in value
+        or "\x00" in value
+        or value.startswith("~")
+        or re.match(r"(?i)[a-z][a-z0-9+.-]*:", value)
+        or _SECRET_TEXT.search(value)
+    ):
+        return False
+    parts = value.split("/")
+    if any(part in {"", ".", "..", "~"} for part in parts):
+        return False
+    path = PurePosixPath(value)
+    return not path.is_absolute() and path.as_posix() == value
+
+
+def _unsafe_citations(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return "an invalid scope-relative citation"
+    for citation in value:
+        if not isinstance(citation, dict):
+            return "an invalid scope-relative citation"
+        if set(citation) - {"path", "path_kind", "location"}:
+            return "an invalid scope-relative citation"
+        if citation.get("path_kind") != "scope_relative":
+            return "an invalid scope-relative citation"
+        if not _valid_scope_relative_path(citation.get("path")):
+            return "an invalid scope-relative citation"
+        if "location" in citation and not isinstance(citation["location"], str):
+            return "an invalid scope-relative citation"
+        for key in ("path_kind", "location"):
+            if key in citation:
+                unsafe = _unsafe_result_text(citation[key])
+                if unsafe is not None:
+                    return unsafe
+    return None
+
+
+def _unsafe_result_text(
+    value: Any,
+    *,
+    allow_scope_relative_citations: bool = False,
+) -> str | None:
+    if isinstance(value, str):
+        return _unsafe_string(value)
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if allow_scope_relative_citations and key == "citations":
+                unsafe = _unsafe_citations(nested)
+            else:
+                unsafe = _unsafe_result_text(
+                    nested,
+                    allow_scope_relative_citations=allow_scope_relative_citations,
+                )
+            if unsafe is not None:
+                return unsafe
+    elif isinstance(value, list):
+        for nested in value:
+            unsafe = _unsafe_result_text(
+                nested,
+                allow_scope_relative_citations=allow_scope_relative_citations,
+            )
             if unsafe is not None:
                 return unsafe
     return None
@@ -392,7 +478,10 @@ class MasterToolBroker:
             return self._error(name, error.code, str(error))
         try:
             data = self._definitions[name].handler(dict(arguments))
-            unsafe = _unsafe_text(data)
+            unsafe = _unsafe_result_text(
+                data,
+                allow_scope_relative_citations=name == "query_context",
+            )
             if unsafe is not None:
                 return self._error(
                     name,

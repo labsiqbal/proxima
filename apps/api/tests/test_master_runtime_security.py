@@ -15,7 +15,11 @@ from proxima_api.master_runtime import (
     MASTER_MAX_TURN_OUTPUT_BYTES,
     handle_master_response,
 )
-from proxima_api.master_tool_broker import MasterToolBroker, _unsafe_text
+from proxima_api.master_tool_broker import (
+    MasterToolBroker,
+    _unsafe_input_text,
+    _unsafe_result_text,
+)
 from proxima_api.runner_specs import RUNNER_SPECS, RunnerSpec
 from proxima_api.run_prompting import MASTER_HISTORY_BYTES, RunPrompting
 
@@ -313,26 +317,77 @@ def test_invalid_envelope_rejects_valid_mutation_in_same_round(
         {"label": "path:/home/owner/secret"},
         {"relations": [{"detail": r"file=C:\Users\owner\secret"}]},
         {"detail": r"share=\\server\owner\secret"},
+        {"detail": "file:///home/owner/secret"},
     ],
 )
 def test_master_tool_path_guard_catches_absolute_paths_after_punctuation(value):
-    assert _unsafe_text(value) == "a filesystem path"
+    assert _unsafe_input_text(value) == "a filesystem path"
 
 
-def test_master_tool_path_guard_allows_scope_relative_citations():
-    assert (
-        _unsafe_text(
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/docs/reference",
+        "http://example.com/docs/reference",
+        "ssh://example.com/docs/reference",
+    ],
+)
+def test_master_tool_path_guard_allows_non_file_urls(url):
+    value = {"description": f"See {url} for details"}
+
+    assert _unsafe_input_text(value) is None
+    assert _unsafe_result_text(value) is None
+
+
+def test_master_tool_path_guard_allows_only_structural_scope_relative_citations():
+    citations = {
+        "citations": [
             {
-                "citations": [
-                    {
-                        "path": "wiki/note.md",
-                        "path_kind": "scope_relative",
-                    }
-                ]
+                "path": "wiki/note.md",
+                "path_kind": "scope_relative",
+                "location": "line 2",
             }
+        ]
+    }
+
+    assert (
+        _unsafe_result_text(
+            citations,
+            allow_scope_relative_citations=True,
         )
         is None
     )
+    assert _unsafe_input_text(citations) == "a filesystem path"
+    assert _unsafe_result_text(citations) == "a filesystem path"
+    assert (
+        _unsafe_result_text(
+            {"label": "wiki/note.md"},
+            allow_scope_relative_citations=True,
+        )
+        == "a filesystem path"
+    )
+    assert (
+        _unsafe_result_text(
+            {"citations": [{"path": "wiki/note.md"}]},
+            allow_scope_relative_citations=True,
+        )
+        == "an invalid scope-relative citation"
+    )
+    for path in ("../secret", "wiki/../secret", "/home/owner/secret"):
+        assert (
+            _unsafe_result_text(
+                {
+                    "citations": [
+                        {
+                            "path": path,
+                            "path_kind": "scope_relative",
+                        }
+                    ]
+                },
+                allow_scope_relative_citations=True,
+            )
+            == "an invalid scope-relative citation"
+        )
 
 
 def test_master_policy_allows_only_validated_scope_relative_citations():
@@ -396,7 +451,7 @@ def test_master_tool_broker_validates_schema_and_never_returns_host_paths(
             "tasks": [
                 {
                     "title": "Unsafe",
-                    "brief": "Read path:/etc/passwd",
+                    "brief": "Read wiki/note.md",
                     "container_id": container_id,
                     "area_id": area_id,
                     "profile_id": profile_id,

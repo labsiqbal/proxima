@@ -103,7 +103,7 @@ def _string_values(value: Any) -> Iterable[str]:
 
 
 def reconstruct_developer_context(payload: dict[str, Any]) -> dict[str, Any]:
-    """Discard runner-generated developer text and install a path-free policy."""
+    """Discard runner developer text and install a filesystem-isolated policy."""
     inputs = payload.get("input")
     if isinstance(inputs, list):
         retained = [

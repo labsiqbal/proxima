@@ -121,11 +121,11 @@ request is denied and every runner-native tool event fails the turn. Codex
 app-server 0.145.0 or newer proves this contract through empty execution
 environments and a loopback provider firewall. The firewall discards Codex's full
 tool set, injects only exact server-owned broker schemas, discards runner-generated
-developer context, and installs a fixed path-free developer policy. Schema drift
-fails closed. Its single secret route rejects ambiguous or encoded requests,
-redirects, and encoded responses, and buffers a bounded provider response before
-releasing it to Codex. Bearer material remains only in the provider HTTP header. Other
-production adapters remain unsupported for Master. See
+developer context, and installs a fixed filesystem-isolated developer policy.
+Schema drift fails closed. Its single secret route rejects ambiguous or encoded
+requests, redirects, and encoded responses, and buffers a bounded provider
+response before releasing it to Codex. Bearer material remains only in the
+provider HTTP header. Other production adapters remain unsupported for Master. See
 [runner-conformance.md](runner-conformance.md).
 
 Master product actions cross only `MasterToolBroker`. Its closed JSON schemas accept

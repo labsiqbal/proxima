@@ -67,11 +67,12 @@ every run. Native permission requests are denied and native tool events fail the
 turn. Codex's loopback provider firewall removes every runner-native model tool and
 reconstructs the complete tool carrier from exact server-owned broker schemas. It
 rejects schema drift, discards runner-generated developer context, and installs a
-fixed path-free developer policy before provider forwarding. Its secret loopback
-route rejects ambiguous framing, encoded bodies and responses, redirects, and
-oversized input or output before Codex receives a partial response. The provider
-bearer remains only in its HTTP header. The schema-validated `MasterToolBroker` accepts only
-bounded product IDs and text and returns no absolute host paths or secret material.
+fixed filesystem-isolated developer policy before provider forwarding. Its secret
+loopback route rejects ambiguous framing, encoded bodies and responses, redirects,
+and oversized input or output before Codex receives a partial response. The
+provider bearer remains only in its HTTP header. The schema-validated
+`MasterToolBroker` accepts only bounded product IDs and text and returns no
+absolute host paths or secret material.
 `query_context` may return validated source citations relative to the selected Ops
 or Code Area scope. A streaming parser, durable root-turn envelope ledger, and
 byte/round/call caps make malformed, replayed, duplicate, and oversized model output
