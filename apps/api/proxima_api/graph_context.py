@@ -964,34 +964,52 @@ class GraphContextService:
             return [], [], "unknown history"
         if merge_base.stdout.strip() != base:
             return [], [], "force-push or non-fast-forward history"
-        names = _git(
+        status = _git(
             root,
             "diff",
-            "--name-only",
-            "--diff-filter=ACMR",
+            "--name-status",
+            "--find-renames",
             f"{base}..{head}",
             check=False,
         )
-        deleted = _git(
-            root,
-            "diff",
-            "--name-only",
-            "--diff-filter=D",
-            f"{base}..{head}",
-            check=False,
-        )
-        if names.returncode != 0 or deleted.returncode != 0:
+        if status.returncode != 0:
             return [], [], "diff failed"
-        changed = [
-            line.strip().replace("\\", "/")
-            for line in names.stdout.splitlines()
-            if line.strip()
-        ]
-        removed = [
-            line.strip().replace("\\", "/")
-            for line in deleted.stdout.splitlines()
-            if line.strip()
-        ]
+        changed: list[str] = []
+        removed: list[str] = []
+        for line in status.stdout.splitlines():
+            raw = line.strip()
+            if not raw:
+                continue
+            parts = raw.split("\t")
+            code = parts[0].strip() if parts else ""
+            if not code:
+                continue
+            kind = code[0].upper()
+            if kind in {"R", "C"}:
+                if len(parts) < 3:
+                    return [], [], "diff failed"
+                old_path = parts[1].strip().replace("\\", "/")
+                new_path = parts[2].strip().replace("\\", "/")
+                if kind == "R" and old_path:
+                    removed.append(old_path)
+                elif kind == "C" and old_path:
+                    changed.append(old_path)
+                if new_path:
+                    changed.append(new_path)
+            elif kind == "D":
+                if len(parts) < 2:
+                    return [], [], "diff failed"
+                path = parts[1].strip().replace("\\", "/")
+                if path:
+                    removed.append(path)
+            elif kind in {"A", "M", "T"}:
+                if len(parts) < 2:
+                    return [], [], "diff failed"
+                path = parts[1].strip().replace("\\", "/")
+                if path:
+                    changed.append(path)
+            else:
+                return [], [], f"unsupported diff status {code}"
         return changed, removed, None
 
     def live_source_fingerprint(
@@ -1745,6 +1763,7 @@ class GraphContextService:
         if not lock.acquire(blocking=False):
             raise GraphBuildError("this graph scope is already building")
         generation_dir: Path | None = None
+        build_mode = "full"
         state_id = int(state_row["id"])
         # Last-success tool pin comes from the published graph, not graph_states:
         # failed/queued/building transitions overwrite the DB column with the
@@ -1841,7 +1860,6 @@ class GraphContextService:
                 ),
             )
 
-            build_mode = "full"
             changed: list[str] = []
             deleted: list[str] = []
             base_graph: Path | None = None
@@ -1870,23 +1888,16 @@ class GraphContextService:
                         base_graph = scope.graph_path
                 # tool/version/history mismatch or empty diff falls back to full
 
-            try:
-                build_result = self._run_builder(
-                    scope=scope,
-                    stage=stage,
-                    metadata=placeholder_metadata,
-                    timeout_seconds=timeout_seconds,
-                    mode=build_mode,
-                    base_graph=base_graph,
-                    changed_rel_paths=changed,
-                    deleted_rel_paths=deleted,
-                )
-            except GraphBuildError:
-                if build_mode == "incremental":
-                    raise GraphBuildError(
-                        "incremental update failed; fallback_full required"
-                    ) from None
-                raise
+            build_result = self._run_builder(
+                scope=scope,
+                stage=stage,
+                metadata=placeholder_metadata,
+                timeout_seconds=timeout_seconds,
+                mode=build_mode,
+                base_graph=base_graph,
+                changed_rel_paths=changed,
+                deleted_rel_paths=deleted,
+            )
 
             expected_metadata = scope.metadata(
                 generation,
@@ -1907,6 +1918,10 @@ class GraphContextService:
                 state_id,
                 error=error,
             )
+            if build_mode == "incremental":
+                raise GraphBuildError(
+                    "incremental update failed; fallback_full required"
+                ) from None
             if isinstance(exc, GraphBuildError):
                 raise
             raise GraphBuildError(error) from exc
@@ -1917,6 +1932,10 @@ class GraphContextService:
                 state_id,
                 error=error,
             )
+            if build_mode == "incremental":
+                raise GraphBuildError(
+                    "incremental update failed; fallback_full required"
+                ) from None
             raise GraphBuildError(error) from exc
         finally:
             if generation_dir is not None:
