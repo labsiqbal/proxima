@@ -51,6 +51,12 @@ _CODE_RE = re.compile(
 )
 
 
+# Emission order for stable responses (broad → specific).
+_LAYER_EMIT_ORDER = (LAYER_FLEET, LAYER_LIVE, LAYER_KNOWLEDGE, LAYER_CODE)
+# When max_layers trims a mixed match, keep more specific layers first.
+_LAYER_KEEP_PRIORITY = (LAYER_CODE, LAYER_KNOWLEDGE, LAYER_LIVE, LAYER_FLEET)
+
+
 def classify_layers(query: str) -> list[str]:
     """Return ordered layers for a natural-language query (bounded, mixed OK)."""
     text = (query or "").strip()
@@ -68,9 +74,23 @@ def classify_layers(query: str) -> list[str]:
     # Default: a bare question with a container leans Knowledge; otherwise Fleet.
     if not layers:
         layers.append(LAYER_KNOWLEDGE)
-    # Stable order: fleet, live, knowledge, code.
-    order = [LAYER_FLEET, LAYER_LIVE, LAYER_KNOWLEDGE, LAYER_CODE]
-    return [layer for layer in order if layer in set(layers)]
+    matched = set(layers)
+    return [layer for layer in _LAYER_EMIT_ORDER if layer in matched]
+
+
+def select_layers(matched: list[str], max_layers: int) -> list[str]:
+    """Bound mixed matches, preferring specific layers, then emit in stable order."""
+    cap = max(1, min(4, int(max_layers)))
+    if len(matched) <= cap:
+        return list(matched)
+    kept: list[str] = []
+    for layer in _LAYER_KEEP_PRIORITY:
+        if layer in matched:
+            kept.append(layer)
+            if len(kept) >= cap:
+                break
+    kept_set = set(kept)
+    return [layer for layer in _LAYER_EMIT_ORDER if layer in kept_set]
 
 
 class ContextRouter:
@@ -101,10 +121,11 @@ class ContextRouter:
         token_budget: int | None = None,
         result_limit: int | None = None,
     ) -> dict[str, Any]:
-        layers = classify_layers(query)
+        matched = classify_layers(query)
         # Cap mixed requests so one turn cannot open every graph in the fleet.
+        # Prefer specific layers (code/knowledge) over broad ones (fleet) when trimming.
         max_layers = max(1, min(4, int(self.config.get("context_router_max_layers", 3))))
-        layers = layers[:max_layers]
+        layers = select_layers(matched, max_layers)
 
         resolved_container_id = container_id
         if resolved_container_id is None and focus_container_id is not None:
