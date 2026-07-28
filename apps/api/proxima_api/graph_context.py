@@ -19,6 +19,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import threading
@@ -96,6 +97,8 @@ _MAX_ERROR_CHARS = 1000
 _MAX_LABEL_CHARS = 500
 _MAX_ID_CHARS = 1000
 _MAX_SOURCE_FILES = 200_000
+_MAX_KNOWLEDGE_WALK_ENTRIES = 250_000
+_MAX_KNOWLEDGE_WALK_DIRECTORIES = 25_000
 _GIT_TIMEOUT_SECONDS = 30
 log = logging.getLogger("proxima.graph_context")
 
@@ -397,6 +400,162 @@ def _write_bytes_fsync(path: Path, payload: bytes) -> None:
             pass
 
 
+def _open_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise GraphValidationError("graph file is unavailable") from exc
+    try:
+        snapshot = os.fstat(descriptor)
+        if not stat.S_ISREG(snapshot.st_mode):
+            raise GraphValidationError("graph file is not a regular file")
+        if snapshot.st_size <= 0 or snapshot.st_size > max_bytes:
+            raise GraphValidationError("graph file exceeds its byte budget")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _regular_file_snapshot_matches(
+    before: os.stat_result,
+    after: os.stat_result,
+    total_bytes: int,
+) -> bool:
+    return (
+        before.st_dev == after.st_dev
+        and before.st_ino == after.st_ino
+        and before.st_size == after.st_size == total_bytes
+        and before.st_mtime_ns == after.st_mtime_ns
+        and before.st_ctime_ns == after.st_ctime_ns
+    )
+
+
+def _read_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[bytes, str]:
+    descriptor, before = _open_regular_file_bounded(
+        path,
+        max_bytes=max_bytes,
+    )
+    payload = bytearray()
+    digest = hashlib.sha256()
+    try:
+        while True:
+            remaining = max_bytes - len(payload)
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, remaining + 1),
+            )
+            if not block:
+                break
+            payload.extend(block)
+            digest.update(block)
+            if len(payload) > max_bytes:
+                raise GraphValidationError(
+                    "graph file exceeds its byte budget"
+                )
+        after = os.fstat(descriptor)
+        if not _regular_file_snapshot_matches(
+            before,
+            after,
+            len(payload),
+        ):
+            raise GraphValidationError("graph file changed while being read")
+    except OSError as exc:
+        raise GraphValidationError("graph file could not be read") from exc
+    finally:
+        os.close(descriptor)
+    return bytes(payload), digest.hexdigest()
+
+
+def _copy_regular_file_bounded(
+    source: Path,
+    destination: Path,
+    *,
+    max_bytes: int,
+) -> str:
+    source_descriptor, before = _open_regular_file_bounded(
+        source,
+        max_bytes=max_bytes,
+    )
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination_descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            dir=destination.parent,
+        )
+    except OSError as exc:
+        os.close(source_descriptor)
+        raise GraphValidationError(
+            "graph backup could not be created"
+        ) from exc
+    total_bytes = 0
+    digest = hashlib.sha256()
+    try:
+        with (
+            os.fdopen(source_descriptor, "rb") as source_handle,
+            os.fdopen(destination_descriptor, "wb") as destination_handle,
+        ):
+            source_descriptor = -1
+            destination_descriptor = -1
+            while True:
+                remaining = max_bytes - total_bytes
+                block = source_handle.read(
+                    min(1024 * 1024, remaining + 1)
+                )
+                if not block:
+                    break
+                total_bytes += len(block)
+                if total_bytes > max_bytes:
+                    raise GraphValidationError(
+                        "graph file exceeds its byte budget"
+                    )
+                destination_handle.write(block)
+                digest.update(block)
+            after = os.fstat(source_handle.fileno())
+            if not _regular_file_snapshot_matches(
+                before,
+                after,
+                total_bytes,
+            ):
+                raise GraphValidationError(
+                    "graph file changed while being copied"
+                )
+            destination_handle.flush()
+            os.fsync(destination_handle.fileno())
+        os.replace(temp_name, destination)
+        directory_descriptor = os.open(
+            destination.parent,
+            os.O_RDONLY,
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        raise GraphValidationError("graph file could not be copied") from exc
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        try:
+            Path(temp_name).unlink()
+        except FileNotFoundError:
+            pass
+    return digest.hexdigest()
+
+
 def _installed_graphify_version() -> str | None:
     try:
         return importlib.metadata.version(GRAPHIFY_DISTRIBUTION)
@@ -404,18 +563,28 @@ def _installed_graphify_version() -> str | None:
         return None
 
 
-def _published_graph_tool_version(graph_path: Path) -> str | None:
+def _published_graph_tool_version(
+    graph_path: Path,
+    *,
+    max_bytes: int,
+) -> str | None:
     """Return tool_version from the last successfully published graph.
 
     Reads canonical graph.json metadata only. Failed rebuilds must not rewrite
     this pin; graph_states.tool_version is not authoritative for incremental
     eligibility because transitions overwrite it with the installed pin.
     """
-    if graph_path.is_symlink() or not graph_path.is_file():
-        return None
     try:
-        data = json.loads(graph_path.read_bytes())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload, _ = _read_regular_file_bounded(
+            graph_path,
+            max_bytes=max_bytes,
+        )
+        data = json.loads(payload)
+    except (
+        GraphValidationError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         return None
     if not isinstance(data, dict):
         return None
@@ -566,6 +735,8 @@ def _select_knowledge_sources(
     """Walk only allowlisted durable Ops knowledge; fail closed on incomplete scans."""
     errors: list[str] = []
     rel_paths: list[str] = []
+    visited_entries = 0
+    visited_directories = 0
     try:
         resolved_root = root.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
@@ -619,32 +790,45 @@ def _select_knowledge_sources(
         stack = [base]
         while stack:
             current = stack.pop()
+            visited_directories += 1
+            if (
+                visited_directories
+                > _MAX_KNOWLEDGE_WALK_DIRECTORIES
+            ):
+                raise GraphBuildError(
+                    "Knowledge walk exceeded its directory budget"
+                )
             if current.is_symlink():
                 continue
             try:
-                entries = list(current.iterdir())
-            except OSError:
-                errors.append("Knowledge directory walk was incomplete")
-                continue
-            for entry in entries:
-                if entry.is_symlink():
-                    continue
-                if entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
-                    continue
-                if entry.name.startswith(".") and entry.name not in {".md"}:
-                    # Hidden dirs/files are never durable Knowledge sources.
-                    if entry.is_dir() or entry.is_file():
+                for entry in current.iterdir():
+                    visited_entries += 1
+                    if (
+                        visited_entries
+                        > _MAX_KNOWLEDGE_WALK_ENTRIES
+                    ):
+                        raise GraphBuildError(
+                            "Knowledge walk exceeded its entry budget"
+                        )
+                    if entry.is_symlink():
                         continue
-                try:
+                    if entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
+                        continue
+                    if (
+                        entry.name.startswith(".")
+                        and entry.name not in {".md"}
+                    ):
+                        continue
                     if entry.is_dir():
-                        # Nested VCS / runtime trees never enter the allowlist.
                         if _is_vcs_tree(entry):
                             continue
                         stack.append(entry)
                     elif entry.is_file():
                         consider(entry)
-                except OSError:
-                    errors.append("Knowledge directory walk was incomplete")
+            except GraphBuildError:
+                raise
+            except OSError:
+                errors.append("Knowledge directory walk was incomplete")
 
     return sorted(set(rel_paths)), errors
 
@@ -828,14 +1012,14 @@ def _validate_graph_data(
     excluded_roots: tuple[Path, ...] = (),
 ) -> tuple[dict[str, Any], str]:
     try:
-        stat = path.lstat()
-    except OSError as exc:
-        raise GraphValidationError("generated graph is missing") from exc
-    if path.is_symlink() or not path.is_file():
-        raise GraphValidationError("generated graph is not a regular file")
-    if stat.st_size <= 0 or stat.st_size > max_bytes:
-        raise GraphValidationError("generated graph exceeds its byte budget")
-    payload = path.read_bytes()
+        payload, graph_sha256 = _read_regular_file_bounded(
+            path,
+            max_bytes=max_bytes,
+        )
+    except GraphValidationError as exc:
+        raise GraphValidationError(
+            "generated graph is unavailable or exceeds its byte budget"
+        ) from exc
     try:
         data = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -891,7 +1075,7 @@ def _validate_graph_data(
     root_spellings = {str(root), root.as_posix()}
     if any(spelling and spelling in serialized for spelling in root_spellings):
         raise GraphValidationError("generated graph leaks an absolute scope path")
-    return data, hashlib.sha256(payload).hexdigest()
+    return data, graph_sha256
 
 
 def _citation(
@@ -2013,12 +2197,28 @@ class GraphContextService:
 
         canonical = scope.graph_path
         last_good = canonical.with_name("graph.last-good.json")
-        prior_bytes: bytes | None = None
+        rollback_path: Path | None = None
         if canonical.exists():
-            if canonical.is_symlink() or not canonical.is_file():
-                raise GraphValidationError("canonical graph is not a regular file")
-            prior_bytes = canonical.read_bytes()
-            _write_bytes_fsync(last_good, prior_bytes)
+            prior_backup = stage.with_name("prior-canonical.json")
+            prior_sha256 = _copy_regular_file_bounded(
+                canonical,
+                prior_backup,
+                max_bytes=max_bytes,
+            )
+            expected_prior_sha256 = str(
+                state_row["graph_sha256"] or ""
+            ).strip().lower()
+            if (
+                int(state_row["generation"] or 0) > 0
+                and expected_prior_sha256
+                and prior_sha256 != expected_prior_sha256
+            ):
+                raise GraphValidationError(
+                    "canonical graph no longer matches its published digest"
+                )
+            os.replace(prior_backup, last_good)
+            os.link(last_good, prior_backup)
+            rollback_path = prior_backup
         os.replace(stage, canonical)
         directory_fd = os.open(canonical.parent, os.O_RDONLY)
         try:
@@ -2120,10 +2320,18 @@ class GraphContextService:
                     (state_row["id"],),
                 ).fetchone()
         except Exception:
-            if prior_bytes is None:
+            if rollback_path is None:
                 canonical.unlink(missing_ok=True)
             else:
-                _write_bytes_fsync(canonical, prior_bytes)
+                os.replace(rollback_path, canonical)
+                directory_fd = os.open(
+                    canonical.parent,
+                    os.O_RDONLY,
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
             raise
         assert row is not None
         self._emit(scope, row)
@@ -2313,7 +2521,14 @@ class GraphContextService:
         # Last-success tool pin comes from the published graph, not graph_states:
         # failed/queued/building transitions overwrite the DB column with the
         # installed pin and would otherwise bypass the full-rebuild guard.
-        prior_tool_version = _published_graph_tool_version(scope.graph_path)
+        max_bytes = max(
+            1024,
+            int(self.config.get("graph_max_bytes", 0)),
+        )
+        prior_tool_version = _published_graph_tool_version(
+            scope.graph_path,
+            max_bytes=max_bytes,
+        )
         try:
             self._transition(scope, state_id, "queued")
             installed = _installed_graphify_version()

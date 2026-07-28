@@ -414,7 +414,13 @@ class KnowledgeGraphLifecycle:
             graph_path = Path(str(graph_path_raw)) if graph_path_raw else None
             published_tool = None
             if graph_path is not None:
-                published_tool = _published_graph_tool_version(graph_path)
+                published_tool = _published_graph_tool_version(
+                    graph_path,
+                    max_bytes=max(
+                        1024,
+                        int(self.config.get("graph_max_bytes", 0)),
+                    ),
+                )
             graph_unusable = generation > 0 and (
                 graph_path is None
                 or not graph_path.is_file()

@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from proxima_api import graph_context
 from proxima_api.graph_context import (
     GRAPHIFY_VERSION,
     SEMANTIC_BACKEND_LOCAL,
+    GraphBuildError,
     _knowledge_path_allowed,
     _select_knowledge_sources,
 )
@@ -146,6 +148,45 @@ def test_select_knowledge_sources_never_leaves_allowlist(tmp_path: Path):
     assert "wiki/nested-repo/secret.md" not in rels
     assert "artifacts/photo.png" not in rels
     assert all(_knowledge_path_allowed(rel) for rel in rels)
+
+
+def test_knowledge_walk_caps_visited_entries(
+    tmp_path: Path,
+    monkeypatch,
+):
+    ops = tmp_path / "ops"
+    wiki = ops / "wiki"
+    wiki.mkdir(parents=True)
+    for index in range(4):
+        (wiki / f"{index}.md").write_text("# Note\n", encoding="utf-8")
+    monkeypatch.setattr(
+        graph_context,
+        "_MAX_KNOWLEDGE_WALK_ENTRIES",
+        3,
+        raising=False,
+    )
+
+    with pytest.raises(GraphBuildError, match="entry budget"):
+        _select_knowledge_sources(ops)
+
+
+def test_knowledge_walk_caps_visited_directories(
+    tmp_path: Path,
+    monkeypatch,
+):
+    ops = tmp_path / "ops"
+    nested = ops / "wiki" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "note.md").write_text("# Note\n", encoding="utf-8")
+    monkeypatch.setattr(
+        graph_context,
+        "_MAX_KNOWLEDGE_WALK_DIRECTORIES",
+        1,
+        raising=False,
+    )
+
+    with pytest.raises(GraphBuildError, match="directory budget"):
+        _select_knowledge_sources(ops)
 
 
 def test_knowledge_scope_excludes_nested_container_roots(tmp_path: Path):

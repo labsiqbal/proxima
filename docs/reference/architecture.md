@@ -362,6 +362,8 @@ as a local Python library in a killable worker with server ceilings for time and
 output bytes. Structural Code extraction and the Ops Knowledge allowlist
 (container identity, curated wiki/decisions, reports, and durable artifact
 metadata) are local-structural; semantic model egress defaults off.
+Knowledge discovery iterates lazily and caps both visited entries and visited
+directories, so unsupported content still consumes a bounded walk budget.
 
 Each build writes to a same-filesystem temporary generation directory. Proxima
 validates the complete JSON shape, exact scope metadata, source citations, edge
@@ -369,10 +371,13 @@ provenance, source fingerprint, graph size, and resolved source containment befo
 an atomic canonical replacement. A killed, incomplete, malformed, or wrong-scope
 generation cannot replace the canonical graph. A successful replacement preserves
 the previous bytes as `graph.last-good.json`; a database finalization failure
-restores those prior bytes. Missing Graphify records an explicit `missing` state,
-and all other failures record `failed`, without affecting Tasks, Fleet, or Live
-state. Generated `graphify-out/` artifacts are treated as ignored build outputs
-inside the Area path unless a future project policy opts into version control.
+restores those prior bytes. Canonical metadata inspection and last-good copying use
+descriptor snapshots bounded by `graph_max_bytes`, and last-good publication is
+atomic without buffering the prior graph in the API process. Missing Graphify
+records an explicit `missing` state, and all other failures record `failed`,
+without affecting Tasks, Fleet, or Live state. Generated `graphify-out/` artifacts
+are treated as ignored build outputs inside the Area path unless a future project
+policy opts into version control.
 
 #### Code graph lifecycle (Group 10)
 
@@ -435,16 +440,17 @@ Task reaches `done` can delay a rebuild but cannot lose its intent.
 Mixed requests call a bounded set of exact layers and never merge fleet-wide graphs.
 Focused Knowledge/Code results are scope-checked so another Container's nodes cannot
 appear. Durable explicit targets and Container Focus are authoritative over
-model-supplied scope. A Container Focus without a pinned Area accepts an exact
-registered Area owned by that Container and rejects cross-Container Areas. Focused
-Live status terms are mapped to job statuses and filtered before the result limit;
-green, successful, and completed mean `done`. Unmatched focused questions use
-Knowledge, while unmatched fleet questions use Fleet and Live. Live state remains
-correct when every graph is missing or stale. Knowledge citations are re-resolved at
-query time, including ancestor VCS-marker checks, so a source that became part of a
-nested repository after publication is refused. There is no public graph query
-route; the Master broker returns validated Ops/Area-relative citation paths but
-never absolute host or internal graph paths.
+model-supplied scope. When an explicit target or Container Focus pins only the
+Container, the broker accepts an exact registered Area owned by that Container and
+rejects cross-Container Areas; an explicitly pinned Area remains authoritative.
+Focused Live status terms are mapped to job statuses and filtered before the result
+limit; green, successful, and completed mean `done`. Unmatched focused questions
+use Knowledge, while unmatched fleet questions use Fleet and Live. Live state
+remains correct when every graph is missing or stale. Knowledge citations are
+re-resolved at query time, including ancestor VCS-marker checks, so a source that
+became part of a nested repository after publication is refused. There is no public
+graph query route; the Master broker returns validated Ops/Area-relative citation
+paths but never absolute host or internal graph paths.
 
 Focus epochs, history projection, and safe-self-update remain later groups.
 

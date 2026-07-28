@@ -171,6 +171,67 @@ def test_query_context_uses_durable_scope_and_rejects_model_overrides(
     knowledge = accepted["result"]["results"][0]
     assert knowledge["scope"]["container_id"] == int(owner["id"])
 
+    pinned_area_conflict = explicit_broker.execute(
+        "query_context",
+        {
+            "query": "Where is BillingService defined?",
+            "container_id": int(owner["id"]),
+            "area_id": int(owner_code_areas[0]["id"]),
+        },
+    )
+    assert pinned_area_conflict["error"]["code"] == "context_scope_conflict"
+
+    explicit_container_message_id = api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Use my explicit Container')",
+        (session_id,),
+    ).lastrowid
+    api.app.state.db.execute(
+        "INSERT INTO master_message_context("
+        "message_id, focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id"
+        ") VALUES (?, 'container', ?, 'explicit', ?, NULL)",
+        (
+            explicit_container_message_id,
+            owner["id"],
+            owner["id"],
+        ),
+    )
+    explicit_container_broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        session_id,
+        origin_message_id=explicit_container_message_id,
+    )
+    explicit_area = explicit_container_broker.execute(
+        "query_context",
+        {
+            "query": "Where is BillingService defined?",
+            "container_id": int(owner["id"]),
+            "area_id": int(owner_code_areas[1]["id"]),
+        },
+    )
+    assert explicit_area["ok"] is True
+    explicit_code = next(
+        item
+        for item in explicit_area["result"]["results"]
+        if item["layer"] == "code"
+    )
+    assert explicit_code["scope"]["area_id"] == int(owner_code_areas[1]["id"])
+    explicit_cross_container = explicit_container_broker.execute(
+        "query_context",
+        {
+            "query": "Where is BillingService defined?",
+            "container_id": int(owner["id"]),
+            "area_id": other_code_area_id,
+        },
+    )
+    assert (
+        explicit_cross_container["error"]["code"]
+        == "context_scope_conflict"
+    )
+
     focus_message_id = api.app.state.db.execute(
         "INSERT INTO messages(session_id, role, content) "
         "VALUES (?, 'user', 'Use my focused Container')",

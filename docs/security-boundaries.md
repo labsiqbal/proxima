@@ -157,7 +157,10 @@ build and query time, then returned only as paths relative to that validated sco
 Build output is confined to a validated `graphify-out` directory inside that scope.
 A symlinked output directory, incomplete walk, escaped citation, malformed JSON,
 wrong scope, timeout, or killed worker fails before atomic publication and leaves
-the prior canonical graph unchanged. Public state and events omit internal paths.
+the prior canonical graph unchanged. Canonical reads use no-follow descriptor
+snapshots bounded by `graph_max_bytes`; last-good backup is a bounded streaming
+copy with atomic replacement. Knowledge traversal is lazy and caps visited entries
+and directories before extraction. Public state and events omit internal paths.
 Graphify performs only local structural extraction. Semantic model egress defaults
 off, Ops content is never sent to a cloud model, and enabling the future egress
 switch makes Knowledge rebuild fail closed. Local-only policy is visible in Master

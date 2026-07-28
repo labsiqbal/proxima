@@ -356,6 +356,7 @@ def hashlib_sha256(payload: bytes) -> str:
 
 def test_successful_replacement_retains_previous_last_good_generation(
     tmp_path: Path,
+    monkeypatch,
 ):
     api, headers = _api(tmp_path)
     project, area_id = _container(api, headers)
@@ -372,7 +373,8 @@ def test_successful_replacement_retains_previous_last_good_generation(
             (first["id"],),
         ).fetchone()["graph_path"]
     )
-    first_bytes = graph_path.read_bytes()
+    original_read_bytes = Path.read_bytes
+    first_bytes = original_read_bytes(graph_path)
     Path(project["path"], "app.py").write_text(
         "class BillingService:\n"
         "    def refund(self):\n"
@@ -380,6 +382,12 @@ def test_successful_replacement_retains_previous_last_good_generation(
         encoding="utf-8",
     )
 
+    def refuse_canonical_buffer(path: Path) -> bytes:
+        if path == graph_path:
+            raise AssertionError("canonical graph was buffered in memory")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse_canonical_buffer)
     second = _rebuild_code(
         api,
         headers,
@@ -387,8 +395,93 @@ def test_successful_replacement_retains_previous_last_good_generation(
         area_id=area_id,
     )
     assert second["generation"] == 2
-    assert graph_path.read_bytes() != first_bytes
-    assert graph_path.with_name("graph.last-good.json").read_bytes() == first_bytes
+    assert original_read_bytes(graph_path) != first_bytes
+    assert (
+        original_read_bytes(graph_path.with_name("graph.last-good.json"))
+        == first_bytes
+    )
+
+
+def test_published_tool_version_uses_bounded_descriptor_read(
+    tmp_path: Path,
+    monkeypatch,
+):
+    graph_path = tmp_path / "graph.json"
+    payload = json.dumps(
+        {
+            "nodes": [],
+            "links": [],
+            "graph": {
+                "proxima": {
+                    "tool_version": GRAPHIFY_VERSION,
+                }
+            },
+        }
+    ).encode()
+    graph_path.write_bytes(payload)
+    original_read_bytes = Path.read_bytes
+
+    def refuse_path_buffer(path: Path) -> bytes:
+        if path == graph_path:
+            raise AssertionError("published graph was read without a bound")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse_path_buffer)
+
+    assert (
+        graph_context._published_graph_tool_version(
+            graph_path,
+            max_bytes=len(payload),
+        )
+        == GRAPHIFY_VERSION
+    )
+    assert (
+        graph_context._published_graph_tool_version(
+            graph_path,
+            max_bytes=len(payload) - 1,
+        )
+        is None
+    )
+
+
+def test_rebuild_refuses_oversized_canonical_before_last_good_backup(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    project, area_id = _container(api, headers)
+    assert area_id is not None
+    rebuilt = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    graph_path = Path(
+        api.app.state.db.execute(
+            "SELECT graph_path FROM graph_states WHERE id = ?",
+            (rebuilt["id"],),
+        ).fetchone()["graph_path"]
+    )
+    max_bytes = max(4096, graph_path.stat().st_size * 2)
+    oversized = b"x" * (max_bytes + 1)
+    graph_path.write_bytes(oversized)
+    api.app.state.config["graph_max_bytes"] = max_bytes
+    Path(project["path"], "app.py").write_text(
+        "class BillingService:\n"
+        "    def refund(self):\n"
+        "        return 'refunded'\n",
+        encoding="utf-8",
+    )
+
+    response = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "code", "area_id": area_id},
+    )
+
+    assert response.status_code == 409, response.text
+    assert graph_path.read_bytes() == oversized
+    assert not graph_path.with_name("graph.last-good.json").exists()
 
 
 def test_query_revalidates_symlinks_and_never_reads_outside_registered_area(

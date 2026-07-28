@@ -807,7 +807,7 @@ class MasterToolBroker:
         area_id = requested_area_id
         context = self.message_context
         durable_scope = False
-        focused_container_scope = False
+        durable_container_only_scope = False
         if context and context.get("target_mode") == "explicit":
             durable_scope = True
             raw_container = context.get("target_container_id")
@@ -817,14 +817,14 @@ class MasterToolBroker:
                     "The owner-selected context is no longer available",
                 )
             container_id = _as_int(raw_container)
-            area_id = (
-                _as_int(context["target_area_id"])
-                if context.get("target_area_id") is not None
-                else None
-            )
+            if context.get("target_area_id") is not None:
+                area_id = _as_int(context["target_area_id"])
+            else:
+                area_id = requested_area_id
+                durable_container_only_scope = True
         elif context and context.get("focus_mode") == "container":
             durable_scope = True
-            focused_container_scope = True
+            durable_container_only_scope = True
             raw_container = context.get("focus_container_id")
             if raw_container is None:
                 raise MasterToolError(
@@ -840,7 +840,7 @@ class MasterToolBroker:
             )
             or (
                 requested_area_id is not None
-                and not focused_container_scope
+                and not durable_container_only_scope
                 and requested_area_id != area_id
             )
         ):
@@ -857,10 +857,10 @@ class MasterToolBroker:
                 (area_id, container_id),
             ).fetchone()
             if area is None:
-                if focused_container_scope:
+                if durable_container_only_scope:
                     raise MasterToolError(
                         "context_scope_conflict",
-                        "query_context Area is outside the focused Container",
+                        "query_context Area is outside the selected Container",
                     )
                 raise MasterToolError(
                     "context_scope_invalid",
