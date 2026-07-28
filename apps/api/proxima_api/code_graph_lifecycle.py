@@ -161,11 +161,12 @@ class CodeGraphLifecycle:
     def _reclaim_abandoned_builds(self) -> None:
         """Move crash-orphaned building rows back to queued so drain can resume.
 
-        In-flight lifecycle builds are tracked in ``_building`` and left alone.
-        Other ``building`` rows older than build timeout + grace (or with a
-        missing/invalid attempt timestamp) are treated as abandoned after a
-        process death or hung rebuild and re-queued without dropping any
-        follow-up rebuild intent recorded while building.
+        In-flight rebuilds (lifecycle drain *and* API/manual rebuilds) are
+        tracked in GraphContextService.active_rebuild_ids() while they hold the
+        scope lock. Reclaim never flips those mid-flight. Other ``building``
+        rows older than build timeout + grace (or with a missing/invalid
+        attempt timestamp) are treated as abandoned after a process death and
+        re-queued without dropping follow-up rebuild intent.
         """
         timeout = max(
             1,
@@ -177,6 +178,7 @@ class CodeGraphLifecycle:
         )
         max_age = float(timeout + grace)
         now = datetime.now(timezone.utc)
+        live_ids = self.graphs.active_rebuild_ids()
         rows = self._db_factory().execute(
             "SELECT gs.id, gs.last_attempt_at "
             "FROM graph_states gs "
@@ -187,7 +189,7 @@ class CodeGraphLifecycle:
         for row in rows:
             state_id = int(row["id"])
             with self._guard:
-                if state_id in self._building:
+                if state_id in self._building or state_id in live_ids:
                     continue
             raw_attempt = row["last_attempt_at"]
             age_seconds: float | None
@@ -203,11 +205,18 @@ class CodeGraphLifecycle:
                     age_seconds = None
             if age_seconds is not None and age_seconds < max_age:
                 continue
+            # Double-check the in-process registry under db_lock so a rebuild
+            # that claimed after our snapshot is not reclaimed.
+            live_ids = self.graphs.active_rebuild_ids()
+            if state_id in live_ids:
+                continue
             lock = getattr(self.app.state, "db_lock", None)
             if lock is None:
                 self._mark_building_queued(state_id)
             else:
                 with lock:
+                    if state_id in self.graphs.active_rebuild_ids():
+                        continue
                     self._mark_building_queued(state_id)
 
     def _mark_building_queued(self, state_id: int) -> None:

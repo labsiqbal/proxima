@@ -898,6 +898,9 @@ class GraphContextService:
         self._db_factory = db_factory
         self._locks_guard = threading.Lock()
         self._locks: dict[tuple[int, str, int | None], threading.Lock] = {}
+        # graph_state ids with an in-process rebuild holding the scope lock
+        # (API routes and lifecycle drain). Reclaim must not flip these to queued.
+        self._active_rebuild_ids: set[int] = set()
 
     @property
     def config(self) -> Mapping[str, Any]:
@@ -905,6 +908,10 @@ class GraphContextService:
 
     def expected_tool_version(self) -> str:
         return GRAPHIFY_VERSION
+
+    def active_rebuild_ids(self) -> frozenset[int]:
+        with self._locks_guard:
+            return frozenset(self._active_rebuild_ids)
 
     def _lock_for(self, scope: GraphScope) -> threading.Lock:
         key = (scope.container_id, scope.kind, scope.area_id)
@@ -1819,6 +1826,8 @@ class GraphContextService:
         generation_dir: Path | None = None
         build_mode = "full"
         state_id = int(state_row["id"])
+        with self._locks_guard:
+            self._active_rebuild_ids.add(state_id)
         # Last-success tool pin comes from the published graph, not graph_states:
         # failed/queued/building transitions overwrite the DB column with the
         # installed pin and would otherwise bypass the full-rebuild guard.
@@ -2015,6 +2024,8 @@ class GraphContextService:
         finally:
             if generation_dir is not None:
                 shutil.rmtree(generation_dir, ignore_errors=True)
+            with self._locks_guard:
+                self._active_rebuild_ids.discard(state_id)
             lock.release()
 
     def _budgets(
