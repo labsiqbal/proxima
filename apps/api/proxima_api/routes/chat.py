@@ -432,6 +432,8 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.content)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        if session["mode"] == "master":
+            raise HTTPException(status_code=409, detail="Master messages must use /api/master/messages")
         author = user["username"] if payload.role == "user" else None
         cur = db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, ?, ?, ?)", (session_id, payload.role, payload.content, author))
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
@@ -446,6 +448,8 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.message)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        if session["mode"] == "master":
+            raise HTTPException(status_code=409, detail="Master runs must use /api/master/messages")
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
         profile = profile_for_user(payload.profile_id, user)

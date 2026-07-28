@@ -941,6 +941,9 @@ class RunWorker:
                 {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"},
             )
             self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
+            mode = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if mode and mode["mode"] == "master":
+                master_focus.apply_pending_if_idle(db, master_session_id=session_id)
         self._fail_job(session_id, detail, run_id)
         return True
 

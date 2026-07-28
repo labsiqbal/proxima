@@ -469,7 +469,7 @@ Container Focus has one open `master_focus_epochs` row and a versioned
 `master_focus_state` record. Focus transitions are optimistic, append a boundary
 message and `master.focus.changed` event, and stamp the captured epoch on the
 user message, run, response, tool result, and Master projection. While a turn is
-active the only allowed Focus mutation is one durable pending Container, applied
+active the only allowed Focus mutation is one durable pending Focus, applied
 once after the last turn closes. An explicit Container send performs transition
 and enqueue atomically. Every restricted Master turn recycles its ACP process and
 rebuilds history solely from its captured epoch, preventing old Container context
