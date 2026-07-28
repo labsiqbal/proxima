@@ -91,40 +91,6 @@ class KnowledgeGraphLifecycle:
                 container_slug,
             )
 
-    def on_ops_task_done(
-        self,
-        *,
-        owner_user_id: int,
-        container_id: int,
-    ) -> None:
-        """Mark only this Container's Knowledge graph stale after Ops work lands."""
-        if not self.enabled():
-            return
-        try:
-            slug_row = self._db_factory().execute(
-                "SELECT slug FROM projects WHERE id = ? AND owner_user_id = ?",
-                (container_id, owner_user_id),
-            ).fetchone()
-            if slug_row is None:
-                return
-            self.graphs.enqueue_knowledge_rebuild(
-                owner_user_id=owner_user_id,
-                container_slug=str(slug_row["slug"]),
-                reason=REASON_OPS_TASK_DONE,
-                mark_stale=True,
-            )
-        except GraphContextError:
-            log.exception(
-                "failed to mark Knowledge graph stale after Ops task for "
-                "container %s",
-                container_id,
-            )
-        except Exception:
-            log.exception(
-                "unexpected post-Ops Knowledge graph failure for container %s",
-                container_id,
-            )
-
     def tick(self) -> None:
         if not self.enabled():
             return
@@ -132,6 +98,10 @@ class KnowledgeGraphLifecycle:
             self._reclaim_abandoned_builds()
         except Exception:
             log.exception("Knowledge graph abandoned-build reclaim failed")
+        try:
+            self._drain_rebuild_intents()
+        except Exception:
+            log.exception("Knowledge graph rebuild-intent drain failed")
         try:
             self._drain_queue(limit=1)
         except Exception:
@@ -229,6 +199,37 @@ class KnowledgeGraphLifecycle:
             (REASON_MANUAL, state_id),
         )
         log.info("reclaimed abandoned Knowledge graph build state_id=%s", state_id)
+
+    def _drain_rebuild_intents(self, *, limit: int = 100) -> None:
+        rows = self._db_factory().execute(
+            "SELECT intent.container_id, intent.reason, intent.intent_version, "
+            "p.slug, p.owner_user_id "
+            "FROM knowledge_rebuild_intents intent "
+            "JOIN projects p ON p.id = intent.container_id "
+            "WHERE p.archived_at IS NULL "
+            "ORDER BY intent.updated_at ASC, intent.container_id ASC "
+            "LIMIT ?",
+            (max(1, limit),),
+        ).fetchall()
+        for row in rows:
+            try:
+                self.graphs.enqueue_knowledge_rebuild(
+                    owner_user_id=int(row["owner_user_id"]),
+                    container_slug=str(row["slug"]),
+                    reason=str(row["reason"] or REASON_OPS_TASK_DONE),
+                    mark_stale=True,
+                )
+            except GraphContextError:
+                log.exception(
+                    "failed to drain Knowledge rebuild intent for container %s",
+                    row["container_id"],
+                )
+                continue
+            self._db_factory().execute(
+                "DELETE FROM knowledge_rebuild_intents "
+                "WHERE container_id = ? AND intent_version = ?",
+                (int(row["container_id"]), int(row["intent_version"])),
+            )
 
     def _drain_queue(self, *, limit: int = 1) -> None:
         rows = self._db_factory().execute(
@@ -456,33 +457,3 @@ class KnowledgeGraphLifecycle:
                     "failed to schedule full Knowledge rebuild for container %s",
                     row["slug"],
                 )
-
-
-def notify_ops_job_done(app: Any, job: sqlite3.Row | dict[str, Any]) -> None:
-    """Best-effort post-Ops-done hook used by job completion paths."""
-    lifecycle = getattr(app.state, "knowledge_graph_lifecycle", None)
-    if lifecycle is None:
-        return
-    try:
-        job_id = int(job["id"])
-        conn = lifecycle._db_factory()
-        row = conn.execute(
-            "SELECT j.project_id, j.target_area_id, p.owner_user_id, a.kind "
-            "FROM jobs j "
-            "JOIN projects p ON p.id = j.project_id "
-            "LEFT JOIN project_areas a ON a.id = j.target_area_id "
-            "WHERE j.id = ?",
-            (job_id,),
-        ).fetchone()
-        if row is None or row["project_id"] is None:
-            return
-        # Only Ops-targeted work marks Knowledge stale. Repo merges use Code.
-        # Historical unscoped jobs (kind is None, no code area bound) count as Ops.
-        if row["kind"] is not None and str(row["kind"]) != "ops":
-            return
-        lifecycle.on_ops_task_done(
-            owner_user_id=int(row["owner_user_id"]),
-            container_id=int(row["project_id"]),
-        )
-    except Exception:
-        log.exception("post-Ops Knowledge graph notification failed")

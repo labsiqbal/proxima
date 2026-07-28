@@ -1415,6 +1415,32 @@ class GraphContextService:
             raise GraphScopeError("Container is not available")
         return dict(row)
 
+    def _other_container_exclusions(
+        self,
+        *,
+        owner_user_id: int,
+        container_id: int,
+        root: Path,
+    ) -> tuple[Path, ...]:
+        exclusions: set[Path] = set()
+        rows = self._db_factory().execute(
+            "SELECT id, path FROM projects "
+            "WHERE owner_user_id = ? AND id != ? AND archived_at IS NULL",
+            (owner_user_id, container_id),
+        ).fetchall()
+        for row in rows:
+            try:
+                candidate = container_registry.container_root(row)
+            except container_registry.ContainerBoundaryError:
+                continue
+            if candidate == root:
+                raise GraphScopeError(
+                    "Graph scope overlaps another active Container root"
+                )
+            if _contains(root, candidate):
+                exclusions.add(candidate)
+        return tuple(sorted(exclusions, key=lambda path: path.as_posix()))
+
     def resolve_scope(
         self,
         *,
@@ -1525,6 +1551,18 @@ class GraphContextService:
         except container_registry.ContainerBoundaryError as exc:
             raise GraphScopeError(str(exc)) from exc
         resolved_root = root.resolve(strict=True)
+        excluded_roots = tuple(
+            dict.fromkeys(
+                (
+                    *excluded_roots,
+                    *self._other_container_exclusions(
+                        owner_user_id=owner_user_id,
+                        container_id=int(container["id"]),
+                        root=resolved_root,
+                    ),
+                )
+            )
+        )
         workspace = self.config.get("workspace_root")
         workspace_root = Path(str(workspace)) if workspace else None
         if _is_worktree_path(resolved_root, workspace_root):

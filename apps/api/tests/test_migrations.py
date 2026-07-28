@@ -54,10 +54,12 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TABLE master_tool_calls")
     conn.execute("DROP TABLE master_projections")
     conn.execute("DROP TABLE graph_states")
+    conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
+    conn.execute("DROP TABLE knowledge_rebuild_intents")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 36
+    assert current_version(conn) == 37
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -550,8 +552,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36]
-    assert current_version(conn) == 36
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37]
+    assert current_version(conn) == 37
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -592,8 +594,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36]
-    assert current_version(conn) == 36
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37]
+    assert current_version(conn) == 37
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -755,6 +757,7 @@ def test_fresh_install_graph_states_matches_idempotent_migration(
     init_db(conn, [])
     apply_graph_states = next(m[2] for m in MIGRATIONS if m[0] == 35)
     apply_lifecycle = next(m[2] for m in MIGRATIONS if m[0] == 36)
+    apply_knowledge_outbox = next(m[2] for m in MIGRATIONS if m[0] == 37)
 
     before = [
         tuple(row)
@@ -762,6 +765,7 @@ def test_fresh_install_graph_states_matches_idempotent_migration(
     ]
     apply_graph_states(conn)
     apply_lifecycle(conn)
+    apply_knowledge_outbox(conn)
     after = [
         tuple(row)
         for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
@@ -781,6 +785,8 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
     init_db(conn, [])
     # Drop lifecycle columns so migration 36 has work to do.
     conn.execute("DROP TABLE graph_states")
+    conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
+    conn.execute("DROP TABLE knowledge_rebuild_intents")
     next(m[2] for m in MIGRATIONS if m[0] == 35)(conn)
     current_version(conn)
     conn.executemany(
@@ -791,12 +797,12 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
     return db_path, conn
 
 
-def test_v36_code_graph_lifecycle_columns_upgrade_and_idempotent(tmp_path: Path):
+def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
-    assert run_migrations(conn, str(db_path)) == [36]
+    assert run_migrations(conn, str(db_path)) == [36, 37]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 36
+    assert current_version(conn) == 37
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -807,3 +813,19 @@ def test_v36_code_graph_lifecycle_columns_upgrade_and_idempotent(tmp_path: Path)
         "pending_head_commit",
         "rebuild_reason",
     }.issubset(columns)
+    assert {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(knowledge_rebuild_intents)"
+        )
+    } == {
+        "container_id",
+        "reason",
+        "intent_version",
+        "created_at",
+        "updated_at",
+    }
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+        "AND name = 'jobs_ops_done_knowledge_rebuild'"
+    ).fetchone()

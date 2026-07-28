@@ -408,13 +408,15 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   durable artifact metadata named `METADATA.md` or `*.meta.json` under
   `artifacts/`. Other artifact files, Repo Areas, secrets, caches, graph outputs,
   Task transcripts, scripts, uploads, exports, and runtime data are excluded.
-  Symlinks and nested VCS trees are skipped.
-- Container create/link enqueues the initial Knowledge build. An Ops Task that
-  finishes marks **only that Container's** Knowledge graph stale and queues a
-  rebuild. Debounce ticks compare cheap allowlisted file metadata markers and
-  hash file contents only after a marker changes. Startup and scheduled audits
-  still verify full content fingerprints and tool drift; a scheduled full
-  rebuild re-walks registered Knowledge graphs only.
+  Symlinks and nested VCS trees are skipped. Other active Container roots in the
+  owner's fleet are excluded when nested beneath any selected graph scope.
+- Container create/link enqueues the initial Knowledge build. The same database
+  transaction that finishes an Ops Task writes **only that Container's** durable
+  Knowledge rebuild intent. A background tick drains the outbox, marks the graph
+  stale, and queues filesystem work. Debounce ticks compare cheap allowlisted file
+  metadata markers and hash file contents only after a marker changes. Startup
+  and scheduled audits still verify full content fingerprints and tool drift; a
+  scheduled full rebuild re-walks registered Knowledge graphs only.
 - Failed, interrupted, ENOSPC, malformed, or incomplete Knowledge rebuilds keep
   last-good bytes. Tasks and SQLite Live state never depend on graph availability.
 - `query_context` routes through `context_router`: Fleet questions to the Fleet

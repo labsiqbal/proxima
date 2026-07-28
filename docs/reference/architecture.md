@@ -317,7 +317,8 @@ and `master_max_parallel` capacity claiming, while each Task's execution policy 
 code Area, including generation, state, fingerprints, Graphify version, freshness,
 failure metadata, and Code lifecycle fields (`repo_head`, pending merge range,
 `rebuild_reason`). Its internal roots and canonical graph paths never appear in
-public payloads;
+public payloads; `knowledge_rebuild_intents` is the per-Container outbox written
+by the database in the same transaction that completes an Ops Task;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
@@ -354,11 +355,13 @@ or model setting.
 and Code to one exact active code Area after canonical symlink resolution. A
 root-repository Code scope excludes every nested registered Area, including Ops.
 Source discovery rejects symlinks, traversal, escaped roots, incomplete walks, and
-scope changes during a build. Task worktree paths cannot be promoted as canonical
-graph roots. Graphify `0.9.28` runs as a local Python library in a killable worker
-with server ceilings for time and output bytes. Structural Code extraction and the
-Ops Knowledge allowlist (container identity, curated wiki/decisions, reports, and
-durable artifact metadata) are local-structural; semantic model egress defaults off.
+scope changes during a build. Every graph scope excludes other active Container
+roots in the owner's fleet when they are nested beneath the selected scope. Task
+worktree paths cannot be promoted as canonical graph roots. Graphify `0.9.28` runs
+as a local Python library in a killable worker with server ceilings for time and
+output bytes. Structural Code extraction and the Ops Knowledge allowlist
+(container identity, curated wiki/decisions, reports, and durable artifact
+metadata) are local-structural; semantic model egress defaults off.
 
 Each build writes to a same-filesystem temporary generation directory. Proxima
 validates the complete JSON shape, exact scope metadata, source citations, edge
@@ -408,7 +411,7 @@ exports, caches, and binary media never enter the walk.
 | Trigger | Action |
 |---|---|
 | Container create / link | ensure Knowledge state + enqueue full build |
-| Ops Task finishes | mark only that Container Knowledge graph stale + enqueue |
+| Ops Task finishes | transactionally write that Container's rebuild outbox intent |
 | owner edits allowlisted Ops files | cheap metadata marker gates a full fingerprint and debounce |
 | startup + scheduled audit | fingerprint / tool / missing-graph drift on registered rows only |
 | scheduled full rebuild | re-queue every registered Knowledge graph |
@@ -416,7 +419,9 @@ exports, caches, and binary media never enter the walk.
 Builds remain local-structural (`semantic_backend=local-structural`). The
 `graph_semantic_egress_enabled` opt-in is visible in settings, state, and logs, but
 cloud extraction is still refused until a future adapter ships. Failed builds keep
-last-good bytes.
+last-good bytes. The background lifecycle drains durable rebuild intents into the
+graph queue before doing filesystem discovery and rebuild work. A crash after the
+Task reaches `done` can delay a rebuild but cannot lose its intent.
 
 `ContextRouter` implements Master `query_context` (ADR-6):
 

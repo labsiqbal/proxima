@@ -315,6 +315,10 @@ def test_invalid_envelope_rejects_valid_mutation_in_same_round(
     "value",
     [
         {"label": "path:/home/owner/secret"},
+        {"label": "path:/mnt/shared/build-output"},
+        {"label": "path:/Volumes/team/build"},
+        {"label": "path:/workspace/private/data"},
+        {"label": "path:C://Users/owner/build-output"},
         {"relations": [{"detail": r"file=C:\Users\owner\secret"}]},
         {"detail": r"share=\\server\owner\secret"},
         {"detail": "file:///home/owner/secret"},
@@ -322,14 +326,16 @@ def test_invalid_envelope_rejects_valid_mutation_in_same_round(
 )
 def test_master_tool_path_guard_catches_absolute_paths_after_punctuation(value):
     assert _unsafe_input_text(value) == "a filesystem path"
+    assert _unsafe_result_text(value) == "a filesystem path"
 
 
 @pytest.mark.parametrize(
     "url",
     [
         "https://example.com/docs/reference",
+        "https://example.com/tmp/build-output",
         "http://example.com/docs/reference",
-        "ssh://example.com/docs/reference",
+        "ssh://example.com/workspace/private/data",
     ],
 )
 def test_master_tool_path_guard_allows_non_file_urls(url):

@@ -174,11 +174,14 @@ execution or SQLite Live state reads.
 
 Knowledge graph lifecycle (Group 11) never reads outside the resolved Ops allowlist
 for that Container. Secret-like names, symlinks, nested repositories, graph
-outputs, Task transcripts, and runtime data are rejected before extraction. Only
-the affected Container is marked stale after included Ops changes. The Master
-context router never merges fleet-wide graphs; focused Knowledge/Code results are
-scope-checked so another Container's graph nodes cannot appear. "What is running?"
-always answers from SQLite Live state even when every graph is missing or stale.
+outputs, Task transcripts, and runtime data are rejected before extraction. An
+active Container root nested beneath a selected graph scope is also excluded. The
+same transaction that completes an Ops Task writes only the affected Container's
+durable rebuild intent; filesystem discovery and rebuild remain asynchronous. The
+Master context router never merges fleet-wide graphs; focused Knowledge/Code
+results are scope-checked so another Container's graph nodes cannot appear. "What
+is running?" always answers from SQLite Live state even when every graph is missing
+or stale.
 
 ## Script steps (hash-bound trust, honest statement)
 

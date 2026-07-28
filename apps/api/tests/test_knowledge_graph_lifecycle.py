@@ -148,6 +148,40 @@ def test_select_knowledge_sources_never_leaves_allowlist(tmp_path: Path):
     assert all(_knowledge_path_allowed(rel) for rel in rels)
 
 
+def test_knowledge_scope_excludes_nested_container_roots(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    outer = _container(api, headers, slug="outer")
+    nested = Path(outer["path"]) / "ops" / "wiki" / "nested"
+    nested.mkdir()
+    (nested / "private.md").write_text(
+        "# Nested only\n\nDo not include in outer.\n",
+        encoding="utf-8",
+    )
+    linked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={"path": str(nested), "slug": "nested", "name": "Nested"},
+    )
+    assert linked.status_code == 201, linked.text
+
+    scope = api.app.state.graph_context.resolve_scope(
+        owner_user_id=1,
+        container_slug="outer",
+        kind="knowledge",
+        area_id=None,
+        create_output=False,
+        deep_ops_scan=False,
+    )
+    rels, errors = _select_knowledge_sources(
+        scope.root,
+        scope.excluded_roots,
+    )
+
+    assert not errors
+    assert nested.resolve() in scope.excluded_roots
+    assert not any(path.startswith("wiki/nested/") for path in rels)
+
+
 def test_knowledge_rebuild_includes_allowlist_only_and_is_local(tmp_path: Path):
     api, headers = _api(tmp_path)
     project = _container(api, headers)
@@ -263,11 +297,64 @@ def test_ops_task_done_marks_only_that_container_stale(tmp_path: Path):
             "SELECT id FROM projects WHERE slug = 'other'"
         ).fetchone()["id"]
     )
-    lifecycle: KnowledgeGraphLifecycle = api.app.state.knowledge_graph_lifecycle
-    lifecycle.on_ops_task_done(
-        owner_user_id=1,
-        container_id=a_id,
+    a_ops_id = int(
+        api.app.state.db.execute(
+            "SELECT id FROM project_areas "
+            "WHERE project_id = ? AND kind = 'ops'",
+            (a_id,),
+        ).fetchone()["id"]
     )
+    job_id = int(
+        api.app.state.db.execute(
+            "INSERT INTO jobs(project_id, target_area_id, title, status) "
+            "VALUES (?, ?, 'Ops work', 'running')",
+            (a_id, a_ops_id),
+        ).lastrowid
+    )
+    api.app.state.db.execute("BEGIN IMMEDIATE")
+    api.app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?",
+        (job_id,),
+    )
+    assert api.app.state.db.execute(
+        "SELECT intent_version FROM knowledge_rebuild_intents "
+        "WHERE container_id = ?",
+        (a_id,),
+    ).fetchone()
+    api.app.state.db.execute("ROLLBACK")
+    assert api.app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["status"] == "running"
+    assert api.app.state.db.execute(
+        "SELECT COUNT(*) FROM knowledge_rebuild_intents"
+    ).fetchone()[0] == 0
+
+    api.app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?",
+        (job_id,),
+    )
+    intent = api.app.state.db.execute(
+        "SELECT container_id, reason, intent_version "
+        "FROM knowledge_rebuild_intents"
+    ).fetchone()
+    assert dict(intent) == {
+        "container_id": a_id,
+        "reason": REASON_OPS_TASK_DONE,
+        "intent_version": 1,
+    }
+    before = {
+        row["container_id"]: dict(row)
+        for row in api.app.state.db.execute(
+            "SELECT container_id, state, rebuild_reason FROM graph_states "
+            "WHERE kind = 'knowledge'"
+        ).fetchall()
+    }
+    assert before[a_id]["state"] == "fresh"
+    assert before[b_id]["state"] == "fresh"
+
+    lifecycle: KnowledgeGraphLifecycle = api.app.state.knowledge_graph_lifecycle
+    lifecycle._drain_rebuild_intents()
     rows = {
         row["container_id"]: dict(row)
         for row in api.app.state.db.execute(
@@ -278,6 +365,9 @@ def test_ops_task_done_marks_only_that_container_stale(tmp_path: Path):
     assert rows[a_id]["state"] == "queued"
     assert rows[a_id]["rebuild_reason"] == REASON_OPS_TASK_DONE
     assert rows[b_id]["state"] == "fresh"
+    assert api.app.state.db.execute(
+        "SELECT COUNT(*) FROM knowledge_rebuild_intents"
+    ).fetchone()[0] == 0
 
 
 def test_content_debounce_hashes_only_after_cheap_marker_changes(

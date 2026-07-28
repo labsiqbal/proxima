@@ -47,14 +47,16 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
-# Safe remote schemes may appear in product text. Local-file schemes must not.
+# Remote schemes may appear in product text. Local-file schemes must not.
 _SAFE_REMOTE_URI = re.compile(
-    r"""(?i)\b(?:https?|mailto|ftp)://[^\s"'<>]+"""
+    r"""(?i)\b(?!(?:file|vscode):)[a-z][a-z0-9+.-]*://[^\s"'<>]+"""
 )
 _LOCAL_FILE_URI = re.compile(
     r"""(?i)\b(?:file:|vscode://file)[^\s"'<>]*"""
 )
-# Host absolute paths: do not use bare "/..." which matches inside https:// URLs.
+_WINDOWS_DRIVE_PATH = re.compile(
+    r"""(?i)(?<![A-Za-z0-9])[A-Za-z]:[/\\]+[^\s"'<>]+"""
+)
 _ABSOLUTE_PATH_TEXT = re.compile(
     r"""(?ix)(?<![A-Za-z0-9])(?:"""
     r"""file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
@@ -63,7 +65,7 @@ _ABSOLUTE_PATH_TEXT = re.compile(
     r"""\\\\[^\s"'<>]+|"""
     r"""~(?:[/\\][^\s"'<>]*)?|"""
     r"""(?:\.\.?[/\\])[^\s"'<>]+|"""
-    r"""/(?:home|Users|etc|var|tmp|srv|opt|root|usr|private|System)(?:/|\\)[^\s"'<>]*"""
+    r"""/(?!/)[^\s"'<>]*"""
     r""")"""
 )
 _RELATIVE_CANDIDATE = re.compile(
@@ -380,7 +382,7 @@ def _relative_path_like(candidate: str) -> bool:
 
 
 def _unsafe_string(value: str) -> str | None:
-    if _LOCAL_FILE_URI.search(value) or _ABSOLUTE_PATH_TEXT.search(value):
+    if _LOCAL_FILE_URI.search(value) or _WINDOWS_DRIVE_PATH.search(value):
         return "a filesystem path"
     masked = _mask_safe_remote_uris(value)
     if _ABSOLUTE_PATH_TEXT.search(masked):

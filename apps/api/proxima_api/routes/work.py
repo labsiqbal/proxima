@@ -623,14 +623,6 @@ def register(app, deps):
             app.state.task_delegation.prerequisite_changed(
                 job_id, connection=db()
             )
-            try:
-                from ..knowledge_graph_lifecycle import notify_ops_job_done
-
-                notify_ops_job_done(app, job)
-            except Exception:
-                logging.getLogger("proxima.knowledge_graph_lifecycle").exception(
-                    "Knowledge graph post-Ops-done hook failed (non-fatal)"
-                )
         return _job_payload(_job_or_404(job_id, user))
 
     @app.post("/api/jobs/{job_id}/reject")
