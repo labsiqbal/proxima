@@ -390,8 +390,10 @@ class CodeGraphLifecycle:
             graph_path = Path(str(graph_path_raw)) if graph_path_raw else None
             if graph_path is not None:
                 published_tool = _published_graph_tool_version(graph_path)
-            graph_missing = generation > 0 and (
-                graph_path is None or not graph_path.is_file()
+            graph_unusable = generation > 0 and (
+                graph_path is None
+                or not graph_path.is_file()
+                or published_tool is None
             )
             tool_mismatch = (
                 generation > 0
@@ -402,11 +404,11 @@ class CodeGraphLifecycle:
                 head_changed
                 or fingerprint_changed
                 or tool_mismatch
-                or graph_missing
+                or graph_unusable
             ):
                 continue
             reason = REASON_EXTERNAL_HEAD if head_changed else REASON_AUDIT
-            if tool_mismatch or graph_missing:
+            if tool_mismatch or graph_unusable:
                 reason = REASON_AUDIT
             try:
                 self.graphs.enqueue_code_rebuild(

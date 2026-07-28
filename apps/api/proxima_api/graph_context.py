@@ -1385,7 +1385,9 @@ class GraphContextService:
             ).fetchone()
             assert current is not None
             follow_up = bool(
-                "rebuild_reason" in columns and current["rebuild_reason"]
+                str(current["state"] or "") == "building"
+                and "rebuild_reason" in columns
+                and current["rebuild_reason"]
             )
             if follow_up:
                 self._db_factory().execute(
@@ -1612,7 +1614,9 @@ class GraphContextService:
                 ).fetchone()
                 assert current is not None
                 follow_up = bool(
-                    "rebuild_reason" in columns and current["rebuild_reason"]
+                    str(current["state"] or "") == "building"
+                    and "rebuild_reason" in columns
+                    and current["rebuild_reason"]
                 )
                 next_state = "queued" if follow_up else "fresh"
                 if "repo_head" in columns:
