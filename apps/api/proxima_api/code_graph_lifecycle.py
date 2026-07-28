@@ -329,7 +329,17 @@ class CodeGraphLifecycle:
                 continue
             if now - seen[0] < debounce:
                 continue
-            # Stable dirty tree long enough to rebuild.
+            try:
+                live_fp = self.graphs.live_source_fingerprint(
+                    owner_user_id=int(row["owner_user_id"]),
+                    container_slug=str(row["slug"]),
+                    area_id=area_id,
+                )
+            except GraphContextError:
+                live_fp = None
+            published_fp = row["source_fingerprint"] or None
+            if live_fp and published_fp and live_fp == published_fp:
+                continue
             try:
                 self.graphs.enqueue_code_rebuild(
                     owner_user_id=int(row["owner_user_id"]),
@@ -345,7 +355,7 @@ class CodeGraphLifecycle:
                     "failed to enqueue dirty-tree Code rebuild for area %s",
                     area_id,
                 )
-            self._dirty_seen.pop(area_id, None)
+            self._dirty_seen[area_id] = (now, signature)
 
     def _audit_registered_code_graphs(self) -> None:
         """Compare canonical HEAD + source fingerprint for known Code graphs only."""
@@ -367,26 +377,35 @@ class CodeGraphLifecycle:
             fingerprint_changed = bool(fingerprint) and fingerprint != (
                 row["source_fingerprint"] or None
             )
+            generation = int(row["generation"] or 0)
             # Compare against last published graph metadata only. graph_states
             # tool_version is rewritten on building/failed/queued transitions.
             published_tool = None
+            graph_path_raw = None
             try:
                 graph_path_raw = row["graph_path"]
             except (IndexError, KeyError, TypeError):
                 graph_path_raw = None
-            if graph_path_raw:
-                published_tool = _published_graph_tool_version(
-                    Path(str(graph_path_raw))
-                )
+            graph_path = Path(str(graph_path_raw)) if graph_path_raw else None
+            if graph_path is not None:
+                published_tool = _published_graph_tool_version(graph_path)
+            graph_missing = generation > 0 and (
+                graph_path is None or not graph_path.is_file()
+            )
             tool_mismatch = (
-                int(row["generation"] or 0) > 0
+                generation > 0
                 and published_tool is not None
                 and published_tool != self.graphs.expected_tool_version()
             )
-            if not (head_changed or fingerprint_changed or tool_mismatch):
+            if not (
+                head_changed
+                or fingerprint_changed
+                or tool_mismatch
+                or graph_missing
+            ):
                 continue
             reason = REASON_EXTERNAL_HEAD if head_changed else REASON_AUDIT
-            if tool_mismatch:
+            if tool_mismatch or graph_missing:
                 reason = REASON_AUDIT
             try:
                 self.graphs.enqueue_code_rebuild(
