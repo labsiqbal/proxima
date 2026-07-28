@@ -400,6 +400,79 @@ def test_successful_replacement_retains_previous_last_good_generation(
         original_read_bytes(graph_path.with_name("graph.last-good.json"))
         == first_bytes
     )
+    assert not graph_path.with_name("graph.publish-pending.json").exists()
+
+
+def test_query_recovers_interrupted_publish_from_last_good(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    _, area_id = _container(api, headers)
+    assert area_id is not None
+    rebuilt = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    row = api.app.state.db.execute(
+        "SELECT graph_path, graph_sha256 FROM graph_states WHERE id = ?",
+        (rebuilt["id"],),
+    ).fetchone()
+    graph_path = Path(row["graph_path"])
+    published = graph_path.read_bytes()
+    graph_path.with_name("graph.last-good.json").write_bytes(published)
+    graph_path.with_name("graph.publish-pending.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "state_id": rebuilt["id"],
+                "expected_sha256": row["graph_sha256"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replacement = json.loads(published)
+    replacement["graph"]["proxima"]["generation"] += 1
+    graph_path.write_text(
+        json.dumps(replacement, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    result = api.app.state.graph_context.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+        question="BillingService",
+    )
+
+    assert result["error"] is None
+    assert result["items"]
+    assert graph_path.read_bytes() == published
+    assert not graph_path.with_name("graph.publish-pending.json").exists()
+
+
+def test_digest_checked_copy_preserves_destination_on_mismatch(
+    tmp_path: Path,
+):
+    source = tmp_path / "last-good.json"
+    destination = tmp_path / "graph.json"
+    source.write_bytes(b"unexpected")
+    destination.write_bytes(b"published")
+
+    with pytest.raises(
+        graph_context.GraphValidationError,
+        match="published digest",
+    ):
+        graph_context._copy_regular_file_bounded(
+            source,
+            destination,
+            max_bytes=1024,
+            expected_sha256=hashlib_sha256(b"published"),
+        )
+
+    assert destination.read_bytes() == b"published"
 
 
 def test_published_tool_version_uses_bounded_descriptor_read(

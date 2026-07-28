@@ -371,13 +371,17 @@ provenance, source fingerprint, graph size, and resolved source containment befo
 an atomic canonical replacement. A killed, incomplete, malformed, or wrong-scope
 generation cannot replace the canonical graph. A successful replacement preserves
 the previous bytes as `graph.last-good.json`; a database finalization failure
-restores those prior bytes. Canonical metadata inspection and last-good copying use
-descriptor snapshots bounded by `graph_max_bytes`, and last-good publication is
-atomic without buffering the prior graph in the API process. Missing Graphify
-records an explicit `missing` state, and all other failures record `failed`,
-without affecting Tasks, Fleet, or Live state. Generated `graphify-out/` artifacts
-are treated as ignored build outputs inside the Area path unless a future project
-policy opts into version control.
+restores those prior bytes. Before canonical replacement, a fsynced publication
+journal records the prior database digest. The next query or rebuild holds the
+scope lock, validates that digest against `graph.last-good.json`, and restores it
+atomically when publication was interrupted before database finalization.
+Canonical metadata inspection and last-good copying use descriptor snapshots
+bounded by `graph_max_bytes`, and last-good publication is atomic without
+buffering the prior graph in the API process. Missing Graphify records an explicit
+`missing` state, and all other failures record `failed`, without affecting Tasks,
+Fleet, or Live state. Generated `graphify-out/` artifacts are treated as ignored
+build outputs inside the Area path unless a future project policy opts into
+version control.
 
 #### Code graph lifecycle (Group 10)
 

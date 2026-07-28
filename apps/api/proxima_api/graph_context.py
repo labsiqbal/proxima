@@ -42,6 +42,9 @@ GRAPH_STATES = frozenset(
 GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
 GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
+GRAPH_PUBLISH_JOURNAL_NAME = "graph.publish-pending.json"
+GRAPH_PUBLISH_JOURNAL_SCHEMA = 1
+GRAPH_PUBLISH_JOURNAL_MAX_BYTES = 4096
 # Local structural extraction only. Cloud model egress requires an explicit
 # future captain policy and a separate adapter; credentials alone never enable it.
 SEMANTIC_BACKEND_LOCAL = "local-structural"
@@ -400,6 +403,18 @@ def _write_bytes_fsync(path: Path, payload: bytes) -> None:
             pass
 
 
+def _unlink_fsync(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def _open_regular_file_bounded(
     path: Path,
     *,
@@ -483,6 +498,7 @@ def _copy_regular_file_bounded(
     destination: Path,
     *,
     max_bytes: int,
+    expected_sha256: str | None = None,
 ) -> str:
     source_descriptor, before = _open_regular_file_bounded(
         source,
@@ -533,6 +549,14 @@ def _copy_regular_file_bounded(
                 )
             destination_handle.flush()
             os.fsync(destination_handle.fileno())
+        actual_sha256 = digest.hexdigest()
+        if (
+            expected_sha256 is not None
+            and actual_sha256 != expected_sha256
+        ):
+            raise GraphValidationError(
+                "graph file no longer matches its published digest"
+            )
         os.replace(temp_name, destination)
         directory_descriptor = os.open(
             destination.parent,
@@ -553,7 +577,7 @@ def _copy_regular_file_bounded(
             Path(temp_name).unlink()
         except FileNotFoundError:
             pass
-    return digest.hexdigest()
+    return actual_sha256
 
 
 def _installed_graphify_version() -> str | None:
@@ -801,30 +825,32 @@ def _select_knowledge_sources(
             if current.is_symlink():
                 continue
             try:
-                for entry in current.iterdir():
-                    visited_entries += 1
-                    if (
-                        visited_entries
-                        > _MAX_KNOWLEDGE_WALK_ENTRIES
-                    ):
-                        raise GraphBuildError(
-                            "Knowledge walk exceeded its entry budget"
-                        )
-                    if entry.is_symlink():
-                        continue
-                    if entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
-                        continue
-                    if (
-                        entry.name.startswith(".")
-                        and entry.name not in {".md"}
-                    ):
-                        continue
-                    if entry.is_dir():
-                        if _is_vcs_tree(entry):
+                with os.scandir(current) as entries:
+                    for dir_entry in entries:
+                        visited_entries += 1
+                        if (
+                            visited_entries
+                            > _MAX_KNOWLEDGE_WALK_ENTRIES
+                        ):
+                            raise GraphBuildError(
+                                "Knowledge walk exceeded its entry budget"
+                            )
+                        if dir_entry.is_symlink():
                             continue
-                        stack.append(entry)
-                    elif entry.is_file():
-                        consider(entry)
+                        if dir_entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
+                            continue
+                        if (
+                            dir_entry.name.startswith(".")
+                            and dir_entry.name not in {".md"}
+                        ):
+                            continue
+                        entry = Path(dir_entry.path)
+                        if dir_entry.is_dir(follow_symlinks=False):
+                            if _is_vcs_tree(entry):
+                                continue
+                            stack.append(entry)
+                        elif dir_entry.is_file(follow_symlinks=False):
+                            consider(entry)
             except GraphBuildError:
                 raise
             except OSError:
@@ -1860,6 +1886,82 @@ class GraphContextService:
             text = text.replace(spelling, "<scope>")
         return text[:_MAX_ERROR_CHARS]
 
+    def _recover_pending_publication_locked(
+        self,
+        scope: GraphScope,
+        row: GraphStateRow,
+        *,
+        max_bytes: int,
+    ) -> GraphStateRow:
+        journal = scope.graph_path.with_name(
+            GRAPH_PUBLISH_JOURNAL_NAME
+        )
+        try:
+            payload, _ = _read_regular_file_bounded(
+                journal,
+                max_bytes=GRAPH_PUBLISH_JOURNAL_MAX_BYTES,
+            )
+            pending = json.loads(payload)
+        except (
+            GraphValidationError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            return row
+        if not isinstance(pending, Mapping):
+            return row
+        expected_sha256 = str(
+            pending.get("expected_sha256") or ""
+        ).strip().lower()
+        if (
+            pending.get("schema") != GRAPH_PUBLISH_JOURNAL_SCHEMA
+            or pending.get("state_id") != int(row["id"])
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        ):
+            return row
+        published_sha256 = str(
+            row["graph_sha256"] or ""
+        ).strip().lower()
+        try:
+            if published_sha256 == expected_sha256:
+                _copy_regular_file_bounded(
+                    scope.graph_path.with_name("graph.last-good.json"),
+                    scope.graph_path,
+                    max_bytes=max_bytes,
+                    expected_sha256=expected_sha256,
+                )
+            _unlink_fsync(journal)
+        except (GraphValidationError, OSError):
+            return row
+        if published_sha256 == expected_sha256:
+            log.warning(
+                "recovered interrupted graph publication "
+                "container=%s kind=%s area=%s",
+                scope.container_slug,
+                scope.kind,
+                scope.area_id,
+            )
+        return row
+
+    def _recover_pending_publication(
+        self,
+        scope: GraphScope,
+        row: GraphStateRow,
+        *,
+        max_bytes: int,
+    ) -> GraphStateRow:
+        lock = self._lock_for(scope)
+        if not lock.acquire(blocking=False):
+            return row
+        try:
+            return self._recover_pending_publication_locked(
+                scope,
+                self._state_row(scope),
+                max_bytes=max_bytes,
+            )
+        finally:
+            lock.release()
+
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {
             "state": row["state"],
@@ -2197,28 +2299,42 @@ class GraphContextService:
 
         canonical = scope.graph_path
         last_good = canonical.with_name("graph.last-good.json")
+        journal = canonical.with_name(GRAPH_PUBLISH_JOURNAL_NAME)
         rollback_path: Path | None = None
+        expected_prior_sha256 = str(
+            state_row["graph_sha256"] or ""
+        ).strip().lower()
         if canonical.exists():
             prior_backup = stage.with_name("prior-canonical.json")
-            prior_sha256 = _copy_regular_file_bounded(
+            _copy_regular_file_bounded(
                 canonical,
                 prior_backup,
                 max_bytes=max_bytes,
+                expected_sha256=(
+                    expected_prior_sha256
+                    if int(state_row["generation"] or 0) > 0
+                    and expected_prior_sha256
+                    else None
+                ),
             )
-            expected_prior_sha256 = str(
-                state_row["graph_sha256"] or ""
-            ).strip().lower()
-            if (
-                int(state_row["generation"] or 0) > 0
-                and expected_prior_sha256
-                and prior_sha256 != expected_prior_sha256
-            ):
-                raise GraphValidationError(
-                    "canonical graph no longer matches its published digest"
-                )
             os.replace(prior_backup, last_good)
             os.link(last_good, prior_backup)
             rollback_path = prior_backup
+        if (
+            rollback_path is not None
+            and int(state_row["generation"] or 0) > 0
+            and expected_prior_sha256
+        ):
+            _write_bytes_fsync(
+                journal,
+                _json_bytes(
+                    {
+                        "schema": GRAPH_PUBLISH_JOURNAL_SCHEMA,
+                        "state_id": int(state_row["id"]),
+                        "expected_sha256": expected_prior_sha256,
+                    }
+                ),
+            )
         os.replace(stage, canonical)
         directory_fd = os.open(canonical.parent, os.O_RDONLY)
         try:
@@ -2332,8 +2448,16 @@ class GraphContextService:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
+            try:
+                _unlink_fsync(journal)
+            except OSError:
+                pass
             raise
         assert row is not None
+        try:
+            _unlink_fsync(journal)
+        except OSError:
+            pass
         self._emit(scope, row)
         return row
 
@@ -2513,6 +2637,15 @@ class GraphContextService:
         lock = self._lock_for(scope)
         if not lock.acquire(blocking=False):
             raise GraphBuildError("this graph scope is already building")
+        max_bytes = max(
+            1024,
+            int(self.config.get("graph_max_bytes", 0)),
+        )
+        state_row = self._recover_pending_publication_locked(
+            scope,
+            state_row,
+            max_bytes=max_bytes,
+        )
         generation_dir: Path | None = None
         build_mode = "full"
         state_id = int(state_row["id"])
@@ -2521,10 +2654,6 @@ class GraphContextService:
         # Last-success tool pin comes from the published graph, not graph_states:
         # failed/queued/building transitions overwrite the DB column with the
         # installed pin and would otherwise bypass the full-rebuild guard.
-        max_bytes = max(
-            1024,
-            int(self.config.get("graph_max_bytes", 0)),
-        )
         prior_tool_version = _published_graph_tool_version(
             scope.graph_path,
             max_bytes=max_bytes,
@@ -2841,6 +2970,15 @@ class GraphContextService:
             area_id=area_id,
         )
         row = self._state_row(scope)
+        max_bytes = max(
+            1024,
+            int(self.config.get("graph_max_bytes", 0)),
+        )
+        row = self._recover_pending_publication(
+            scope,
+            row,
+            max_bytes=max_bytes,
+        )
         budgets = self._budgets(
             depth=depth,
             timeout_ms=timeout_ms,
@@ -2889,10 +3027,7 @@ class GraphContextService:
                     "root": str(scope.root),
                     "expected_metadata": expected_metadata,
                     "expected_sha256": expected_sha,
-                    "max_bytes": max(
-                        1024,
-                        int(self.config.get("graph_max_bytes", 0)),
-                    ),
+                    "max_bytes": max_bytes,
                     "question": question.strip(),
                     "budgets": {
                         "depth": budgets.depth,

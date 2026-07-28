@@ -400,7 +400,9 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
   last-good bytes and leave Tasks / SQLite Live state unaffected. Canonical
   metadata reads and last-good preservation use descriptor snapshots bounded by
   `graph_max_bytes`; the prior generation is copied and replaced atomically
-  without buffering it in the API process.
+  without buffering it in the API process. A fsynced publication journal records
+  the prior database digest before replacement, so a query or rebuild after a
+  process interruption restores the matching last-good generation atomically.
 - Repo Task-agent homes receive one server-managed `proxima-code-graph` MCP entry
   fixed to exactly their selected Area; arbitrary `project_path` is ignored.
   The Master does not inherit this MCP entry.

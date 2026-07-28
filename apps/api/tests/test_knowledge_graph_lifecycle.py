@@ -189,6 +189,26 @@ def test_knowledge_walk_caps_visited_directories(
         _select_knowledge_sources(ops)
 
 
+def test_knowledge_walk_does_not_materialize_directories(
+    tmp_path: Path,
+    monkeypatch,
+):
+    ops = tmp_path / "ops"
+    wiki = ops / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "note.md").write_text("# Note\n", encoding="utf-8")
+
+    def refuse_iterdir(_path: Path):
+        raise AssertionError("Knowledge walk materialized a directory")
+
+    monkeypatch.setattr(Path, "iterdir", refuse_iterdir)
+
+    rels, errors = _select_knowledge_sources(ops)
+
+    assert not errors
+    assert rels == ["wiki/note.md"]
+
+
 def test_knowledge_scope_excludes_nested_container_roots(tmp_path: Path):
     api, headers = _api(tmp_path)
     outer = _container(api, headers, slug="outer")
