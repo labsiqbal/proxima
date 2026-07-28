@@ -90,7 +90,7 @@ Key variables:
 | `PROXIMA_SERVICE_NAME` | `proxima` | Managed service selected by the CLI |
 | `PROXIMA_FEATURE_DESIGN_STUDIO` | `1` | Set to `0` to disable Design Studio |
 | `PROXIMA_FEATURE_MASTER_ORCHESTRATOR` | `0` | Master runtime, UI, and graph routes remain off until integrated acceptance |
-| `PROXIMA_GRAPH_SEMANTIC_EGRESS` | `0` | Keep Graphify extraction local; Group 9 has no cloud semantic mode |
+| `PROXIMA_GRAPH_SEMANTIC_EGRESS` | `0` | Reserved graph-policy flag; see [configuration notes](docs/installation.md#configuration) |
 
 ## 6. Phone and other devices (Tailscale)
 
