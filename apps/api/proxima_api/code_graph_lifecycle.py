@@ -18,6 +18,7 @@ from .graph_context import (
     GraphBuildError,
     GraphContextError,
     GraphContextService,
+    _published_graph_tool_version,
 )
 
 log = logging.getLogger("proxima.code_graph_lifecycle")
@@ -226,7 +227,7 @@ class CodeGraphLifecycle:
         return self._db_factory().execute(
             "SELECT gs.id AS state_id, gs.area_id, gs.container_id, gs.repo_head, "
             "gs.source_fingerprint, gs.tool_version, gs.generation, gs.state, "
-            "gs.root_path, p.slug, p.owner_user_id "
+            "gs.root_path, gs.graph_path, p.slug, p.owner_user_id "
             "FROM graph_states gs "
             "JOIN projects p ON p.id = gs.container_id "
             "JOIN project_areas a ON a.id = gs.area_id "
@@ -299,10 +300,21 @@ class CodeGraphLifecycle:
             fingerprint_changed = bool(fingerprint) and fingerprint != (
                 row["source_fingerprint"] or None
             )
+            # Compare against last published graph metadata only. graph_states
+            # tool_version is rewritten on building/failed/queued transitions.
+            published_tool = None
+            try:
+                graph_path_raw = row["graph_path"]
+            except (IndexError, KeyError, TypeError):
+                graph_path_raw = None
+            if graph_path_raw:
+                published_tool = _published_graph_tool_version(
+                    Path(str(graph_path_raw))
+                )
             tool_mismatch = (
                 int(row["generation"] or 0) > 0
-                and row["tool_version"]
-                and row["tool_version"] != self.graphs.expected_tool_version()
+                and published_tool is not None
+                and published_tool != self.graphs.expected_tool_version()
             )
             if not (head_changed or fingerprint_changed or tool_mismatch):
                 continue

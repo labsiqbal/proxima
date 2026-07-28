@@ -387,6 +387,27 @@ def _coalesce_pending_range(
     return base, head
 
 
+def _coalesce_rebuild_reason(
+    existing_reason: str | None,
+    incoming_reason: str,
+) -> str:
+    """Prefer full-required rebuild reasons over later incremental intents.
+
+    Drain only selects incremental when reason is exactly ``task_merged``.
+    A sticky full reason (incremental_fallback, audit, external_head, …) must
+    not be downgraded by a subsequent task_merged enqueue.
+    """
+    existing = str(existing_reason or "").strip()
+    incoming = str(incoming_reason or "").strip()
+    if not existing:
+        return incoming or "manual"
+    if not incoming:
+        return existing
+    if incoming == "task_merged" and existing != "task_merged":
+        return existing
+    return incoming
+
+
 def _select_graphify_sources(
     root: Path,
     kind: str,
@@ -1645,11 +1666,19 @@ class GraphContextService:
                     existing_head = state_row["pending_head_commit"]
                 except (IndexError, KeyError, TypeError):
                     existing_head = None
+                try:
+                    existing_reason = state_row["rebuild_reason"]
+                except (IndexError, KeyError, TypeError):
+                    existing_reason = None
                 new_base, new_head = _coalesce_pending_range(
                     existing_base,
                     existing_head,
                     pending_base_commit,
                     pending_head_commit,
+                )
+                coalesced_reason = _coalesce_rebuild_reason(
+                    existing_reason,
+                    reason,
                 )
                 if building:
                     # Keep building; only record follow-up intent for after publish/fail.
@@ -1657,14 +1686,14 @@ class GraphContextService:
                         "UPDATE graph_states SET rebuild_reason = ?, "
                         "pending_base_commit = ?, pending_head_commit = ?, "
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (reason, new_base, new_head, state_id),
+                        (coalesced_reason, new_base, new_head, state_id),
                     )
                 else:
                     self._db_factory().execute(
                         "UPDATE graph_states SET state = 'queued', rebuild_reason = ?, "
                         "pending_base_commit = ?, pending_head_commit = ?, "
                         "last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (reason, new_base, new_head, state_id),
+                        (coalesced_reason, new_base, new_head, state_id),
                     )
                 row = self._db_factory().execute(
                     "SELECT * FROM graph_states WHERE id = ?",
