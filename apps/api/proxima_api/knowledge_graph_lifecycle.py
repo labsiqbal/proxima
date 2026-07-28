@@ -48,6 +48,8 @@ class KnowledgeGraphLifecycle:
         self._building: set[int] = set()
         # container_id -> (first_dirty_monotonic, last_signature)
         self._dirty_seen: dict[int, tuple[float, str]] = {}
+        # container_id -> signature already enqueued while still mismatched
+        self._dirty_enqueued: dict[int, str] = {}
         self._last_audit_at = 0.0
         self._last_full_rebuild_at = 0.0
         self._startup_audit_done = False
@@ -327,9 +329,14 @@ class KnowledgeGraphLifecycle:
                 continue
             if not signature:
                 self._dirty_seen.pop(container_id, None)
+                self._dirty_enqueued.pop(container_id, None)
                 continue
             published = row["source_fingerprint"] or None
             if published and signature == published:
+                self._dirty_seen.pop(container_id, None)
+                self._dirty_enqueued.pop(container_id, None)
+                continue
+            if self._dirty_enqueued.get(container_id) == signature:
                 self._dirty_seen.pop(container_id, None)
                 continue
             seen = self._dirty_seen.get(container_id)
@@ -350,7 +357,9 @@ class KnowledgeGraphLifecycle:
                     "failed to enqueue dirty Knowledge rebuild for container %s",
                     row["slug"],
                 )
-            self._dirty_seen[container_id] = (now, signature)
+            else:
+                self._dirty_enqueued[container_id] = signature
+            self._dirty_seen.pop(container_id, None)
 
     def _audit_registered_knowledge_graphs(self, *, reason: str) -> None:
         """Compare allowlist fingerprints for known Knowledge graphs only."""
