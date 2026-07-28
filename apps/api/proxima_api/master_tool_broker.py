@@ -47,17 +47,88 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
-_NON_FILE_URI_TEXT = re.compile(
-    r"""(?i)\b(?!file:)[a-z][a-z0-9+.-]*://[^\s"'<>]+"""
+# Safe remote schemes may appear in product text. Local-file schemes must not.
+_SAFE_REMOTE_URI = re.compile(
+    r"""(?i)\b(?:https?|mailto|ftp)://[^\s"'<>]+"""
 )
+_LOCAL_FILE_URI = re.compile(
+    r"""(?i)\b(?:file:|vscode://file)[^\s"'<>]*"""
+)
+# Host absolute paths: do not use bare "/..." which matches inside https:// URLs.
 _ABSOLUTE_PATH_TEXT = re.compile(
-    r"""(?ix)(?<![A-Za-z0-9])(?:file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
-    r"""[A-Za-z]:[/\\][^\s"'<>]+|\\\\[^\s"'<>]+|/[^\s"'<>]+|"""
-    r"""(?:\.\.?[/\\]|~[/\\])[^\s"'<>]*)"""
+    r"""(?ix)(?<![A-Za-z0-9])(?:"""
+    r"""file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
+    r"""vscode://file[^\s"'<>]*|"""
+    r"""[A-Za-z]:[/\\][^\s"'<>]+|"""
+    r"""\\\\[^\s"'<>]+|"""
+    r"""~(?:[/\\][^\s"'<>]*)?|"""
+    r"""(?:\.\.?[/\\])[^\s"'<>]+|"""
+    r"""/(?:home|Users|etc|var|tmp|srv|opt|root|usr|private|System)(?:/|\\)[^\s"'<>]*"""
+    r""")"""
 )
-_RELATIVE_PATH_TEXT = re.compile(
-    r"""(?<![A-Za-z0-9._-])(?:[A-Za-z0-9._-]+[/\\])+"""
-    r"""[A-Za-z0-9._-]+(?![A-Za-z0-9._-])"""
+_RELATIVE_CANDIDATE = re.compile(
+    r"""(?u)(?<![A-Za-z0-9._\-/])"""
+    r"""(?:[\w.-]+(?:/[\w.-]+)+|\./[\w./-]+|\.\./[\w./-]+)"""
+    r"""(?![A-Za-z0-9._\-/])"""
+)
+_FILE_BASENAME = re.compile(
+    r"""(?ix)(?<![A-Za-z0-9._-])(?:"""
+    r"""(?:README|LICENSE|CHANGELOG|package|pyproject|Cargo|go|tsconfig|vite\.config)"""
+    r"""\.[A-Za-z0-9._-]+"""
+    r"""|"""
+    r"""(?:\.env(?:\.[A-Za-z0-9._-]+)?|id_rsa|id_ed25519|secrets?|credentials?)"""
+    r"""(?:\.[A-Za-z0-9._-]+)?"""
+    r""")(?![A-Za-z0-9._-])"""
+)
+_FILE_EXT = re.compile(
+    r"""(?i)\.(?:md|mdx|txt|rst|py|ts|tsx|js|jsx|json|toml|ya?ml|env|pem|key|"""
+    r"""html?|css|go|rs|java|c|cc|cpp|h|hpp|sh|bash|zsh|sql|graphql)$"""
+)
+_KNOWN_PATH_ROOTS = frozenset(
+    {
+        "wiki",
+        "ops",
+        "artifacts",
+        "reports",
+        "graphify-out",
+        "src",
+        "apps",
+        "docs",
+        "scripts",
+        "tasks",
+        "uploads",
+        "exports",
+        "node_modules",
+        "home",
+        "users",
+        "etc",
+        "var",
+        "tmp",
+    }
+)
+# Ordinary English slash compounds - never treat as filesystem paths.
+_PROSE_SLASH_PHRASES = frozenset(
+    {
+        "and/or",
+        "ci/cd",
+        "read/write",
+        "i/o",
+        "tcp/ip",
+        "frontend/backend",
+        "client/server",
+        "input/output",
+        "pass/fail",
+        "on/off",
+        "yes/no",
+        "source/target",
+        "test/production",
+        "app/server",
+        "black/white",
+        "in/out",
+        "up/down",
+        "he/she",
+        "s/he",
+    }
 )
 _SECRET_TEXT = re.compile(
     r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
@@ -275,13 +346,50 @@ def validate_master_tool_call(
     }
 
 
+def _mask_safe_remote_uris(value: str) -> str:
+    """Blank out ordinary remote URIs so path scans do not match their slashes.
+
+    Local-file URI schemes are left in place so absolute-path detection can
+    still catch them.
+    """
+
+    def _blank(match: re.Match[str]) -> str:
+        return " " * len(match.group(0))
+
+    return _SAFE_REMOTE_URI.sub(_blank, value)
+
+
+def _relative_path_like(candidate: str) -> bool:
+    """True when a slash-separated token looks like a filesystem path."""
+    lowered = candidate.replace("\\", "/").strip().lower()
+    if not lowered or lowered in _PROSE_SLASH_PHRASES:
+        return False
+    if lowered.startswith("./") or lowered.startswith("../") or ".." in lowered.split("/"):
+        return True
+    parts = [part for part in lowered.split("/") if part]
+    if len(parts) < 2:
+        return False
+    if parts[0] in _KNOWN_PATH_ROOTS:
+        return True
+    if any(_FILE_EXT.search(part) for part in parts):
+        return True
+    # Unicode multi-component paths without extension are still path-like.
+    if any(ord(ch) > 127 for ch in candidate):
+        return True
+    return False
+
+
 def _unsafe_string(value: str) -> str | None:
-    without_uris = _NON_FILE_URI_TEXT.sub("", value)
-    if (
-        _ABSOLUTE_PATH_TEXT.search(without_uris)
-        or _RELATIVE_PATH_TEXT.search(without_uris)
-    ):
+    if _LOCAL_FILE_URI.search(value) or _ABSOLUTE_PATH_TEXT.search(value):
         return "a filesystem path"
+    masked = _mask_safe_remote_uris(value)
+    if _ABSOLUTE_PATH_TEXT.search(masked):
+        return "a filesystem path"
+    if _FILE_BASENAME.search(masked):
+        return "a filesystem path"
+    for match in _RELATIVE_CANDIDATE.finditer(masked):
+        if _relative_path_like(match.group(0)):
+            return "a filesystem path"
     if _SECRET_TEXT.search(value):
         return "credential-like material"
     return None
