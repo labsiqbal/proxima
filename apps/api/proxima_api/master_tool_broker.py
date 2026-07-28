@@ -807,6 +807,7 @@ class MasterToolBroker:
         area_id = requested_area_id
         context = self.message_context
         durable_scope = False
+        focused_container_scope = False
         if context and context.get("target_mode") == "explicit":
             durable_scope = True
             raw_container = context.get("target_container_id")
@@ -823,6 +824,7 @@ class MasterToolBroker:
             )
         elif context and context.get("focus_mode") == "container":
             durable_scope = True
+            focused_container_scope = True
             raw_container = context.get("focus_container_id")
             if raw_container is None:
                 raise MasterToolError(
@@ -830,7 +832,7 @@ class MasterToolBroker:
                     "The owner-selected context is no longer available",
                 )
             container_id = _as_int(raw_container)
-            area_id = None
+            area_id = requested_area_id
         if durable_scope and (
             (
                 requested_container_id is not None
@@ -838,6 +840,7 @@ class MasterToolBroker:
             )
             or (
                 requested_area_id is not None
+                and not focused_container_scope
                 and requested_area_id != area_id
             )
         ):
@@ -854,6 +857,11 @@ class MasterToolBroker:
                 (area_id, container_id),
             ).fetchone()
             if area is None:
+                if focused_container_scope:
+                    raise MasterToolError(
+                        "context_scope_conflict",
+                        "query_context Area is outside the focused Container",
+                    )
                 raise MasterToolError(
                     "context_scope_invalid",
                     "Query Area is not in the selected Container",

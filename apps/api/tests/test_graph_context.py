@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -470,6 +471,74 @@ def test_query_worker_rejects_bytes_that_do_not_match_published_digest(
             freshness={"generation": rebuilt["generation"]},
             excluded_roots=scope.excluded_roots,
         )
+
+
+def test_query_reads_canonical_graph_only_in_bounded_worker(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    _, area_id = _container(api, headers)
+    assert area_id is not None
+    _rebuild_code(api, headers, slug="graph-one", area_id=area_id)
+    service = api.app.state.graph_context
+    scope = service.resolve_scope(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+    )
+    parent_pid = os.getpid()
+    original_read_bytes = Path.read_bytes
+
+    def refuse_parent_graph_read(path: Path) -> bytes:
+        if path == scope.graph_path and os.getpid() == parent_pid:
+            raise AssertionError("canonical graph read outside bounded worker")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse_parent_graph_read)
+    result = service.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+        question="BillingService",
+    )
+
+    assert result["error"] is None
+    assert result["items"]
+
+
+def test_knowledge_query_rejects_sources_that_became_nested_vcs_trees(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    project, _ = _container(api, headers, with_code=False)
+    wiki = Path(project["path"], "ops", "wiki")
+    wiki.mkdir(exist_ok=True)
+    (wiki / "note.md").write_text(
+        "# Billing provenance\n\nKeep source-relative citations.\n",
+        encoding="utf-8",
+    )
+    rebuilt = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "knowledge"},
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    (wiki / ".git").mkdir()
+
+    result = api.app.state.graph_context.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="knowledge",
+        question="Billing provenance",
+    )
+
+    assert result["items"] == []
+    assert result["citations"] == []
+    assert result["provenance"] == []
+    assert result["error"]["code"] == "graph_tampered"
 
 
 def test_registered_area_symlink_escape_fails_closed_before_state_read(

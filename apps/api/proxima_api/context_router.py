@@ -33,6 +33,8 @@ _FLEET_RE = re.compile(
 )
 _LIVE_RE = re.compile(
     r"\b(running|blocked|green|status|queued|in review|live state|"
+    r"done|completed?|finished|success|successful|succeeded|"
+    r"cancelled|canceled|"
     r"what is running|what's running|whats running|currently running|"
     r"attention|stuck|failed (?:jobs?|tasks?)|"
     r"(?:jobs?|tasks?) (?:are )?(?:failing|failed))\b",
@@ -60,6 +62,34 @@ _CODE_RE = re.compile(
 _LAYER_EMIT_ORDER = (LAYER_FLEET, LAYER_LIVE, LAYER_KNOWLEDGE, LAYER_CODE)
 # When max_layers trims a mixed match, keep more specific layers first.
 _LAYER_KEEP_PRIORITY = (LAYER_CODE, LAYER_KNOWLEDGE, LAYER_LIVE, LAYER_FLEET)
+_LIVE_DEFAULT_STATUSES = ("queued", "running", "review", "blocked", "failed")
+_LIVE_STATUS_ORDER = (
+    "queued",
+    "running",
+    "review",
+    "blocked",
+    "done",
+    "failed",
+    "cancelled",
+)
+_LIVE_STATUS_PATTERNS = (
+    (re.compile(r"\bqueued\b", re.IGNORECASE), ("queued",)),
+    (
+        re.compile(r"\b(?:running|currently running)\b", re.IGNORECASE),
+        ("running",),
+    ),
+    (re.compile(r"\b(?:in review|reviewing)\b", re.IGNORECASE), ("review",)),
+    (re.compile(r"\b(?:blocked|stuck)\b", re.IGNORECASE), ("blocked",)),
+    (
+        re.compile(
+            r"\b(?:done|completed?|finished|success|successful|succeeded|green)\b",
+            re.IGNORECASE,
+        ),
+        ("done",),
+    ),
+    (re.compile(r"\b(?:failed|failing)\b", re.IGNORECASE), ("failed",)),
+    (re.compile(r"\b(?:cancelled|canceled)\b", re.IGNORECASE), ("cancelled",)),
+)
 
 
 def classify_layers(query: str, *, container_scoped: bool = False) -> list[str]:
@@ -99,6 +129,16 @@ def select_layers(matched: list[str], max_layers: int) -> list[str]:
                 break
     kept_set = set(kept)
     return [layer for layer in _LAYER_EMIT_ORDER if layer in kept_set]
+
+
+def _live_status_filter(query: str) -> tuple[str, ...] | None:
+    matched: set[str] = set()
+    for pattern, statuses in _LIVE_STATUS_PATTERNS:
+        if pattern.search(query):
+            matched.update(statuses)
+    if not matched:
+        return None
+    return tuple(status for status in _LIVE_STATUS_ORDER if status in matched)
 
 
 class ContextRouter:
@@ -161,6 +201,7 @@ class ContextRouter:
                     self._live(
                         owner_user_id=owner_user_id,
                         container_id=resolved_container_id,
+                        query=query,
                         limit=limit,
                     )
                 )
@@ -280,6 +321,7 @@ class ContextRouter:
         *,
         owner_user_id: int,
         container_id: int | None,
+        query: str,
         limit: int,
     ) -> dict[str, Any]:
         where = ["p.owner_user_id = ?"]
@@ -287,6 +329,10 @@ class ContextRouter:
         if container_id is not None:
             where.append("j.project_id = ?")
             params.append(int(container_id))
+        statuses = _live_status_filter(query) or _LIVE_DEFAULT_STATUSES
+        placeholders = ",".join("?" for _ in statuses)
+        where.append(f"j.status IN ({placeholders})")
+        params.extend(statuses)
         params.append(limit)
         rows = self._db_factory().execute(
             "SELECT j.id, j.title, j.status, j.project_id AS container_id, "
@@ -294,7 +340,6 @@ class ContextRouter:
             "FROM jobs j "
             "LEFT JOIN projects p ON p.id = j.project_id "
             f"WHERE {' AND '.join(where)} "
-            "AND j.status IN ('queued', 'running', 'review', 'blocked', 'failed') "
             "ORDER BY "
             "CASE j.status "
             "WHEN 'running' THEN 0 WHEN 'blocked' THEN 1 "

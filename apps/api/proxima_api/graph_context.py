@@ -526,6 +526,39 @@ def _knowledge_path_allowed(rel_path: str) -> bool:
     return suffix in KNOWLEDGE_DIR_EXTENSIONS[top]
 
 
+def _knowledge_source_allowed_at_query(
+    root: Path,
+    rel_path: str,
+    excluded_roots: tuple[Path, ...] = (),
+) -> bool:
+    if not _knowledge_path_allowed(rel_path):
+        return False
+    try:
+        _, target = _resolve_source(root, rel_path, excluded_roots)
+    except GraphValidationError:
+        return False
+    current = target.parent
+    while True:
+        try:
+            if current.is_symlink() or not current.is_dir():
+                return False
+        except OSError:
+            return False
+        for marker in KNOWLEDGE_VCS_DIR_NAMES:
+            try:
+                (current / marker).lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+            return False
+        if current == root:
+            return True
+        if not _contains(root, current) or current.parent == current:
+            return False
+        current = current.parent
+
+
 def _select_knowledge_sources(
     root: Path,
     excluded_roots: tuple[Path, ...] = (),
@@ -2612,7 +2645,6 @@ class GraphContextService:
                 message="No validated graph generation is available.",
             )
 
-        # Integrity: refuse tampered canonical bytes before any graph walk.
         expected_sha = str(row["graph_sha256"] or "").strip().lower()
         if not expected_sha:
             return self._unavailable_result(
@@ -2621,26 +2653,6 @@ class GraphContextService:
                 budgets=budgets,
                 code="graph_tampered",
                 message="Canonical graph has no published digest.",
-            )
-        try:
-            actual_sha = hashlib.sha256(
-                scope.graph_path.read_bytes()
-            ).hexdigest()
-        except OSError:
-            return self._unavailable_result(
-                scope=scope,
-                row=row,
-                budgets=budgets,
-                code="graph_tampered",
-                message="Canonical graph could not be verified.",
-            )
-        if actual_sha != expected_sha:
-            return self._unavailable_result(
-                scope=scope,
-                row=row,
-                budgets=budgets,
-                code="graph_tampered",
-                message="Canonical graph no longer matches its published digest.",
             )
 
         published_backend = str(
@@ -2709,8 +2721,9 @@ class GraphContextService:
             result_queue.close()
         if outcome.get("ok"):
             result = dict(outcome["result"])
-            if scope.kind == "knowledge" and not self._knowledge_result_allowed(
-                result
+            if (
+                scope.kind == "knowledge"
+                and not self._knowledge_result_allowed(scope, result)
             ):
                 return self._unavailable_result(
                     scope=scope,
@@ -2734,7 +2747,10 @@ class GraphContextService:
         )
 
     @staticmethod
-    def _knowledge_result_allowed(result: Mapping[str, Any]) -> bool:
+    def _knowledge_result_allowed(
+        scope: GraphScope,
+        result: Mapping[str, Any],
+    ) -> bool:
         """Refuse Knowledge results that cite non-allowlisted Ops paths."""
         paths: list[str] = []
         for citation in result.get("citations") or []:
@@ -2753,6 +2769,10 @@ class GraphContextService:
             normalized = path.replace("\\", "/").strip().strip("/")
             if not normalized:
                 continue
-            if not _knowledge_path_allowed(normalized):
+            if not _knowledge_source_allowed_at_query(
+                scope.root,
+                normalized,
+                scope.excluded_roots,
+            ):
                 return False
         return True

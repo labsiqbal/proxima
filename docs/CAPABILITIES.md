@@ -309,7 +309,9 @@ target differs from Focus, the UI announces the Focus change and the API records
 the new Focus before it enqueues the turn. `master_message_context` durably binds
 the Focus and target ids to the user message. The restricted prompt and
 `MasterToolBroker` then enforce explicit routing, or keep automatic routing inside
-a Container Focus. Sent messages display that durable routing metadata.
+a Container Focus. Under a Container Focus without a pinned Area, `query_context`
+may select an exact registered Area in that Container but rejects an Area owned by
+another Container. Sent messages display that durable routing metadata.
 
 The existing Master-session SSE stream is the only live path. It resumes from the
 durable cursor, deduplicates replay, ignores raw delta events, and applies typed
@@ -408,8 +410,10 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   durable artifact metadata named `METADATA.md` or `*.meta.json` under
   `artifacts/`. Other artifact files, Repo Areas, secrets, caches, graph outputs,
   Task transcripts, scripts, uploads, exports, and runtime data are excluded.
-  Symlinks and nested VCS trees are skipped. Other active Container roots in the
-  owner's fleet are excluded when nested beneath any selected graph scope.
+  Symlinks and nested VCS trees are skipped. Query-time citation validation
+  re-resolves each selected source and rejects a directory that gained a VCS
+  marker after publication. Other active Container roots in the owner's fleet
+  are excluded when nested beneath any selected graph scope.
 - Container create/link enqueues the initial Knowledge build. The same database
   transaction that finishes an Ops Task writes **only that Container's** durable
   Knowledge rebuild intent. A background tick drains the outbox, marks the graph
@@ -420,14 +424,17 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
 - Failed, interrupted, ENOSPC, malformed, or incomplete Knowledge rebuilds keep
   last-good bytes. Tasks and SQLite Live state never depend on graph availability.
 - `query_context` routes through `context_router`: Fleet questions to the Fleet
-  registry, running/green/blocked/status to SQLite Live state, Container facts and
-  decisions to one Knowledge graph, code structure and impact to one Code graph.
+  registry; running/green/successful/done/cancelled/blocked/status to SQLite Live
+  state; Container facts and decisions to one Knowledge graph; and code structure
+  and impact to one Code graph. Focused status questions filter in SQLite before
+  applying the result limit, with green/successful/completed mapped to `done`.
   Mixed requests call only the needed layers with budgets and never merge
   fleet-wide graphs. Focused graph results cannot include another Container's
-  nodes. Durable explicit targets and Container Focus override model scope, and
-  conflicting model scope is rejected. Unmatched focused questions use Knowledge;
-  unmatched fleet questions use Fleet and Live. Every graph layer keeps generation,
-  freshness, scope-relative citations, and provenance.
+  nodes. Durable explicit targets and Container Focus override model scope; a
+  Focused Container without a pinned Area permits an exact owned Area and rejects
+  cross-Container Areas. Unmatched focused questions use Knowledge; unmatched fleet
+  questions use Fleet and Live. Every graph layer keeps generation, freshness,
+  scope-relative citations, and provenance.
 - Local-only structural extraction is the default and is visible in Master
   settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and
   docs. Cloud semantic egress stays off unless an explicit future captain policy

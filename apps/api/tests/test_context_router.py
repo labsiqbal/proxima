@@ -84,6 +84,33 @@ def test_query_context_uses_durable_scope_and_rejects_model_overrides(
     api, headers = _api(tmp_path)
     owner = _container(api, headers, "owner-scope")
     other = _container(api, headers, "model-scope")
+    for project, repo_names in (
+        (owner, ("repo-a", "repo-b")),
+        (other, ("repo-other",)),
+    ):
+        root = Path(project["path"])
+        for repo_name in repo_names:
+            repo = root / repo_name
+            (repo / ".git").mkdir(parents=True)
+            (repo / "service.py").write_text(
+                "class BillingService:\n    pass\n",
+                encoding="utf-8",
+            )
+        detected = api.post(
+            f"/api/projects/{project['slug']}/areas/detect",
+            headers=headers,
+        )
+        assert detected.status_code == 200, detected.text
+    owner_code_areas = api.get(
+        "/api/projects/owner-scope/areas",
+        headers=headers,
+    ).json()["code_areas"]
+    other_code_area_id = int(
+        api.get(
+            "/api/projects/model-scope/areas",
+            headers=headers,
+        ).json()["code_areas"][0]["id"]
+    )
     owner_area_id = int(
         api.app.state.db.execute(
             "SELECT id FROM project_areas "
@@ -168,10 +195,26 @@ def test_query_context_uses_durable_scope_and_rejects_model_overrides(
         {
             "query": "Where is BillingService defined?",
             "container_id": int(owner["id"]),
-            "area_id": owner_area_id,
+            "area_id": int(owner_code_areas[0]["id"]),
         },
     )
-    assert area_override["error"]["code"] == "context_scope_conflict"
+    assert area_override["ok"] is True
+    code = next(
+        item
+        for item in area_override["result"]["results"]
+        if item["layer"] == "code"
+    )
+    assert code["scope"]["area_id"] == int(owner_code_areas[0]["id"])
+
+    cross_container = focus_broker.execute(
+        "query_context",
+        {
+            "query": "Where is BillingService defined?",
+            "container_id": int(owner["id"]),
+            "area_id": other_code_area_id,
+        },
+    )
+    assert cross_container["error"]["code"] == "context_scope_conflict"
 
 
 @pytest.mark.parametrize(
@@ -255,6 +298,49 @@ def test_what_is_running_is_correct_with_missing_graphs(tmp_path: Path):
     assert any(item["title"] == "Live job" for item in live["items"])
     assert payload["policy"]["local_only"] is True
     assert "graphify-out" not in json.dumps(payload)
+
+
+def test_terminal_status_queries_filter_live_jobs_before_result_limit(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path, graph_query_result_limit=1)
+    project = _container(api, headers, "terminal-live")
+    container_id = int(project["id"])
+    for title, status in (
+        ("Completed job", "done"),
+        ("Cancelled job", "cancelled"),
+        ("Running job", "running"),
+    ):
+        api.app.state.db.execute(
+            "INSERT INTO jobs("
+            "project_id, title, status, engine, created_by, steps_state"
+            ") VALUES (?, ?, ?, 'linear', 1, '[]')",
+            (container_id, title, status),
+        )
+    desk = api.get("/api/master/desk", headers=headers).json()
+    broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        desk["session"]["id"],
+    )
+
+    for query, expected_status in (
+        ("What's done?", "done"),
+        ("What completed?", "done"),
+        ("What is green?", "done"),
+        ("Which tasks were successful?", "done"),
+        ("What was cancelled?", "cancelled"),
+    ):
+        result = broker.execute(
+            "query_context",
+            {"query": query, "container_id": container_id},
+        )
+        assert result["ok"] is True
+        payload = result["result"]
+        assert payload["layers"] == ["live"]
+        live = payload["results"][0]
+        assert [item["status"] for item in live["items"]] == [expected_status]
 
 
 def test_knowledge_context_stays_in_focused_container(tmp_path: Path):
