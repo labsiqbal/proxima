@@ -53,6 +53,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
 │  MasterToolBroker  typed, schema-validated, bounded path-free product tools      │
 │  GraphContextService  scoped, bounded Graphify generations and query results     │
+│  CodeGraphLifecycle  Code rebuild queue, audit, dirty debounce (never worktree) │
 │  Master runtime chat-only conformance, read-only scratch, deny native tools      │
 │  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
@@ -76,7 +77,10 @@ supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
 identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
 schema-validated, path-free product tools), `codex_master_proxy.py` (Codex loopback
 provider firewall), `master_supervisor.py` (budgeted unattended
-queue starter), `job_checkpoints.py`, `turn_restore.py`,
+queue starter), `graph_context.py` (scoped Graphify adapter),
+`code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
+`graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
+`turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
@@ -311,7 +315,8 @@ and `master_max_parallel` capacity claiming, while each Task's execution policy 
 `master_tool_calls` is the durable per-turn product-envelope replay ledger;
 `graph_states` stores one Knowledge row per Container and one Code row per exact
 code Area, including generation, state, fingerprints, Graphify version, freshness,
-and failure metadata. Its internal roots and canonical graph paths never appear in
+failure metadata, and Code lifecycle fields (`repo_head`, pending merge range,
+`rebuild_reason`). Its internal roots and canonical graph paths never appear in
 public payloads;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
@@ -368,6 +373,7 @@ inside the Area path unless a future project policy opts into version control.
 
 #### Code graph lifecycle (Group 10)
 
+Migration 36 adds Code lifecycle columns on `graph_states`.
 `CodeGraphLifecycle` owns Code graph freshness only:
 
 | Trigger | Action |
