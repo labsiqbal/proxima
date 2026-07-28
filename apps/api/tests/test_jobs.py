@@ -72,7 +72,11 @@ def test_executor_advances_steps_then_review(tmp_path):
     app = _app(tmp_path)
     c = _client(app)
     wid = _make_workflow(c, [{"name": "A", "instruction": "do a"}, {"name": "B", "instruction": "do b"}])
-    job = c.post("/api/jobs", json={"workflow_id": wid}).json()
+    # Explicit guarded: Full Auto defaults new jobs to autonomous (no final review).
+    job = c.post(
+        "/api/jobs",
+        json={"workflow_id": wid, "input": {"execution_policy": "guarded"}},
+    ).json()
     jid, sid = job["id"], job["session_id"]
 
     assert c.post(f"/api/jobs/{jid}/start").status_code == 200
@@ -88,11 +92,25 @@ def test_executor_advances_steps_then_review(tmp_path):
     assert j["current_step_idx"] == 1
     assert j["steps_state"][1]["status"] == "running"
 
-    # complete step 1 -> last step -> review
+    # complete step 1 -> last step -> review (guarded policy)
     app.state.worker._advance_job(_latest_run(app, sid), "draft done")
     j = c.get(f"/api/jobs/{jid}").json()
     assert j["steps_state"][1]["status"] == "done"
     assert j["status"] == "review"
+
+
+def test_executor_defaults_to_autonomous_and_finishes_without_review(tmp_path):
+    """Full Auto: missing execution_policy on create lands as done for scratch jobs."""
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _make_workflow(c, [{"name": "A", "instruction": "do a"}])
+    job = c.post("/api/jobs", json={"workflow_id": wid}).json()
+    assert job["input"]["execution_policy"] == "autonomous"
+    jid, sid = job["id"], job["session_id"]
+    assert c.post(f"/api/jobs/{jid}/start").status_code == 200
+    app.state.worker._advance_job(_latest_run(app, sid), "finished")
+    j = c.get(f"/api/jobs/{jid}").json()
+    assert j["status"] == "done"
 
 
 def test_jobs_list_filter_and_approve(tmp_path):

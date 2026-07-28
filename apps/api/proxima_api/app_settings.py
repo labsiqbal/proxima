@@ -153,6 +153,9 @@ MASTER_BUDGET_TURNS_KEY = "master.budget.turns"
 MASTER_BUDGET_WALL_SECONDS_KEY = "master.budget.wall_seconds"
 MASTER_BUDGET_TOKENS_KEY = "master.budget.tokens_optional"
 MASTER_TOUR_CORE_DONE_KEY = "master.tour.core_done"
+# Full Auto product default: fresh installs (no stored key) start with
+# Unattended on. Explicit "0" remains off; budgets still enforce stop.
+MASTER_UNATTENDED_DEFAULT = "1"
 MASTER_BUDGET_TURNS_DEFAULT = 20
 MASTER_BUDGET_WALL_SECONDS_DEFAULT = 14_400
 MASTER_BUDGET_TURNS_MIN = 1
@@ -169,7 +172,7 @@ def get_master_settings(conn) -> dict[str, Any]:
     except (TypeError, ValueError):
         tokens = None
     return {
-        "unattended": get_setting(conn, MASTER_UNATTENDED_KEY, "0") == "1",
+        "unattended": get_setting(conn, MASTER_UNATTENDED_KEY, MASTER_UNATTENDED_DEFAULT) == "1",
         "budget_turns": _bounded_int(
             get_setting(conn, MASTER_BUDGET_TURNS_KEY),
             MASTER_BUDGET_TURNS_DEFAULT,

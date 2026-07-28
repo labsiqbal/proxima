@@ -90,6 +90,20 @@ def test_alpha_route_alias_reads_the_same_master_records(tmp_path: Path):
     ).fetchone()[0] == 1
 
 
+def test_master_unattended_defaults_on_for_fresh_settings(tmp_path: Path):
+    """Full Auto: missing master.unattended key means Unattended on (toggleable)."""
+    app, client = _client(tmp_path)
+    settings = client.get("/api/settings/master")
+    assert settings.status_code == 200
+    assert settings.json()["unattended"] is True
+    assert app_settings.get_master_settings(app.state.db)["unattended"] is True
+    # Explicit off still sticks.
+    saved = client.put("/api/settings/master", json={"unattended": False})
+    assert saved.status_code == 200
+    assert saved.json()["unattended"] is False
+    assert app_settings.get_master_settings(app.state.db)["unattended"] is False
+
+
 def test_master_message_acceptance_returns_canonical_durable_message(
     tmp_path: Path, monkeypatch
 ):

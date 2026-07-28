@@ -453,20 +453,23 @@ retried/dismissed.
 and running jobs, badges a count when work is in flight, and deep-links each row to
 the task workspace or chat (with a Tasks index shortcut).
 
-**Unattended:** the desk toggle is opt-in. `MasterSupervisor` starts only already-queued
-Master jobs; it never dispatches work while off and never participates in stuck-run
-recovery. Saved turn (1-200) and wall-clock (5 minutes-24 hours) budgets apply on the
-next tick. The optional token value is stored/readable, but current ACP runner events
-do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion turns the
-mode off cleanly and creates an `master_budget` Attention row. Unattended runs only
-start already-queued Master Tasks, each following its own Guarded or Autonomous
-execution policy for ACP approval, plus normal BYO push/PR capability; destructive
-product admin is not in its handler set. `master_max_parallel` limits queued plus
-running Task-agent runs, and dependency-blocked rows do not starve later eligible
-Tasks. Start and worker claims revalidate the owner, Master session, Container, Area,
-Task-agent, delegation audit, and dependency graph. Immediate database transactions
-reserve capacity and unattended turns across processes; graph branches share that
-same global cap. A process-local tick mutex avoids redundant same-process work.
+**Unattended (Full Auto default on):** fresh settings default the desk toggle on so
+Master can start already-queued work without an owner turn. Owners can still turn it
+off anytime. `MasterSupervisor` starts only already-queued Master jobs; it never
+dispatches work while off and never participates in stuck-run recovery. Saved turn
+(1-200) and wall-clock (5 minutes-24 hours) budgets apply on the next tick and still
+enforce stop. The optional token value is stored/readable, but current ACP runner
+events do not expose usage, so turn + wall-clock are the enforced caps. Exhaustion
+turns the mode off cleanly and creates an `master_budget` Attention row. Unattended
+runs only start already-queued Master Tasks, each following its own Guarded or
+Autonomous execution policy for ACP approval, plus normal BYO push/PR capability;
+destructive product admin is not in its handler set. `master_max_parallel` limits
+queued plus running Task-agent runs, and dependency-blocked rows do not starve later
+eligible Tasks. Start and worker claims revalidate the owner, Master session,
+Container, Area, Task-agent, delegation audit, and dependency graph. Immediate
+database transactions reserve capacity and unattended turns across processes; graph
+branches share that same global cap. A process-local tick mutex avoids redundant
+same-process work.
 Satpam remains the sole steer/restart authority.
 
 **Durable Task and supervision projection:** `MasterProjectionService` appends
@@ -1344,8 +1347,8 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 + **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated path-free product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
-+ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
++ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated path-free product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and a budgeted Unattended toggle that defaults on for Full Auto (still toggleable; budgets enforce stop). The Master feature flag itself defaults off and every current production adapter fails closed for Master.
++ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy defaulting to **Autonomous (Full Auto)**. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.

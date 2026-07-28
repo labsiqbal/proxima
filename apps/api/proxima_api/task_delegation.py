@@ -24,6 +24,12 @@ REQUIRED_DEPENDENCY_STATUSES = frozenset({"review", "done"})
 TERMINAL_FAILURE_STATUSES = frozenset({"failed", "cancelled"})
 STATUS_RANK = {"queued": 0, "running": 1, "review": 2, "done": 3}
 DEFAULT_MASTER_PARALLEL = 3
+# Product Full Auto default for newly created Tasks (Work launcher, Master
+# broker, and any create path that omits an explicit policy). Historical job
+# rows without execution_policy still behave as guarded at landing/permission
+# time - only create-time fallbacks use this value.
+DEFAULT_TASK_EXECUTION_POLICY = "autonomous"
+VALID_EXECUTION_POLICIES = frozenset({"guarded", "autonomous"})
 
 
 class TaskDelegationError(RuntimeError):
@@ -327,7 +333,7 @@ class TaskDelegationService:
             raise TaskDelegationError(
                 "task_too_large", "Task title or brief is too long"
             )
-        if request.execution_policy not in {"guarded", "autonomous"}:
+        if request.execution_policy not in VALID_EXECUTION_POLICIES:
             raise TaskDelegationError(
                 "invalid_execution_policy",
                 "execution policy must be guarded or autonomous",
@@ -492,15 +498,12 @@ class TaskDelegationService:
             steps_state = [wf.step_state_from(step, dict(request.input_data))]
 
         input_data = dict(request.input_data)
-        # Preserve the existing Work API's input projection. Missing policy has
-        # always meant guarded, while autonomous must be explicit for the run
-        # advancers. The brief remains the Task's own field and frozen step
-        # instruction unless the caller also supplied it as Recipe input.
-        if (
-            request.execution_policy == "autonomous"
-            or "execution_policy" in input_data
-        ):
-            input_data["execution_policy"] = request.execution_policy
+        # Always project the create-time policy onto job input so new Tasks are
+        # explicit. Historical rows that still omit execution_policy continue
+        # to land/approve as guarded (see completed_landing_status / worker).
+        # The brief remains the Task's own field and frozen step instruction
+        # unless the caller also supplied it as Recipe input.
+        input_data["execution_policy"] = request.execution_policy
         return {
             "user_id": user_id,
             "title": title,
@@ -840,10 +843,20 @@ class TaskDelegationService:
         """
         conn = connection or self.db_factory()
         user_id = self._as_int(user.get("id"), "user_id")
+        # Full Auto create-time default for new scratch jobs; explicit guarded
+        # remains valid. Historical rows already on disk are not rewritten.
+        stored_input = dict(input_data)
+        if not stored_input.get("execution_policy"):
+            stored_input["execution_policy"] = DEFAULT_TASK_EXECUTION_POLICY
+        elif stored_input["execution_policy"] not in VALID_EXECUTION_POLICIES:
+            raise TaskDelegationError(
+                "invalid_execution_policy",
+                "execution policy must be guarded or autonomous",
+            )
         state_steps = steps or [
             wf.step_state_from(
                 wf.normalize_steps([{"name": "Task", "instruction": brief}])[0],
-                dict(input_data),
+                stored_input,
             )
         ]
         with self.app.state.db_lock:
@@ -863,7 +876,7 @@ class TaskDelegationService:
                         recipe_id,
                         session_cur.lastrowid,
                         title,
-                        json.dumps(dict(input_data), ensure_ascii=False),
+                        json.dumps(stored_input, ensure_ascii=False),
                         json.dumps(state_steps, ensure_ascii=False),
                         user_id,
                     ),

@@ -20,6 +20,7 @@ from jsonschema import Draft202012Validator
 from . import container_registry
 from .auth import iso_now
 from .task_delegation import (
+    DEFAULT_TASK_EXECUTION_POLICY,
     DependencyRequest,
     TaskDelegationError,
     TaskDelegationRequest,
@@ -43,7 +44,11 @@ _STATUS = {
     "type": "string",
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
-_EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
+_EXECUTION_POLICY = {
+    "type": "string",
+    "enum": ["guarded", "autonomous"],
+    "default": DEFAULT_TASK_EXECUTION_POLICY,
+}
 _PATH_TEXT = re.compile(
     r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
     r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
@@ -651,12 +656,13 @@ class MasterToolBroker:
                 dependencies.append(DependencyRequest(raw))
         client_key = str(task.get("key") or f"task-{index + 1}")
         brief = str(task["brief"]).strip()
+        policy = str(
+            task.get("execution_policy") or DEFAULT_TASK_EXECUTION_POLICY
+        )
         input_data = {
             "brief": brief,
             "task_kind": "agent",
-            "execution_policy": str(
-                task.get("execution_policy") or "guarded"
-            ),
+            "execution_policy": policy,
             "master_dispatched": True,
         }
         return TaskDelegationRequest(
@@ -665,7 +671,7 @@ class MasterToolBroker:
             container_id=container_id,
             area_id=area_id,
             profile_id=profile_id,
-            execution_policy=str(task.get("execution_policy") or "guarded"),
+            execution_policy=policy,
             recipe_id=(
                 _as_int(task["recipe_id"])
                 if task.get("recipe_id") is not None

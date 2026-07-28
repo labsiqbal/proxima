@@ -23,7 +23,7 @@ const request = {
 	brief: "  Audit release  ",
 	projectSlug: "master",
 	profileId: 7,
-	executionPolicy: "guarded" as const,
+	executionPolicy: "autonomous" as const,
 };
 
 const chatSession = (id: number, title: string): ChatSession => ({
@@ -121,7 +121,7 @@ describe("Ops task API flow", () => {
 			project_slug: "master",
 			profile_id: 7,
 			title: "Audit release",
-			input: { brief: "Audit release", task_kind: "agent", execution_policy: "guarded" },
+			input: { brief: "Audit release", task_kind: "agent", execution_policy: "autonomous" },
 		});
 		expect(startJob).toHaveBeenCalledWith("token", 42);
 		expect(createRun).not.toHaveBeenCalled();
@@ -140,7 +140,7 @@ describe("Ops task API flow", () => {
 				brief: "/image cinematic launch poster",
 				projectSlug: "master",
 				profileId: 7,
-				executionPolicy: "guarded",
+				executionPolicy: "autonomous",
 			}),
 		).resolves.toBe(43);
 		expect(createRun).toHaveBeenCalledWith("token", 10, {
@@ -158,7 +158,7 @@ describe("Ops task API flow", () => {
 				brief: "/design poster",
 				projectSlug: "master",
 				profileId: 7,
-				executionPolicy: "guarded",
+				executionPolicy: "autonomous",
 			}),
 		).rejects.toThrow(/clearer design brief/i);
 		expect(createJob).not.toHaveBeenCalled();

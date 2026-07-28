@@ -74,16 +74,17 @@ the completion/failure/review/Attention/Satpam truth; named durable transitions 
 also show one coalesced, keyboard-dismissible toast that never steals focus. Raw
 token, reasoning, and tool deltas never produce toasts.
 
-**Unattended** is a quick pressed toggle on the desk. Off means Master never starts work
-without an owner turn. On means the server may start already-queued Master jobs until the
-saved turn/wall budget stops cleanly; numeric limits live under Settings → Master and
-remain readable on the desk. Satpam, not Master, owns stuck-job steer/restart.
+**Unattended** is a quick pressed toggle on the desk. Full Auto defaults it **on** for
+fresh settings so Master may start already-queued jobs until the saved turn/wall budget
+stops cleanly. Off means Master never starts work without an owner turn. Numeric limits
+live under Settings → Master and remain readable on the desk. Satpam, not Master, owns
+stuck-job steer/restart.
 
 ## Tasks
 
 Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work — plans and one-off tasks together. Plan rows expand into their ordered job list; branching plans also offer the List↔Graph projection toggle. A repo job (one that worked in an isolated copy of a code area) reviews its **Changes** in place — inside a plan row's expanding body, or on the full-width task page — with approve-and-merge and reject-with-reason as the two verdict doors; per T4 there is no right panel and no popup, and the copy stays jargon-free.
 
-The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
+The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** - a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed; Full Auto defaults to Autonomous). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
 ## Workflows
 

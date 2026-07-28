@@ -109,7 +109,12 @@ def test_work_route_idempotency_replays_one_task_and_delegation(tmp_path: Path):
 
     assert first.status_code == repeated.status_code == 200
     assert first.json()["id"] == repeated.json()["id"]
-    assert first.json()["input"] == payload["input"]
+    # Full Auto: missing execution_policy is stored as autonomous for new Tasks.
+    assert first.json()["input"] == {
+        "brief": "Create it once",
+        "execution_policy": "autonomous",
+    }
+    assert first.json()["input"] == repeated.json()["input"]
     assert app.state.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
     assert (
         app.state.db.execute("SELECT COUNT(*) FROM task_delegations").fetchone()[0]

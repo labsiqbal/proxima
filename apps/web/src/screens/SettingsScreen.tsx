@@ -644,7 +644,7 @@ function MasterSettingsPanel({ token }: { token: string }) {
   }
   if (busy === 'load' && !settings) return <div className="panel settings-loading" role="status"><span className="ui-spinner" /> Loading Master settings…</div>
   return <div className="panel"><div className="panel-head"><h3>Unattended budgets</h3><span>{settings?.unattended ? 'currently on' : 'currently off'}</span></div>
-    <p className="muted">Master can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
+    <p className="muted">Full Auto defaults Unattended on for new installs so Master can start already-queued work within these budgets. Toggle it off on the desk anytime. Turn and wall-clock caps always apply and still stop cleanly. The token cap applies when the backing runner reports usage.</p>
     <form className="settings-rows master-settings-form" onSubmit={save}>
       <label><span className="srow-label">Turn limit</span><input type="number" min="1" max="200" step="1" value={turns} onChange={event => setTurns(event.target.value)} disabled={!!busy} /></label>
       <label><span className="srow-label">Wall-clock minutes</span><input type="number" min="5" max="1440" step="5" value={wallMinutes} onChange={event => setWallMinutes(event.target.value)} disabled={!!busy} /></label>
@@ -658,7 +658,7 @@ function MasterSettingsPanel({ token }: { token: string }) {
 const HELP_CHAPTERS = [
   { id: 'core', title: 'Primary loop', summary: 'Chat → Tasks → Workflows → Archive, with Master as the delegate side path.' },
   { id: 'chat', title: 'Chat', summary: 'Hands-on work with one agent: send prompts, watch tools, open deliverables.' },
-  { id: 'master', title: 'Master', summary: 'Delegate outcomes; up to three workers; unattended budgets stay opt-in.' },
+  { id: 'master', title: 'Master', summary: 'Delegate outcomes; up to three workers; Full Auto defaults Unattended on with budget caps.' },
   { id: 'tasks', title: 'Tasks', summary: 'Watch durable jobs run, review changes, and open task workspaces.' },
   { id: 'workflows', title: 'Workflows', summary: 'Save plans as templates, schedule runs, and author on the graph canvas.' },
   { id: 'archive', title: 'Archive', summary: 'Durable deliverables, versions, lineage, and the shared ArtifactViewer.' },

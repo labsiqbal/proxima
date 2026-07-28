@@ -68,16 +68,17 @@ One workspace, organized around two paths into durable work: **Chat or Master â†
   chat-only runner, with schema-validated path-free Proxima product tools, live
   worker capacity, active queue, needs-you links, and job-scoped checkpoints. Master
   never auto-approves runner tool prompts; each worker Task instead follows its own
-  Guarded or Autonomous policy, without changing the global permission setting. Optional
-  unattended mode starts only queued work and stops at saved turn and wall-clock
-  budgets; code jobs may still commit, push, or open PRs through your existing
-  `git`/`gh` setup. Satpam alone owns stuck-job recovery.
+  Guarded or Autonomous policy, without changing the global permission setting. Full
+  Auto defaults Unattended on so Master can start only already-queued work within
+  saved turn and wall-clock budgets (toggle off anytime); code jobs may still commit,
+  push, or open PRs through your existing `git`/`gh` setup. Satpam alone owns
+  stuck-job recovery.
 - **Global Attention inbox** - review gates, tool permissions, satpam restart asks,
   and Master decisions collect in one shell badge. Safe binary actions can run
   inline; complex diffs and open questions always deep-link to their owning surface.
-- **Tasks with review gates** â€” describe an outcome, pick an agent and a
-  **Guarded** or **Autonomous** policy; the task runs as a durable job and
-  pauses for your review before it counts as done.
+- **Tasks with review gates** - describe an outcome, pick an agent and a
+  **Guarded** or **Autonomous** policy (Full Auto defaults to Autonomous); the task
+  runs as a durable job and still pauses for repo diff review before merge.
 
   ![Tasks list](docs/screenshots/tasks-list.png)
 - **Repo jobs: diff review + local merge** - a job aimed at a code area runs in

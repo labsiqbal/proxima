@@ -44,8 +44,8 @@ export function MasterComposer({
       />
       <p className="master-composer-hint">
         {desk?.unattended
-          ? 'Master may continue already queued Tasks within your saved budgets.'
-          : 'Master responds when you ask. Every delegated action remains a visible Task.'}
+          ? 'Full Auto: Unattended is on - Master may start already-queued Tasks within your saved budgets (toggle off anytime).'
+          : 'Unattended is off - Master responds when you ask and will not start queued Tasks on its own.'}
         {!attachmentSlug
           ? ' Choose a Container target when you need attachments or file mentions.'
           : ''}

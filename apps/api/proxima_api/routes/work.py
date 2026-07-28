@@ -23,6 +23,7 @@ from .. import scheduler
 from .. import workflows as wf
 from .. import worktrees
 from ..task_delegation import (
+    DEFAULT_TASK_EXECUTION_POLICY,
     TaskDelegationError,
     TaskDelegationRequest,
     new_idempotency_key,
@@ -341,7 +342,8 @@ def register(app, deps):
                     area_id=_as_int(area["id"]),
                     profile_id=_as_int(profile["id"]),
                     execution_policy=str(
-                        (payload.input or {}).get("execution_policy") or "guarded"
+                        (payload.input or {}).get("execution_policy")
+                        or DEFAULT_TASK_EXECUTION_POLICY
                     ),
                     recipe_id=payload.workflow_id,
                     input_data=payload.input or {},

@@ -492,9 +492,10 @@ Responses route, reconstructs the attested broker carrier, and fully buffers bou
 identity-encoded provider responses. It does not release partial oversized or
 redirected responses to the runner.
 
-Interactive Master is quiet until asked. The desk can enable unattended mode; the
-`MasterSupervisor` then starts already-queued Master jobs within turn and wall-clock
-budgets and the configured `master_max_parallel` active-run limit. Dependency-blocked
+Interactive Master answers when asked. Full Auto defaults Unattended on for fresh
+settings so `MasterSupervisor` may start already-queued Master jobs within turn and
+wall-clock budgets and the configured `master_max_parallel` active-run limit (owners
+can still toggle Unattended off on the desk). Dependency-blocked
 rows do not consume a start slot. Each start revalidates the canonical owner,
 project-unbound Master session, active Container, exact Area, worker session,
 Task-agent profile, delegation audit, and prerequisite state. Immediate SQLite
@@ -1102,11 +1103,15 @@ compatibility `home` view and seeds the shared Master composer. The explicit
 `master` view opens the same mounted surface and provider state. When Master is off,
 the legacy Task Composer remains behind view id `home`; it creates then starts an
 ad-hoc job and opens a dedicated `task` view with `#task/<id>` restoration.
-`execution_policy=guarded` preserves final review; `autonomous` completes the final
-step without an approval stop. Normal legacy-launcher tasks queue the selected
-profile; `/image` and `/design` reuse the proven media run path and link that run to
-the job so worker completion advances it to review. Start failure triggers
-queued-task cleanup; a media link failure preserves and exposes the task ID.
+New Tasks default to `execution_policy=autonomous` (Full Auto); `guarded` remains
+selectable per task. Missing policy on historical job rows still lands as guarded at
+completion time - only create-path fallbacks use the autonomous product default.
+`execution_policy=guarded` preserves final review for non-delegated legacy jobs;
+`autonomous` completes the final step without an approval stop. Normal
+legacy-launcher tasks queue the selected profile; `/image` and `/design` reuse the
+proven media run path and link that run to the job so worker completion advances it
+to review. Start failure triggers queued-task cleanup; a media link failure
+preserves and exposes the task ID.
 Launcher project selection updates context directly. The shell header
 ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat session
 for coherence) and **stays on the current view**; only intentional open paths

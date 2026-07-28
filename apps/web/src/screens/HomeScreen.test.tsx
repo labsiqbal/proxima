@@ -78,7 +78,7 @@ describe("HomeScreen Ops task composer", () => {
 		vi.mocked(listArtifacts).mockResolvedValue({ artifacts: [] });
 	});
 
-	it("submits a guarded project-scoped task", async () => {
+	it("submits an autonomous project-scoped task by default (Full Auto)", async () => {
 		const user = userEvent.setup();
 		render(<HomeScreen {...base} />);
 		await screen.findByRole("heading", {
@@ -96,7 +96,7 @@ describe("HomeScreen Ops task composer", () => {
 				brief: "Audit the release",
 				projectSlug: "master",
 				profileId: 7,
-				executionPolicy: "guarded",
+				executionPolicy: "autonomous",
 			}),
 		);
 		expect(base.onOpenJob).toHaveBeenCalledWith(41);
@@ -127,7 +127,7 @@ describe("HomeScreen Ops task composer", () => {
 				brief: "Audit docs/release-brief.md for launch",
 				projectSlug: "master",
 				profileId: 7,
-				executionPolicy: "guarded",
+				executionPolicy: "autonomous",
 			}),
 		);
 	});

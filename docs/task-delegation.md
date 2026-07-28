@@ -12,7 +12,7 @@ A new scoped Task has:
 - one Container id
 - one active Area id that belongs to that Container
 - one non-system Task-agent profile
-- guarded or autonomous in-run execution policy
+- guarded or autonomous in-run execution policy (new Tasks default to autonomous)
 - one caller-owned idempotency key
 - optional Recipe input, origin session/message, and prerequisite Tasks
 

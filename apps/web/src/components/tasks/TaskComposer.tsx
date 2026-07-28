@@ -9,6 +9,8 @@ import {
 import type { AppFeatures, Profile, Project } from "../../types";
 
 export type OpsExecutionPolicy = "guarded" | "autonomous";
+/** Full Auto product default: new Tasks start Autonomous (still toggleable). */
+export const DEFAULT_OPS_EXECUTION_POLICY: OpsExecutionPolicy = "autonomous";
 export type OpsTaskRequest = {
 	brief: string;
 	projectSlug: string;
@@ -153,7 +155,7 @@ export function TaskComposer({
 }) {
 	const [error, setError] = React.useState("");
 	const [executionPolicy, setExecutionPolicy] =
-		React.useState<OpsExecutionPolicy>("guarded");
+		React.useState<OpsExecutionPolicy>(DEFAULT_OPS_EXECUTION_POLICY);
 	const mountedRef = React.useRef(true);
 	const actionSeq = React.useRef(0);
 	// Must re-arm mounted on mount: React Strict Mode runs cleanup then remounts
@@ -239,8 +241,11 @@ export function TaskComposer({
 								setExecutionPolicy(value as OpsExecutionPolicy)
 							}
 							options={[
+								{
+									value: "autonomous",
+									label: "Autonomous (Full Auto)",
+								},
 								{ value: "guarded", label: "Guarded" },
-								{ value: "autonomous", label: "Autonomous" },
 							]}
 						/>
 					</label>

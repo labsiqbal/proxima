@@ -111,8 +111,9 @@ ambience, `code-header` style bar, Settings-sized toggle and select, ghost-butto
 examples, and surface cards without a separate marketing page skin.
 
 The current production-bundle smoke captured the honest empty state in the live
-accessibility tree: capacity 0/3 free, unattended off, empty queue, empty
-Attention, and empty checkpoints. No refreshed screenshot is claimed here.
+accessibility tree: capacity 0/3 free, empty queue, empty Attention, and empty
+checkpoints. Full Auto defaults Unattended on for fresh settings (still toggleable;
+budgets enforce stop). No refreshed screenshot is claimed here.
 
 The profile runner picker lists every installed runner, including Grok.
 
@@ -135,7 +136,7 @@ honestly.
 ![Tasks board](screenshots/tasks-board.png)
 
 **New task** opens a focused launcher with Project, Agent, and Guarded or
-Autonomous policy.
+Autonomous policy (Full Auto defaults to Autonomous).
 
 ![New task launcher](screenshots/task-launcher.png)
 

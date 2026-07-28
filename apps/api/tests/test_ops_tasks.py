@@ -99,6 +99,29 @@ def test_link_failed_media_run_marks_task_failed(tmp_path):
     assert "provider unavailable" in linked.json()["steps_state"][0]["error"]
 
 
+def test_create_task_defaults_missing_execution_policy_to_autonomous(tmp_path):
+    """Full Auto: Work create-path fallback is autonomous; historical rows stay guarded."""
+    app = _app(tmp_path)
+    client = _client(app)
+    job = client.post(
+        "/api/jobs", json={"input": {"brief": "default Full Auto task"}}
+    ).json()
+    assert job["input"]["execution_policy"] == "autonomous"
+    # A historical unscoped row without execution_policy still lands as guarded
+    # (review). The create-time default must not rewrite that read path.
+    from proxima_api.task_delegation import completed_landing_status
+
+    historical_id = app.state.db.execute(
+        "INSERT INTO jobs(title, status, input, steps_state, created_by) "
+        "VALUES ('legacy', 'running', ?, '[]', ?)",
+        ('{"brief": "legacy"}', job["created_by"]),
+    ).lastrowid
+    historical = app.state.db.execute(
+        "SELECT * FROM jobs WHERE id = ?", (historical_id,)
+    ).fetchone()
+    assert completed_landing_status(app.state.db, historical) == "review"
+
+
 def test_autonomous_task_finishes_without_final_review(tmp_path):
     app = _app(tmp_path)
     client = _client(app)
