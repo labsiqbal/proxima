@@ -121,20 +121,22 @@ request is denied and every runner-native tool event fails the turn. Codex
 app-server 0.145.0 or newer proves this contract through empty execution
 environments and a loopback provider firewall. The firewall discards Codex's full
 tool set, injects only exact server-owned broker schemas, discards runner-generated
-developer context, and installs a fixed path-free developer policy. Schema drift
-fails closed. Its single secret route rejects ambiguous or encoded requests,
-redirects, and encoded responses, and buffers a bounded provider response before
-releasing it to Codex. Bearer material remains only in the provider HTTP header. Other
-production adapters remain unsupported for Master. See
+developer context, and installs a fixed filesystem-isolated developer policy.
+Schema drift fails closed. Its single secret route rejects ambiguous or encoded
+requests, redirects, and encoded responses, and buffers a bounded provider
+response before releasing it to Codex. Bearer material remains only in the
+provider HTTP header. Other production adapters remain unsupported for Master. See
 [runner-conformance.md](runner-conformance.md).
 
 Master product actions cross only `MasterToolBroker`. Its closed JSON schemas accept
 bounded product IDs and text, never paths. The broker resolves owner-scoped IDs in
-trusted Proxima code and returns bounded path-free records. Delegation and start call
-`TaskDelegationService`, preserving exact Container/Area binding, dependency
-validation, atomicity, and idempotency. A streaming parser, per-turn durable envelope
-ledger, and request/result/round/output caps turn malformed, replayed, duplicate, or
-oversized calls into visible deterministic errors.
+trusted Proxima code and returns bounded records without absolute host or internal
+graph paths. `query_context` is the narrow exception that returns validated
+scope-relative source citations. Delegation and start call `TaskDelegationService`,
+preserving exact Container/Area binding, dependency validation, atomicity, and
+idempotency. A streaming parser, per-turn durable envelope ledger, and
+request/result/round/output caps turn malformed, replayed, duplicate, or oversized
+calls into visible deterministic errors.
 
 The Master broker is an authority and consistency boundary, while runner conformance
 must separately prove the process boundary. Repo Tasks
@@ -150,15 +152,27 @@ accepts a shell command, absolute or relative path, Graphify CLI argument, raw M
 project path, or semantic backend. Knowledge resolves to the physical Ops boundary;
 Code resolves to one exact active code Area after symlink resolution and excludes
 all nested registered Areas. Source citations are re-resolved and revalidated at
-build and query time.
+build and query time, then returned only as paths relative to that validated scope.
 
 Build output is confined to a validated `graphify-out` directory inside that scope.
 A symlinked output directory, incomplete walk, escaped citation, malformed JSON,
 wrong scope, timeout, or killed worker fails before atomic publication and leaves
-the prior canonical graph unchanged. Public state and events omit internal paths.
+the prior canonical graph unchanged. Canonical reads use no-follow descriptor
+snapshots bounded by `graph_max_bytes`; last-good backup is a bounded streaming
+copy with atomic replacement. A fsynced publication journal stores both prior and
+replacement digests, while SQLite finalization updates and re-reads graph state in
+one transaction. An ambiguous commit is accepted only after the writer is out of
+its transaction and an independent read-only SQLite connection plus a bounded
+canonical hash both match the replacement digest; otherwise journal and canonical
+bytes remain for locked reconciliation. Failure cleanup cannot overwrite a graph
+state that has already committed as `fresh` or `queued`. Knowledge traversal
+streams directory entries with `os.scandir()` and caps visited entries and
+directories before extraction. Public state and events omit internal paths.
 Graphify performs only local structural extraction. Semantic model egress defaults
 off, Ops content is never sent to a cloud model, and enabling the future egress
-switch makes Knowledge rebuild fail closed.
+switch makes Knowledge rebuild fail closed. Local-only policy is visible in Master
+settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and docs.
+Configured cloud credentials alone never enable egress.
 
 Code graph lifecycle (Group 10) never promotes a Task worktree graph as canonical.
 Rebuilds and audits only touch registered Area roots for that Container. Repo
@@ -167,6 +181,19 @@ selected Area; the proxy strips or ignores arbitrary `project_path`, so a prompt
 cannot retarget another Area's graph through MCP parameters. Master runs do not
 receive this MCP entry. Graph absence or rebuild failure never blocks Task
 execution or SQLite Live state reads.
+
+Knowledge graph lifecycle (Group 11) never reads outside the resolved Ops allowlist
+for that Container. Secret-like names, symlinks, nested repositories, graph
+outputs, Task transcripts, and runtime data are rejected before extraction. An
+active Container root nested beneath a selected graph scope is also excluded. The
+same transaction that completes an Ops Task writes only the affected Container's
+durable rebuild intent; filesystem discovery and rebuild remain asynchronous. The
+Master context router never merges fleet-wide graphs; focused Knowledge/Code
+results are scope-checked so another Container's graph nodes cannot appear. "What
+is running?" always answers from SQLite Live state even when every graph is missing
+or stale. Blocked/stuck Live questions include dependency-blocked jobs persisted as
+`queued` with a non-null `blocked_reason`, and apply that predicate before limiting
+results.
 
 ## Script steps (hash-bound trust, honest statement)
 

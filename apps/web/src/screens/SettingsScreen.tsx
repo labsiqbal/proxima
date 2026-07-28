@@ -643,16 +643,23 @@ function MasterSettingsPanel({ token }: { token: string }) {
     finally { setBusy(null) }
   }
   if (busy === 'load' && !settings) return <div className="panel settings-loading" role="status"><span className="ui-spinner" /> Loading Master settings…</div>
-  return <div className="panel"><div className="panel-head"><h3>Unattended budgets</h3><span>{settings?.unattended ? 'currently on' : 'currently off'}</span></div>
-    <p className="muted">Master can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
-    <form className="settings-rows master-settings-form" onSubmit={save}>
-      <label><span className="srow-label">Turn limit</span><input type="number" min="1" max="200" step="1" value={turns} onChange={event => setTurns(event.target.value)} disabled={!!busy} /></label>
-      <label><span className="srow-label">Wall-clock minutes</span><input type="number" min="5" max="1440" step="5" value={wallMinutes} onChange={event => setWallMinutes(event.target.value)} disabled={!!busy} /></label>
-      <label><span className="srow-label">Token budget (optional)</span><input type="number" min="1" step="1000" value={tokens} onChange={event => setTokens(event.target.value)} disabled={!!busy} placeholder="No token cap when unavailable" /></label>
-      {message && <p className={message.ok ? 'ok-text' : 'auth-error'} role={message.ok ? 'status' : 'alert'}>{message.text}</p>}
-      <button type="submit" className="primary-button" disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save budgets'}</button>
-    </form>
-  </div>
+  const policy = settings?.graph_policy
+  return <>
+    <div className="panel"><div className="panel-head"><h3>Unattended budgets</h3><span>{settings?.unattended ? 'currently on' : 'currently off'}</span></div>
+      <p className="muted">Master can start queued work unattended only after you opt in on the desk. Turn and wall-clock caps always apply. The token cap applies when the backing runner reports usage.</p>
+      <form className="settings-rows master-settings-form" onSubmit={save}>
+        <label><span className="srow-label">Turn limit</span><input type="number" min="1" max="200" step="1" value={turns} onChange={event => setTurns(event.target.value)} disabled={!!busy} /></label>
+        <label><span className="srow-label">Wall-clock minutes</span><input type="number" min="5" max="1440" step="5" value={wallMinutes} onChange={event => setWallMinutes(event.target.value)} disabled={!!busy} /></label>
+        <label><span className="srow-label">Token budget (optional)</span><input type="number" min="1" step="1000" value={tokens} onChange={event => setTokens(event.target.value)} disabled={!!busy} placeholder="No token cap when unavailable" /></label>
+        {message && <p className={message.ok ? 'ok-text' : 'auth-error'} role={message.ok ? 'status' : 'alert'}>{message.text}</p>}
+        <button type="submit" className="primary-button" disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save budgets'}</button>
+      </form>
+    </div>
+    {policy && <div className="panel"><div className="panel-head"><h3>Graph context policy</h3><span>{policy.local_only ? 'local-only' : 'egress opt-in set'}</span></div>
+      <p className="muted">{policy.description}</p>
+      <p className="muted">Default backend: <code>{policy.semantic_backend_default}</code>. Cloud semantic egress: {policy.semantic_egress_enabled ? 'opt-in flag set (still refused until a future adapter)' : 'disabled'}.</p>
+    </div>}
+  </>
 }
 
 const HELP_CHAPTERS = [

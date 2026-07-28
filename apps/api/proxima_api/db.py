@@ -367,6 +367,36 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT,
   archived_at TEXT
 );
+CREATE TABLE IF NOT EXISTS knowledge_rebuild_intents (
+  container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  intent_version INTEGER NOT NULL DEFAULT 1 CHECK(intent_version > 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TRIGGER IF NOT EXISTS jobs_ops_done_knowledge_rebuild
+AFTER UPDATE OF status ON jobs
+WHEN OLD.status != 'done'
+  AND NEW.status = 'done'
+  AND NEW.project_id IS NOT NULL
+  AND (
+    NEW.target_area_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM project_areas area
+      WHERE area.id = NEW.target_area_id
+        AND area.project_id = NEW.project_id
+        AND area.kind = 'ops'
+        AND area.source != 'excluded'
+    )
+  )
+BEGIN
+  INSERT INTO knowledge_rebuild_intents(container_id, reason)
+  VALUES (NEW.project_id, 'ops_task_done')
+  ON CONFLICT(container_id) DO UPDATE SET
+    reason = excluded.reason,
+    intent_version = knowledge_rebuild_intents.intent_version + 1,
+    updated_at = CURRENT_TIMESTAMP;
+END;
 -- Server-owned Task creation audit. jobs remains the Task lifecycle truth; this
 -- row records where the Task came from, why it was routed to one exact Area,
 -- and enough durable start intent to resume safely after a process crash.

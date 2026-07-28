@@ -1,9 +1,11 @@
-"""Schema-validated, path-free product tools available to Master.
+"""Schema-validated, filesystem-isolated product tools available to Master.
 
 This module is the complete authority surface exposed to a Master model. It
 accepts IDs and bounded product text, resolves those IDs inside trusted Proxima
-code, and returns small product records. It never accepts or returns filesystem
-paths, credentials, runner homes, configuration, or arbitrary MCP/native tools.
+code, and returns small product records. It never accepts filesystem paths or
+returns absolute host paths, credentials, runner homes, configuration, or
+arbitrary MCP/native tools. Graph citations are validated scope-relative
+references.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from fastapi import HTTPException
@@ -44,9 +47,90 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
-_PATH_TEXT = re.compile(
-    r"""(?:^|[\s"'(])(?:/[^\s"'<>]+|[A-Za-z]:\\[^\s"'<>]+|"""
-    r"""(?:\.\.?[/\\]|~[/\\]|file://)[^\s"'<>]*)"""
+# Remote schemes may appear in product text. Local-file schemes must not.
+_SAFE_REMOTE_URI = re.compile(
+    r"""(?i)\b(?!(?:file|vscode):)[a-z][a-z0-9+.-]*://[^\s"'<>]+"""
+)
+_LOCAL_FILE_URI = re.compile(
+    r"""(?i)\b(?:file:|vscode://file)[^\s"'<>]*"""
+)
+_WINDOWS_DRIVE_PATH = re.compile(
+    r"""(?i)(?<![A-Za-z0-9])[A-Za-z]:[/\\]+[^\s"'<>]+"""
+)
+_ABSOLUTE_PATH_TEXT = re.compile(
+    r"""(?ix)(?<![A-Za-z0-9])(?:"""
+    r"""file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
+    r"""vscode://file[^\s"'<>]*|"""
+    r"""[A-Za-z]:[/\\][^\s"'<>]+|"""
+    r"""\\\\[^\s"'<>]+|"""
+    r"""~(?:[/\\][^\s"'<>]*)?|"""
+    r"""(?:\.\.?[/\\])[^\s"'<>]+|"""
+    r"""/(?!/)[^\s"'<>]*"""
+    r""")"""
+)
+_RELATIVE_CANDIDATE = re.compile(
+    r"""(?u)(?<![A-Za-z0-9._\-/])"""
+    r"""(?:[\w.-]+(?:/[\w.-]+)+|\./[\w./-]+|\.\./[\w./-]+)"""
+    r"""(?![A-Za-z0-9._\-/])"""
+)
+_FILE_BASENAME = re.compile(
+    r"""(?ix)(?<![A-Za-z0-9._-])(?:"""
+    r"""(?:README|LICENSE|CHANGELOG|package|pyproject|Cargo|go|tsconfig|vite\.config)"""
+    r"""\.[A-Za-z0-9._-]+"""
+    r"""|"""
+    r"""(?:\.env(?:\.[A-Za-z0-9._-]+)?|id_rsa|id_ed25519|secrets?|credentials?)"""
+    r"""(?:\.[A-Za-z0-9._-]+)?"""
+    r""")(?![A-Za-z0-9._-])"""
+)
+_FILE_EXT = re.compile(
+    r"""(?i)\.(?:md|mdx|txt|rst|py|ts|tsx|js|jsx|json|toml|ya?ml|env|pem|key|"""
+    r"""html?|css|go|rs|java|c|cc|cpp|h|hpp|sh|bash|zsh|sql|graphql)$"""
+)
+_KNOWN_PATH_ROOTS = frozenset(
+    {
+        "wiki",
+        "ops",
+        "artifacts",
+        "reports",
+        "graphify-out",
+        "src",
+        "apps",
+        "docs",
+        "scripts",
+        "tasks",
+        "uploads",
+        "exports",
+        "node_modules",
+        "home",
+        "users",
+        "etc",
+        "var",
+        "tmp",
+    }
+)
+# Ordinary English slash compounds - never treat as filesystem paths.
+_PROSE_SLASH_PHRASES = frozenset(
+    {
+        "and/or",
+        "ci/cd",
+        "read/write",
+        "i/o",
+        "tcp/ip",
+        "frontend/backend",
+        "client/server",
+        "input/output",
+        "pass/fail",
+        "on/off",
+        "yes/no",
+        "source/target",
+        "test/production",
+        "app/server",
+        "black/white",
+        "in/out",
+        "up/down",
+        "he/she",
+        "s/he",
+    }
 )
 _SECRET_TEXT = re.compile(
     r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
@@ -120,6 +204,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "query_context": _object(
         {
             "container_id": _ID,
+            "area_id": _ID,
             "query": {
                 "type": "string",
                 "minLength": 1,
@@ -182,7 +267,10 @@ _TOOL_DESCRIPTIONS = {
     "list_tasks": "List bounded owner-visible Tasks.",
     "list_task_agents": "List Task-agent profiles available for delegation.",
     "list_recipes": "List active Recipes available to the owner.",
-    "query_context": "Report scoped context availability for a query.",
+    "query_context": (
+        "Route a question to Fleet, Live state, one Knowledge graph, "
+        "and/or one Code graph with provenance and budgets."
+    ),
     "delegate_tasks": "Atomically create an idempotent Task batch or dependency DAG.",
     "start_tasks": "Start existing Master-owned Tasks through the delegation service.",
     "create_attention": "Create one idempotent owner Attention item.",
@@ -230,7 +318,7 @@ def _validation_error(name: str, arguments: Any) -> MasterToolError | None:
         ),
     )
     if not errors:
-        unsafe = _unsafe_text(arguments)
+        unsafe = _unsafe_input_text(arguments)
         if unsafe is not None:
             return MasterToolError(
                 "unsafe_tool_text",
@@ -260,21 +348,135 @@ def validate_master_tool_call(
     }
 
 
-def _unsafe_text(value: Any) -> str | None:
-    if isinstance(value, str):
-        if _PATH_TEXT.search(value):
+def _mask_safe_remote_uris(value: str) -> str:
+    """Blank out ordinary remote URIs so path scans do not match their slashes.
+
+    Local-file URI schemes are left in place so absolute-path detection can
+    still catch them.
+    """
+
+    def _blank(match: re.Match[str]) -> str:
+        return " " * len(match.group(0))
+
+    return _SAFE_REMOTE_URI.sub(_blank, value)
+
+
+def _relative_path_like(candidate: str) -> bool:
+    """True when a slash-separated token looks like a filesystem path."""
+    lowered = candidate.replace("\\", "/").strip().lower()
+    if not lowered or lowered in _PROSE_SLASH_PHRASES:
+        return False
+    if lowered.startswith("./") or lowered.startswith("../") or ".." in lowered.split("/"):
+        return True
+    parts = [part for part in lowered.split("/") if part]
+    if len(parts) < 2:
+        return False
+    if parts[0] in _KNOWN_PATH_ROOTS:
+        return True
+    if any(_FILE_EXT.search(part) for part in parts):
+        return True
+    # Unicode multi-component paths without extension are still path-like.
+    if any(ord(ch) > 127 for ch in candidate):
+        return True
+    return False
+
+
+def _unsafe_string(value: str) -> str | None:
+    if _LOCAL_FILE_URI.search(value) or _WINDOWS_DRIVE_PATH.search(value):
+        return "a filesystem path"
+    masked = _mask_safe_remote_uris(value)
+    if _ABSOLUTE_PATH_TEXT.search(masked):
+        return "a filesystem path"
+    if _FILE_BASENAME.search(masked):
+        return "a filesystem path"
+    for match in _RELATIVE_CANDIDATE.finditer(masked):
+        if _relative_path_like(match.group(0)):
             return "a filesystem path"
-        if _SECRET_TEXT.search(value):
-            return "credential-like material"
-        return None
+    if _SECRET_TEXT.search(value):
+        return "credential-like material"
+    return None
+
+
+def _unsafe_input_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        return _unsafe_string(value)
     if isinstance(value, dict):
         for nested in value.values():
-            unsafe = _unsafe_text(nested)
+            unsafe = _unsafe_input_text(nested)
             if unsafe is not None:
                 return unsafe
     elif isinstance(value, list):
         for nested in value:
-            unsafe = _unsafe_text(nested)
+            unsafe = _unsafe_input_text(nested)
+            if unsafe is not None:
+                return unsafe
+    return None
+
+
+def _valid_scope_relative_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 4_000:
+        return False
+    if (
+        "\\" in value
+        or "\x00" in value
+        or value.startswith("~")
+        or re.match(r"(?i)[a-z][a-z0-9+.-]*:", value)
+        or _SECRET_TEXT.search(value)
+    ):
+        return False
+    parts = value.split("/")
+    if any(part in {"", ".", "..", "~"} for part in parts):
+        return False
+    path = PurePosixPath(value)
+    return not path.is_absolute() and path.as_posix() == value
+
+
+def _unsafe_citations(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return "an invalid scope-relative citation"
+    for citation in value:
+        if not isinstance(citation, dict):
+            return "an invalid scope-relative citation"
+        if set(citation) - {"path", "path_kind", "location"}:
+            return "an invalid scope-relative citation"
+        if citation.get("path_kind") != "scope_relative":
+            return "an invalid scope-relative citation"
+        if not _valid_scope_relative_path(citation.get("path")):
+            return "an invalid scope-relative citation"
+        if "location" in citation and not isinstance(citation["location"], str):
+            return "an invalid scope-relative citation"
+        for key in ("path_kind", "location"):
+            if key in citation:
+                unsafe = _unsafe_result_text(citation[key])
+                if unsafe is not None:
+                    return unsafe
+    return None
+
+
+def _unsafe_result_text(
+    value: Any,
+    *,
+    allow_scope_relative_citations: bool = False,
+) -> str | None:
+    if isinstance(value, str):
+        return _unsafe_string(value)
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if allow_scope_relative_citations and key == "citations":
+                unsafe = _unsafe_citations(nested)
+            else:
+                unsafe = _unsafe_result_text(
+                    nested,
+                    allow_scope_relative_citations=allow_scope_relative_citations,
+                )
+            if unsafe is not None:
+                return unsafe
+    elif isinstance(value, list):
+        for nested in value:
+            unsafe = _unsafe_result_text(
+                nested,
+                allow_scope_relative_citations=allow_scope_relative_citations,
+            )
             if unsafe is not None:
                 return unsafe
     return None
@@ -386,7 +588,10 @@ class MasterToolBroker:
             return self._error(name, error.code, str(error))
         try:
             data = self._definitions[name].handler(dict(arguments))
-            unsafe = _unsafe_text(data)
+            unsafe = _unsafe_result_text(
+                data,
+                allow_scope_relative_citations=name == "query_context",
+            )
             if unsafe is not None:
                 return self._error(
                     name,
@@ -580,12 +785,93 @@ class MasterToolBroker:
         ).fetchall()
         return {"recipes": [dict(row) for row in rows]}
 
-    def _query_context(self, _args: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "available": False,
-            "code": "feature_unavailable",
-            "message": "Scoped graph context is not available in this release",
-        }
+    def _query_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        router = getattr(self.app.state, "context_router", None)
+        if router is None:
+            return {
+                "available": False,
+                "code": "feature_unavailable",
+                "message": "Scoped graph context is not available in this release",
+            }
+        requested_container_id = (
+            _as_int(args["container_id"])
+            if args.get("container_id") is not None
+            else None
+        )
+        requested_area_id = (
+            _as_int(args["area_id"])
+            if args.get("area_id") is not None
+            else None
+        )
+        container_id = requested_container_id
+        area_id = requested_area_id
+        context = self.message_context
+        durable_scope = False
+        durable_container_only_scope = False
+        if context and context.get("target_mode") == "explicit":
+            durable_scope = True
+            raw_container = context.get("target_container_id")
+            if raw_container is None:
+                raise MasterToolError(
+                    "context_scope_unavailable",
+                    "The owner-selected context is no longer available",
+                )
+            container_id = _as_int(raw_container)
+            if context.get("target_area_id") is not None:
+                area_id = _as_int(context["target_area_id"])
+            else:
+                area_id = requested_area_id
+                durable_container_only_scope = True
+        elif context and context.get("focus_mode") == "container":
+            durable_scope = True
+            durable_container_only_scope = True
+            raw_container = context.get("focus_container_id")
+            if raw_container is None:
+                raise MasterToolError(
+                    "context_scope_unavailable",
+                    "The owner-selected context is no longer available",
+                )
+            container_id = _as_int(raw_container)
+            area_id = requested_area_id
+        if durable_scope and (
+            (
+                requested_container_id is not None
+                and requested_container_id != container_id
+            )
+            or (
+                requested_area_id is not None
+                and not durable_container_only_scope
+                and requested_area_id != area_id
+            )
+        ):
+            raise MasterToolError(
+                "context_scope_conflict",
+                "query_context scope conflicts with owner-selected context",
+            )
+        if container_id is not None:
+            self._owned_container(container_id)
+        if area_id is not None:
+            area = self.conn.execute(
+                "SELECT id FROM project_areas "
+                "WHERE id = ? AND project_id = ? AND source != 'excluded'",
+                (area_id, container_id),
+            ).fetchone()
+            if area is None:
+                if durable_container_only_scope:
+                    raise MasterToolError(
+                        "context_scope_conflict",
+                        "query_context Area is outside the selected Container",
+                    )
+                raise MasterToolError(
+                    "context_scope_invalid",
+                    "Query Area is not in the selected Container",
+                )
+        return router.route(
+            owner_user_id=self.user_id,
+            query=str(args["query"]),
+            container_id=container_id,
+            area_id=area_id,
+        )
 
     def _task_request(
         self,

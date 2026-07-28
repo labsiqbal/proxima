@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 35 tables. Applied migration version: **36**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 36 tables. Applied migration version: **37**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`knowledge_rebuild_intents`](#knowledge_rebuild_intents), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -241,6 +241,17 @@ SQLite (WAL mode). 35 tables. Applied migration version: **36**. This is the exa
 | `archived_at` | TEXT | yes |  |  |
 
 **Indexes:** `idx_jobs_origin_master` - (origin_master_session_id, status, created_at); `idx_jobs_archived` - (archived_at); `idx_jobs_workflow` - (workflow_id); `idx_jobs_project_status` - (project_id, status, created_at)
+
+
+### knowledge_rebuild_intents
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `container_id` | INTEGER | yes |  | PK → `projects.id` (ON DELETE CASCADE) |
+| `reason` | TEXT | NO |  |  |
+| `intent_version` | INTEGER | NO | `1` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 
 ### master_message_context
@@ -666,4 +677,4 @@ SQLite (WAL mode). 35 tables. Applied migration version: **36**. This is the exa
 
 
 ---
-_Generated 2026-07-28 08:51 UTC._
+_Generated 2026-07-28 17:49 UTC._

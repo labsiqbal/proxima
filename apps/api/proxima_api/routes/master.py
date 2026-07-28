@@ -309,6 +309,24 @@ def register(app, deps):
             "message": {**dict(message), "master_target": context},
         }
 
+    def _graph_policy() -> dict[str, Any]:
+        """Install-visible local-only Knowledge/Code extraction policy (Group 11)."""
+        from ..graph_context import SEMANTIC_BACKEND_LOCAL
+
+        egress = bool(app.state.config.get("graph_semantic_egress_enabled"))
+        return {
+            "semantic_egress_enabled": egress,
+            "local_only": not egress,
+            "semantic_backend_default": (
+                "disabled" if egress else SEMANTIC_BACKEND_LOCAL
+            ),
+            "description": (
+                "Knowledge and Code graphs use local structural extraction only. "
+                "Cloud model egress stays off unless an explicit future captain "
+                "policy enables it; configured cloud credentials never unlock it."
+            ),
+        }
+
     @app.get("/api/settings/alpha", deprecated=True)
     @app.get("/api/settings/master")
     def get_master_settings(user: dict[str, Any] = Depends(current_user)):
@@ -318,6 +336,7 @@ def register(app, deps):
             **app_settings.get_master_settings(db()),
             "runner_id": profile["runner_id"],
             "max_parallel": master_parallel_limit(app.state.config),
+            "graph_policy": _graph_policy(),
         }
 
     @app.put("/api/settings/alpha", deprecated=True)
@@ -357,6 +376,7 @@ def register(app, deps):
             **settings,
             "runner_id": profile["runner_id"],
             "max_parallel": master_parallel_limit(app.state.config),
+            "graph_policy": _graph_policy(),
         }
 
     def _checkpoint_owned(checkpoint_id: int, user: dict[str, Any]):

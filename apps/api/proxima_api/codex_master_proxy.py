@@ -51,7 +51,11 @@ _ABSOLUTE_PATH = re.compile(
 )
 _MASTER_DEVELOPER_TEXT = (
     "You are Proxima Master. Chat and call only the supplied Proxima product "
-    "functions. You have no native tools or host access."
+    "functions. You have no native tools or host access. Never request, invent, "
+    "or emit absolute host paths, runner homes, credentials, internal graph "
+    "paths, or unrelated filesystem paths. The only filesystem reference you "
+    "may emit is a query_context citation returned by Proxima with "
+    "path_kind=scope_relative, and only as provenance for that result."
 )
 
 
@@ -103,7 +107,7 @@ def _string_values(value: Any) -> Iterable[str]:
 
 
 def reconstruct_developer_context(payload: dict[str, Any]) -> dict[str, Any]:
-    """Discard runner-generated developer text and install a path-free policy."""
+    """Discard runner developer text and install a filesystem-isolated policy."""
     inputs = payload.get("input")
     if isinstance(inputs, list):
         retained = [

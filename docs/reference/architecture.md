@@ -51,7 +51,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  EventHub      fan-out of run/session events → SSE + WS subscribers            │
 │  RunWorker     bounded-concurrency background executor for agent runs          │
 │  TaskDelegationService  one-Area Task create, dependency, idempotent start      │
-│  MasterToolBroker  typed, schema-validated, bounded path-free product tools      │
+│  MasterToolBroker  typed, schema-validated, filesystem-isolated product tools    │
 │  GraphContextService  scoped, bounded Graphify generations and query results     │
 │  CodeGraphLifecycle  Code rebuild queue, audit, dirty debounce (never worktree) │
 │  Master runtime chat-only conformance, read-only scratch, deny native tools      │
@@ -75,7 +75,7 @@ connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
 supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
 identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
-schema-validated, path-free product tools), `codex_master_proxy.py` (Codex loopback
+schema-validated, filesystem-isolated product tools), `codex_master_proxy.py` (Codex loopback
 provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `graph_context.py` (scoped Graphify adapter),
 `code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
@@ -317,7 +317,8 @@ and `master_max_parallel` capacity claiming, while each Task's execution policy 
 code Area, including generation, state, fingerprints, Graphify version, freshness,
 failure metadata, and Code lifecycle fields (`repo_head`, pending merge range,
 `rebuild_reason`). Its internal roots and canonical graph paths never appear in
-public payloads;
+public payloads; `knowledge_rebuild_intents` is the per-Container outbox written
+by the database in the same transaction that completes an Ops Task;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
@@ -354,22 +355,40 @@ or model setting.
 and Code to one exact active code Area after canonical symlink resolution. A
 root-repository Code scope excludes every nested registered Area, including Ops.
 Source discovery rejects symlinks, traversal, escaped roots, incomplete walks, and
-scope changes during a build. Task worktree paths cannot be promoted as canonical
-graph roots. Graphify `0.9.28` runs as a local Python library in a killable worker
-with server ceilings for time and output bytes. Structural Code extraction and the
-curated `ops/container.md` Knowledge seed are local; semantic model egress defaults
-off.
+scope changes during a build. Every graph scope excludes other active Container
+roots in the owner's fleet when they are nested beneath the selected scope. Task
+worktree paths cannot be promoted as canonical graph roots. Graphify `0.9.28` runs
+as a local Python library in a killable worker with server ceilings for time and
+output bytes. Structural Code extraction and the Ops Knowledge allowlist
+(container identity, curated wiki/decisions, reports, and durable artifact
+metadata) are local-structural; semantic model egress defaults off.
+Knowledge discovery iterates lazily and caps both visited entries and visited
+directories, so unsupported content still consumes a bounded walk budget.
 
 Each build writes to a same-filesystem temporary generation directory. Proxima
 validates the complete JSON shape, exact scope metadata, source citations, edge
 provenance, source fingerprint, graph size, and resolved source containment before
 an atomic canonical replacement. A killed, incomplete, malformed, or wrong-scope
 generation cannot replace the canonical graph. A successful replacement preserves
-the previous bytes as `graph.last-good.json`; a database finalization failure
-restores those prior bytes. Missing Graphify records an explicit `missing` state,
-and all other failures record `failed`, without affecting Tasks, Fleet, or Live
-state. Generated `graphify-out/` artifacts are treated as ignored build outputs
-inside the Area path unless a future project policy opts into version control.
+the previous bytes as `graph.last-good.json`; a confirmed pre-commit database
+finalization failure restores those prior bytes. Before canonical replacement, a
+fsynced publication journal records both the prior and replacement digests.
+Graph-state finalization runs its update and final read in one explicit
+transaction. If the commit outcome is ambiguous, publication accepts it only after
+the writer is out of its transaction and an independent read-only SQLite
+connection plus the bounded canonical digest both match the replacement. It then
+returns the committed `fresh` or `queued` row as success. This preserves a queued
+follow-up rebuild for the lifecycle drain. Unresolved outcomes leave canonical
+and journal bytes untouched for the next locked query or rebuild to reconcile.
+Generic rebuild failure handling only transitions a row that is still `building`,
+so it cannot overwrite a committed `fresh` or `queued` outcome.
+Canonical digest checks and last-good copying use descriptor snapshots bounded by
+`graph_max_bytes`, and publication never buffers the prior graph in the API
+process. Missing Graphify records an explicit `missing` state. A failed build
+records `failed` unless a newer durable intent keeps it `queued`, without
+affecting Tasks, Fleet, or Live state. Generated `graphify-out/` artifacts are
+treated as ignored build outputs inside the Area path unless a future project
+policy opts into version control.
 
 #### Code graph lifecycle (Group 10)
 
@@ -396,10 +415,56 @@ Repo Task-agent capability activation injects a server-managed
 Area graph path. The proxy ignores arbitrary `project_path`. Master capability
 activation remains empty and never receives this entry.
 
-Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
-context routing remain later groups. The internal query contract is still typed and
-path-free; there is no public graph query route and
-`MasterToolBroker.query_context` remains `feature_unavailable` until context routing.
+#### Knowledge graph lifecycle and context router (Group 11)
+
+`KnowledgeGraphLifecycle` owns at most one Knowledge graph per Container Ops area.
+Sources are an Ops-root allowlist only: `container.md`, `design.md`, curated wiki
+notes, reports, and durable artifact metadata named `METADATA.md` or
+`*.meta.json` under `artifacts/`. Other artifact files, secret-like names,
+symlinks, nested repos, `graphify-out`, Task transcripts, scripts, uploads,
+exports, caches, and binary media never enter the walk.
+
+| Trigger | Action |
+|---|---|
+| Container create / link | ensure Knowledge state + enqueue full build |
+| Ops Task finishes | transactionally write that Container's rebuild outbox intent |
+| owner edits allowlisted Ops files | cheap metadata marker gates a full fingerprint and debounce |
+| startup + scheduled audit | fingerprint / tool / missing-graph drift on registered rows only |
+| scheduled full rebuild | re-queue every registered Knowledge graph |
+
+Builds remain local-structural (`semantic_backend=local-structural`). The
+`graph_semantic_egress_enabled` opt-in is visible in settings, state, and logs, but
+cloud extraction is still refused until a future adapter ships. Failed builds keep
+last-good bytes. The background lifecycle drains durable rebuild intents into the
+graph queue before doing filesystem discovery and rebuild work. A crash after the
+Task reaches `done` can delay a rebuild but cannot lose its intent.
+
+`ContextRouter` implements Master `query_context` (ADR-6):
+
+| Intent | Source |
+|---|---|
+| fleet / which Containers | Fleet registry |
+| running / green / successful / completed / cancelled / blocked / status | SQLite Live state |
+| facts / decisions about a Container | that Container's Knowledge graph |
+| code structure / impact | one named Code graph Area |
+
+Mixed requests call a bounded set of exact layers and never merge fleet-wide graphs.
+Focused Knowledge/Code results are scope-checked so another Container's nodes cannot
+appear. Durable explicit targets and Container Focus are authoritative over
+model-supplied scope. When an explicit target or Container Focus pins only the
+Container, the broker accepts an exact registered Area owned by that Container and
+rejects cross-Container Areas; an explicitly pinned Area remains authoritative.
+Focused Live status terms are mapped to job statuses and filtered before the result
+limit; green, successful, and completed mean `done`, while blocked/stuck includes
+explicit `blocked` jobs plus `queued` jobs with a non-null `blocked_reason`.
+Unmatched focused questions use Knowledge, while unmatched fleet questions use
+Fleet and Live. Live state remains correct when every graph is missing or stale.
+Knowledge citations are re-resolved at query time, including ancestor VCS-marker
+checks, so a source that became part of a nested repository after publication is
+refused. There is no public graph query route; the Master broker returns validated
+Ops/Area-relative citation paths but never absolute host or internal graph paths.
+
+Focus epochs, history projection, and safe-self-update remain later groups.
 
 ### Native artifact review flow
 
@@ -451,7 +516,7 @@ owner message -> queued Master chat-only run
       -> Codex firewall replaces all tools and developer context with server-owned policy
       -> assistant calls a native dynamic Proxima product function
       -> schema validation + per-turn call ledger
-      -> MasterToolBroker executes a bounded path-free product handler in process
+      -> MasterToolBroker executes a bounded filesystem-isolated handler in process
       -> trusted bounded result returns through app-server dynamic dispatch
       -> delegate_tasks/start_tasks call TaskDelegationService
       -> atomic jobs + delegation audits + dependency edges
@@ -467,9 +532,10 @@ owner message -> queued Master chat-only run
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
 nested, oversized, duplicate, unknown, and disallowed envelopes with stable errors
 written to the Master thread. The broker's closed JSON schemas admit only bounded
-product IDs and text, and its results never include paths, runner homes, bearer
-material, or configuration. Request, result, round, call, and aggregate output caps
-fail before a truncated envelope can become a hidden action. The
+product IDs and text. Results never include absolute host or internal graph paths,
+runner homes, bearer material, or configuration; `query_context` may include
+validated scope-relative citations as provenance. Request, result, round, call, and
+aggregate output caps fail before a truncated envelope can become a hidden action. The
 `master_tool_calls` ledger binds each envelope hash to the durable root turn; mutation
 idempotency is derived from that identity.
 

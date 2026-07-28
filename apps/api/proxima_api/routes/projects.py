@@ -63,6 +63,25 @@ def register(app, deps):
             logging.getLogger("proxima.projects").exception(
                 "Code graph registration hook failed (non-fatal)"
             )
+
+    def _notify_knowledge_graph(
+        *,
+        owner_user_id: int,
+        container_slug: str,
+    ) -> None:
+        """Enqueue the Container Knowledge graph on create/link (Group 11)."""
+        lifecycle = getattr(app.state, "knowledge_graph_lifecycle", None)
+        if lifecycle is None:
+            return
+        try:
+            lifecycle.on_container_registered(
+                owner_user_id=owner_user_id,
+                container_slug=container_slug,
+            )
+        except Exception:
+            logging.getLogger("proxima.projects").exception(
+                "Knowledge graph registration hook failed (non-fatal)"
+            )
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     project_payload = deps["project_payload"]
@@ -202,6 +221,10 @@ def register(app, deps):
                 project_id=int(pid),
                 added_rels=list(summary.get("added") or []),
             )
+            _notify_knowledge_graph(
+                owner_user_id=int(user["id"]),
+                container_slug=slug,
+            )
             row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
             return project_payload(row)
         finally:
@@ -229,6 +252,10 @@ def register(app, deps):
             container_slug=payload.slug,
             project_id=int(project_id),
             added_rels=list(summary.get("added") or []),
+        )
+        _notify_knowledge_graph(
+            owner_user_id=int(user["id"]),
+            container_slug=payload.slug,
         )
         row = dict(db().execute("SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?", (user["username"], project_id)).fetchone())
         return project_payload(row)

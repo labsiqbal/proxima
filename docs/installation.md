@@ -176,9 +176,11 @@ Notes:
 - Master persistence migration always runs. The Master runtime and UI default to
   off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until integrated acceptance
   enables them for production.
-- Graphify structural extraction is local. Keep
-  `PROXIMA_GRAPH_SEMANTIC_EGRESS=0`; Group 9 does not implement cloud semantic
-  processing and refuses Knowledge rebuilds when this future switch is enabled.
+- Graphify structural extraction for Code and allowlisted Ops Knowledge is local.
+  Keep `PROXIMA_GRAPH_SEMANTIC_EGRESS=0`. Setting the reserved opt-in to `1` is
+  visible in graph policy, state, and logs, but Knowledge rebuilds fail closed
+  until a semantic adapter exists. Configured cloud credentials never enable
+  egress by themselves.
 - Runner/app children receive filtered environments. Add trusted variable names to the
   corresponding comma-separated allowlist. Full inheritance is a compatibility escape
   hatch and should remain off when opening unfamiliar projects.

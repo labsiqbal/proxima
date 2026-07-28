@@ -22,7 +22,7 @@ it ships no model and no credentials of its own.
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
 | Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex/Grok TOML MCP selections while preserving unrelated settings |
-| Scoped graph extraction | **Graphify** (`graphifyy==0.9.28`) | exact tested pin; local structural Code extraction; Code lifecycle uses full + changed-file incremental rebuilds; no semantic extras or cloud model egress |
+| Scoped graph extraction | **Graphify** (`graphifyy==0.9.28`) | exact tested pin; local structural Code + Knowledge (markdown/docs) extraction; Code lifecycle uses full + changed-file incremental rebuilds; Knowledge uses allowlisted Ops sources only; no cloud model egress without an explicit future policy |
 | Database | **SQLite** (stdlib `sqlite3`, WAL mode) | one file per install; no server |
 | Package manager | **uv** (`uv.lock`) | `uv run …`, `uv sync` |
 | Tests | **pytest** (`>=8.3`) | `apps/api/tests/` |
@@ -55,6 +55,13 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
   enqueues Code rebuilds on Area registration and Task merge, audits external HEAD
   / fingerprint drift, debounces dirty tracked trees, and injects a fixed-Area
   Graphify MCP entry for repo Task-agents (no arbitrary `project_path`).
+- **Knowledge graph lifecycle** (`knowledge_graph_lifecycle.py`) - one Ops
+  Knowledge graph per Container; allowlist-only source walk; debounce, startup
+  audit, scheduled full rebuild; Ops Task completion marks only that Container
+  stale.
+- **Context router** (`context_router.py`) - Master `query_context` routes to
+  Fleet registry, SQLite Live state, one Knowledge graph, and/or one Code graph
+  with budgets, provenance, and cross-Container isolation.
 - **Terminal** (`terminal.py`) — a PTY-backed shell exposed over WebSocket.
 - **App runner + preview proxy** (`apprunner.py`, `preview_proxy.py`) — launch an
   owner-confirmed project dev server with a filtered env and reverse-proxy it using

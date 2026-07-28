@@ -63,3 +63,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0003](0003-evolutionary-architecture.md) | Evolutionary architecture — perpetual beta, contributor-driven | Accepted |
 | [0004](0004-durable-task-delegation-boundary.md) | Durable Task delegation is one server-owned boundary | Accepted |
 | [0005](0005-restricted-master-runtime-boundary.md) | Restricted Master runtime boundary | Accepted |
+| [0006](0006-master-context-is-layered-and-scoped.md) | Master context is layered and scoped | Accepted |

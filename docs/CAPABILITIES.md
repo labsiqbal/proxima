@@ -309,7 +309,10 @@ target differs from Focus, the UI announces the Focus change and the API records
 the new Focus before it enqueues the turn. `master_message_context` durably binds
 the Focus and target ids to the user message. The restricted prompt and
 `MasterToolBroker` then enforce explicit routing, or keep automatic routing inside
-a Container Focus. Sent messages display that durable routing metadata.
+a Container Focus. When either an explicit target or Container Focus pins only
+the Container, `query_context` may select an exact registered Area in that
+Container but rejects an Area owned by another Container. An explicitly pinned
+Area remains authoritative. Sent messages display that durable routing metadata.
 
 The existing Master-session SSE stream is the only live path. It resumes from the
 durable cursor, deduplicates replay, ignores raw delta events, and applies typed
@@ -349,11 +352,12 @@ credential. Its stored capability selection is exactly
 Every runner-native permission request and native tool event is rejected. Codex
 uses empty execution environments plus a private loopback provider firewall that
 replaces its complete tool carrier with exact server-owned broker schemas and
-replaces runner-generated developer context with a fixed path-free policy. The
-firewall rejects schema drift, encoded or ambiguous transport, redirects, and
-oversized responses before releasing provider bytes. Codex's carrier-free HTTP
-fallback is accepted only after exact dynamic schemas are attested on the same
-ephemeral thread. Host paths and bearer material stay out of model input. See
+replaces runner-generated developer context with a fixed filesystem-isolated
+policy. The firewall rejects schema drift, encoded or ambiguous transport,
+redirects, and oversized responses before releasing provider bytes. Codex's
+carrier-free HTTP fallback is accepted only after exact dynamic schemas are
+attested on the same ephemeral thread. Host paths and bearer material stay out of
+model input. See
 [Runner conformance](runner-conformance.md) for the adapter matrix.
 
 Codex Master calls native dynamic Proxima functions; the compatibility harness
@@ -364,11 +368,13 @@ server-owned handler in the API process. Supported reads are `list_containers`,
 `get_container`, `get_live_state`, `list_tasks`, `list_task_agents`, and
 `list_recipes`. Supported mutations are `delegate_tasks`, `start_tasks`, and
 `create_attention`.
-`query_context` has a stable typed `feature_unavailable` result until the later
-graph/context slice. No tool accepts or returns filesystem paths, credentials,
-runner homes, configuration, or arbitrary tool input.
+`query_context` routes Fleet / Live / Knowledge / Code layers through the scoped
+context router (Group 11) with budgets and provenance. No tool accepts filesystem
+path inputs or returns absolute host paths, credentials, runner homes,
+configuration, or arbitrary tool input. `query_context` citations intentionally
+carry validated paths relative to the selected Ops or Code Area scope.
 
-Group 9 supplies the path-free graph state boundary beneath that future tool.
+Group 9 supplies the host-path-free graph state boundary beneath that tool.
 With Master enabled, authenticated owners can read exact Container and Area graph
 state and request one explicit rebuild. The adapter pins Graphify `0.9.28`, resolves
 all roots from registered Container and Area identities, excludes nested Areas from
@@ -391,17 +397,71 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
   scheduled audit that only walks already-registered Code graph Areas.
 - Stable working-tree dirty tracked changes are debounced and then enqueued.
 - Failed, interrupted, ENOSPC, malformed, or incomplete rebuilds preserve
-  last-good bytes and leave Tasks / SQLite Live state unaffected.
+  last-good bytes and leave Tasks / SQLite Live state unaffected. Canonical
+  metadata reads and last-good preservation use descriptor snapshots bounded by
+  `graph_max_bytes`; the prior generation is copied and replaced atomically
+  without buffering it in the API process. A fsynced publication journal records
+  the prior and replacement digests before replacement. Graph-state finalization
+  commits its update and final read in one transaction. An ambiguous commit result
+  is accepted only after the writer has left its transaction and an independent
+  read-only SQLite connection plus the bounded canonical hash both match the
+  replacement. This preserves any queued follow-up rebuild; unresolved outcomes
+  leave the journal for locked reconciliation. Failure transitions only own rows
+  still in `building`.
 - Repo Task-agent homes receive one server-managed `proxima-code-graph` MCP entry
   fixed to exactly their selected Area; arbitrary `project_path` is ignored.
   The Master does not inherit this MCP entry.
 
-Knowledge graph lifecycle automation, Focus epochs, history projection, and Master
-context routing remain later delivery groups. Structural extraction stays local;
-semantic model egress defaults off.
+Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**:
+
+- At most one Knowledge graph per Container Ops area at
+  `<container>/ops/graphify-out/graph.json`, with state in `graph_states`.
+- Builds read only the resolved Ops allowlist: `container.md`, `design.md`,
+  curated `wiki/**/*.md` (not `index.md` / `log.md`), `reports/**` text docs, and
+  durable artifact metadata named `METADATA.md` or `*.meta.json` under
+  `artifacts/`. Other artifact files, Repo Areas, secrets, caches, graph outputs,
+  Task transcripts, scripts, uploads, exports, and runtime data are excluded.
+  Symlinks and nested VCS trees are skipped. Query-time citation validation
+  re-resolves each selected source and rejects a directory that gained a VCS
+  marker after publication. Other active Container roots in the owner's fleet
+  are excluded when nested beneath any selected graph scope. Directory traversal
+  is lazy and independently caps visited entries and directories, including
+  excluded or unsupported content that never becomes a source.
+- Container create/link enqueues the initial Knowledge build. The same database
+  transaction that finishes an Ops Task writes **only that Container's** durable
+  Knowledge rebuild intent. A background tick drains the outbox, marks the graph
+  stale, and queues filesystem work. Debounce ticks compare cheap allowlisted file
+  metadata markers and hash file contents only after a marker changes. Startup
+  and scheduled audits still verify full content fingerprints and tool drift; a
+  scheduled full rebuild re-walks registered Knowledge graphs only.
+- Failed, interrupted, ENOSPC, malformed, or incomplete Knowledge rebuilds keep
+  last-good bytes. Tasks and SQLite Live state never depend on graph availability.
+- `query_context` routes through `context_router`: Fleet questions to the Fleet
+  registry; running/green/successful/done/cancelled/blocked/status to SQLite Live
+  state; Container facts and decisions to one Knowledge graph; and code structure
+  and impact to one Code graph. Focused status questions filter in SQLite before
+  applying the result limit, with green/successful/completed mapped to `done`.
+  Blocked/stuck includes both explicit `blocked` jobs and dependency-blocked
+  `queued` jobs whose `blocked_reason` is set.
+  Mixed requests call only the needed layers with budgets and never merge
+  fleet-wide graphs. Focused graph results cannot include another Container's
+  nodes. Durable explicit targets and Container Focus override model scope; either
+  form may permit an exact owned Area when only the Container is pinned, while an
+  explicitly pinned Area remains authoritative and cross-Container Areas are
+  rejected. Unmatched focused questions use Knowledge; unmatched fleet questions
+  use Fleet and Live. Every graph layer keeps generation, freshness, scope-relative
+  citations, and provenance.
+- Local-only structural extraction is the default and is visible in Master
+  settings (`graph_policy`), graph state `semantic_backend`, rebuild logs, and
+  docs. Cloud semantic egress stays off unless an explicit future captain policy
+  enables a real adapter; configured cloud credentials never unlock egress.
+
+Focus epochs, history projection, and safe-self-update remain later delivery
+groups.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
-`POST /api/containers/{slug}/graphs/rebuild`.
+`POST /api/containers/{slug}/graphs/rebuild`,
+`GET /api/settings/master` (includes `graph_policy`).
 
 `delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
 or start jobs directly. A Master batch may name client-local Task keys and
@@ -1344,7 +1404,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 + **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated path-free product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
++ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.

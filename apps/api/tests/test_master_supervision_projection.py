@@ -120,7 +120,7 @@ def test_idle_sse_flushes_a_connection_comment_without_waiting_for_keepalive(
         _next_sse_event(
             app,
             desk["session"]["id"],
-            0,
+            desk["event_cursor"],
         )
     )
 

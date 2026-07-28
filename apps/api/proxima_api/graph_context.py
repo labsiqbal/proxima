@@ -2,9 +2,10 @@
 
 Public callers select a Container plus an optional Area database id. Filesystem
 roots and graph paths are resolved only inside this module. Group 9 supplied the
-path-free adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
-(enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Knowledge lifecycle
-and Master context routing remain later delivery groups.
+filesystem-isolated adapter and atomic publish. Group 10 adds Code graph lifecycle helpers
+(enqueue, incremental rebuild, HEAD/fingerprint, gitignore). Group 11 expands the
+Ops Knowledge allowlist, Knowledge lifecycle helpers, and local-only semantic
+policy labels. Master context routing lives in ``context_router``.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import threading
@@ -29,6 +31,7 @@ from typing import Any, Callable, Mapping, TypeAlias
 
 from . import container_registry
 from .auth import iso_now
+from .db import connect as connect_database
 
 GRAPHIFY_DISTRIBUTION = "graphifyy"
 GRAPHIFY_VERSION = "0.9.28"
@@ -40,12 +43,66 @@ GRAPH_STATES = frozenset(
 GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
 GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
+GRAPH_PUBLISH_JOURNAL_NAME = "graph.publish-pending.json"
+GRAPH_PUBLISH_JOURNAL_SCHEMA = 2
+GRAPH_PUBLISH_JOURNAL_MAX_BYTES = 4096
+# Local structural extraction only. Cloud model egress requires an explicit
+# future captain policy and a separate adapter; credentials alone never enable it.
+SEMANTIC_BACKEND_LOCAL = "local-structural"
+SEMANTIC_BACKEND_DISABLED = "disabled"
 GraphStateRow: TypeAlias = Mapping[str, Any] | sqlite3.Row
+
+# Knowledge graph reads ONLY these durable Ops paths (under the Ops root).
+KNOWLEDGE_ROOT_FILES = frozenset({"container.md", "design.md"})
+KNOWLEDGE_DIR_EXTENSIONS: dict[str, frozenset[str]] = {
+    # Curated notes and decisions (living logs / generated catalogs stay out).
+    "wiki": frozenset({".md"}),
+    "reports": frozenset({".md", ".txt", ".html", ".json", ".rst"}),
+    # Durable artifact *metadata only* - never deliverable bodies or media.
+    # Explicit convention: ``*.meta.json`` or ``METADATA.md`` under artifacts/.
+    "artifacts": frozenset({".json", ".md"}),
+}
+KNOWLEDGE_ARTIFACT_META_JSON_SUFFIX = ".meta.json"
+KNOWLEDGE_ARTIFACT_META_NAMES = frozenset({"metadata.md"})
+KNOWLEDGE_WIKI_EXCLUDED = frozenset({"index.md", "log.md"})
+KNOWLEDGE_VCS_DIR_NAMES = frozenset({".git", ".hg", ".svn"})
+KNOWLEDGE_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        "graphify-out",
+        *KNOWLEDGE_VCS_DIR_NAMES,
+        "node_modules",
+        "__pycache__",
+        ".cache",
+        "cache",
+        "tmp",
+        "temp",
+        "tasks",
+        "scripts",
+        "uploads",
+        "exports",
+        ".proxima",
+    }
+)
+# Distinct fingerprint for a successful allowlist walk with zero sources.
+# Must not be confused with ``None`` (scan failed / incomplete).
+EMPTY_KNOWLEDGE_FINGERPRINT = hashlib.sha256(
+    b"proxima-knowledge-empty-allowlist-v1"
+).hexdigest()
+_KNOWLEDGE_SECRET_NAME_RE = re.compile(
+    r"(^|[/_.-])("
+    r"secret|secrets|credential|credentials|password|passwd|token|apikey|api[_-]?key|"
+    r"private[_-]?key|id_rsa|id_ed25519|\.pem|\.key|\.env|dotenv"
+    r")([/_.-]|$)",
+    re.IGNORECASE,
+)
+_MAX_KNOWLEDGE_FILE_BYTES = 2 * 1024 * 1024
 
 _MAX_ERROR_CHARS = 1000
 _MAX_LABEL_CHARS = 500
 _MAX_ID_CHARS = 1000
 _MAX_SOURCE_FILES = 200_000
+_MAX_KNOWLEDGE_WALK_ENTRIES = 250_000
+_MAX_KNOWLEDGE_WALK_DIRECTORIES = 25_000
 _GIT_TIMEOUT_SECONDS = 30
 log = logging.getLogger("proxima.graph_context")
 
@@ -78,6 +135,10 @@ class GraphQueryTimeout(GraphContextError):
     code = "graph_query_timeout"
 
 
+class GraphTamperedError(GraphContextError):
+    code = "graph_tampered"
+
+
 @dataclass(frozen=True)
 class GraphScope:
     container_id: int
@@ -98,7 +159,13 @@ class GraphScope:
             "area_rel_path": self.area_rel_path,
         }
 
-    def metadata(self, generation: int, source_fingerprint: str) -> dict[str, Any]:
+    def metadata(
+        self,
+        generation: int,
+        source_fingerprint: str,
+        *,
+        semantic_backend: str = SEMANTIC_BACKEND_LOCAL,
+    ) -> dict[str, Any]:
         return {
             "schema": GRAPH_METADATA_SCHEMA,
             "container_id": self.container_id,
@@ -107,7 +174,7 @@ class GraphScope:
             "generation": generation,
             "source_fingerprint": source_fingerprint,
             "tool_version": GRAPHIFY_VERSION,
-            "semantic_backend": "disabled",
+            "semantic_backend": semantic_backend,
             "complete": True,
         }
 
@@ -337,6 +404,227 @@ def _write_bytes_fsync(path: Path, payload: bytes) -> None:
             pass
 
 
+def _unlink_fsync(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _open_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise GraphValidationError("graph file is unavailable") from exc
+    try:
+        snapshot = os.fstat(descriptor)
+        if not stat.S_ISREG(snapshot.st_mode):
+            raise GraphValidationError("graph file is not a regular file")
+        if snapshot.st_size <= 0 or snapshot.st_size > max_bytes:
+            raise GraphValidationError("graph file exceeds its byte budget")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, snapshot
+
+
+def _regular_file_snapshot_matches(
+    before: os.stat_result,
+    after: os.stat_result,
+    total_bytes: int,
+) -> bool:
+    return (
+        before.st_dev == after.st_dev
+        and before.st_ino == after.st_ino
+        and before.st_size == after.st_size == total_bytes
+        and before.st_mtime_ns == after.st_mtime_ns
+        and before.st_ctime_ns == after.st_ctime_ns
+    )
+
+
+def _read_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[bytes, str]:
+    descriptor, before = _open_regular_file_bounded(
+        path,
+        max_bytes=max_bytes,
+    )
+    payload = bytearray()
+    digest = hashlib.sha256()
+    try:
+        while True:
+            remaining = max_bytes - len(payload)
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, remaining + 1),
+            )
+            if not block:
+                break
+            payload.extend(block)
+            digest.update(block)
+            if len(payload) > max_bytes:
+                raise GraphValidationError(
+                    "graph file exceeds its byte budget"
+                )
+        after = os.fstat(descriptor)
+        if not _regular_file_snapshot_matches(
+            before,
+            after,
+            len(payload),
+        ):
+            raise GraphValidationError("graph file changed while being read")
+    except OSError as exc:
+        raise GraphValidationError("graph file could not be read") from exc
+    finally:
+        os.close(descriptor)
+    return bytes(payload), digest.hexdigest()
+
+
+def _hash_regular_file_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> str:
+    descriptor, before = _open_regular_file_bounded(
+        path,
+        max_bytes=max_bytes,
+    )
+    total_bytes = 0
+    digest = hashlib.sha256()
+    try:
+        while True:
+            remaining = max_bytes - total_bytes
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, remaining + 1),
+            )
+            if not block:
+                break
+            total_bytes += len(block)
+            if total_bytes > max_bytes:
+                raise GraphValidationError(
+                    "graph file exceeds its byte budget"
+                )
+            digest.update(block)
+        after = os.fstat(descriptor)
+        if not _regular_file_snapshot_matches(
+            before,
+            after,
+            total_bytes,
+        ):
+            raise GraphValidationError(
+                "graph file changed while being hashed"
+            )
+    except OSError as exc:
+        raise GraphValidationError(
+            "graph file could not be hashed"
+        ) from exc
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest()
+
+
+def _copy_regular_file_bounded(
+    source: Path,
+    destination: Path,
+    *,
+    max_bytes: int,
+    expected_sha256: str | None = None,
+) -> str:
+    source_descriptor, before = _open_regular_file_bounded(
+        source,
+        max_bytes=max_bytes,
+    )
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination_descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            dir=destination.parent,
+        )
+    except OSError as exc:
+        os.close(source_descriptor)
+        raise GraphValidationError(
+            "graph backup could not be created"
+        ) from exc
+    total_bytes = 0
+    digest = hashlib.sha256()
+    try:
+        with (
+            os.fdopen(source_descriptor, "rb") as source_handle,
+            os.fdopen(destination_descriptor, "wb") as destination_handle,
+        ):
+            source_descriptor = -1
+            destination_descriptor = -1
+            while True:
+                remaining = max_bytes - total_bytes
+                block = source_handle.read(
+                    min(1024 * 1024, remaining + 1)
+                )
+                if not block:
+                    break
+                total_bytes += len(block)
+                if total_bytes > max_bytes:
+                    raise GraphValidationError(
+                        "graph file exceeds its byte budget"
+                    )
+                destination_handle.write(block)
+                digest.update(block)
+            after = os.fstat(source_handle.fileno())
+            if not _regular_file_snapshot_matches(
+                before,
+                after,
+                total_bytes,
+            ):
+                raise GraphValidationError(
+                    "graph file changed while being copied"
+                )
+            destination_handle.flush()
+            os.fsync(destination_handle.fileno())
+        actual_sha256 = digest.hexdigest()
+        if (
+            expected_sha256 is not None
+            and actual_sha256 != expected_sha256
+        ):
+            raise GraphValidationError(
+                "graph file no longer matches its published digest"
+            )
+        os.replace(temp_name, destination)
+        directory_descriptor = os.open(
+            destination.parent,
+            os.O_RDONLY,
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        raise GraphValidationError("graph file could not be copied") from exc
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        try:
+            Path(temp_name).unlink()
+        except FileNotFoundError:
+            pass
+    return actual_sha256
+
+
 def _installed_graphify_version() -> str | None:
     try:
         return importlib.metadata.version(GRAPHIFY_DISTRIBUTION)
@@ -344,18 +632,28 @@ def _installed_graphify_version() -> str | None:
         return None
 
 
-def _published_graph_tool_version(graph_path: Path) -> str | None:
+def _published_graph_tool_version(
+    graph_path: Path,
+    *,
+    max_bytes: int,
+) -> str | None:
     """Return tool_version from the last successfully published graph.
 
     Reads canonical graph.json metadata only. Failed rebuilds must not rewrite
     this pin; graph_states.tool_version is not authoritative for incremental
     eligibility because transitions overwrite it with the installed pin.
     """
-    if graph_path.is_symlink() or not graph_path.is_file():
-        return None
     try:
-        data = json.loads(graph_path.read_bytes())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload, _ = _read_regular_file_bounded(
+            graph_path,
+            max_bytes=max_bytes,
+        )
+        data = json.loads(payload)
+    except (
+        GraphValidationError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         return None
     if not isinstance(data, dict):
         return None
@@ -408,6 +706,204 @@ def _coalesce_rebuild_reason(
     return incoming
 
 
+def _is_knowledge_secret_path(rel_path: str) -> bool:
+    return bool(_KNOWLEDGE_SECRET_NAME_RE.search(rel_path.replace("\\", "/")))
+
+
+def _is_vcs_tree(path: Path) -> bool:
+    """True when path is a VCS metadata dir or a nested repo root."""
+    if path.name in KNOWLEDGE_VCS_DIR_NAMES:
+        return True
+    try:
+        if not path.is_dir() or path.is_symlink():
+            return False
+    except OSError:
+        return False
+    for marker in KNOWLEDGE_VCS_DIR_NAMES:
+        candidate = path / marker
+        try:
+            if candidate.exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _knowledge_path_allowed(rel_path: str) -> bool:
+    """True when a scope-relative path is on the durable Knowledge allowlist."""
+    normalized = rel_path.replace("\\", "/").strip().strip("/")
+    if not normalized or normalized.startswith("../") or "/../" in f"/{normalized}/":
+        return False
+    if any(
+        part in KNOWLEDGE_EXCLUDED_DIR_NAMES
+        for part in PurePosixPath(normalized).parts
+    ):
+        return False
+    if _is_graphify_ignore_path(normalized) or _is_knowledge_secret_path(normalized):
+        return False
+    if normalized in KNOWLEDGE_ROOT_FILES:
+        return True
+    pure = PurePosixPath(normalized)
+    if not pure.parts:
+        return False
+    top = pure.parts[0]
+    if top not in KNOWLEDGE_DIR_EXTENSIONS:
+        return False
+    if top == "wiki":
+        # Generated catalog and living session log are not durable knowledge.
+        name = pure.name
+        if name in KNOWLEDGE_WIKI_EXCLUDED or pure.as_posix().endswith("/log.md"):
+            return False
+    if top == "artifacts":
+        # Explicit durable metadata convention only - never deliverable bodies.
+        name = pure.name.lower()
+        if name in KNOWLEDGE_ARTIFACT_META_NAMES:
+            return True
+        return name.endswith(KNOWLEDGE_ARTIFACT_META_JSON_SUFFIX)
+    suffix = pure.suffix.lower()
+    return suffix in KNOWLEDGE_DIR_EXTENSIONS[top]
+
+
+def _knowledge_source_allowed_at_query(
+    root: Path,
+    rel_path: str,
+    excluded_roots: tuple[Path, ...] = (),
+) -> bool:
+    if not _knowledge_path_allowed(rel_path):
+        return False
+    try:
+        _, target = _resolve_source(root, rel_path, excluded_roots)
+    except GraphValidationError:
+        return False
+    current = target.parent
+    while True:
+        try:
+            if current.is_symlink() or not current.is_dir():
+                return False
+        except OSError:
+            return False
+        for marker in KNOWLEDGE_VCS_DIR_NAMES:
+            try:
+                (current / marker).lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+            return False
+        if current == root:
+            return True
+        if not _contains(root, current) or current.parent == current:
+            return False
+        current = current.parent
+
+
+def _select_knowledge_sources(
+    root: Path,
+    excluded_roots: tuple[Path, ...] = (),
+) -> tuple[list[str], list[str]]:
+    """Walk only allowlisted durable Ops knowledge; fail closed on incomplete scans."""
+    errors: list[str] = []
+    rel_paths: list[str] = []
+    visited_entries = 0
+    visited_directories = 0
+    try:
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return [], [f"Knowledge Ops root is unavailable: {exc}"]
+
+    def consider(path: Path) -> None:
+        if path.is_symlink():
+            return
+        try:
+            if not path.is_file():
+                return
+            resolved = path.resolve(strict=True)
+            if not _contains(resolved_root, resolved):
+                errors.append("Knowledge source escaped the Ops root")
+                return
+            if any(_contains(excluded, resolved) for excluded in excluded_roots):
+                return
+            rel = resolved.relative_to(resolved_root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            errors.append("Knowledge source could not be resolved inside Ops")
+            return
+        if not _knowledge_path_allowed(rel):
+            return
+        try:
+            size = resolved.stat().st_size
+        except OSError:
+            errors.append("Knowledge source became unreadable during scan")
+            return
+        if size <= 0 or size > _MAX_KNOWLEDGE_FILE_BYTES:
+            # Oversized or empty files are skipped, not fatal - still fail if
+            # the walk itself is incomplete.
+            return
+        rel_paths.append(rel)
+        if len(rel_paths) > _MAX_SOURCE_FILES:
+            raise GraphBuildError("graph source count exceeds the server limit")
+
+    for name in sorted(KNOWLEDGE_ROOT_FILES):
+        candidate = resolved_root / name
+        if candidate.exists() or candidate.is_symlink():
+            consider(candidate)
+
+    for dirname in sorted(KNOWLEDGE_DIR_EXTENSIONS):
+        base = resolved_root / dirname
+        if base.is_symlink():
+            continue
+        if not base.is_dir():
+            continue
+        # A nested repository rooted at an allowlisted top-level dir is out.
+        if _is_vcs_tree(base):
+            continue
+        stack = [base]
+        while stack:
+            current = stack.pop()
+            visited_directories += 1
+            if (
+                visited_directories
+                > _MAX_KNOWLEDGE_WALK_DIRECTORIES
+            ):
+                raise GraphBuildError(
+                    "Knowledge walk exceeded its directory budget"
+                )
+            if current.is_symlink():
+                continue
+            try:
+                with os.scandir(current) as entries:
+                    for dir_entry in entries:
+                        visited_entries += 1
+                        if (
+                            visited_entries
+                            > _MAX_KNOWLEDGE_WALK_ENTRIES
+                        ):
+                            raise GraphBuildError(
+                                "Knowledge walk exceeded its entry budget"
+                            )
+                        if dir_entry.is_symlink():
+                            continue
+                        if dir_entry.name in KNOWLEDGE_EXCLUDED_DIR_NAMES:
+                            continue
+                        if (
+                            dir_entry.name.startswith(".")
+                            and dir_entry.name not in {".md"}
+                        ):
+                            continue
+                        entry = Path(dir_entry.path)
+                        if dir_entry.is_dir(follow_symlinks=False):
+                            if _is_vcs_tree(entry):
+                                continue
+                            stack.append(entry)
+                        elif dir_entry.is_file(follow_symlinks=False):
+                            consider(entry)
+            except GraphBuildError:
+                raise
+            except OSError:
+                errors.append("Knowledge directory walk was incomplete")
+
+    return sorted(set(rel_paths)), errors
+
+
 def _select_graphify_sources(
     root: Path,
     kind: str,
@@ -416,10 +912,7 @@ def _select_graphify_sources(
 ) -> tuple[list[str], list[str]]:
     """Return exact scope-relative source paths and incomplete-scan diagnostics."""
     if kind == "knowledge":
-        seed = root / "container.md"
-        if seed.is_symlink() or not seed.is_file():
-            return [], []
-        return ["container.md"], []
+        return _select_knowledge_sources(root, excluded_roots)
 
     from graphify.detect import detect
 
@@ -446,6 +939,15 @@ def _select_graphify_sources(
         if len(rel_paths) > _MAX_SOURCE_FILES:
             raise GraphBuildError("graph source count exceeds the server limit")
     return sorted(set(rel_paths)), errors
+
+
+def semantic_backend_label(*, kind: str, egress_enabled: bool) -> str:
+    """Record which extraction backend a generation used (or refused)."""
+    del kind  # Code and Knowledge both stay local-structural in this group.
+    if egress_enabled:
+        # Explicit opt-in is visible, but cloud extraction is still refused.
+        return SEMANTIC_BACKEND_DISABLED
+    return SEMANTIC_BACKEND_LOCAL
 
 
 def _build_graphify_worker(
@@ -581,14 +1083,14 @@ def _validate_graph_data(
     excluded_roots: tuple[Path, ...] = (),
 ) -> tuple[dict[str, Any], str]:
     try:
-        stat = path.lstat()
-    except OSError as exc:
-        raise GraphValidationError("generated graph is missing") from exc
-    if path.is_symlink() or not path.is_file():
-        raise GraphValidationError("generated graph is not a regular file")
-    if stat.st_size <= 0 or stat.st_size > max_bytes:
-        raise GraphValidationError("generated graph exceeds its byte budget")
-    payload = path.read_bytes()
+        payload, graph_sha256 = _read_regular_file_bounded(
+            path,
+            max_bytes=max_bytes,
+        )
+    except GraphValidationError as exc:
+        raise GraphValidationError(
+            "generated graph is unavailable or exceeds its byte budget"
+        ) from exc
     try:
         data = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -644,7 +1146,7 @@ def _validate_graph_data(
     root_spellings = {str(root), root.as_posix()}
     if any(spelling and spelling in serialized for spelling in root_spellings):
         raise GraphValidationError("generated graph leaks an absolute scope path")
-    return data, hashlib.sha256(payload).hexdigest()
+    return data, graph_sha256
 
 
 def _citation(
@@ -657,7 +1159,11 @@ def _citation(
         return None
     rel, _ = _resolve_source(root, source, excluded_roots)
     line = str(node.get("source_location") or "").strip()[:80]
-    return {"path": rel, "location": line}
+    return {
+        "path": rel,
+        "path_kind": "scope_relative",
+        "location": line,
+    }
 
 
 def _query_graph_data(
@@ -665,6 +1171,7 @@ def _query_graph_data(
     *,
     root: Path,
     expected_metadata: Mapping[str, Any],
+    expected_sha256: str,
     max_bytes: int,
     question: str,
     budgets: GraphQueryBudgets,
@@ -679,13 +1186,17 @@ def _query_graph_data(
         if time.monotonic() > deadline:
             raise GraphQueryTimeout("graph query exceeded its time budget")
 
-    data, _ = _validate_graph_data(
+    data, actual_sha256 = _validate_graph_data(
         path,
         root=root,
         expected_metadata=expected_metadata,
         max_bytes=max_bytes,
         excluded_roots=excluded_roots,
     )
+    if actual_sha256 != expected_sha256:
+        raise GraphTamperedError(
+            "canonical graph no longer matches its published digest"
+        )
     check_time()
     nodes = data["nodes"]
     links = data.get("links", data.get("edges", []))
@@ -891,7 +1402,7 @@ def _query_worker(result_queue: Any, kwargs: dict[str, Any]) -> None:
 
 
 class GraphContextService:
-    """One path-free boundary for Graphify state, rebuild, and bounded query."""
+    """One filesystem-isolated boundary for Graphify state, rebuild, and query."""
 
     def __init__(self, app: Any, db_factory: Callable[[], sqlite3.Connection]):
         self.app = app
@@ -1074,12 +1585,13 @@ class GraphContextService:
         *,
         owner_user_id: int,
         container_slug: str,
-        area_id: int,
+        area_id: int | None = None,
+        kind: str = "code",
     ) -> str | None:
         scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
-            kind="code",
+            kind=kind,
             area_id=area_id,
             create_output=False,
         )
@@ -1087,7 +1599,7 @@ class GraphContextService:
         try:
             rel_paths, errors = _select_graphify_sources(
                 scope.root,
-                "code",
+                kind,
                 cache,
                 scope.excluded_roots,
             )
@@ -1096,6 +1608,85 @@ class GraphContextService:
             return _fingerprint_files(scope.root, rel_paths, scope.excluded_roots)
         finally:
             shutil.rmtree(cache, ignore_errors=True)
+
+    def knowledge_source_signature(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+    ) -> str | None:
+        """Fingerprint allowlisted Knowledge sources for debounce and audit.
+
+        Returns:
+        - a content fingerprint when allowlisted sources exist
+        - ``EMPTY_KNOWLEDGE_FINGERPRINT`` when the walk succeeds with zero sources
+        - ``None`` when the walk is incomplete or the scope is unavailable
+        """
+        scope = self.resolve_scope(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+            create_output=False,
+        )
+        cache = Path(tempfile.mkdtemp(prefix=".proxima-kfp-"))
+        try:
+            rel_paths, errors = _select_graphify_sources(
+                scope.root,
+                "knowledge",
+                cache,
+                scope.excluded_roots,
+            )
+            if errors:
+                return None
+            if not rel_paths:
+                return EMPTY_KNOWLEDGE_FINGERPRINT
+            return _fingerprint_files(
+                scope.root,
+                rel_paths,
+                scope.excluded_roots,
+            )
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
+
+    def knowledge_source_marker(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+    ) -> str | None:
+        scope = self.resolve_scope(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+            create_output=False,
+            deep_ops_scan=False,
+        )
+        rel_paths, errors = _select_knowledge_sources(
+            scope.root,
+            scope.excluded_roots,
+        )
+        if errors:
+            return None
+        digest = hashlib.sha256()
+        for rel_text in rel_paths:
+            try:
+                rel, source = _resolve_source(
+                    scope.root,
+                    rel_text,
+                    scope.excluded_roots,
+                )
+                stat = source.stat()
+            except (GraphContextError, OSError):
+                return None
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(stat.st_size).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(str(stat.st_mtime_ns).encode("ascii"))
+            digest.update(b"\0")
+        return digest.hexdigest()
 
     def _owned_container(
         self,
@@ -1112,6 +1703,32 @@ class GraphContextService:
             raise GraphScopeError("Container is not available")
         return dict(row)
 
+    def _other_container_exclusions(
+        self,
+        *,
+        owner_user_id: int,
+        container_id: int,
+        root: Path,
+    ) -> tuple[Path, ...]:
+        exclusions: set[Path] = set()
+        rows = self._db_factory().execute(
+            "SELECT id, path FROM projects "
+            "WHERE owner_user_id = ? AND id != ? AND archived_at IS NULL",
+            (owner_user_id, container_id),
+        ).fetchall()
+        for row in rows:
+            try:
+                candidate = container_registry.container_root(row)
+            except container_registry.ContainerBoundaryError:
+                continue
+            if candidate == root:
+                raise GraphScopeError(
+                    "Graph scope overlaps another active Container root"
+                )
+            if _contains(root, candidate):
+                exclusions.add(candidate)
+        return tuple(sorted(exclusions, key=lambda path: path.as_posix()))
+
     def resolve_scope(
         self,
         *,
@@ -1120,6 +1737,7 @@ class GraphContextService:
         kind: str,
         area_id: int | None = None,
         create_output: bool = False,
+        deep_ops_scan: bool = True,
     ) -> GraphScope:
         if kind not in GRAPH_KINDS:
             raise GraphScopeError("unknown graph kind")
@@ -1136,11 +1754,61 @@ class GraphContextService:
                 root = container_registry.ops_root(
                     self._db_factory(),
                     container,
-                    deep_ops_scan=True,
+                    deep_ops_scan=deep_ops_scan,
                 )
                 rel_path = None
                 resolved_area_id = None
+                # Fail closed when legacy Ops (rel_path='.') still shares the
+                # Container root with registered Code Areas - allowlisted-looking
+                # repo files must not enter Knowledge.
+                ops_row = self._db_factory().execute(
+                    "SELECT rel_path FROM project_areas "
+                    "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded' "
+                    "ORDER BY id LIMIT 1",
+                    (container["id"],),
+                ).fetchone()
+                ops_rel = (
+                    str(ops_row["rel_path"] or "").strip() if ops_row is not None else ""
+                )
+                code_area_ids = [
+                    int(row["id"])
+                    for row in self._db_factory().execute(
+                        "SELECT id FROM project_areas "
+                        "WHERE project_id = ? AND kind = 'code' "
+                        "AND source != 'excluded'",
+                        (container["id"],),
+                    ).fetchall()
+                ]
+                if ops_rel in {"", "."} and code_area_ids:
+                    raise GraphScopeError(
+                        "Knowledge graph requires physical Ops separation from "
+                        "Code Areas; legacy Ops root still overlaps Code scope"
+                    )
                 excluded_roots: tuple[Path, ...] = ()
+                if code_area_ids:
+                    try:
+                        area_roots = container_registry.validated_area_roots(
+                            self._db_factory(),
+                            container,
+                        )
+                    except container_registry.ContainerBoundaryError:
+                        area_roots = {}
+                    resolved_ops = root.resolve(strict=True)
+                    excluded_list: list[Path] = []
+                    for code_id in code_area_ids:
+                        candidate = area_roots.get(code_id)
+                        if candidate is None:
+                            continue
+                        try:
+                            resolved_code = candidate.resolve(strict=True)
+                        except (OSError, RuntimeError):
+                            continue
+                        if (
+                            resolved_code == resolved_ops
+                            or _contains(resolved_ops, resolved_code)
+                        ):
+                            excluded_list.append(resolved_code)
+                    excluded_roots = tuple(excluded_list)
             else:
                 if area_id is None:
                     raise GraphScopeError("Code graph scope requires an Area id")
@@ -1171,6 +1839,18 @@ class GraphContextService:
         except container_registry.ContainerBoundaryError as exc:
             raise GraphScopeError(str(exc)) from exc
         resolved_root = root.resolve(strict=True)
+        excluded_roots = tuple(
+            dict.fromkeys(
+                (
+                    *excluded_roots,
+                    *self._other_container_exclusions(
+                        owner_user_id=owner_user_id,
+                        container_id=int(container["id"]),
+                        root=resolved_root,
+                    ),
+                )
+            )
+        )
         workspace = self.config.get("workspace_root")
         workspace_root = Path(str(workspace)) if workspace else None
         if _is_worktree_path(resolved_root, workspace_root):
@@ -1250,6 +1930,183 @@ class GraphContextService:
         for spelling in {str(scope.root), scope.root.as_posix()}:
             text = text.replace(spelling, "<scope>")
         return text[:_MAX_ERROR_CHARS]
+
+    def _recover_pending_publication_locked(
+        self,
+        scope: GraphScope,
+        row: GraphStateRow,
+        *,
+        max_bytes: int,
+    ) -> GraphStateRow:
+        journal = scope.graph_path.with_name(
+            GRAPH_PUBLISH_JOURNAL_NAME
+        )
+        try:
+            payload, _ = _read_regular_file_bounded(
+                journal,
+                max_bytes=GRAPH_PUBLISH_JOURNAL_MAX_BYTES,
+            )
+            pending = json.loads(payload)
+        except (
+            GraphValidationError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            return row
+        if not isinstance(pending, Mapping):
+            return row
+        schema = pending.get("schema")
+        expected_sha256 = str(
+            pending.get("expected_sha256") or ""
+        ).strip().lower()
+        replacement_sha256 = str(
+            pending.get("replacement_sha256") or ""
+        ).strip().lower()
+        if (
+            schema not in {1, GRAPH_PUBLISH_JOURNAL_SCHEMA}
+            or pending.get("state_id") != int(row["id"])
+            or (
+                expected_sha256
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    expected_sha256,
+                )
+                is None
+            )
+            or (
+                schema == 1
+                and not expected_sha256
+            )
+            or (
+                schema == GRAPH_PUBLISH_JOURNAL_SCHEMA
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    replacement_sha256,
+                )
+                is None
+            )
+        ):
+            return row
+        committed_row = self._committed_graph_state_by_id(int(row["id"]))
+        if committed_row is None:
+            return row
+        if self._db_factory().in_transaction:
+            return committed_row
+        row = committed_row
+        published_sha256 = str(
+            row["graph_sha256"] or ""
+        ).strip().lower()
+        try:
+            if expected_sha256 and published_sha256 == expected_sha256:
+                _copy_regular_file_bounded(
+                    scope.graph_path.with_name("graph.last-good.json"),
+                    scope.graph_path,
+                    max_bytes=max_bytes,
+                    expected_sha256=expected_sha256,
+                )
+            elif (
+                schema == GRAPH_PUBLISH_JOURNAL_SCHEMA
+                and published_sha256 == replacement_sha256
+            ):
+                if (
+                    _hash_regular_file_bounded(
+                        scope.graph_path,
+                        max_bytes=max_bytes,
+                    )
+                    != replacement_sha256
+                ):
+                    return row
+            elif schema == 1 and published_sha256:
+                if (
+                    _hash_regular_file_bounded(
+                        scope.graph_path,
+                        max_bytes=max_bytes,
+                    )
+                    != published_sha256
+                ):
+                    return row
+            elif not published_sha256 and not expected_sha256:
+                _unlink_fsync(scope.graph_path)
+            else:
+                return row
+            _unlink_fsync(journal)
+        except (GraphValidationError, OSError):
+            return row
+        if expected_sha256 and published_sha256 == expected_sha256:
+            log.warning(
+                "recovered interrupted graph publication "
+                "container=%s kind=%s area=%s",
+                scope.container_slug,
+                scope.kind,
+                scope.area_id,
+            )
+        return row
+
+    def _recover_pending_publication(
+        self,
+        scope: GraphScope,
+        row: GraphStateRow,
+        *,
+        max_bytes: int,
+    ) -> GraphStateRow:
+        lock = self._lock_for(scope)
+        if not lock.acquire(blocking=False):
+            return row
+        try:
+            return self._recover_pending_publication_locked(
+                scope,
+                self._state_row(scope),
+                max_bytes=max_bytes,
+            )
+        finally:
+            lock.release()
+
+    def _committed_graph_state_by_id(
+        self,
+        state_id: int,
+    ) -> sqlite3.Row | None:
+        configured_path = str(
+            self.config.get("database_path") or ""
+        ).strip()
+        if not configured_path or configured_path == ":memory:":
+            return None
+        connection: sqlite3.Connection | None = None
+        try:
+            database_uri = (
+                Path(configured_path)
+                .expanduser()
+                .resolve()
+                .as_uri()
+                + "?mode=ro"
+            )
+            connection = sqlite3.connect(
+                database_uri,
+                uri=True,
+                check_same_thread=False,
+                isolation_level=None,
+                timeout=1,
+            )
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM graph_states WHERE id = ?",
+                (state_id,),
+            ).fetchone()
+        except (OSError, RuntimeError, sqlite3.Error):
+            return None
+        finally:
+            if connection is not None:
+                connection.close()
+        return row
+
+    def _publication_connection(self) -> sqlite3.Connection:
+        configured_path = str(
+            self.config.get("database_path") or ""
+        ).strip()
+        if not configured_path or configured_path == ":memory:":
+            raise GraphValidationError(
+                "graph publication database is unavailable"
+            )
+        return connect_database(configured_path)
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {
@@ -1391,9 +2248,10 @@ class GraphContextService:
                 (state_id,),
             ).fetchone()
             assert current is not None
+            if str(current["state"] or "") != "building":
+                return current
             follow_up = bool(
-                str(current["state"] or "") == "building"
-                and "rebuild_reason" in columns
+                "rebuild_reason" in columns
                 and current["rebuild_reason"]
             )
             if follow_up:
@@ -1588,12 +2446,38 @@ class GraphContextService:
 
         canonical = scope.graph_path
         last_good = canonical.with_name("graph.last-good.json")
-        prior_bytes: bytes | None = None
+        journal = canonical.with_name(GRAPH_PUBLISH_JOURNAL_NAME)
+        rollback_path: Path | None = None
+        expected_prior_sha256 = str(
+            state_row["graph_sha256"] or ""
+        ).strip().lower()
         if canonical.exists():
-            if canonical.is_symlink() or not canonical.is_file():
-                raise GraphValidationError("canonical graph is not a regular file")
-            prior_bytes = canonical.read_bytes()
-            _write_bytes_fsync(last_good, prior_bytes)
+            prior_backup = stage.with_name("prior-canonical.json")
+            _copy_regular_file_bounded(
+                canonical,
+                prior_backup,
+                max_bytes=max_bytes,
+                expected_sha256=(
+                    expected_prior_sha256
+                    if int(state_row["generation"] or 0) > 0
+                    and expected_prior_sha256
+                    else None
+                ),
+            )
+            os.replace(prior_backup, last_good)
+            os.link(last_good, prior_backup)
+            rollback_path = prior_backup
+        _write_bytes_fsync(
+            journal,
+            _json_bytes(
+                {
+                    "schema": GRAPH_PUBLISH_JOURNAL_SCHEMA,
+                    "state_id": int(state_row["id"]),
+                    "expected_sha256": expected_prior_sha256 or None,
+                    "replacement_sha256": graph_sha256,
+                }
+            ),
+        )
         os.replace(stage, canonical)
         directory_fd = os.open(canonical.parent, os.O_RDONLY)
         try:
@@ -1607,94 +2491,162 @@ class GraphContextService:
                 repo_head = self.repo_head_sha(scope.root)
             except GraphScopeError:
                 repo_head = None
+        connection = self._publication_connection()
         try:
             with self.app.state.db_lock:
-                columns = {
-                    row[1]
-                    for row in self._db_factory().execute(
-                        "PRAGMA table_info(graph_states)"
-                    ).fetchall()
-                }
-                current = self._db_factory().execute(
-                    "SELECT * FROM graph_states WHERE id = ?",
-                    (state_row["id"],),
-                ).fetchone()
-                assert current is not None
-                follow_up = bool(
-                    str(current["state"] or "") == "building"
-                    and "rebuild_reason" in columns
-                    and current["rebuild_reason"]
-                )
-                next_state = "queued" if follow_up else "fresh"
-                if "repo_head" in columns:
-                    if follow_up:
-                        self._db_factory().execute(
-                            "UPDATE graph_states SET state = ?, generation = ?, "
-                            "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                            "semantic_backend = 'disabled', last_success_at = ?, "
-                            "last_attempt_at = ?, last_error = NULL, "
-                            "repo_head = ?, "
-                            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (
-                                next_state,
-                                expected_metadata["generation"],
-                                expected_metadata["source_fingerprint"],
-                                graph_sha256,
-                                GRAPHIFY_VERSION,
-                                now,
-                                now,
-                                repo_head,
-                                state_row["id"],
-                            ),
-                        )
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    columns = {
+                        item[1]
+                        for item in connection.execute(
+                            "PRAGMA table_info(graph_states)"
+                        ).fetchall()
+                    }
+                    current = connection.execute(
+                        "SELECT * FROM graph_states WHERE id = ?",
+                        (state_row["id"],),
+                    ).fetchone()
+                    assert current is not None
+                    follow_up = bool(
+                        str(current["state"] or "") == "building"
+                        and "rebuild_reason" in columns
+                        and current["rebuild_reason"]
+                    )
+                    next_state = "queued" if follow_up else "fresh"
+                    backend = str(
+                        expected_metadata.get("semantic_backend")
+                        or SEMANTIC_BACKEND_LOCAL
+                    )
+                    if "repo_head" in columns:
+                        if follow_up:
+                            connection.execute(
+                                "UPDATE graph_states SET state = ?, generation = ?, "
+                                "source_fingerprint = ?, graph_sha256 = ?, "
+                                "tool_version = ?, semantic_backend = ?, "
+                                "last_success_at = ?, last_attempt_at = ?, "
+                                "last_error = NULL, repo_head = ?, "
+                                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (
+                                    next_state,
+                                    expected_metadata["generation"],
+                                    expected_metadata["source_fingerprint"],
+                                    graph_sha256,
+                                    GRAPHIFY_VERSION,
+                                    backend,
+                                    now,
+                                    now,
+                                    repo_head,
+                                    state_row["id"],
+                                ),
+                            )
+                        else:
+                            connection.execute(
+                                "UPDATE graph_states SET state = 'fresh', "
+                                "generation = ?, source_fingerprint = ?, "
+                                "graph_sha256 = ?, tool_version = ?, "
+                                "semantic_backend = ?, last_success_at = ?, "
+                                "last_attempt_at = ?, last_error = NULL, "
+                                "repo_head = ?, pending_base_commit = NULL, "
+                                "pending_head_commit = NULL, "
+                                "rebuild_reason = NULL, "
+                                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (
+                                    expected_metadata["generation"],
+                                    expected_metadata["source_fingerprint"],
+                                    graph_sha256,
+                                    GRAPHIFY_VERSION,
+                                    backend,
+                                    now,
+                                    now,
+                                    repo_head,
+                                    state_row["id"],
+                                ),
+                            )
                     else:
-                        self._db_factory().execute(
+                        connection.execute(
                             "UPDATE graph_states SET state = 'fresh', generation = ?, "
                             "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                            "semantic_backend = 'disabled', last_success_at = ?, "
+                            "semantic_backend = ?, last_success_at = ?, "
                             "last_attempt_at = ?, last_error = NULL, "
-                            "repo_head = ?, pending_base_commit = NULL, "
-                            "pending_head_commit = NULL, rebuild_reason = NULL, "
                             "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             (
                                 expected_metadata["generation"],
                                 expected_metadata["source_fingerprint"],
                                 graph_sha256,
                                 GRAPHIFY_VERSION,
+                                backend,
                                 now,
                                 now,
-                                repo_head,
                                 state_row["id"],
                             ),
                         )
-                else:
-                    self._db_factory().execute(
-                        "UPDATE graph_states SET state = 'fresh', generation = ?, "
-                        "source_fingerprint = ?, graph_sha256 = ?, tool_version = ?, "
-                        "semantic_backend = 'disabled', last_success_at = ?, "
-                        "last_attempt_at = ?, last_error = NULL, "
-                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (
-                            expected_metadata["generation"],
-                            expected_metadata["source_fingerprint"],
-                            graph_sha256,
-                            GRAPHIFY_VERSION,
-                            now,
-                            now,
-                            state_row["id"],
-                        ),
-                    )
-                row = self._db_factory().execute(
-                    "SELECT * FROM graph_states WHERE id = ?",
-                    (state_row["id"],),
-                ).fetchone()
+                    row = connection.execute(
+                        "SELECT * FROM graph_states WHERE id = ?",
+                        (state_row["id"],),
+                    ).fetchone()
+                    assert row is not None
+                    connection.execute("COMMIT")
+                except Exception:
+                    if connection.in_transaction:
+                        try:
+                            connection.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                    raise
         except Exception:
-            if prior_bytes is None:
-                canonical.unlink(missing_ok=True)
+            try:
+                connection.close()
+            except sqlite3.Error:
+                raise
+            database_row = self._committed_graph_state_by_id(
+                int(state_row["id"])
+            )
+            database_sha256 = (
+                str(database_row["graph_sha256"] or "").strip().lower()
+                if database_row is not None
+                else None
+            )
+            if database_sha256 == graph_sha256:
+                try:
+                    canonical_sha256 = _hash_regular_file_bounded(
+                        canonical,
+                        max_bytes=max_bytes,
+                    )
+                except GraphValidationError:
+                    raise
+                if canonical_sha256 != graph_sha256:
+                    raise
+                row = database_row
+            elif database_sha256 != expected_prior_sha256:
+                raise
             else:
-                _write_bytes_fsync(canonical, prior_bytes)
-            raise
+                if rollback_path is None:
+                    _unlink_fsync(canonical)
+                else:
+                    os.replace(rollback_path, canonical)
+                    directory_fd = os.open(
+                        canonical.parent,
+                        os.O_RDONLY,
+                    )
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                try:
+                    _unlink_fsync(journal)
+                except OSError:
+                    pass
+                raise
+        else:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
         assert row is not None
+        try:
+            _unlink_fsync(journal)
+        except OSError:
+            pass
         self._emit(scope, row)
         return row
 
@@ -1704,6 +2656,51 @@ class GraphContextService:
         owner_user_id: int,
         container_slug: str,
         area_id: int,
+        reason: str,
+        mode: str = "full",
+        mark_stale: bool = False,
+        pending_base_commit: str | None = None,
+        pending_head_commit: str | None = None,
+    ) -> dict[str, Any]:
+        """Create state if needed, optionally mark stale, and queue a Code rebuild."""
+        return self._enqueue_rebuild(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="code",
+            area_id=area_id,
+            reason=reason,
+            mode=mode,
+            mark_stale=mark_stale,
+            pending_base_commit=pending_base_commit,
+            pending_head_commit=pending_head_commit,
+        )
+
+    def enqueue_knowledge_rebuild(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        reason: str,
+        mark_stale: bool = False,
+    ) -> dict[str, Any]:
+        """Create Knowledge state if needed and queue a full Ops rebuild."""
+        return self._enqueue_rebuild(
+            owner_user_id=owner_user_id,
+            container_slug=container_slug,
+            kind="knowledge",
+            area_id=None,
+            reason=reason,
+            mode="full",
+            mark_stale=mark_stale,
+        )
+
+    def _enqueue_rebuild(
+        self,
+        *,
+        owner_user_id: int,
+        container_slug: str,
+        kind: str,
+        area_id: int | None,
         reason: str,
         mode: str = "full",
         mark_stale: bool = False,
@@ -1721,7 +2718,7 @@ class GraphContextService:
         scope = self.resolve_scope(
             owner_user_id=owner_user_id,
             container_slug=container_slug,
-            kind="code",
+            kind=kind,
             area_id=area_id,
             create_output=True,
         )
@@ -1804,15 +2801,21 @@ class GraphContextService:
         pending_head_commit: str | None = None,
         rebuild_reason: str | None = None,
     ) -> dict[str, Any]:
+        egress_enabled = bool(self.config.get("graph_semantic_egress_enabled"))
+        backend = semantic_backend_label(
+            kind=kind,
+            egress_enabled=egress_enabled,
+        )
         if rebuild_reason:
             log.info(
-                "code graph rebuild reason=%s container=%s area=%s",
+                "%s graph rebuild reason=%s container=%s area=%s semantic_backend=%s",
+                kind,
                 rebuild_reason,
                 container_slug,
                 area_id,
+                backend,
             )
         scope = self.resolve_scope(
-
             owner_user_id=owner_user_id,
             container_slug=container_slug,
             kind=kind,
@@ -1823,6 +2826,15 @@ class GraphContextService:
         lock = self._lock_for(scope)
         if not lock.acquire(blocking=False):
             raise GraphBuildError("this graph scope is already building")
+        max_bytes = max(
+            1024,
+            int(self.config.get("graph_max_bytes", 0)),
+        )
+        state_row = self._recover_pending_publication_locked(
+            scope,
+            state_row,
+            max_bytes=max_bytes,
+        )
         generation_dir: Path | None = None
         build_mode = "full"
         state_id = int(state_row["id"])
@@ -1831,7 +2843,10 @@ class GraphContextService:
         # Last-success tool pin comes from the published graph, not graph_states:
         # failed/queued/building transitions overwrite the DB column with the
         # installed pin and would otherwise bypass the full-rebuild guard.
-        prior_tool_version = _published_graph_tool_version(scope.graph_path)
+        prior_tool_version = _published_graph_tool_version(
+            scope.graph_path,
+            max_bytes=max_bytes,
+        )
         try:
             self._transition(scope, state_id, "queued")
             installed = _installed_graphify_version()
@@ -1847,16 +2862,38 @@ class GraphContextService:
                 )
                 return self._payload(scope, row)
             if installed != GRAPHIFY_VERSION:
-                raise GraphBuildError(
+                message = (
                     f"Graphify version mismatch: expected {GRAPHIFY_VERSION}, got {installed}"
                 )
-            if (
-                scope.kind == "knowledge"
-                and bool(self.config.get("graph_semantic_egress_enabled"))
-            ):
-                raise GraphBuildError(
-                    "semantic model egress is not implemented in this delivery group"
+                self._transition(
+                    scope,
+                    state_id,
+                    "failed",
+                    error=message,
                 )
+                raise GraphBuildError(message)
+            # Cloud semantic extraction never runs from credentials alone.
+            # Even an explicit egress opt-in fails closed until a future policy
+            # ships a real local-or-cloud adapter.
+            if scope.kind == "knowledge" and egress_enabled:
+                log.warning(
+                    "knowledge graph rebuild refused: semantic egress opt-in is "
+                    "set but cloud extraction is not implemented "
+                    "(container=%s backend=%s)",
+                    container_slug,
+                    backend,
+                )
+                message = (
+                    "semantic model egress is not implemented; "
+                    "Knowledge graphs remain local-structural only"
+                )
+                self._transition(
+                    scope,
+                    state_id,
+                    "failed",
+                    error=message,
+                )
+                raise GraphBuildError(message)
             # Claim any queued intent before the building transition clears pending.
             claimed_head: str | None
             with self.app.state.db_lock:
@@ -1908,7 +2945,11 @@ class GraphContextService:
                 )
             )
             stage = generation_dir / "graph.json"
-            placeholder_metadata = scope.metadata(generation, "")
+            placeholder_metadata = scope.metadata(
+                generation,
+                "",
+                semantic_backend=backend,
+            )
             timeout_seconds = min(
                 600,
                 max(
@@ -1986,6 +3027,16 @@ class GraphContextService:
             expected_metadata = scope.metadata(
                 generation,
                 str(build_result["source_fingerprint"]),
+                semantic_backend=backend,
+            )
+            log.info(
+                "%s graph published container=%s generation=%s semantic_backend=%s "
+                "sources=%s",
+                scope.kind,
+                scope.container_slug,
+                generation,
+                backend,
+                len(build_result.get("source_files") or []),
             )
             row = self._publish_generation(
                 scope=scope,
@@ -2122,6 +3173,15 @@ class GraphContextService:
             area_id=area_id,
         )
         row = self._state_row(scope)
+        max_bytes = max(
+            1024,
+            int(self.config.get("graph_max_bytes", 0)),
+        )
+        row = self._recover_pending_publication(
+            scope,
+            row,
+            max_bytes=max_bytes,
+        )
         budgets = self._budgets(
             depth=depth,
             timeout_ms=timeout_ms,
@@ -2141,9 +3201,23 @@ class GraphContextService:
                 message="No validated graph generation is available.",
             )
 
+        expected_sha = str(row["graph_sha256"] or "").strip().lower()
+        if not expected_sha:
+            return self._unavailable_result(
+                scope=scope,
+                row=row,
+                budgets=budgets,
+                code="graph_tampered",
+                message="Canonical graph has no published digest.",
+            )
+
+        published_backend = str(
+            row["semantic_backend"] or SEMANTIC_BACKEND_LOCAL
+        )
         expected_metadata = scope.metadata(
             int(row["generation"]),
             str(row["source_fingerprint"]),
+            semantic_backend=published_backend,
         )
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue(maxsize=1)
@@ -2155,10 +3229,8 @@ class GraphContextService:
                     "path": str(scope.graph_path),
                     "root": str(scope.root),
                     "expected_metadata": expected_metadata,
-                    "max_bytes": max(
-                        1024,
-                        int(self.config.get("graph_max_bytes", 0)),
-                    ),
+                    "expected_sha256": expected_sha,
+                    "max_bytes": max_bytes,
                     "question": question.strip(),
                     "budgets": {
                         "depth": budgets.depth,
@@ -2201,7 +3273,21 @@ class GraphContextService:
         finally:
             result_queue.close()
         if outcome.get("ok"):
-            return dict(outcome["result"])
+            result = dict(outcome["result"])
+            if (
+                scope.kind == "knowledge"
+                and not self._knowledge_result_allowed(scope, result)
+            ):
+                return self._unavailable_result(
+                    scope=scope,
+                    row=row,
+                    budgets=budgets,
+                    code="graph_tampered",
+                    message=(
+                        "Knowledge query cited paths outside the Ops allowlist"
+                    ),
+                )
+            return result
         return self._unavailable_result(
             scope=scope,
             row=row,
@@ -2212,3 +3298,34 @@ class GraphContextService:
                 outcome.get("error") or "Graph query failed.",
             ),
         )
+
+    @staticmethod
+    def _knowledge_result_allowed(
+        scope: GraphScope,
+        result: Mapping[str, Any],
+    ) -> bool:
+        """Refuse Knowledge results that cite non-allowlisted Ops paths."""
+        paths: list[str] = []
+        for citation in result.get("citations") or []:
+            if isinstance(citation, Mapping) and citation.get("path"):
+                paths.append(str(citation["path"]))
+        for item in result.get("items") or []:
+            if not isinstance(item, Mapping):
+                continue
+            for citation in item.get("citations") or []:
+                if isinstance(citation, Mapping) and citation.get("path"):
+                    paths.append(str(citation["path"]))
+            source = item.get("source_file") or item.get("path")
+            if source:
+                paths.append(str(source))
+        for path in paths:
+            normalized = path.replace("\\", "/").strip().strip("/")
+            if not normalized:
+                continue
+            if not _knowledge_source_allowed_at_query(
+                scope.root,
+                normalized,
+                scope.excluded_roots,
+            ):
+                return False
+        return True

@@ -64,8 +64,11 @@ carrier without that pre-turn attestation fails closed. The provider bearer rema
 an HTTP header inside trusted Proxima code and is never logged or inserted into
 model input.
 Runner-generated developer context is discarded and replaced by a fixed server-owned
-path-free policy. The app-server retains its dynamic-tool dispatch registration, so
-returned function calls route to the in-process broker.
+filesystem-isolated policy. It forbids model-supplied, absolute host, internal graph,
+and unrelated paths. Only validated `query_context` citations marked
+`path_kind=scope_relative` may be repeated as provenance. The app-server retains its
+dynamic-tool dispatch registration, so returned function calls route to the
+in-process broker.
 
 The loopback listener binds IPv4 loopback only and exposes one secret Responses
 route. It rejects alternate routes, framing ambiguity, request compression,
