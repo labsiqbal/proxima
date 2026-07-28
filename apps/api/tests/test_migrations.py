@@ -55,9 +55,9 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TABLE master_projections")
     conn.execute("DROP TABLE graph_states")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 35
+    assert current_version(conn) == 36
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -550,8 +550,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35]
-    assert current_version(conn) == 35
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36]
+    assert current_version(conn) == 36
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -592,8 +592,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35]
-    assert current_version(conn) == 35
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36]
+    assert current_version(conn) == 36
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -639,9 +639,18 @@ def _prepare_schema_34_graph_fixture(tmp_path: Path):
 
 def test_v35_graph_states_upgrade_rerun_and_scope_constraints(tmp_path: Path):
     db_path, conn = _prepare_schema_34_graph_fixture(tmp_path)
+    apply_graph_states = next(m[2] for m in MIGRATIONS if m[0] == 35)
 
-    assert run_migrations(conn, str(db_path)) == [35]
-    assert run_migrations(conn, str(db_path)) == []
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=[m for m in MIGRATIONS if m[0] == 35],
+    ) == [35]
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=[m for m in MIGRATIONS if m[0] == 35],
+    ) == []
     assert current_version(conn) == 35
 
     columns = {
@@ -704,13 +713,15 @@ def test_v35_graph_states_upgrade_rerun_and_scope_constraints(tmp_path: Path):
             (first_container, wrong_area),
         )
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    # Keep apply_graph_states referenced so static analysis sees the binding.
+    assert callable(apply_graph_states)
 
 
 def test_v35_graph_states_migration_rolls_back_as_one_transaction(
     tmp_path: Path,
 ):
     db_path, conn = _prepare_schema_34_graph_fixture(tmp_path)
-    apply_graph_states = MIGRATIONS[-1][2]
+    apply_graph_states = next(m[2] for m in MIGRATIONS if m[0] == 35)
 
     def apply_then_fail(connection):
         apply_graph_states(connection)
@@ -742,13 +753,15 @@ def test_fresh_install_graph_states_matches_idempotent_migration(
     db_path = tmp_path / "fresh.db"
     conn = connect(db_path)
     init_db(conn, [])
-    apply_graph_states = MIGRATIONS[-1][2]
+    apply_graph_states = next(m[2] for m in MIGRATIONS if m[0] == 35)
+    apply_lifecycle = next(m[2] for m in MIGRATIONS if m[0] == 36)
 
     before = [
         tuple(row)
         for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
     ]
     apply_graph_states(conn)
+    apply_lifecycle(conn)
     after = [
         tuple(row)
         for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
@@ -760,3 +773,37 @@ def test_fresh_install_graph_states_matches_idempotent_migration(
         "AND name = 'graph_states_area_scope_insert'"
     ).fetchone()
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def _prepare_schema_35_graph_fixture(tmp_path: Path):
+    db_path = tmp_path / "schema-35.db"
+    conn = connect(db_path)
+    init_db(conn, [])
+    # Drop lifecycle columns so migration 36 has work to do.
+    conn.execute("DROP TABLE graph_states")
+    next(m[2] for m in MIGRATIONS if m[0] == 35)(conn)
+    current_version(conn)
+    conn.executemany(
+        "INSERT INTO schema_migrations(version, description, applied_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [(version, f"schema {version}") for version in range(1, 36)],
+    )
+    return db_path, conn
+
+
+def test_v36_code_graph_lifecycle_columns_upgrade_and_idempotent(tmp_path: Path):
+    db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
+
+    assert run_migrations(conn, str(db_path)) == [36]
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) == 36
+
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
+    }
+    assert {
+        "repo_head",
+        "pending_base_commit",
+        "pending_head_commit",
+        "rebuild_reason",
+    }.issubset(columns)

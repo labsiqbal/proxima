@@ -39,6 +39,7 @@ from .updates import (
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
+from .code_graph_lifecycle import CodeGraphLifecycle
 from .frontend_static import register_frontend
 from .features import public_flags
 from .route_deps import build_route_deps
@@ -137,6 +138,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     )
 
         registry_task = asyncio.create_task(_registry_loop())
+    code_graph_task: asyncio.Task | None = None
     if cfg.get("start_worker", True) and cfg.get("feature_master_orchestrator", False):
         async def _master_loop() -> None:
             while True:
@@ -148,6 +150,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 except Exception:
                     logging.getLogger("proxima.master").exception("Master supervisor tick failed")
         master_task = asyncio.create_task(_master_loop())
+
+        code_graph_interval = max(
+            1.0,
+            float(cfg.get("code_graph_tick_seconds", 5)),
+        )
+
+        async def _code_graph_loop() -> None:
+            while True:
+                await asyncio.sleep(code_graph_interval)
+                try:
+                    lifecycle = getattr(app.state, "code_graph_lifecycle", None)
+                    if lifecycle is not None:
+                        await asyncio.to_thread(lifecycle.tick)
+                except Exception:
+                    logging.getLogger("proxima.code_graph_lifecycle").exception(
+                        "Code graph lifecycle tick failed"
+                    )
+
+        code_graph_task = asyncio.create_task(_code_graph_loop())
     if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
         async def _scheduler_loop() -> None:
             while True:
@@ -188,6 +209,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         master_task.cancel()
         with suppress(asyncio.CancelledError):
             await master_task
+    if code_graph_task:
+        code_graph_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await code_graph_task
     if update_task:
         update_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -253,6 +278,11 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     app.state.task_delegation = TaskDelegationService(app, db)
     app.state.graph_context = GraphContextService(app, db)
+    app.state.code_graph_lifecycle = CodeGraphLifecycle(
+        app,
+        db,
+        app.state.graph_context,
+    )
     # Durable start intent is committed before the retryable start step. Resume
     # any request that was interrupted in that gap before serving new traffic.
     try:

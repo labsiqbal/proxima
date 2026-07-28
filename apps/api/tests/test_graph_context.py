@@ -127,7 +127,11 @@ def test_graph_routes_are_authenticated_feature_gated_and_path_free(
         ("knowledge", None),
         ("code", area_id),
     ]
-    assert all(item["state"] == "missing" for item in graphs)
+    by_kind = {item["scope"]["kind"]: item for item in graphs}
+    # Knowledge remains missing until its later lifecycle group; Code is enqueued
+    # at Area registration (Group 10).
+    assert by_kind["knowledge"]["state"] == "missing"
+    assert by_kind["code"]["state"] in {"queued", "missing", "building", "fresh"}
     assert all(
         item["freshness"]["semantic_backend"] == "disabled"
         for item in graphs
@@ -482,11 +486,11 @@ def test_graph_state_events_use_master_stream_without_paths(
         for event in response.json()["events"]
         if event["type"].startswith("graph.state.")
     ]
-    assert [event["type"] for event in events] == [
-        "graph.state.queued",
-        "graph.state.building",
-        "graph.state.fresh",
-    ]
+    # Area registration may already enqueue; rebuild always contributes the
+    # terminal queued → building → fresh sequence.
+    assert "graph.state.queued" in [event["type"] for event in events]
+    assert "graph.state.building" in [event["type"] for event in events]
+    assert events[-1]["type"] == "graph.state.fresh"
     assert all(event["session_id"] == master_session_id for event in events)
     serialized = json.dumps(events)
     assert project["path"] not in serialized

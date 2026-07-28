@@ -1414,6 +1414,21 @@ def _add_graph_states(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_code_graph_lifecycle_columns(conn: sqlite3.Connection) -> None:
+    """Group 10: HEAD tracking, pending merge range, and rebuild reason."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(graph_states)").fetchall()
+    }
+    if "repo_head" not in columns:
+        conn.execute("ALTER TABLE graph_states ADD COLUMN repo_head TEXT")
+    if "pending_base_commit" not in columns:
+        conn.execute("ALTER TABLE graph_states ADD COLUMN pending_base_commit TEXT")
+    if "pending_head_commit" not in columns:
+        conn.execute("ALTER TABLE graph_states ADD COLUMN pending_head_commit TEXT")
+    if "rebuild_reason" not in columns:
+        conn.execute("ALTER TABLE graph_states ADD COLUMN rebuild_reason TEXT")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -1474,6 +1489,11 @@ MIGRATIONS: list[Migration] = [
         35,
         "add scoped Graphify operational state and freshness contract",
         _add_graph_states,
+    ),
+    (
+        36,
+        "add Code graph lifecycle HEAD and rebuild queue columns",
+        _add_code_graph_lifecycle_columns,
     ),
 ]
 

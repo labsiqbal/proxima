@@ -76,14 +76,16 @@ envelope ledger, and byte/round/call caps make malformed, replayed, duplicate, a
 oversized model output visible without partial hidden actions. See
 [runner-conformance.md](runner-conformance.md).
 
-Graph state uses the same path-free product principle but is not a Master tool in
-Group 9. Authenticated state and rebuild routes accept typed Container and Area
-identities only. The server resolves and canonicalizes roots, excludes nested Areas,
-rejects symlink escapes and escaped source citations, and publishes only completely
+Graph state uses the same path-free product principle but is not a Master tool yet.
+Authenticated state and rebuild routes accept typed Container and Area identities
+only. The server resolves and canonicalizes roots, excludes nested Areas, rejects
+symlink escapes and escaped source citations, and publishes only completely
 validated temporary generations. Query metadata includes scope, generation,
-freshness, citations, and provenance without exposing paths. Graphify shell and MCP
-path surfaces are not exposed, semantic model egress defaults off, and Ops content
-is never sent to a cloud model.
+freshness, citations, and provenance without exposing paths. Repo Task-agents may
+receive a server-managed Graphify MCP fixed to their selected Area; that proxy
+ignores arbitrary `project_path` so a prompt cannot retarget another Area's graph.
+The Master never inherits that MCP entry. Semantic model egress defaults off, and
+Ops content is never sent to a cloud model.
 
 ## Path policy
 

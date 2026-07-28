@@ -34,6 +34,7 @@ import os
 import platform
 import re
 import shutil
+import sys
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -319,10 +320,22 @@ def detect_bundled_skills(bundle_dir: str | Path | None) -> list[dict[str, Any]]
 
 # ── MCP detection (per-runner config format) ─────────────────────────────────
 
+def claude_config_json(home: Path) -> Path:
+    """Resolve Claude's mcpServers config file for a profile or live home.
+
+    Live home sets CLAUDE_CONFIG_DIR to ~/.claude; Claude still reads the sibling
+    ~/.claude.json. Managed profile homes keep .claude.json inside the home.
+    """
+    home = Path(home)
+    if home.name == ".claude":
+        return home.parent / ".claude.json"
+    return home / ".claude.json"
+
+
 def _mcp_from_claude(host: Path) -> list[dict[str, Any]]:
     """Claude's global MCP servers live in ~/.claude.json (sibling of ~/.claude),
     under top-level `mcpServers`."""
-    cfg = host.parent / ".claude.json"  # host is ~/.claude → ~/.claude.json
+    cfg = claude_config_json(host)
     if not cfg.is_file():
         return []
     try:
@@ -515,6 +528,9 @@ def _selected(detected: list[dict[str, Any]], sel_ids: list[str] | None, key: st
 
 # ── public: activation ───────────────────────────────────────────────────────
 
+CODE_GRAPH_MCP_NAME = "proxima-code-graph"
+
+
 def apply_capabilities(
     spec: Any,
     home: Path,
@@ -523,6 +539,7 @@ def apply_capabilities(
     bundle_dir: str | Path | None = None,
     custom_roots: list[str] | None = None,
     strict: bool = False,
+    fixed_code_graph_path: str | Path | None = None,
 ) -> dict[str, list[str]]:
     """Make the selected skills + MCP live in a profile's seeded home.
 
@@ -530,6 +547,11 @@ def apply_capabilities(
     stays in sync with the host copy; no duplication). Bundled skills ride the same
     path under `bundled/<name>`. Symlinks not in the selection are pruned. MCP:
     rewrite the runner's config in the home to the selected subset.
+
+    When ``fixed_code_graph_path`` is set (repo Task-agent runs), inject a
+    server-managed Graphify MCP entry locked to that Area's canonical graph.
+    Arbitrary ``project_path`` is ignored by the proxy. Master runs must pass
+    None so they never inherit this entry.
 
     Idempotent. Returns what was applied for logging/debug. Ordinary profile
     activation is best-effort; security boundaries may set ``strict`` to fail
@@ -559,11 +581,155 @@ def apply_capabilities(
         elif rid == "hermes":
             applied["mcp"] = _apply_hermes_mcp(
                 home, _selected(detected["mcp"], mcp_names, "name"), source_override, spec)
+        if fixed_code_graph_path is not None:
+            injected = apply_fixed_code_graph_mcp(
+                rid,
+                home,
+                Path(fixed_code_graph_path),
+            )
+            if injected:
+                applied["mcp"] = list(
+                    dict.fromkeys([*applied["mcp"], injected])
+                )
+        else:
+            remove_fixed_code_graph_mcp(rid, home)
     except Exception:
         log.exception("apply_capabilities failed for runner %s", rid)
         if strict:
             raise
     return applied
+
+
+def _code_graph_mcp_command(graph_path: Path) -> dict[str, Any]:
+    """Stdio MCP entry that can only query the fixed Area graph."""
+    return {
+        "command": sys.executable or "python3",
+        "args": ["-m", "proxima_api.graphify_area_mcp"],
+        "env": {"PROXIMA_CODE_GRAPH_PATH": str(graph_path)},
+    }
+
+
+def apply_fixed_code_graph_mcp(
+    runner_id: str,
+    home: Path,
+    graph_path: Path,
+) -> str | None:
+    """Inject or refresh the Area-fixed Code graph MCP server for a runner home."""
+    try:
+        resolved = graph_path.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if resolved.is_symlink() or not resolved.is_file():
+        # Graph may still be building; still pin the path so a later refresh works.
+        resolved = graph_path
+    entry = _code_graph_mcp_command(resolved)
+    home = Path(home)
+    try:
+        if runner_id == "claude-code":
+            cfg_path = claude_config_json(home)
+            data: dict[str, Any] = {}
+            if cfg_path.is_file():
+                raw = json.loads(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+                if isinstance(raw, dict):
+                    data = raw
+            servers = data.get("mcpServers")
+            if not isinstance(servers, dict):
+                servers = {}
+            servers[CODE_GRAPH_MCP_NAME] = entry
+            data["mcpServers"] = servers
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return CODE_GRAPH_MCP_NAME
+        if runner_id in ("codex", "grok"):
+            cfg_path = home / "config.toml"
+            doc = tomlkit.document()
+            if cfg_path.is_file():
+                doc = tomlkit.parse(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+            servers = doc.get("mcp_servers")
+            if servers is None:
+                servers = tomlkit.table()
+                doc["mcp_servers"] = servers
+            table = tomlkit.table()
+            table.add("command", entry["command"])
+            table.add("args", list(entry["args"]))
+            env_table = tomlkit.table()
+            for key, value in entry["env"].items():
+                env_table.add(key, value)
+            table.add("env", env_table)
+            servers[CODE_GRAPH_MCP_NAME] = table
+            home.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            return CODE_GRAPH_MCP_NAME
+        if runner_id == "hermes":
+            cfg_path = home / "config.yaml"
+            data = {}
+            if cfg_path.is_file():
+                loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            key = "mcpServers" if "mcpServers" in data else "mcp_servers"
+            servers = data.get(key)
+            if not isinstance(servers, dict):
+                servers = {}
+            servers[CODE_GRAPH_MCP_NAME] = entry
+            data[key] = servers
+            home.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(
+                yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+            return CODE_GRAPH_MCP_NAME
+    except Exception:
+        log.exception("fixed Code graph MCP injection failed for %s", runner_id)
+    return None
+
+
+def remove_fixed_code_graph_mcp(runner_id: str, home: Path) -> None:
+    """Drop the server-managed Code graph MCP entry when the run is not a repo Task."""
+    home = Path(home)
+    try:
+        if runner_id == "claude-code":
+            cfg_path = claude_config_json(home)
+            if not cfg_path.is_file():
+                return
+            data = json.loads(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+            if not isinstance(data, dict):
+                return
+            servers = data.get("mcpServers")
+            if isinstance(servers, dict) and CODE_GRAPH_MCP_NAME in servers:
+                servers.pop(CODE_GRAPH_MCP_NAME, None)
+                data["mcpServers"] = servers
+                cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return
+        if runner_id in ("codex", "grok"):
+            cfg_path = home / "config.toml"
+            if not cfg_path.is_file():
+                return
+            doc = tomlkit.parse(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+            servers = doc.get("mcp_servers")
+            if servers is not None and CODE_GRAPH_MCP_NAME in servers:
+                del servers[CODE_GRAPH_MCP_NAME]
+                cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            return
+        if runner_id == "hermes":
+            cfg_path = home / "config.yaml"
+            if not cfg_path.is_file():
+                return
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8", errors="ignore"))
+            if not isinstance(data, dict):
+                return
+            for key in ("mcpServers", "mcp_servers"):
+                servers = data.get(key)
+                if isinstance(servers, dict) and CODE_GRAPH_MCP_NAME in servers:
+                    servers.pop(CODE_GRAPH_MCP_NAME, None)
+                    data[key] = servers
+                    cfg_path.write_text(
+                        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+                        encoding="utf-8",
+                    )
+                    return
+    except Exception:
+        log.exception("fixed Code graph MCP removal failed for %s", runner_id)
 
 
 def _apply_skill_symlinks(skills_home: Path, selected: list[dict[str, Any]]) -> list[str]:
@@ -628,11 +794,11 @@ def _rmdir_if_empty(p: Path) -> None:
 
 def _apply_claude_mcp(home: Path, selected: list[dict[str, Any]], source_override: str | None,
                       spec: Any) -> list[str]:
-    """Rewrite <home>/.claude.json mcpServers to the selected subset. The full host
-    .claude.json is copied in by seeding (all servers); this filters it to the
+    """Rewrite the profile home Claude mcpServers to the selected subset. The full
+    host .claude.json is copied in by seeding (all servers); this filters it to the
     profile's selection so each profile can carry a different MCP set."""
-    host_cfg = _host_dir(spec, source_override).parent / ".claude.json"
-    home_cfg = home / ".claude.json"
+    host_cfg = claude_config_json(_host_dir(spec, source_override))
+    home_cfg = claude_config_json(home)
     try:
         host_data = json.loads(host_cfg.read_text(encoding="utf-8", errors="ignore")) if host_cfg.is_file() else {}
     except (OSError, json.JSONDecodeError):

@@ -78,6 +78,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Group 9 has no semantic-model adapter. Code extraction and the bounded
     # ops/container.md Knowledge seed are local structural passes only.
     "graph_semantic_egress_enabled": False,
+    # Group 10 Code graph lifecycle: background drain/audit/debounce cadence.
+    "code_graph_tick_seconds": 5,
+    "code_graph_audit_seconds": 300,
+    "code_graph_dirty_debounce_seconds": 15,
     # Proxima's shipped capability bundle (T8): bundled skills + the recommended-
     # tools advisory list. None -> <repo root>/bundled-skills (normalize_config).
     "bundled_skills_dir": None,
@@ -123,6 +127,15 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cfg["graph_semantic_egress_enabled"] = _bool_flag(
         cfg.get("graph_semantic_egress_enabled")
+    )
+    cfg["code_graph_tick_seconds"] = max(
+        1, int(cfg.get("code_graph_tick_seconds") or 5)
+    )
+    cfg["code_graph_audit_seconds"] = max(
+        30, int(cfg.get("code_graph_audit_seconds") or 300)
+    )
+    cfg["code_graph_dirty_debounce_seconds"] = max(
+        1, int(cfg.get("code_graph_dirty_debounce_seconds") or 15)
     )
     raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
     cfg["service_name"] = raw_service.removesuffix(".service")
