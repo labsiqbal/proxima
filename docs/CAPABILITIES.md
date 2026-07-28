@@ -403,9 +403,11 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
   without buffering it in the API process. A fsynced publication journal records
   the prior and replacement digests before replacement. Graph-state finalization
   commits its update and final read in one transaction. An ambiguous commit result
-  that matches the replacement digest is treated as committed, preserving any
-  queued follow-up rebuild; unresolved outcomes leave the journal for locked
-  reconciliation. Failure transitions only own rows still in `building`.
+  is accepted only after the writer has left its transaction and an independent
+  read-only SQLite connection plus the bounded canonical hash both match the
+  replacement. This preserves any queued follow-up rebuild; unresolved outcomes
+  leave the journal for locked reconciliation. Failure transitions only own rows
+  still in `building`.
 - Repo Task-agent homes receive one server-managed `proxima-code-graph` MCP entry
   fixed to exactly their selected Area; arbitrary `project_path` is ignored.
   The Master does not inherit this MCP entry.
@@ -439,6 +441,8 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   state; Container facts and decisions to one Knowledge graph; and code structure
   and impact to one Code graph. Focused status questions filter in SQLite before
   applying the result limit, with green/successful/completed mapped to `done`.
+  Blocked/stuck includes both explicit `blocked` jobs and dependency-blocked
+  `queued` jobs whose `blocked_reason` is set.
   Mixed requests call only the needed layers with budgets and never merge
   fleet-wide graphs. Focused graph results cannot include another Container's
   nodes. Durable explicit targets and Container Focus override model scope; either

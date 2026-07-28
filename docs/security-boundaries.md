@@ -161,7 +161,8 @@ the prior canonical graph unchanged. Canonical reads use no-follow descriptor
 snapshots bounded by `graph_max_bytes`; last-good backup is a bounded streaming
 copy with atomic replacement. A fsynced publication journal stores both prior and
 replacement digests, while SQLite finalization updates and re-reads graph state in
-one transaction. An ambiguous commit is accepted only when SQLite and a bounded
+one transaction. An ambiguous commit is accepted only after the writer is out of
+its transaction and an independent read-only SQLite connection plus a bounded
 canonical hash both match the replacement digest; otherwise journal and canonical
 bytes remain for locked reconciliation. Failure cleanup cannot overwrite a graph
 state that has already committed as `fresh` or `queued`. Knowledge traversal
@@ -190,7 +191,9 @@ durable rebuild intent; filesystem discovery and rebuild remain asynchronous. Th
 Master context router never merges fleet-wide graphs; focused Knowledge/Code
 results are scope-checked so another Container's graph nodes cannot appear. "What
 is running?" always answers from SQLite Live state even when every graph is missing
-or stale.
+or stale. Blocked/stuck Live questions include dependency-blocked jobs persisted as
+`queued` with a non-null `blocked_reason`, and apply that predicate before limiting
+results.
 
 ## Script steps (hash-bound trust, honest statement)
 

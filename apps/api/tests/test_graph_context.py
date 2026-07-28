@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import graph_context
+from proxima_api.db import connect as connect_database
 from proxima_api.graph_context import (
     GRAPHIFY_VERSION,
     GraphBuildTimeout,
@@ -404,6 +405,16 @@ class _FailAfterCommit(_ConnectionProxy):
         return cursor
 
 
+class _FailCommitAndRollback(_ConnectionProxy):
+    def execute(self, sql, parameters=()):
+        operation = sql.strip().upper()
+        if operation == "COMMIT":
+            raise sqlite3.OperationalError("simulated unresolved COMMIT")
+        if operation == "ROLLBACK":
+            raise sqlite3.OperationalError("simulated failed ROLLBACK")
+        return self.connection.execute(sql, parameters)
+
+
 def test_successful_replacement_retains_previous_last_good_generation(
     tmp_path: Path,
     monkeypatch,
@@ -480,8 +491,14 @@ def test_post_update_select_failure_rolls_back_database_and_canonical(
         encoding="utf-8",
     )
     service = api.app.state.graph_context
-    connection = _FailSelectAfterGraphStateUpdate(api.app.state.db)
-    monkeypatch.setattr(service, "_db_factory", lambda: connection)
+    connection = _FailSelectAfterGraphStateUpdate(
+        connect_database(tmp_path / "proxima.db")
+    )
+    monkeypatch.setattr(
+        service,
+        "_publication_connection",
+        lambda: connection,
+    )
 
     failed = api.post(
         "/api/containers/graph-one/graphs/rebuild",
@@ -534,8 +551,12 @@ def test_ambiguous_commit_reconciles_new_digest_and_canonical(
         encoding="utf-8",
     )
     service = api.app.state.graph_context
-    connection = _FailAfterCommit(api.app.state.db)
-    monkeypatch.setattr(service, "_db_factory", lambda: connection)
+    connection = _FailAfterCommit(connect_database(tmp_path / "proxima.db"))
+    monkeypatch.setattr(
+        service,
+        "_publication_connection",
+        lambda: connection,
+    )
     original_builder = service._run_builder
 
     def build_with_follow_up(**kwargs):
@@ -584,6 +605,71 @@ def test_ambiguous_commit_reconciles_new_digest_and_canonical(
     assert result["error"] is None
     assert result["items"]
     assert graph_path.read_bytes() == replacement
+    assert not journal_path.exists()
+
+
+def test_unresolved_commit_does_not_accept_uncommitted_graph_digest(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    project, area_id = _container(api, headers)
+    assert area_id is not None
+    first = _rebuild_code(
+        api,
+        headers,
+        slug="graph-one",
+        area_id=area_id,
+    )
+    row = api.app.state.db.execute(
+        "SELECT graph_path, graph_sha256 FROM graph_states WHERE id = ?",
+        (first["id"],),
+    ).fetchone()
+    graph_path = Path(row["graph_path"])
+    first_bytes = graph_path.read_bytes()
+    first_sha256 = str(row["graph_sha256"])
+    Path(project["path"], "app.py").write_text(
+        "class BillingService:\n"
+        "    def refund(self):\n"
+        "        return 'refunded'\n",
+        encoding="utf-8",
+    )
+    service = api.app.state.graph_context
+    connection = _FailCommitAndRollback(
+        connect_database(tmp_path / "proxima.db")
+    )
+    monkeypatch.setattr(
+        service,
+        "_publication_connection",
+        lambda: connection,
+    )
+
+    response = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "code", "area_id": area_id},
+    )
+
+    journal_path = graph_path.with_name("graph.publish-pending.json")
+    assert response.status_code == 409, response.text
+    assert not journal_path.exists()
+    assert graph_path.read_bytes() == first_bytes
+    with sqlite3.connect(str(tmp_path / "proxima.db")) as committed:
+        committed_sha256 = committed.execute(
+            "SELECT graph_sha256 FROM graph_states WHERE id = ?",
+            (first["id"],),
+        ).fetchone()[0]
+    assert committed_sha256 == first_sha256
+
+    recovered = service.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="code",
+        area_id=area_id,
+        question="BillingService",
+    )
+
+    assert recovered["error"] is None
     assert not journal_path.exists()
 
 

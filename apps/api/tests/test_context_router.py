@@ -404,6 +404,48 @@ def test_terminal_status_queries_filter_live_jobs_before_result_limit(
         assert [item["status"] for item in live["items"]] == [expected_status]
 
 
+def test_blocked_live_query_includes_dependency_blocked_queued_jobs(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path, graph_query_result_limit=1)
+    project = _container(api, headers, "blocked-live")
+    container_id = int(project["id"])
+    for title, status, blocked_reason in (
+        ("Running job", "running", None),
+        ("Plain queued job", "queued", None),
+        ("Dependency blocked job", "queued", "Blocked by prerequisite #1"),
+    ):
+        api.app.state.db.execute(
+            "INSERT INTO jobs("
+            "project_id, title, status, blocked_reason, engine, "
+            "created_by, steps_state"
+            ") VALUES (?, ?, ?, ?, 'linear', 1, '[]')",
+            (container_id, title, status, blocked_reason),
+        )
+    desk = api.get("/api/master/desk", headers=headers).json()
+    broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        desk["session"]["id"],
+    )
+
+    result = broker.execute(
+        "query_context",
+        {"query": "Which tasks are stuck?", "container_id": container_id},
+    )
+
+    assert result["ok"] is True
+    payload = result["result"]
+    assert payload["layers"] == ["live"]
+    live = payload["results"][0]
+    assert [item["title"] for item in live["items"]] == [
+        "Dependency blocked job"
+    ]
+    assert live["items"][0]["status"] == "queued"
+    assert live["items"][0]["blocked_reason"] == "Blocked by prerequisite #1"
+
+
 def test_knowledge_context_stays_in_focused_container(tmp_path: Path):
     api, headers = _api(tmp_path)
     acme = _container(api, headers, "acme")

@@ -331,7 +331,13 @@ class ContextRouter:
             params.append(int(container_id))
         statuses = _live_status_filter(query) or _LIVE_DEFAULT_STATUSES
         placeholders = ",".join("?" for _ in statuses)
-        where.append(f"j.status IN ({placeholders})")
+        status_predicate = f"j.status IN ({placeholders})"
+        if "blocked" in statuses:
+            status_predicate = (
+                f"({status_predicate} OR "
+                "(j.status = 'queued' AND j.blocked_reason IS NOT NULL))"
+            )
+        where.append(status_predicate)
         params.extend(statuses)
         params.append(limit)
         rows = self._db_factory().execute(

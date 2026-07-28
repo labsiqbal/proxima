@@ -31,6 +31,7 @@ from typing import Any, Callable, Mapping, TypeAlias
 
 from . import container_registry
 from .auth import iso_now
+from .db import connect as connect_database
 
 GRAPHIFY_DISTRIBUTION = "graphifyy"
 GRAPHIFY_VERSION = "0.9.28"
@@ -1986,6 +1987,12 @@ class GraphContextService:
             )
         ):
             return row
+        committed_row = self._committed_graph_state_by_id(int(row["id"]))
+        if committed_row is None:
+            return row
+        if self._db_factory().in_transaction:
+            return committed_row
+        row = committed_row
         published_sha256 = str(
             row["graph_sha256"] or ""
         ).strip().lower()
@@ -2054,18 +2061,52 @@ class GraphContextService:
         finally:
             lock.release()
 
-    def _graph_state_by_id(
+    def _committed_graph_state_by_id(
         self,
         state_id: int,
     ) -> sqlite3.Row | None:
+        configured_path = str(
+            self.config.get("database_path") or ""
+        ).strip()
+        if not configured_path or configured_path == ":memory:":
+            return None
+        connection: sqlite3.Connection | None = None
         try:
-            row = self._db_factory().execute(
+            database_uri = (
+                Path(configured_path)
+                .expanduser()
+                .resolve()
+                .as_uri()
+                + "?mode=ro"
+            )
+            connection = sqlite3.connect(
+                database_uri,
+                uri=True,
+                check_same_thread=False,
+                isolation_level=None,
+                timeout=1,
+            )
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
                 "SELECT * FROM graph_states WHERE id = ?",
                 (state_id,),
             ).fetchone()
-        except Exception:
+        except (OSError, RuntimeError, sqlite3.Error):
             return None
+        finally:
+            if connection is not None:
+                connection.close()
         return row
+
+    def _publication_connection(self) -> sqlite3.Connection:
+        configured_path = str(
+            self.config.get("database_path") or ""
+        ).strip()
+        if not configured_path or configured_path == ":memory:":
+            raise GraphValidationError(
+                "graph publication database is unavailable"
+            )
+        return connect_database(configured_path)
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {
@@ -2450,7 +2491,7 @@ class GraphContextService:
                 repo_head = self.repo_head_sha(scope.root)
             except GraphScopeError:
                 repo_head = None
-        connection = self._db_factory()
+        connection = self._publication_connection()
         try:
             with self.app.state.db_lock:
                 try:
@@ -2553,7 +2594,11 @@ class GraphContextService:
                             pass
                     raise
         except Exception:
-            database_row = self._graph_state_by_id(
+            try:
+                connection.close()
+            except sqlite3.Error:
+                raise
+            database_row = self._committed_graph_state_by_id(
                 int(state_row["id"])
             )
             database_sha256 = (
@@ -2592,6 +2637,11 @@ class GraphContextService:
                 except OSError:
                     pass
                 raise
+        else:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
         assert row is not None
         try:
             _unlink_fsync(journal)

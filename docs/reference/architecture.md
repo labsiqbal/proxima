@@ -374,13 +374,14 @@ the previous bytes as `graph.last-good.json`; a confirmed pre-commit database
 finalization failure restores those prior bytes. Before canonical replacement, a
 fsynced publication journal records both the prior and replacement digests.
 Graph-state finalization runs its update and final read in one explicit
-transaction. If the commit outcome is ambiguous but SQLite and the bounded
-canonical digest both match the replacement, publication returns the committed
-`fresh` or `queued` row as success. This preserves a queued follow-up rebuild for
-the lifecycle drain. Unresolved outcomes leave canonical and journal bytes
-untouched for the next locked query or rebuild to reconcile. Generic rebuild
-failure handling only transitions a row that is still `building`, so it cannot
-overwrite a committed `fresh` or `queued` outcome.
+transaction. If the commit outcome is ambiguous, publication accepts it only after
+the writer is out of its transaction and an independent read-only SQLite
+connection plus the bounded canonical digest both match the replacement. It then
+returns the committed `fresh` or `queued` row as success. This preserves a queued
+follow-up rebuild for the lifecycle drain. Unresolved outcomes leave canonical
+and journal bytes untouched for the next locked query or rebuild to reconcile.
+Generic rebuild failure handling only transitions a row that is still `building`,
+so it cannot overwrite a committed `fresh` or `queued` outcome.
 Canonical digest checks and last-good copying use descriptor snapshots bounded by
 `graph_max_bytes`, and publication never buffers the prior graph in the API
 process. Missing Graphify records an explicit `missing` state. A failed build
@@ -454,13 +455,14 @@ model-supplied scope. When an explicit target or Container Focus pins only the
 Container, the broker accepts an exact registered Area owned by that Container and
 rejects cross-Container Areas; an explicitly pinned Area remains authoritative.
 Focused Live status terms are mapped to job statuses and filtered before the result
-limit; green, successful, and completed mean `done`. Unmatched focused questions
-use Knowledge, while unmatched fleet questions use Fleet and Live. Live state
-remains correct when every graph is missing or stale. Knowledge citations are
-re-resolved at query time, including ancestor VCS-marker checks, so a source that
-became part of a nested repository after publication is refused. There is no public
-graph query route; the Master broker returns validated Ops/Area-relative citation
-paths but never absolute host or internal graph paths.
+limit; green, successful, and completed mean `done`, while blocked/stuck includes
+explicit `blocked` jobs plus `queued` jobs with a non-null `blocked_reason`.
+Unmatched focused questions use Knowledge, while unmatched fleet questions use
+Fleet and Live. Live state remains correct when every graph is missing or stale.
+Knowledge citations are re-resolved at query time, including ancestor VCS-marker
+checks, so a source that became part of a nested repository after publication is
+refused. There is no public graph query route; the Master broker returns validated
+Ops/Area-relative citation paths but never absolute host or internal graph paths.
 
 Focus epochs, history projection, and safe-self-update remain later groups.
 
