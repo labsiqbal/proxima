@@ -1098,15 +1098,14 @@ VERSION (repo root) → read_local_version() → FastAPI app.version → GET /ap
 UpdateManager: every 6h → GET api.github.com/repos/<repo>/releases/latest
                            (never raises — offline/404/hiccup → last_error)
                                     │
-   GET /api/update/status · POST /api/update/check (legacy apply is inert)
+   GET /api/update/status · POST /api/update/check (metadata only)
                                     │
   feature_safe_self_update (default off) → authenticated request/status projection
                                     │
- external root-owned controller → flock + fsynced hash-chained journal → immutable
- releases / external fence / service adapter (all activation remains unavailable)
+ external root-owned controller → native lock + fsynced hash-chained journal
                                     │
-Sidebar pill → release-notes modal → Update now → blocking overlay polls
-GET /api/health every 2s until version == target → reload
+ exact manifest/provenance tree → immutable releases / external fence / adapter
+                 (legacy HTTP and CLI apply paths remain inert)
 ```
 
 `UpdateManager` (`updates.py`) is the one thing that phones home: an
@@ -1117,10 +1116,20 @@ loop (the manual check route still works) and `PROXIMA_UPDATE_REPO` defaults to
 `labsiqbal/proxima`; forks can point it at their own repo. `apply()` now always
 fails closed. Group 14 adds `self_update_runs` as an owner-visible mirror plus
 `/api/self-updates/*` and `/api/maintenance`; the mirror is never the source of
-promotion truth. The external updater owns the release manifest verification,
-provenance, single-flight lock, journal and recovery decision. Its systemd and
-launchd contracts are deliberately unavailable for activation until installer
-qualification and later candidate/fault gates land.
+promotion truth. Both production entrypoints read
+`PROXIMA_FEATURE_SAFE_SELF_UPDATE` and the optional absolute
+`PROXIMA_SAFE_UPDATE_FENCE_PATH`; the flag defaults off and a configured fence is
+read-only application status.
+
+The external updater owns exact regular-file manifest verification, canonical
+Python/web lockfile digests, local provenance revalidation, native POSIX/Windows
+single-flight locking, the journal, and the recovery decision. A nonterminal journal
+continues to own single-flight after the kernel lock is released. Missing, truncated,
+or hostile-path journals produce `do_not_start_any_release`, including through the
+machine-readable recovery CLI. systemd, launchd, and unmanaged adapters remain
+unmanaged until the qualification matrix in
+[`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
+[ADR-0008](../adr/0008-external-safe-update-authority.md).
 
 ## Runner abstraction
 

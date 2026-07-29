@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from pathlib import Path
+
+from .tree import TreeError, regular_file_digests
 
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 RELEASE_ID = re.compile(r"^sha256-[a-f0-9]{40}-[a-f0-9]{12}$")
@@ -37,15 +40,18 @@ class ReleaseLayout:
     def create_immutable_release(self, release_id: str, source: Path) -> Path:
         """Install an already-verified tree without replacing an existing release."""
         destination = self.release_dir(release_id)
-        if destination.exists():
+        if os.path.lexists(destination):
             raise LayoutError("release id already exists")
-        if not source.is_dir() or source.is_symlink():
-            raise LayoutError("release source must be a real directory")
+        try:
+            regular_file_digests(source)
+        except TreeError as exc:
+            raise LayoutError(str(exc)) from exc
         destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        parent_stat = destination.parent.lstat()
+        if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+            raise LayoutError("release directory must be a real directory")
         os.rename(source, destination)
         for path in [destination, *destination.rglob("*")]:
-            if path.is_symlink():
-                raise LayoutError("release contains symlink")
             path.chmod(0o555 if path.is_dir() else 0o444)
         descriptor = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:

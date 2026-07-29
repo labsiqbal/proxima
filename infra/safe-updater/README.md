@@ -10,3 +10,16 @@ and render an authenticated projection, but cannot write those files.
 
 `install-safe-updater` is intentionally fail-closed until the later candidate
 sandbox, trusted probe, and service-manager qualification work lands.
+
+Read-only recovery status is available as stable JSON:
+
+```bash
+python -m apps.safe_updater.cli recovery-status \
+  --root /path/to/trusted-root \
+  --run-id 0123456789abcdef0123456789abcdef \
+  --intent-file /path/to/trusted-intent.json
+```
+
+No adapter may report managed until the complete matrix in
+[`docs/adding-safe-updater-adapter.md`](../../docs/adding-safe-updater-adapter.md)
+passes.

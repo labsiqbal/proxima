@@ -50,9 +50,9 @@ pushes `main` plus the tag, and creates the GitHub Release in
 
 ## Rules
 
-- **`main` must always be releasable.** `proxima update` on user machines
-  pulls `main` HEAD (not the tag), so never park unfinished work there —
-  that's what the `staging` branch is for.
+- **`main` must always be releasable.** Release checks expose published metadata,
+  and future qualified updater work will consume trusted release identities. Never
+  park unfinished work there; use the `staging` branch.
 - Requires an authenticated `gh` CLI; the script aborts cleanly otherwise.
 - Never bypass the release script's QA or repository-identity checks.
 - Release notes are user-facing — write for users.
@@ -71,8 +71,8 @@ domains must remain protected by Cloudflare Access.
 
 ## What users see
 
-Within 6 hours (or on "Check for updates" in Settings), user installs with update
-checks enabled show a sidebar pill → release-notes modal → one-click **Update
-now** (Linux/macOS; Windows gets manual instructions). Root-owned system services
-use the administrator-driven update documented in `infra/systemd/README.md`. See
+Within 6 hours, or on "Check for updates" in Settings, user installs with update
+checks enabled can show the published release metadata. The current HTTP and CLI
+apply paths refuse activation on every platform. Root-owned system services use
+the administrator-driven procedure documented in `infra/systemd/README.md`. See
 `docs/installation.md#updating`.

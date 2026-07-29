@@ -43,7 +43,12 @@ authority outside candidate code and runtime data. The app's authenticated
 `self_update_runs` record is an owner-visible projection, not the decision record.
 Candidate code cannot use it to promote itself. Until the installer qualifies a
 manager and sandbox, `feature_safe_self_update` is off and all activation fails
-closed.
+closed. Enrollment must prove that the candidate identity neither owns nor has
+mode, group, ACL, or inherited write access to each trusted journal, pointer,
+fence, backup, and service-configuration path. The foundation exposes a POSIX
+identity/mode qualification check, but ships no enrollment that could grant those
+permissions. See [ADR-0008](adr/0008-external-safe-update-authority.md) and the
+[adapter playbook](adding-safe-updater-adapter.md).
 
 ## App Owner
 

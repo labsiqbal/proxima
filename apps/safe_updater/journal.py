@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,23 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _ensure_durable_directory(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while not os.path.lexists(current):
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    existing = current.lstat()
+    if stat.S_ISLNK(existing.st_mode) or not stat.S_ISDIR(existing.st_mode):
+        raise JournalIntegrityError("journal directory path is not a real directory")
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700)
+        _fsync_directory(directory)
+        _fsync_directory(directory.parent)
 
 
 @dataclass(frozen=True)
@@ -54,10 +72,11 @@ class Journal:
         if not RUN_ID.fullmatch(run_id):
             raise JournalIntegrityError("invalid journal run id")
         journal_dir = root / "journal"
-        journal_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _ensure_durable_directory(journal_dir)
+        _fsync_directory(journal_dir.parent)
         _fsync_directory(journal_dir)
         path = journal_dir / f"{run_id}.jsonl"
-        if path.exists():
+        if os.path.lexists(path):
             raise FileExistsError("journal already exists")
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(descriptor)
@@ -65,25 +84,63 @@ class Journal:
         return cls(path, intent_digest)
 
     def records(self) -> list[JournalRecord]:
-        if not self.path.exists():
+        if not os.path.lexists(self.path):
             return []
+        path_stat = self.path.lstat()
+        if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+            raise JournalIntegrityError("journal path is not a regular file")
         records: list[JournalRecord] = []
         previous: JournalRecord | None = None
         for raw in self.path.read_bytes().splitlines():
             try:
                 data = json.loads(raw)
+                if not isinstance(data, dict) or set(data) != {
+                    "sequence",
+                    "phase",
+                    "at",
+                    "intent_digest",
+                    "evidence",
+                    "previous_hash",
+                    "recovery",
+                    "record_hash",
+                }:
+                    raise JournalIntegrityError("journal record fields invalid")
                 stored = data.pop("record_hash")
-                if not isinstance(stored, str) or hashlib.sha256(_canonical(data)).hexdigest() != stored:
+                if (
+                    not isinstance(stored, str)
+                    or len(stored) != 64
+                    or any(char not in "0123456789abcdef" for char in stored)
+                    or hashlib.sha256(_canonical(data)).hexdigest() != stored
+                ):
                     raise JournalIntegrityError("journal record hash mismatch")
+                if (
+                    not isinstance(data["sequence"], int)
+                    or isinstance(data["sequence"], bool)
+                    or not isinstance(data["at"], str)
+                    or not isinstance(data["intent_digest"], str)
+                    or not isinstance(data["evidence"], dict)
+                    or data["previous_hash"] is not None
+                    and not isinstance(data["previous_hash"], str)
+                    or not isinstance(data["recovery"], str)
+                ):
+                    raise JournalIntegrityError("journal record types invalid")
                 record = JournalRecord(
-                    sequence=int(data["sequence"]), phase=Phase(data["phase"]),
-                    intent_digest=str(data["intent_digest"]), evidence=dict(data["evidence"]),
+                    sequence=data["sequence"], phase=Phase(data["phase"]),
+                    intent_digest=data["intent_digest"], evidence=dict(data["evidence"]),
                     previous_hash=data["previous_hash"], record_hash=stored, recovery=str(data["recovery"]),
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise JournalIntegrityError("malformed journal record") from exc
             if record.intent_digest != self.intent_digest:
                 raise JournalIntegrityError("journal intent substitution")
+            if any(
+                not isinstance(key, str)
+                or not isinstance(value, str)
+                or len(value) != 64
+                or any(char not in "0123456789abcdef" for char in value)
+                for key, value in record.evidence.items()
+            ):
+                raise JournalIntegrityError("journal evidence invalid")
             if record.sequence != len(records) + 1 or record.previous_hash != (previous.record_hash if previous else None):
                 raise JournalIntegrityError("journal sequence or chain mismatch")
             try:

@@ -1417,17 +1417,21 @@ media result, message-review result, collaboration synthesis, draft, or graph up
 
 ## 21. Updates (version check + self-update)
 
-**Why:** Every install should be one click away from the latest release without
-the owner babysitting `git pull`.
+**Why:** Owners should see release availability without letting the running
+application or candidate code promote itself.
 **How:** `UpdateManager` may check GitHub release metadata every 6h, but its old
-live-checkout apply route is inert. The safe-update foundation is behind the
-server-enforced `feature_safe_self_update` flag, default off. A managed external
-updater, not candidate code or the app database, owns the append-only fsynced
-journal, lock, immutable release pointers, maintenance fence, backups, and
-recovery verdict. The app exposes only authenticated owner projections. systemd,
-launchd, and unmanaged installs fail closed until later installer qualification,
-candidate proof, and rollback fault testing. Local candidates carry provenance,
-not a release signature.
+live-checkout apply route and `proxima update` are inert. The safe-update foundation
+is behind the server-enforced `feature_safe_self_update` flag, default off in both
+production entrypoints. A managed external updater, not candidate code or the app
+database, owns the append-only fsynced journal, native single-flight lock, immutable
+release pointers, maintenance fence, backups, service configuration, and recovery
+verdict. Signed release manifests and unsigned local provenance are rechecked
+against the exact regular-file tree and canonical Python/web lockfiles. The app
+exposes only authenticated owner projections and a read-only externally configured
+maintenance fence. systemd, launchd, and unmanaged installs fail closed until the
+[adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
+and rollback fault testing pass. The authority decision is recorded in
+[ADR-0008](adr/0008-external-safe-update-authority.md).
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,
 `GET /api/self-updates/{id}`, `POST /api/self-updates/{id}/recovery-status`.

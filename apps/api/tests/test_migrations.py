@@ -43,6 +43,50 @@ def test_no_pending_is_noop_but_creates_tracking_table(tmp_path: Path):
     assert current_version(conn) == 0
 
 
+def test_v43_adds_safe_update_projection_once_to_pre_v43_schema(tmp_path: Path):
+    db_path = tmp_path / "schema-42.db"
+    conn = connect(db_path)
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+    conn.execute("DROP TABLE self_update_runs")
+    conn.execute("DELETE FROM schema_migrations WHERE version = 43")
+
+    assert run_migrations(conn, str(db_path)) == [43]
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) == 43
+    assert {
+        row[1] for row in conn.execute("PRAGMA table_info(self_update_runs)")
+    } == {
+        "id",
+        "origin_job_id",
+        "base_commit",
+        "candidate_commit",
+        "previous_release_id",
+        "candidate_release_id",
+        "previous_schema_version",
+        "candidate_schema_version",
+        "phase",
+        "status",
+        "journal_digest",
+        "journal_ref",
+        "evidence_summary",
+        "failure_class",
+        "rollback_status",
+        "created_at",
+        "updated_at",
+    }
+    assert {
+        row[1]
+        for row in conn.execute("PRAGMA index_list(self_update_runs)")
+    } == {"idx_self_update_runs_status", "sqlite_autoindex_self_update_runs_1"}
+    assert [
+        row[2]
+        for row in conn.execute(
+            "PRAGMA index_info(idx_self_update_runs_status)"
+        )
+    ] == ["status", "created_at"]
+
+
 def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     tmp_path: Path,
 ):
@@ -57,9 +101,9 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
     conn.execute("DROP TABLE knowledge_rebuild_intents")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 42
+    assert current_version(conn) == 43
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -552,8 +596,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]
-    assert current_version(conn) == 42
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]
+    assert current_version(conn) == 43
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -594,8 +638,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]
-    assert current_version(conn) == 42
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]
+    assert current_version(conn) == 43
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -808,9 +852,9 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
 def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
-    assert run_migrations(conn, str(db_path)) == [36, 37, 38, 39, 40, 41, 42]
+    assert run_migrations(conn, str(db_path)) == [36, 37, 38, 39, 40, 41, 42, 43]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 42
+    assert current_version(conn) == 43
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -908,8 +952,8 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
         [(version, f"schema {version}") for version in range(1, 39)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [39, 40, 41, 42]
-    assert current_version(conn) == 42
+    assert run_migrations(conn, str(db_path)) == [39, 40, 41, 42, 43]
+    assert current_version(conn) == 43
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -1006,7 +1050,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
         [(version, f"schema {version}") for version in range(1, 40)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [40, 41, 42]
+    assert run_migrations(conn, str(db_path)) == [40, 41, 42, 43]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
         "FROM task_delegations WHERE id = 19"
@@ -1133,7 +1177,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
         [(version, f"schema {version}") for version in range(1, 42)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [42]
+    assert run_migrations(conn, str(db_path)) == [42, 43]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(
         "SELECT focus_container_id, target_container_id, target_area_id "

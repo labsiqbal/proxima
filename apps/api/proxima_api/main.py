@@ -29,7 +29,12 @@ from .preview_proxy import (
     valid_preview_token,
 )
 from .runners import augmented_path
-from .settings import DEFAULT_CONFIG, hermes_home_for, normalize_config
+from .settings import (
+    DEFAULT_CONFIG,
+    hermes_home_for,
+    normalize_config,
+    safe_update_config_from_env,
+)
 from .updates import (
     UPDATE_CHECK_INTERVAL_SECONDS,
     UPDATE_FIRST_CHECK_DELAY_SECONDS,
@@ -557,6 +562,7 @@ def _config_from_env() -> dict[str, Any]:
         "feature_master_orchestrator": os.environ.get(
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "0"
         ).lower() in ("1", "true", "yes", "on"),
+        **safe_update_config_from_env(),
         # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
         "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
     }

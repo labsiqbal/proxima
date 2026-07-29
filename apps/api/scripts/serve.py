@@ -8,12 +8,13 @@ import uvicorn
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(APP_ROOT))
+for source_root in (REPO_ROOT, APP_ROOT):
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
 
 from proxima_api.main import create_app
 from proxima_api.logging_config import uvicorn_log_config
-from proxima_api.settings import DEFAULT_CONFIG
+from proxima_api.settings import DEFAULT_CONFIG, safe_update_config_from_env
 
 
 def env_path(name: str, default: Path) -> str:
@@ -130,6 +131,7 @@ app = create_app(
         "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", True),
         "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
         "feature_master_orchestrator": env_bool("PROXIMA_FEATURE_MASTER_ORCHESTRATOR", False),
+        **safe_update_config_from_env(),
         # On by default since slice 4 (review UI); the env var is the escape hatch.
         "feature_repo_worktrees": env_bool("PROXIMA_FEATURE_REPO_WORKTREES", True),
         # systemd --user unit Diagnostics reads via journalctl (CLI + staging use the same env).
