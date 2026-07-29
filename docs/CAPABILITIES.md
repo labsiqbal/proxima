@@ -275,6 +275,9 @@ built-in orchestrator without manually composing every worker task.
 > publishes the static chat-only declaration plus dynamic host eligibility and
 > its reason. The Master selector enables only dynamically eligible adapters; a
 > legacy or unavailable backing runner remains a disabled explanatory state.
+> During external maintenance, discovery keeps its read-only binary projection
+> but skips process-backed conformance and marks Master eligibility unavailable.
+> Settings, message creation, and worker spawn retain their authoritative checks.
 
 **Master identity and desk:** when the feature is enabled, the authenticated Master
 entry point creates or reuses exactly one hidden

@@ -688,6 +688,15 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    runner_bin = tmp_path / "runner-bin"
+    runner_bin.mkdir()
+    codex = runner_bin / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex-cli 0.145.0'\n")
+    codex.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH",
+        f"{runner_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
     database = tmp_path / "proxima.db"
     setup = connect(database)
     init_db(setup)
@@ -731,12 +740,39 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
             unexpected_shim,
         )
 
+        def unexpected_runner_probe(*_args, **_kwargs):
+            raise AssertionError("maintenance discovery launched a runner probe")
+
+        monkeypatch.setattr(
+            "proxima_api.runner_specs.subprocess.run",
+            unexpected_runner_probe,
+        )
+
         assert client.post("/api/update/check").status_code == 423
         assert client.post("/auth/auto").status_code == 423
         assert client.post("/auth/resume").status_code == 200
         assert client.get("/api/setup/status").status_code == 200
         assert client.get("/api/profiles").json() == {"profiles": []}
         assert client.get("/api/wiki/all").json() == {"notes": []}
+        runner_response = client.get(
+            "/api/runners/detect",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert runner_response.status_code == 200
+        detected_codex = next(
+            runner
+            for runner in runner_response.json()["runners"]
+            if runner["id"] == "codex"
+        )
+        assert detected_codex["installed"] is True
+        assert detected_codex["masterEligible"] is False
+        assert detected_codex["masterUnavailableReason"] == (
+            "Master runner verification is unavailable during maintenance"
+        )
+        assert client.get(
+            "/api/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code == 200
         assert not wiki_root.exists()
         assert client.get("/api/appview/missing/").status_code == 423
         assert (

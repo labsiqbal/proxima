@@ -48,7 +48,11 @@ Eligibility calls the same `master_runner_conformance` boundary against the
 server's controlled runtime path, so an absent, old, or unverifiable Codex is not
 enabled by the Master selector. A legacy or unavailable current selection remains
 a disabled explanatory state. Settings, message creation, and worker spawn still
-repeat conformance rather than trusting the browser result.
+repeat conformance rather than trusting the browser result. While external
+maintenance is pending or active, discovery skips process-backed conformance and
+reports Master ineligible with a maintenance reason; both runner detection and the
+dashboard remain read-only without launching a runner probe. Authoritative checks
+resume after the fence clears.
 
 The Codex adapter starts app-server with strict configuration that disables shell,
 browser, web search, apps, plugins, hooks, goals, image generation, subagents,

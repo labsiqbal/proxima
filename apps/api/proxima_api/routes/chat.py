@@ -1200,6 +1200,7 @@ def register(app, deps):
         runners = detect_runners(
             path_env=str(cfg.get("_runtime_path") or ""),
             create_shim=False,
+            allow_process_probes=not maintenance.fenced(),
         )
         system_health = {
             "activeRuns": active_runs_count,

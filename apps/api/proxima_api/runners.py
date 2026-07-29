@@ -31,6 +31,9 @@ _RUNNER_PROVIDER_ENV = {
     "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
     "OPENROUTER_API_KEY", "XAI_API_KEY",
 }
+_MASTER_PROBE_MAINTENANCE_REASON = (
+    "Master runner verification is unavailable during maintenance"
+)
 
 
 def _env_on(name: str) -> bool:
@@ -193,6 +196,7 @@ def detect_runners(
     registry: Iterable[RunnerDefinition] = RUNNER_REGISTRY,
     *,
     create_shim: bool = True,
+    allow_process_probes: bool = True,
 ) -> list[dict]:
     resolved_path = augmented_path(path_env, create_shim=create_shim)
     detected: list[dict] = []
@@ -200,10 +204,24 @@ def detect_runners(
     for runner in registry:
         spec = RUNNER_SPECS.get(runner.id)
         master_chat_only = bool(spec and spec.master_chat_only)
-        master_eligible, master_unavailable_reason = master_runner_conformance(
-            runner.id,
-            path_env=resolved_path,
-        )
+        if allow_process_probes:
+            master_eligible, master_unavailable_reason = (
+                master_runner_conformance(
+                    runner.id,
+                    path_env=resolved_path,
+                )
+            )
+        else:
+            master_eligible = False
+            master_unavailable_reason = (
+                _MASTER_PROBE_MAINTENANCE_REASON
+                if master_chat_only
+                else (
+                    spec.master_unavailable_reason
+                    if spec is not None
+                    else "runner is not available"
+                )
+            )
         master_fields = {
             "masterChatOnly": master_chat_only,
             "masterEligible": master_eligible,
