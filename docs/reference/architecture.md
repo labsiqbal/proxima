@@ -483,10 +483,13 @@ from its captured epoch, preventing old Container context from surviving in runn
 or model caches. The shared frontend projects the existing ordered Master message
 ids into Roving, Fleet, and Container histories without copying a session. A
 Container projection includes Focus-attributed segments and messages whose
-immutable subject is that Container; Fleet excludes those subject messages.
-History folder changes deliberately request durable Focus, while shell Container
-selection is independent unless the owner explicitly chooses `Focus Master here`.
-Safe-self-update remains a later group.
+immutable subject is that Container; Fleet requires positive Fleet attribution and
+excludes those subject messages. Message Focus, subject, target, and Area ids survive
+Container deletion, and the unavailable historical folder remains selectable.
+History folder changes for available Containers deliberately request durable Focus,
+while unavailable folders are read-only and shell Container selection is independent
+unless the owner explicitly chooses `Focus Master here`. Safe-self-update remains a
+later group.
 See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow
@@ -606,7 +609,9 @@ event to the authoritative source row. Unique owner-scoped projection keys make
 retry, reconnect, and restart reconciliation idempotent. Projection message, event,
 and ledger rows commit together. Startup validates their strict owner, source/type,
 foreign-key, index, complete-link, and bounded payload contract. Raw streaming deltas
-are never projected. Server-owned summaries omit Task titles, runner errors,
+are never projected. Each named event carries the same captured Focus and subject
+attribution committed with its message, so the live projection cannot drift before
+canonical reconciliation. Server-owned summaries omit Task titles, runner errors,
 permission commands, Attention text, Satpam reasons, paths, and credentials. The
 existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
 [master-supervision.md](../master-supervision.md).
@@ -618,6 +623,9 @@ draft/selection, Focus, target, Fleet data, popup state, transient toasts, and s
 scroll/panel state. `MasterScreen` and `MasterPopup` are view-only consumers and
 never mount their own stream, store, polling loop, or draft owner. The hidden home
 does not render a composer while another surface is active.
+Owner-keyed session storage restores draft, selection, and scroll after browser
+refresh; the target remains an owner-keyed local preference. Neither store restores
+server-owned Focus.
 Lifecycle generations plus abort controllers reject late owner/token/session
 responses, close replaced streams, and keep React StrictMode from creating two live
 connections or duplicate UI submissions. Projection and final-message events are
@@ -646,9 +654,9 @@ Container/Area arguments for explicit targets and confines automatic routing to 
 Container Focus. Fleet Focus discards model-supplied Container and Area graph
 scope, so automatic routing can read only Fleet and Live layers. Deleting an idle
 focused Container first closes its epoch and transitions durable Focus; the
-historical epoch keeps its immutable numeric Container identity while optional
-message and target links null safely. An active Master turn refuses deletion before
-any filesystem change.
+historical epoch, message Focus, subject, target, and Area keep their immutable
+numeric identities. An active Master turn refuses deletion before any filesystem
+change.
 
 The shell popup is available only on ordinary authenticated surfaces. Auth,
 onboarding, the full Master home, update application, drawers, search, account

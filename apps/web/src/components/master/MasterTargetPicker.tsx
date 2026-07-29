@@ -8,10 +8,7 @@ function containerLabel(name: string, identityLabel: string | null): string {
 }
 
 export function MasterFocusPicker() {
-  const { desk, focus, fleet, actions } = useMasterState()
-  const pendingContainer = fleet.containers.find(
-    container => container.id === desk?.focus?.pending_container_id,
-  )
+  const { focus, fleet, actions } = useMasterState()
   return (
     <div className="master-focus-control">
       <label className="master-focus-picker">
@@ -38,15 +35,24 @@ export function MasterFocusPicker() {
           ))}
         </select>
       </label>
-      {desk?.focus?.pending && (
-        <small className="master-focus-pending" role="status">
-          Pending Focus: {pendingContainer
-            ? containerLabel(pendingContainer.name, pendingContainer.identity_label)
-            : desk.focus.pending_container_id == null ? 'Fleet' : 'another Container'}
-          . Applies after this turn.
-        </small>
-      )}
+      <MasterPendingFocus />
     </div>
+  )
+}
+
+export function MasterPendingFocus() {
+  const { desk, fleet } = useMasterState()
+  const pendingContainer = fleet.containers.find(
+    container => container.id === desk?.focus?.pending_container_id,
+  )
+  if (!desk?.focus?.pending) return null
+  return (
+    <small className="master-focus-pending" role="status">
+      Pending Focus: {pendingContainer
+        ? containerLabel(pendingContainer.name, pendingContainer.identity_label)
+        : desk.focus.pending_container_id == null ? 'Fleet' : 'another Container'}
+      . Applies after this turn.
+    </small>
   )
 }
 
@@ -54,6 +60,21 @@ export function MasterHistoryPicker() {
   const state = useMasterState()
   const history = state.history ?? { kind: 'roving' as const }
   const { fleet, actions } = state
+  const availableIds = new Set(fleet.containers.map(container => container.id))
+  const unavailableIds = [...new Set(
+    (state.messages ?? []).flatMap(message => {
+      const attribution = message.message_focus
+      return [
+        attribution?.focus_container_id,
+        attribution?.subject_container_id,
+      ].filter((id): id is number => (
+        typeof id === 'number'
+        && Number.isSafeInteger(id)
+        && id > 0
+        && !availableIds.has(id)
+      ))
+    }),
+  )].sort((left, right) => left - right)
   const value = history.kind === 'roving'
     ? 'roving'
     : history.kind === 'fleet'
@@ -75,6 +96,10 @@ export function MasterHistoryPicker() {
           const containerId = event.target.value === 'fleet'
             ? null
             : Number(event.target.value.replace('container:', ''))
+          if (containerId != null && !availableIds.has(containerId)) {
+            actions.setHistory({ kind: 'container', containerId })
+            return
+          }
           void actions.setFocus(containerId)
             .then(() => actions.setHistory(containerId == null
               ? { kind: 'fleet' }
@@ -87,6 +112,11 @@ export function MasterHistoryPicker() {
         {fleet.containers.map(container => (
           <option value={`container:${container.id}`} key={container.id}>
             {containerLabel(container.name, container.identity_label)}
+          </option>
+        ))}
+        {unavailableIds.map(containerId => (
+          <option value={`container:${containerId}`} key={`unavailable:${containerId}`}>
+            Unavailable Container #{containerId}
           </option>
         ))}
       </select>

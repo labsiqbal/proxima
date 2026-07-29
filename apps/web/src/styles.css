@@ -14140,6 +14140,7 @@ button.moodboard-add-method:hover {
 .master-message.system { justify-self: start; border: 1px solid var(--ui-stroke-tertiary); border-bottom-left-radius: var(--radius-sm); background: var(--ui-surface-subtle); }
 /* Tool-result rows: flat timeline text only - no border, fill, radius, or outer bubble. */
 .master-tool-results { display: grid; gap: var(--space-1); max-width: 100%; justify-self: stretch; min-width: 0; }
+.master-tool-message { display: grid; gap: var(--space-2); width: 100%; min-width: 0; }
 .master-tool-results > div { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .master-tool-results > div.failed { color: var(--ui-danger-text); }
 .master-tool-results b { display: block; font-size: var(--text-sm); font-weight: 500; color: var(--ui-text-secondary); }
@@ -14489,6 +14490,7 @@ button.moodboard-add-method:hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.master-popup-head .master-focus-pending { color: var(--ui-warning-text); }
 .master-popup-mark {
 	display: grid;
 	place-items: center;

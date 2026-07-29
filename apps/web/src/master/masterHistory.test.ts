@@ -32,4 +32,26 @@ describe('projectMasterHistory', () => {
     expect(result.map(message => message.id)).toEqual([4])
     expect(result.map(message => message.content).join(' ')).not.toContain('secret')
   })
+
+  it('requires positive Fleet attribution instead of treating erased scope as Fleet', () => {
+    const result = projectMasterHistory([
+      {
+        id: 8,
+        role: 'assistant',
+        content: 'Deleted Container response',
+        message_focus: {
+          focus_epoch_id: 3,
+          focus_container_id: null,
+          subject_container_id: null,
+        },
+      },
+      {
+        id: 9,
+        role: 'assistant',
+        content: 'Unattributed legacy response',
+      },
+    ], { kind: 'fleet' })
+
+    expect(result).toEqual([])
+  })
 })

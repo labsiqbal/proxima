@@ -317,11 +317,13 @@ def register(app, deps):
             "mc.target_area_id AS master_target_area_id, "
             "mf.message_id AS focus_message_id, "
             "mf.focus_epoch_id AS master_focus_epoch_id, "
-            "mf.focus_container_id AS message_focus_container_id, "
+            "COALESCE(mf.focus_container_id, mfe.container_id) "
+            "AS message_focus_container_id, "
             "mf.subject_container_id AS message_subject_container_id "
             "FROM messages m LEFT JOIN master_message_context mc "
             "ON mc.message_id = m.id "
             "LEFT JOIN message_focus mf ON mf.message_id = m.id "
+            "LEFT JOIN master_focus_epochs mfe ON mfe.id = mf.focus_epoch_id "
             "WHERE m.session_id = ? ORDER BY m.id ASC",
             (session_id,),
         ).fetchall()

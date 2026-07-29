@@ -290,9 +290,12 @@ Focus, per-message target, popup state, transient notifications, Fleet registry,
 and stable scroll/panel state. The full-page Master home and floating popup consume
 that same interface without shadow stores, duplicate composers, or a second live
 connection. Moving between those views preserves the draft, target, Focus, active
-run, ordered thread, and scroll anchor.
+run, ordered thread, and scroll anchor. Owner-keyed session storage restores the
+draft, selection, and scroll anchor after a browser refresh, while the existing
+owner-keyed target preference remains durable.
 Logout, owner/token transition, onboarding, feature-off, and update application
-abort stale work, close the old stream, and clear owner-scoped state.
+abort stale work and close the old stream. Refresh state is keyed by owner and never
+crosses an owner transition.
 
 The popup is available from normal authenticated shell surfaces through a labeled
 floating trigger and `Ctrl`/`Command` + `Shift` + `M`. It can persist at either
@@ -478,21 +481,26 @@ The Master home projects the one canonical roving thread into `Roving thread`,
 `Fleet history`, and per-Container folders without creating or copying a
 session. A Container folder contains only its immutable Focus segments plus
 asynchronous system updates whose durable subject is that Container; Fleet
-excludes Container-subject updates. Focus boundaries, focused segments, and
-system updates are visibly labelled. Selecting a Fleet or Container history
-folder explicitly changes durable Focus, while selecting the roving thread is
-read-only. The shell Container remains independent: `Focus Master here` is an
-explicit bridge, never an implicit shell-selection side effect. Pending Focus,
-explicit-target Focus effects, and Fleet mode remain visible in both shared
-home and popup state. Safe-self-update remains a later delivery group. See
+requires positive Fleet attribution and excludes Container-subject updates. Focus
+boundaries, focused segments, system updates, and specialized tool-result rows are
+visibly labelled. Historical Container and target ids are append-only facts rather
+than foreign keys that null on deletion, so an unavailable Container folder remains
+selectable without leaking its messages into Fleet. Selecting an available Fleet or
+Container history folder explicitly changes durable Focus, while selecting the
+roving thread or an unavailable historical folder is read-only. The shell Container
+remains independent: `Focus Master here` is an explicit bridge, never an implicit
+shell-selection side effect. Pending Focus, explicit-target Focus effects, and Fleet
+mode remain visible in both shared home and popup state. Safe-self-update remains a
+later delivery group. See
 [ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 The shared provider bootstraps Focus and its optimistic version from the Master
 desk, writes picker changes through the durable Focus endpoint, and consumes
 `master.focus.changed` on the existing session stream. Focus is never restored
 from local storage. Deleting an idle focused Container closes its epoch and moves
-Master safely onward while retaining the historical epoch identity; deletion is
-refused before filesystem changes while that Master turn is active.
+Master safely onward while retaining immutable message Focus, subject, target,
+Area, and epoch ids; deletion is refused before filesystem changes while that
+Master turn is active.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
 `POST /api/containers/{slug}/graphs/rebuild`,
@@ -572,8 +580,10 @@ Master thread. `master_projections` is an owner-scoped idempotency/link ledger, 
 second lifecycle ledger: jobs, runs, checkpoints, Attention, node state, and Satpam
 rows remain authoritative. Each projection also emits one named event on the
 existing session SSE stream with stable source, Task, Container, Area, checkpoint,
-intervention, message, projection, and toast keys. Raw token, reasoning, and tool
-deltas are never copied, and the matching ledger/event payload is bounded to 16 KiB.
+intervention, message, projection, toast, captured Focus, and subject keys. Live
+projection rendering uses that transactionally committed attribution rather than
+guessing from current browser Focus. Raw token, reasoning, and tool deltas are never
+copied, and the matching ledger/event payload is bounded to 16 KiB.
 Server-owned projection summaries do not copy Task titles, runner errors,
 permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup

@@ -36,6 +36,11 @@ function positiveInteger(value: unknown): number | null {
     : null
 }
 
+function attributedId(value: unknown): number | null | undefined {
+  if (value === null) return null
+  return positiveInteger(value) ?? undefined
+}
+
 function safeProjectionContent(
   type: string,
   payload: Record<string, unknown>,
@@ -356,9 +361,15 @@ export function projectMasterEvent(
     const payload = isRecord(event.payload) ? event.payload : {}
     const messageId = positiveInteger(payload.message_id)
     const content = safeProjectionContent(event.type, payload)
+    const focusEpochId = attributedId(payload.focus_epoch_id)
+    const focusContainerId = attributedId(payload.focus_container_id)
+    const subjectContainerId = attributedId(payload.subject_container_id)
     if (
       messageId != null
       && content
+      && focusEpochId !== undefined
+      && focusContainerId !== undefined
+      && subjectContainerId !== undefined
       && !messages.some(message => message.id === messageId)
     ) {
       insertedMessageId = messageId
@@ -370,11 +381,9 @@ export function projectMasterEvent(
         run_id: null,
         created_at: event.created_at,
         message_focus: {
-          focus_epoch_id: positiveInteger(payload.focus_epoch_id),
-          focus_container_id: positiveInteger(payload.focus_container_id),
-          subject_container_id: positiveInteger(
-            payload.subject_container_id ?? payload.container_id,
-          ),
+          focus_epoch_id: focusEpochId,
+          focus_container_id: focusContainerId,
+          subject_container_id: subjectContainerId,
         },
       }])
     }

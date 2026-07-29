@@ -172,6 +172,23 @@ function messageKey(message: MasterViewMessage, index: number) {
   return message.id ?? message.clientId ?? `master-message-${index}`
 }
 
+function MasterHistoryKind({
+  kind,
+}: {
+  kind?: 'focused-segment' | 'system-event' | 'focus-boundary' | null
+}) {
+  if (!kind) return null
+  return (
+    <small className={`master-history-kind ${kind}`}>
+      {kind === 'system-event'
+        ? 'System update'
+        : kind === 'focus-boundary'
+          ? 'Focus boundary'
+          : 'Focused segment'}
+    </small>
+  )
+}
+
 export function MasterConversation({
   onOpenJob,
 }: {
@@ -247,11 +264,17 @@ export function MasterConversation({
         const tools = message.role === 'system' ? parseToolResults(content) : null
         if (tools) {
           return (
-            <MasterToolResults
+            <article
+              className="master-tool-message"
               key={messageKey(message, index)}
-              tools={tools}
-              onOpenJob={onOpenJob}
-            />
+              data-message-id={message.id}
+            >
+              <MasterHistoryKind kind={message.historyKind} />
+              <MasterToolResults
+                tools={tools}
+                onOpenJob={onOpenJob}
+              />
+            </article>
           )
         }
         const metadata = message.master_target
@@ -302,15 +325,7 @@ export function MasterConversation({
                   : 'Proxima'}
               {message.pending && <span className="master-message-pending">Sending</span>}
             </strong>
-            {message.historyKind && (
-              <small className={`master-history-kind ${message.historyKind}`}>
-                {message.historyKind === 'system-event'
-                  ? 'System update'
-                  : message.historyKind === 'focus-boundary'
-                    ? 'Focus boundary'
-                    : 'Focused segment'}
-              </small>
-            )}
+            <MasterHistoryKind kind={message.historyKind} />
             {targetLabel && (
               <small className="master-message-target">{targetLabel}</small>
             )}

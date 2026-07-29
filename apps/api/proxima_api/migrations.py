@@ -1824,6 +1824,331 @@ def _freeze_master_focus_attribution(conn: sqlite3.Connection) -> None:
             )
 
 
+def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    has_focus = {"message_focus", "messages"}.issubset(tables)
+    has_context = {"master_message_context", "messages"}.issubset(tables)
+    focus_foreign_tables = {
+        str(row[2])
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(message_focus)"
+        ).fetchall()
+    } if has_focus else set()
+    context_foreign_tables = {
+        str(row[2])
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(master_message_context)"
+        ).fetchall()
+    } if has_context else set()
+    rebuild_focus = has_focus and "projects" in focus_foreign_tables
+    rebuild_context = has_context and bool(
+        {"projects", "project_areas"} & context_foreign_tables
+    )
+    if not has_focus and not has_context:
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if rebuild_focus:
+            conn.execute("DROP TRIGGER IF EXISTS messages_master_focus_insert")
+            conn.execute(
+                "DROP TRIGGER IF EXISTS messages_master_focus_run_update"
+            )
+            focus_container = "focus.focus_container_id"
+            if "master_focus_epochs" in tables:
+                focus_container = (
+                    "COALESCE(focus.focus_container_id, epoch.container_id)"
+                )
+            subject_container = "focus.subject_container_id"
+            if "master_projections" in tables:
+                subject_container = (
+                    "COALESCE(focus.subject_container_id, "
+                    "CAST(json_extract(projection.payload_json, "
+                    "'$.subject_container_id') AS INTEGER), "
+                    "CAST(json_extract(projection.payload_json, "
+                    "'$.container_id') AS INTEGER))"
+                )
+            epoch_join = (
+                "LEFT JOIN master_focus_epochs AS epoch "
+                "ON epoch.id = focus.focus_epoch_id "
+                if "master_focus_epochs" in tables
+                else ""
+            )
+            projection_join = (
+                "LEFT JOIN master_projections AS projection "
+                "ON projection.message_id = focus.message_id "
+                if "master_projections" in tables
+                else ""
+            )
+            conn.execute(
+                """
+                CREATE TABLE message_focus_new (
+                  message_id INTEGER PRIMARY KEY
+                    REFERENCES messages(id) ON DELETE CASCADE,
+                  focus_epoch_id INTEGER
+                    REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
+                  focus_container_id INTEGER,
+                  subject_container_id INTEGER
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO message_focus_new("
+                "message_id, focus_epoch_id, focus_container_id, "
+                "subject_container_id"
+                ") SELECT focus.message_id, focus.focus_epoch_id, "
+                f"{focus_container}, {subject_container} "
+                "FROM message_focus AS focus "
+                f"{epoch_join}{projection_join}"
+            )
+            conn.execute("DROP TABLE message_focus")
+            conn.execute(
+                "ALTER TABLE message_focus_new RENAME TO message_focus"
+            )
+            conn.execute(
+                "CREATE INDEX idx_message_focus_epoch "
+                "ON message_focus(focus_epoch_id, message_id)"
+            )
+            conn.execute(
+                "CREATE INDEX idx_message_focus_subject "
+                "ON message_focus(subject_container_id, message_id)"
+            )
+
+        if rebuild_context:
+            focus_join = (
+                "LEFT JOIN message_focus AS focus "
+                "ON focus.message_id = context.message_id "
+                if has_focus
+                else ""
+            )
+            focus_container = (
+                "COALESCE(context.focus_container_id, "
+                "focus.focus_container_id)"
+                if has_focus
+                else "context.focus_container_id"
+            )
+            target_container = (
+                "CASE WHEN context.target_mode = 'explicit' THEN "
+                "COALESCE(context.target_container_id, "
+                "focus.focus_container_id) ELSE NULL END"
+                if has_focus
+                else "context.target_container_id"
+            )
+            conn.execute(
+                """
+                CREATE TABLE master_message_context_new (
+                  message_id INTEGER PRIMARY KEY
+                    REFERENCES messages(id) ON DELETE CASCADE,
+                  focus_mode TEXT NOT NULL
+                    CHECK(focus_mode IN ('fleet', 'container')),
+                  focus_container_id INTEGER,
+                  target_mode TEXT NOT NULL
+                    CHECK(target_mode IN ('auto', 'explicit')),
+                  target_container_id INTEGER,
+                  target_area_id INTEGER,
+                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  CHECK(
+                    focus_mode = 'container'
+                    OR (
+                      focus_mode = 'fleet'
+                      AND focus_container_id IS NULL
+                    )
+                  ),
+                  CHECK(
+                    target_mode = 'explicit'
+                    OR (
+                      target_mode = 'auto'
+                      AND target_container_id IS NULL
+                      AND target_area_id IS NULL
+                    )
+                  )
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO master_message_context_new("
+                "message_id, focus_mode, focus_container_id, target_mode, "
+                "target_container_id, target_area_id, created_at"
+                ") SELECT context.message_id, context.focus_mode, "
+                f"{focus_container}, context.target_mode, "
+                f"{target_container}, context.target_area_id, "
+                "context.created_at FROM master_message_context AS context "
+                f"{focus_join}"
+            )
+            conn.execute("DROP TABLE master_message_context")
+            conn.execute(
+                "ALTER TABLE master_message_context_new "
+                "RENAME TO master_message_context"
+            )
+            conn.execute(
+                "CREATE INDEX idx_master_message_context_focus "
+                "ON master_message_context(focus_container_id, message_id)"
+            )
+            conn.execute(
+                "CREATE INDEX idx_master_message_context_target "
+                "ON master_message_context("
+                "target_container_id, target_area_id, message_id)"
+            )
+        if has_focus:
+            conn.execute(
+                "DROP TRIGGER IF EXISTS message_focus_epoch_immutable"
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER message_focus_epoch_immutable
+                BEFORE UPDATE OF
+                  focus_epoch_id, focus_container_id, subject_container_id
+                ON message_focus
+                WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+                  OR NEW.focus_container_id IS NOT OLD.focus_container_id
+                  OR NEW.subject_container_id IS NOT OLD.subject_container_id
+                BEGIN
+                  SELECT RAISE(
+                    ABORT,
+                    'Message Focus epoch attribution is immutable'
+                  );
+                END
+                """
+            )
+        if has_context:
+            conn.execute(
+                "DROP TRIGGER IF EXISTS master_message_context_immutable"
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER master_message_context_immutable
+                BEFORE UPDATE OF
+                  focus_mode, focus_container_id, target_mode,
+                  target_container_id, target_area_id
+                ON master_message_context
+                WHEN NEW.focus_mode IS NOT OLD.focus_mode
+                  OR NEW.focus_container_id IS NOT OLD.focus_container_id
+                  OR NEW.target_mode IS NOT OLD.target_mode
+                  OR NEW.target_container_id IS NOT OLD.target_container_id
+                  OR NEW.target_area_id IS NOT OLD.target_area_id
+                BEGIN
+                  SELECT RAISE(
+                    ABORT,
+                    'Master message context is immutable'
+                  );
+                END
+                """
+            )
+        if rebuild_focus and {
+            "runs",
+            "sessions",
+            "master_focus_epochs",
+        }.issubset(tables):
+            conn.execute(
+                """
+                CREATE TRIGGER messages_master_focus_insert
+                AFTER INSERT ON messages
+                WHEN NEW.run_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM sessions
+                    WHERE id = NEW.session_id AND mode = 'master'
+                  )
+                BEGIN
+                  INSERT OR IGNORE INTO message_focus(
+                    message_id, focus_epoch_id, focus_container_id,
+                    subject_container_id
+                  )
+                  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+                  FROM runs AS run
+                  LEFT JOIN master_focus_epochs AS epoch
+                    ON epoch.id = run.focus_epoch_id
+                  WHERE run.id = NEW.run_id
+                    AND run.session_id = NEW.session_id;
+                END
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER messages_master_focus_run_update
+                AFTER UPDATE OF run_id ON messages
+                WHEN NEW.run_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM sessions
+                    WHERE id = NEW.session_id AND mode = 'master'
+                  )
+                BEGIN
+                  INSERT OR IGNORE INTO message_focus(
+                    message_id, focus_epoch_id, focus_container_id,
+                    subject_container_id
+                  )
+                  SELECT NEW.id, run.focus_epoch_id, epoch.container_id, NULL
+                  FROM runs AS run
+                  LEFT JOIN master_focus_epochs AS epoch
+                    ON epoch.id = run.focus_epoch_id
+                  WHERE run.id = NEW.run_id
+                    AND run.session_id = NEW.session_id;
+                END
+                """
+            )
+        if {
+            "master_projections",
+            "events",
+            "message_focus",
+        }.issubset(tables):
+            conn.execute(
+                """
+                UPDATE master_projections
+                SET payload_json = json_set(
+                  payload_json,
+                  '$.focus_epoch_id',
+                  (
+                    SELECT focus.focus_epoch_id
+                    FROM message_focus AS focus
+                    WHERE focus.message_id = master_projections.message_id
+                  ),
+                  '$.focus_container_id',
+                  (
+                    SELECT focus.focus_container_id
+                    FROM message_focus AS focus
+                    WHERE focus.message_id = master_projections.message_id
+                  ),
+                  '$.subject_container_id',
+                  (
+                    SELECT focus.subject_container_id
+                    FROM message_focus AS focus
+                    WHERE focus.message_id = master_projections.message_id
+                  )
+                )
+                WHERE message_id IN (
+                  SELECT message_id FROM message_focus
+                )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE events
+                SET payload = (
+                  SELECT projection.payload_json
+                  FROM master_projections AS projection
+                  WHERE projection.event_id = events.id
+                )
+                WHERE id IN (
+                  SELECT event_id
+                  FROM master_projections
+                  WHERE event_id IS NOT NULL
+                )
+                """
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def _add_graph_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -2064,6 +2389,12 @@ MIGRATIONS: list[Migration] = [
         41,
         "make captured Master message and run Focus epochs immutable",
         _freeze_master_focus_attribution,
+    ),
+    (
+        42,
+        "preserve immutable Master history scope after Container deletion",
+        _preserve_master_history_scope,
+        {"no_auto_tx": True},
     ),
 ]
 

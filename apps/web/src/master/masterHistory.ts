@@ -31,7 +31,11 @@ export function projectMasterHistory(
     const focused = attribution?.focus_container_id ?? null
     const subject = attribution?.subject_container_id ?? null
     const matches = scope.kind === 'roving'
-      || (scope.kind === 'fleet' && focused == null && subject == null)
+      || (scope.kind === 'fleet'
+        && attribution != null
+        && attribution.focus_epoch_id == null
+        && focused == null
+        && subject == null)
       || (scope.kind === 'container' && (
         focused === scope.containerId || subject === scope.containerId
       ))

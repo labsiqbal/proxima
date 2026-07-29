@@ -235,6 +235,45 @@ describe('MasterScreen', () => {
       .toBeInTheDocument()
   })
 
+  it('keeps deleted Container history selectable by immutable attribution', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      messages: [{
+        id: 90,
+        role: 'assistant',
+        content: 'Historical result',
+        message_focus: {
+          focus_epoch_id: 9,
+          focus_container_id: 44,
+          subject_container_id: null,
+        },
+      }],
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    expect(screen.getByRole('option', { name: 'Unavailable Container #44' }))
+      .toBeInTheDocument()
+  })
+
+  it('labels focused tool-result rows with their shared history attribution', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      history: { kind: 'container', containerId: 21 },
+      historyMessages: [{
+        id: 91,
+        role: 'system',
+        content: 'Master tool results:\n```json\n[{"ok":true,"tool":"list_tasks","result":{"jobs":[]}}]\n```',
+        historyKind: 'focused-segment',
+      }],
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    const results = screen.getByRole('group', { name: 'Master tool results' })
+    expect(results.closest('article')).toHaveTextContent('Focused segment')
+  })
+
   it('disables the only composer while Master is working', () => {
     vi.mocked(useMasterState).mockReturnValue({
       ...state,

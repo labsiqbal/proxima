@@ -73,6 +73,14 @@ const desk = {
   },
 }
 
+const fleetProjectionPayload = (messageId: number, taskId: number) => ({
+  message_id: messageId,
+  task_id: taskId,
+  focus_epoch_id: null,
+  focus_container_id: null,
+  subject_container_id: null,
+})
+
 class FakeEventSource {
   static CONNECTING = 0
   static OPEN = 1
@@ -205,6 +213,7 @@ describe('MasterStateProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    sessionStorage.clear()
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource)
     vi.mocked(getMasterDesk).mockResolvedValue(desk as never)
@@ -415,7 +424,7 @@ describe('MasterStateProvider', () => {
       type: 'master.task.completed',
       run_id: 0,
       session_id: 9,
-      payload: { message_id: 55, task_id: 7 },
+      payload: fleetProjectionPayload(55, 7),
       created_at: '2026-07-27T10:01:00Z',
     }
     act(() => {
@@ -440,7 +449,7 @@ describe('MasterStateProvider', () => {
       type: 'master.task.completed',
       run_id: null,
       session_id: 9,
-      payload: { message_id: 55, task_id: 7 },
+      payload: fleetProjectionPayload(55, 7),
       created_at: '2026-07-27T10:01:00Z',
     }))
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent('Completed Task #7.')
@@ -462,7 +471,7 @@ describe('MasterStateProvider', () => {
         seq: 3,
         type: 'master.task.review_ready',
         session_id: 9,
-        payload: { message_id: 56, task_id: 8 },
+        payload: fleetProjectionPayload(56, 8),
         created_at: '2026-07-27T10:02:00Z',
       }),
     ))
@@ -759,7 +768,7 @@ describe('MasterStateProvider', () => {
     expect(FakeEventSource.instances[0].url).toContain('/sessions/10/')
   })
 
-  it('closes the old stream and clears owned state on same-owner token rotation', async () => {
+  it('closes the old stream while preserving refresh state on same-owner token rotation', async () => {
     const view = renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     const source = FakeEventSource.instances[0]
@@ -781,7 +790,7 @@ describe('MasterStateProvider', () => {
     )
 
     expect(source.close).toHaveBeenCalled()
-    expect(screen.getByTestId('draft')).toHaveTextContent('')
+    expect(screen.getByTestId('draft')).toHaveTextContent('Keep this draft')
     expect(screen.getByTestId('messages')).toHaveTextContent('')
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
     expect(FakeEventSource.instances.filter(instance => !instance.close.mock.calls.length))
@@ -817,6 +826,26 @@ describe('MasterStateProvider', () => {
     expect(screen.getByTestId('draft')).toHaveTextContent('Keep this draft')
     expect(screen.getByTestId('selection')).toHaveTextContent('2:7')
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('restores owner-scoped draft, selection, target, and scroll after refresh', async () => {
+    const first = renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Draft' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Select' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Target Acme' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remember scroll' })[0])
+    first.unmount()
+
+    renderProvider()
+
+    expect(screen.getAllByTestId('draft')[0]).toHaveTextContent('Keep this draft')
+    expect(screen.getAllByTestId('selection')[0]).toHaveTextContent('2:7')
+    expect(screen.getAllByTestId('target')[0]).toHaveTextContent('explicit:21:any')
+    expect(screen.getAllByTestId('scroll')[0]).toHaveTextContent('240:false:55')
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    expect(FakeEventSource.instances.filter(instance => !instance.close.mock.calls.length))
+      .toHaveLength(1)
   })
 
   it('focuses the explicit target before one enqueue and preserves it across route consumers', async () => {
@@ -902,28 +931,28 @@ describe('MasterStateProvider', () => {
         ...base,
         id: 13,
         type: 'master.task.started',
-        payload: { message_id: 70, task_id: 8 },
+        payload: fleetProjectionPayload(70, 8),
       })
       source.emit('master.task.started', {
         ...base,
         id: 14,
         seq: 2,
         type: 'master.task.started',
-        payload: { message_id: 71, task_id: 8 },
+        payload: fleetProjectionPayload(71, 8),
       })
       source.emit('master.task.completed', {
         ...base,
         id: 15,
         seq: 3,
         type: 'master.task.completed',
-        payload: { message_id: 72, task_id: 8 },
+        payload: fleetProjectionPayload(72, 8),
       })
       source.emit('master.task.completed', {
         ...base,
         id: 16,
         seq: 4,
         type: 'master.task.completed',
-        payload: { message_id: 72, task_id: 8 },
+        payload: fleetProjectionPayload(72, 8),
       })
       source.emit('message.delta', {
         ...base,

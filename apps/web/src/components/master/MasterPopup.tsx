@@ -2,6 +2,7 @@ import React from 'react'
 import { useMasterState } from '../../master/MasterStateProvider'
 import { MasterComposer } from './MasterComposer'
 import { MasterConversation } from './MasterConversation'
+import { MasterPendingFocus } from './MasterTargetPicker'
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -176,6 +177,7 @@ export function MasterPopup({
                     {' · '}
                     {connection.state === 'connected' ? 'Live' : 'Reconnecting'}
                   </small>
+                  <MasterPendingFocus />
                 </span>
               </div>
               <nav aria-label="Master popup actions">

@@ -15,7 +15,7 @@ vi.mock('./MasterComposer', () => ({
   MasterComposer: () => <textarea aria-label="Message Master" />,
 }))
 
-function PopupHarness() {
+function PopupHarness({ pending = false }: { pending?: boolean }) {
   const [popup, setPopup] = React.useState({
     open: false,
     preferredCorner: 'right' as const,
@@ -30,12 +30,22 @@ function PopupHarness() {
   }), [])
   vi.mocked(useMasterState).mockReturnValue({
     enabled: true,
-    desk: { session: { id: 9 } },
+    desk: {
+      session: { id: 9 },
+      focus: {
+        pending,
+        pending_container_id: pending ? 21 : null,
+      },
+    },
     connection: { state: 'connected' },
     unread: { count: 2 },
     popup,
     focus: { mode: 'fleet', containerId: null },
-    fleet: { containers: [] },
+    fleet: {
+      containers: pending
+        ? [{ id: 21, name: 'Acme', identity_label: 'Acme' }]
+        : [],
+    },
     actions,
   } as never)
   return (
@@ -84,6 +94,16 @@ describe('MasterPopup', () => {
     expect(screen.getByRole('button', { name: 'Move popup to bottom right' }))
       .toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: 'Master' })).toBe(dialog)
+  })
+
+  it('shows a pending Focus inside the shared popup', async () => {
+    const user = userEvent.setup()
+    render(<PopupHarness pending />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Master popup' }))
+
+    expect(screen.getByText('Pending Focus: Acme. Applies after this turn.'))
+      .toBeInTheDocument()
   })
 })
 

@@ -195,10 +195,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS master_message_context (
   message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   focus_mode TEXT NOT NULL CHECK(focus_mode IN ('fleet', 'container')),
-  focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  focus_container_id INTEGER,
   target_mode TEXT NOT NULL CHECK(target_mode IN ('auto', 'explicit')),
-  target_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-  target_area_id INTEGER REFERENCES project_areas(id) ON DELETE SET NULL,
+  target_container_id INTEGER,
+  target_area_id INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK(
     focus_mode = 'container'
@@ -209,6 +209,18 @@ CREATE TABLE IF NOT EXISTS master_message_context (
     OR (target_mode = 'auto' AND target_container_id IS NULL AND target_area_id IS NULL)
   )
 );
+CREATE TRIGGER IF NOT EXISTS master_message_context_immutable
+BEFORE UPDATE OF
+  focus_mode, focus_container_id, target_mode, target_container_id, target_area_id
+ON master_message_context
+WHEN NEW.focus_mode IS NOT OLD.focus_mode
+  OR NEW.focus_container_id IS NOT OLD.focus_container_id
+  OR NEW.target_mode IS NOT OLD.target_mode
+  OR NEW.target_container_id IS NOT OLD.target_container_id
+  OR NEW.target_area_id IS NOT OLD.target_area_id
+BEGIN
+  SELECT RAISE(ABORT, 'Master message context is immutable');
+END;
 CREATE INDEX IF NOT EXISTS idx_master_message_context_focus
   ON master_message_context(focus_container_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_master_message_context_target
@@ -237,16 +249,20 @@ CREATE TABLE IF NOT EXISTS master_focus_state (
 CREATE TABLE IF NOT EXISTS message_focus (
   message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
-  focus_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-  subject_container_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
+  focus_container_id INTEGER,
+  subject_container_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_message_focus_epoch
   ON message_focus(focus_epoch_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_message_focus_subject
   ON message_focus(subject_container_id, message_id);
 CREATE TRIGGER IF NOT EXISTS message_focus_epoch_immutable
-BEFORE UPDATE OF focus_epoch_id ON message_focus
+BEFORE UPDATE OF
+  focus_epoch_id, focus_container_id, subject_container_id
+ON message_focus
 WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+  OR NEW.focus_container_id IS NOT OLD.focus_container_id
+  OR NEW.subject_container_id IS NOT OLD.subject_container_id
 BEGIN
   SELECT RAISE(ABORT, 'Message Focus epoch attribution is immutable');
 END;
