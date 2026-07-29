@@ -49,6 +49,21 @@ def test_maintenance_status_reads_only_configured_external_fence(tmp_path):
     }
 
 
+def test_maintenance_status_fails_closed_for_invalid_utf8_fence(tmp_path):
+    fence = tmp_path / "root-owned" / "fence.json"
+    fence.parent.mkdir()
+    fence.write_bytes(b"\xff\xfe")
+    response = _client(tmp_path, safe_update_fence_path=str(fence)).get(
+        "/api/maintenance"
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "active": True,
+        "phase": "unknown",
+        "reason": "maintenance_state_unreadable",
+    }
+
+
 def test_production_env_loaders_share_disabled_enrollment_contract(
     tmp_path, monkeypatch
 ):

@@ -1426,9 +1426,13 @@ production entrypoints. A managed external updater, not candidate code or the ap
 database, owns the append-only fsynced journal, native single-flight lock, immutable
 release pointers, maintenance fence, backups, service configuration, and recovery
 verdict. Signed release manifests and unsigned local provenance are rechecked
-against the exact regular-file tree and canonical Python/web lockfiles. The app
-exposes only authenticated owner projections and a read-only externally configured
-maintenance fence. systemd, launchd, and unmanaged installs fail closed until the
+against the exact regular-file tree and canonical Python/web lockfiles. Publication
+copies verified bytes into fresh controller-owned inodes, rechecks the trusted
+staging tree, and then renames it atomically. Directory durability selects a POSIX
+or Windows backend; unsupported durability fails closed. The app exposes only
+authenticated owner projections and a read-only externally configured maintenance
+fence, including active/unknown status for unreadable bytes. systemd, launchd, and
+unmanaged installs fail closed until the
 [adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).

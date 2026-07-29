@@ -7,7 +7,7 @@ class UnmanagedAdapter:
     def capability(self) -> ManagerCapability:
         return ManagerCapability(False, "unmanaged", "safe_update_unmanaged")
 
-    def _fail(self) -> None:
+    def _fail(self, *_args: str) -> None:
         raise RuntimeError("safe_update_unmanaged")
 
     stop_and_verify = _fail

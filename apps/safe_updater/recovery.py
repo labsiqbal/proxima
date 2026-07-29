@@ -15,17 +15,24 @@ class RecoveryStatus:
 
 
 def inspect(journal: Journal) -> RecoveryStatus:
-    if not journal.path.exists():
+    try:
+        if not journal.path.exists():
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                None,
+                "accepted-run journal is missing",
+            )
+        records = journal.records()
+    except JournalIntegrityError as exc:
+        return RecoveryStatus(False, "do_not_start_any_release", None, str(exc))
+    except OSError:
         return RecoveryStatus(
             False,
             "do_not_start_any_release",
             None,
-            "accepted-run journal is missing",
+            "accepted-run journal is unreadable",
         )
-    try:
-        records = journal.records()
-    except JournalIntegrityError as exc:
-        return RecoveryStatus(False, "do_not_start_any_release", None, str(exc))
     if not records:
         return RecoveryStatus(
             False,

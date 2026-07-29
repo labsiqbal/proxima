@@ -11,8 +11,11 @@ from types import SimpleNamespace
 
 import pytest
 
+import apps.safe_updater.durability as durability_module
 import apps.safe_updater.journal as journal_module
+import apps.safe_updater.layout as layout_module
 import apps.safe_updater.locks as lock_module
+import apps.safe_updater.privileges as privilege_module
 from apps.safe_updater.adapters.launchd import LaunchdAdapter
 from apps.safe_updater.adapters.systemd import SystemdAdapter
 from apps.safe_updater.adapters.unmanaged import UnmanagedAdapter
@@ -101,12 +104,50 @@ def test_journal_creation_fsyncs_each_new_directory_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     synced: list[Path] = []
-    monkeypatch.setattr(journal_module, "_fsync_directory", synced.append)
+    monkeypatch.setattr(journal_module, "fsync_directory", synced.append)
     root = tmp_path / "new-root"
     Journal.create(root, "a" * 32, "b" * 64)
     assert tmp_path in synced
     assert root in synced
     assert root / "journal" in synced
+
+
+def test_platform_durability_selects_windows_directory_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    synced: list[Path] = []
+    monkeypatch.setattr(durability_module.os, "name", "nt")
+    monkeypatch.setattr(
+        durability_module,
+        "_flush_windows_directory",
+        synced.append,
+    )
+    durability_module.fsync_directory(tmp_path)
+    assert synced == [tmp_path]
+
+
+def test_journal_append_retries_short_writes(tmp_path: Path, monkeypatch):
+    journal = Journal.create(tmp_path, "a" * 32, "b" * 64)
+    real_write = os.write
+    calls = 0
+
+    def short_write(file_descriptor, value):
+        nonlocal calls
+        calls += 1
+        return real_write(file_descriptor, value[: max(1, len(value) // 2)])
+
+    monkeypatch.setattr(durability_module.os, "write", short_write)
+    journal.append(Phase.PREFLIGHT)
+    assert calls > 1
+    assert journal.records()[0].phase is Phase.PREFLIGHT
+
+
+def test_journal_rejects_unterminated_final_record(tmp_path: Path):
+    journal = Journal.create(tmp_path, "a" * 32, "b" * 64)
+    journal.append(Phase.PREFLIGHT)
+    journal.path.write_bytes(journal.path.read_bytes().removesuffix(b"\n"))
+    with pytest.raises(JournalIntegrityError, match="unterminated"):
+        journal.records()
 
 
 def test_single_flight_returns_existing_owner(tmp_path: Path):
@@ -174,6 +215,59 @@ def test_layout_rejects_hostile_tree_before_publish(tmp_path: Path):
         layout.create_immutable_release(release_id, source)
     assert source.exists()
     assert not layout.release_dir(release_id).exists()
+    assert list((tmp_path / "trusted" / "releases").glob(".incoming-*")) == []
+
+
+def test_layout_publishes_fresh_controller_owned_inodes(tmp_path: Path):
+    outside = tmp_path / "candidate-owned"
+    outside.write_bytes(b"verified bytes")
+    source = tmp_path / "candidate"
+    source.mkdir()
+    os.link(outside, source / "app.py")
+    release_id = f"sha256-{'a' * 40}-{'b' * 12}"
+    destination = ReleaseLayout(tmp_path / "trusted").create_immutable_release(
+        release_id,
+        source,
+    )
+
+    published = destination / "app.py"
+    assert source.exists()
+    assert published.read_bytes() == b"verified bytes"
+    assert published.stat().st_ino != outside.stat().st_ino
+    assert published.stat().st_nlink == 1
+    assert published.stat().st_uid == getattr(
+        os,
+        "geteuid",
+        lambda: published.stat().st_uid,
+    )()
+    outside.write_bytes(b"candidate mutation")
+    assert published.read_bytes() == b"verified bytes"
+
+
+def test_layout_rolls_back_failed_publication_flush(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "candidate"
+    source.mkdir()
+    (source / "app.py").write_bytes(b"verified bytes")
+    release_id = f"sha256-{'a' * 40}-{'b' * 12}"
+    layout = ReleaseLayout(tmp_path / "trusted")
+    real_fsync_directory = layout_module.fsync_directory
+    calls = 0
+
+    def fail_publication_flush(path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected durability failure")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(layout_module, "fsync_directory", fail_publication_flush)
+    with pytest.raises(LayoutError, match="publication durability failed"):
+        layout.create_immutable_release(release_id, source)
+    assert not layout.release_dir(release_id).exists()
+    assert list((tmp_path / "trusted" / "releases").glob(".incoming-*")) == []
+    assert layout.create_immutable_release(release_id, source).exists()
 
 
 def test_fence_is_external_durable_contract(tmp_path: Path):
@@ -275,7 +369,9 @@ def test_recovery_cli_prints_stable_fail_closed_status(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX service identity contract")
-def test_candidate_identity_cannot_own_or_write_trusted_state(tmp_path: Path):
+def test_candidate_identity_cannot_own_or_write_trusted_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     paths = [
         tmp_path / "journal",
         tmp_path / "pointers",
@@ -289,13 +385,77 @@ def test_candidate_identity_cannot_own_or_write_trusted_state(tmp_path: Path):
     paths[4].chmod(0o600)
     trusted_owner = paths[0].stat().st_uid
     trusted_group = paths[0].stat().st_gid
-    candidate = CandidateIdentity(trusted_owner + 1, frozenset())
+    candidate = CandidateIdentity(trusted_owner + 1, trusted_group + 1)
+    monkeypatch.setattr(
+        privilege_module,
+        "_effective_access",
+        lambda _identity, requests: tuple(False for _ in requests),
+    )
     assert_candidate_cannot_write(candidate, paths)
-    with pytest.raises(PrivilegeBoundaryError, match="owns trusted state"):
+    with pytest.raises(PrivilegeBoundaryError, match="unprivileged"):
         assert_candidate_cannot_write(
-            CandidateIdentity(trusted_owner, frozenset({trusted_group})),
+            CandidateIdentity(0, 0),
             paths,
         )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX service identity contract")
+def test_privilege_boundary_rejects_effective_parent_or_acl_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    trusted_parent = tmp_path / "trusted"
+    trusted_parent.mkdir(mode=0o700)
+    journal = trusted_parent / "journal"
+    journal.mkdir(mode=0o700)
+    identity = CandidateIdentity(os.geteuid() + 1, os.getegid() + 1)
+
+    def parent_write(_identity, requests):
+        return tuple(request.path == trusted_parent for request in requests)
+
+    monkeypatch.setattr(privilege_module, "_effective_access", parent_write)
+    with pytest.raises(PrivilegeBoundaryError, match="replace trusted ancestry"):
+        assert_candidate_cannot_write(identity, [journal])
+
+    def leaf_acl_write(_identity, requests):
+        return tuple(request.path == journal for request in requests)
+
+    monkeypatch.setattr(privilege_module, "_effective_access", leaf_acl_write)
+    with pytest.raises(PrivilegeBoundaryError, match="write trusted state"):
+        assert_candidate_cannot_write(identity, [journal])
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() != 0,
+    reason="requires root to drop to the candidate identity",
+)
+def test_privilege_boundary_probes_actual_candidate_identity(tmp_path: Path):
+    import pwd
+
+    try:
+        candidate = pwd.getpwnam("nobody")
+    except KeyError:
+        pytest.skip("no unprivileged nobody identity is available")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir(mode=0o700)
+    assert_candidate_cannot_write(
+        CandidateIdentity(candidate.pw_uid, candidate.pw_gid),
+        [trusted],
+    )
+
+
+def test_recovery_normalizes_journal_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    journal = Journal.create(tmp_path, "a" * 32, "b" * 64)
+
+    def unreadable():
+        raise PermissionError("host path must not escape into output")
+
+    monkeypatch.setattr(journal, "records", unreadable)
+    result = inspect(journal)
+    assert result.safe is False
+    assert result.action == "do_not_start_any_release"
+    assert result.reason == "accepted-run journal is unreadable"
 
 
 def test_legacy_update_cli_is_inert(tmp_path: Path):
@@ -312,8 +472,23 @@ def test_legacy_update_cli_is_inert(tmp_path: Path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_installers_describe_disabled_update_state():
+    root = Path(__file__).resolve().parents[3]
+    for relative in (
+        "scripts/install-user",
+        "scripts/install-macos",
+        "scripts/install-windows.ps1",
+    ):
+        content = (root / relative).read_text(encoding="utf-8")
+        assert "git pull + rebuild + restart" not in content
+        assert "git pull; powershell" not in content
+        assert "safe updater activation is disabled" in content
+
+
 @pytest.mark.parametrize("adapter", [UnmanagedAdapter(), SystemdAdapter("proxima.service"), LaunchdAdapter("com.proxima.service")])
 def test_adapters_fail_closed_before_activation(adapter):
     assert adapter.capability().managed is False
     with pytest.raises(RuntimeError):
         adapter.stop_and_verify()
+    with pytest.raises(RuntimeError, match="safe_update"):
+        adapter.start_readonly_candidate("release")

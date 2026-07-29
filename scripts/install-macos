@@ -53,7 +53,7 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-# Link the `proxima` command onto PATH (so `proxima update` works anywhere).
+# Link the `proxima` command onto PATH for service management.
 mkdir -p "$HOME/.local/bin"
 ln -sf "$ROOT/scripts/proxima" "$HOME/.local/bin/proxima"
 
@@ -66,7 +66,7 @@ cat <<EOF
 ✅ Proxima is installed and running (launchd).
 
    Open:      http://127.0.0.1:$PORT      (first launch asks you to create the admin account)
-   Update:    proxima update              (git pull + rebuild + restart)
+   Update:    unavailable                 (safe updater activation is disabled)
    Logs:      tail -f ~/Library/Logs/proxima.log
    Restart:   launchctl unload "$PLIST" && launchctl load "$PLIST"
    Stop:      launchctl unload "$PLIST"

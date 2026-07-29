@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .durability import fsync_directory, write_all
 from .layout import RUN_ID
 from .state_machine import Phase, StateTransitionError, recovery_action, validate_transition
 
@@ -20,14 +21,6 @@ class JournalIntegrityError(ValueError):
 
 def _canonical(value: dict[str, Any]) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _ensure_durable_directory(path: Path) -> None:
@@ -43,8 +36,8 @@ def _ensure_durable_directory(path: Path) -> None:
         raise JournalIntegrityError("journal directory path is not a real directory")
     for directory in reversed(missing):
         directory.mkdir(mode=0o700)
-        _fsync_directory(directory)
-        _fsync_directory(directory.parent)
+        fsync_directory(directory)
+        fsync_directory(directory.parent)
 
 
 @dataclass(frozen=True)
@@ -73,14 +66,14 @@ class Journal:
             raise JournalIntegrityError("invalid journal run id")
         journal_dir = root / "journal"
         _ensure_durable_directory(journal_dir)
-        _fsync_directory(journal_dir.parent)
-        _fsync_directory(journal_dir)
+        fsync_directory(journal_dir.parent)
+        fsync_directory(journal_dir)
         path = journal_dir / f"{run_id}.jsonl"
         if os.path.lexists(path):
             raise FileExistsError("journal already exists")
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(descriptor)
-        _fsync_directory(journal_dir)
+        fsync_directory(journal_dir)
         return cls(path, intent_digest)
 
     def records(self) -> list[JournalRecord]:
@@ -89,9 +82,12 @@ class Journal:
         path_stat = self.path.lstat()
         if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
             raise JournalIntegrityError("journal path is not a regular file")
+        raw_journal = self.path.read_bytes()
+        if raw_journal and not raw_journal.endswith(b"\n"):
+            raise JournalIntegrityError("journal has an unterminated record")
         records: list[JournalRecord] = []
         previous: JournalRecord | None = None
-        for raw in self.path.read_bytes().splitlines():
+        for raw in raw_journal.splitlines():
             try:
                 data = json.loads(raw)
                 if not isinstance(data, dict) or set(data) != {
@@ -173,9 +169,14 @@ class Journal:
         record_hash = hashlib.sha256(_canonical(digest_payload)).hexdigest()
         data["record_hash"] = record_hash
         line = _canonical(data) + b"\n"
-        with self.path.open("ab", buffering=0) as stream:
-            stream.write(line)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _fsync_directory(self.path.parent)
+        descriptor = os.open(
+            self.path,
+            os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0),
+        )
+        try:
+            write_all(descriptor, line)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        fsync_directory(self.path.parent)
         return JournalRecord(data["sequence"], phase, self.intent_digest, normalized, data["previous_hash"], record_hash, data["recovery"])

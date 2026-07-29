@@ -38,14 +38,19 @@ An adapter needs evidence for all of these:
 
 - The controller identity owns trusted state and service control. The application
   and candidate identities own none of it and have no mode, group, ACL, inherited
-  permission, or service-manager path that can write it.
+  permission, writable ancestry, or service-manager path that can replace or write
+  it. Qualification runs under a privileged controller and probes access after
+  dropping to the exact candidate UID and groups.
 - Journal creation and every append survive process kill and power-loss ordering.
-  Missing, partial, malformed, reordered, and replayed records fail closed.
+  The selected platform backend must durably flush directory entries. Missing,
+  partial, unterminated, malformed, reordered, and replayed records fail closed.
 - Cross-process lock contention works on the target platform. A nonterminal
   journal continues to block later submissions after the kernel lock is released.
 - Manifest signature verification binds the exact regular file set, tree digest,
   `apps/api/uv.lock`, and `apps/web/package-lock.json`. Symlinks, special files,
-  traversal, extras, and substitutions are rejected before publish.
+  traversal, extras, and substitutions are rejected before publish. Publication
+  copies content into fresh controller-owned inodes, rechecks trusted staging, and
+  atomically renames it without preserving candidate hardlinks or ownership.
 - Candidate execution has read-only source and no access to journals, pointers,
   fences, backups, service configuration, runtime data, or secrets.
 - Stop verification detects surviving writable processes and sidecars.
@@ -64,9 +69,12 @@ At minimum add target-platform integration tests for:
 
 - two simultaneous submissions and one sequential submission after a nonterminal run
 - controller kill before and after each journal fsync boundary
+- short writes and a final record whose newline was never committed
 - hostile identifiers, symlink swaps, special files, and exact-tree enforcement
+- candidate-owned source modes, hardlinks, and mutation after publication
 - signature, lockfile, provenance, and release-identity substitution
-- candidate attempts to write each trusted state class
+- candidate attempts to write or replace each trusted state class through leaf,
+  parent, ACL, inherited, supplementary-group, and privileged-identity paths
 - incomplete enrollment, missing service manager, and invalid service configuration
 - stop verification with a surviving process and sidecar
 - read-only start, health failure, writable start, rollback, and repeated recovery

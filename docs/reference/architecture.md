@@ -1123,11 +1123,15 @@ read-only application status.
 
 The external updater owns exact regular-file manifest verification, canonical
 Python/web lockfile digests, local provenance revalidation, native POSIX/Windows
-single-flight locking, the journal, and the recovery decision. A nonterminal journal
-continues to own single-flight after the kernel lock is released. Missing, truncated,
-or hostile-path journals produce `do_not_start_any_release`, including through the
-machine-readable recovery CLI. systemd, launchd, and unmanaged adapters remain
-unmanaged until the qualification matrix in
+single-flight locking, platform-selected directory durability, the journal, and the
+recovery decision. Release publication copies verified content into fresh
+controller-owned staging inodes, revalidates that tree, freezes it, and atomically
+renames it inside the trusted releases directory. Source ownership and hardlinks
+cannot carry into the published release. A nonterminal journal continues to own
+single-flight after the kernel lock is released. Missing, truncated, unterminated,
+unreadable, or hostile-path journals produce `do_not_start_any_release`, including
+through the machine-readable recovery CLI. systemd, launchd, and unmanaged adapters
+remain unmanaged until the qualification matrix in
 [`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
 [ADR-0008](../adr/0008-external-safe-update-authority.md).
 

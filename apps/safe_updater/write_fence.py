@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
+
+from .durability import fsync_directory, write_all
 
 
 def status(path: Path) -> dict[str, str] | None:
@@ -11,7 +14,7 @@ def status(path: Path) -> dict[str, str] | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {"phase": "unknown", "reason": "maintenance_state_unreadable"}
     if not isinstance(value, dict) or not isinstance(value.get("phase"), str):
         return {"phase": "unknown", "reason": "maintenance_state_invalid"}
@@ -20,14 +23,25 @@ def status(path: Path) -> dict[str, str] | None:
 
 def write(path: Path, run_id: str, phase: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        json.dump({"run_id": run_id, "phase": phase}, stream, sort_keys=True)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    payload = json.dumps(
+        {"run_id": run_id, "phase": phase},
+        sort_keys=True,
+    ).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
     try:
-        os.fsync(descriptor)
+        try:
+            write_all(descriptor, payload)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
-        os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
