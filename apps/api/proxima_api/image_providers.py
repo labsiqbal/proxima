@@ -193,6 +193,30 @@ def xai_oauth_ready() -> dict[str, Any]:
     return {"ready": False, "detail": f"xAI OAuth token not found or expired. {_XAI_OAUTH_LOGIN_HINT}"}
 
 
+def readiness_snapshot(
+    *,
+    enabled: bool,
+    codex: bool = False,
+    higgsfield_cli: bool = False,
+    xai_oauth: bool = False,
+) -> dict[str, dict[str, Any] | None]:
+    inert = {
+        "ready": False,
+        "detail": "Readiness unavailable during maintenance.",
+    }
+    if not enabled:
+        return {
+            "codex": dict(inert) if codex else None,
+            "higgsfield": dict(inert) if higgsfield_cli else None,
+            "xaiOauth": dict(inert) if xai_oauth else None,
+        }
+    return {
+        "codex": codex_ready() if codex else None,
+        "higgsfield": higgsfield.status() if higgsfield_cli else None,
+        "xaiOauth": xai_oauth_ready() if xai_oauth else None,
+    }
+
+
 # ── generate ───────────────────────────────────────────────────────────────
 
 def generate(

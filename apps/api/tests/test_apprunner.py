@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import socket
 import time
 
@@ -111,5 +113,65 @@ def test_app_runner_reports_ready_when_port_accepts_connections():
             assert status["port"] == port
         finally:
             await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    manager = AppManager()
+    lease = Lease()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 30",
+            5180,
+            effect_lease=lease,
+        )
+        assert lease.released is False
+        await manager.stop("demo")
+        assert lease.released is True
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="Bubblewrap is required for process containment",
+)
+def test_contained_app_runner_kills_detached_descendants(tmp_path):
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    manager = AppManager(contained=True)
+    lease = Lease()
+    escaped = tmp_path / "escaped.txt"
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "setsid sh -c 'sleep 0.4; echo escaped > escaped.txt' "
+            "</dev/null >/dev/null 2>&1 &",
+            5180,
+            effect_lease=lease,
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not lease.released:
+            await asyncio.sleep(0.01)
+        assert lease.released is True
+        await asyncio.sleep(0.6)
+        assert not escaped.exists()
+        await manager.shutdown()
 
     asyncio.run(run_case())

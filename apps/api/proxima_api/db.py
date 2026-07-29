@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -946,14 +947,106 @@ CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
 """.replace("__DEFAULT_RUNNER__", FALLBACK_RUNNER)
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def connect(
+    path: str | Path,
+    *,
+    read_only: bool = False,
+    deny_writes: bool = False,
+    writes_fenced: Callable[[], bool] | None = None,
+) -> sqlite3.Connection:
     db_path = Path(path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
+    dynamically_fenced = deny_writes or writes_fenced is not None
+    initially_fenced = deny_writes or (
+        writes_fenced is not None and writes_fenced()
+    )
+    connect_kwargs: dict[str, Any] = {
+        "check_same_thread": False,
+        "isolation_level": None,
+        "cached_statements": 0 if dynamically_fenced else 128,
+    }
+    if read_only:
+        if not db_path.is_file():
+            raise FileNotFoundError("maintenance database is missing")
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            **connect_kwargs,
+        )
+    elif initially_fenced:
+        if not db_path.is_file():
+            raise FileNotFoundError("fenced database is missing")
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=rw",
+            uri=True,
+            **connect_kwargs,
+        )
+    else:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path, **connect_kwargs)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    if dynamically_fenced:
+        denied = frozenset(
+            getattr(sqlite3, name)
+            for name in (
+                "SQLITE_ALTER_TABLE",
+                "SQLITE_ANALYZE",
+                "SQLITE_ATTACH",
+                "SQLITE_CREATE_INDEX",
+                "SQLITE_CREATE_TABLE",
+                "SQLITE_CREATE_TEMP_INDEX",
+                "SQLITE_CREATE_TEMP_TABLE",
+                "SQLITE_CREATE_TEMP_TRIGGER",
+                "SQLITE_CREATE_TEMP_VIEW",
+                "SQLITE_CREATE_TRIGGER",
+                "SQLITE_CREATE_VIEW",
+                "SQLITE_CREATE_VTABLE",
+                "SQLITE_DELETE",
+                "SQLITE_DETACH",
+                "SQLITE_DROP_INDEX",
+                "SQLITE_DROP_TABLE",
+                "SQLITE_DROP_TEMP_INDEX",
+                "SQLITE_DROP_TEMP_TABLE",
+                "SQLITE_DROP_TEMP_TRIGGER",
+                "SQLITE_DROP_TEMP_VIEW",
+                "SQLITE_DROP_TRIGGER",
+                "SQLITE_DROP_VIEW",
+                "SQLITE_DROP_VTABLE",
+                "SQLITE_INSERT",
+                "SQLITE_PRAGMA",
+                "SQLITE_REINDEX",
+                "SQLITE_SAVEPOINT",
+                "SQLITE_TRANSACTION",
+                "SQLITE_UPDATE",
+            )
+            if hasattr(sqlite3, name)
+        )
+
+        def authorize(
+            action: int,
+            _arg1: str | None,
+            _arg2: str | None,
+            _database: str | None,
+            _source: str | None,
+        ) -> int:
+            if action not in denied:
+                return sqlite3.SQLITE_OK
+            if deny_writes or (
+                writes_fenced is not None and writes_fenced()
+            ):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(
+            authorize
+        )
+    if not read_only and not initially_fenced:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+        except Exception:
+            conn.close()
+            raise
     return conn
 
 

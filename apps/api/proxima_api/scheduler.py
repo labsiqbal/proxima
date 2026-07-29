@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .auth import iso_now
+from .maintenance_status import writes_fenced
 from . import features, worktrees, workflows as wf
 from .graph import normalize_graph
 
@@ -219,6 +220,8 @@ def run_schedule_now(app: FastAPI, sched: dict[str, Any]) -> int | None:
 def _scheduler_tick(app: FastAPI, now: datetime | None = None) -> list[int]:
     """One scheduler pass: spawn a job for every enabled schedule whose cron matches
     the current minute (once per minute, honoring overlap policy). Returns job ids."""
+    if writes_fenced(getattr(app.state, "config", {})):
+        return []
     now = now or datetime.now()
     minute_key = now.strftime("%Y-%m-%dT%H:%M")
     db = app.state.worker_db

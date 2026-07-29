@@ -7,7 +7,7 @@ import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -42,6 +42,7 @@ from .updates import (
     read_local_version,
 )
 from .safe_updates import SafeUpdateCoordinator
+from .maintenance_status import MaintenanceBoundary
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -91,12 +92,15 @@ def _as_int(value: Any) -> int:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
     cfg = app.state.config
+    startup_lease = app.state.startup_lease
     app.state.hub.bind_loop(asyncio.get_running_loop())
     # The candidate may serve a fixture to trusted probes, but it must never run
     # production-style writers, migrations, schedulers, refreshers or update loops.
-    if cfg.get("candidate_mode", False):
+    if cfg.get("candidate_mode", False) or app.state.maintenance.fenced():
+        startup_lease.suspend_admission()
+        startup_lease.release()
         yield
         return
     if cfg.get("auto_provision", True):
@@ -131,6 +135,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.master_projection.safe_reconcile()
     except Exception as _exc:
         logging.getLogger("proxima.worker").exception("orphaned run cleanup failed")
+    startup_lease.suspend_admission()
+    if app.state.maintenance.fenced():
+        startup_lease.release()
+        yield
+        return
     if cfg.get("start_worker", True):
         worker.start()
     scheduler_task: asyncio.Task | None = None
@@ -142,7 +151,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     if registry_interval:
         def _refresh_registry() -> None:
-            conn = connect(cfg["database_path"])
+            conn = connect(
+                cfg["database_path"],
+                writes_fenced=app.state.maintenance.database_write_check(),
+            )
             try:
                 refresh_registry_projections(conn)
             finally:
@@ -238,6 +250,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logging.getLogger("proxima.updates").exception("update check loop tick failed")
                 await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
         update_task = asyncio.create_task(_update_check_loop())
+    startup_lease.release()
     yield
     if registry_task:
         registry_task.cancel()
@@ -269,16 +282,43 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.preview_relays.shutdown()
 
 
-def create_app(config: dict[str, Any] | None = None) -> FastAPI:
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    try:
+        async with _lifespan_impl(app):
+            yield
+    except BaseException:
+        app.state.startup_lease.release()
+        raise
+
+
+def _create_app(
+    config: dict[str, Any] | None,
+    lease_sink: Callable[[Any], None],
+) -> FastAPI:
     cfg = normalize_config(config)
-    # Align shim root with this app instance, then prime process PATH so Terminal
-    # PTYs and bare-env children see the same local bins + python→python3 shim
-    # as agent/app subprocesses built via subprocess_env.
     os.environ.setdefault("PROXIMA_WORKSPACE_ROOT", str(cfg["workspace_root"]))
-    os.environ["PATH"] = augmented_path(os.environ.get("PATH"))
+    maintenance = MaintenanceBoundary(cfg)
+    startup_lease = maintenance.acquire(process_wide=True)
+    lease_sink(startup_lease)
+    maintenance_mode = not startup_lease.acquired or maintenance.fenced()
+    if maintenance_mode:
+        cfg["_safe_update_startup_read_only"] = True
+    os.environ["PATH"] = augmented_path(
+        os.environ.get("PATH"),
+        create_shim=not maintenance_mode,
+    )
+    cfg["_runtime_path"] = os.environ["PATH"]
     app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
-    app.state.db = connect(cfg["database_path"])
+    app.state.maintenance = maintenance
+    app.state.startup_lease = startup_lease
+    app.state.db = connect(
+        cfg["database_path"],
+        read_only=maintenance_mode,
+        deny_writes=maintenance_mode,
+        writes_fenced=maintenance.database_write_check(),
+    )
     app.state.db_lock = __import__("threading").RLock()
     if cfg.get("candidate_mode", False):
         # A controller-prepared fixture is already migrated.  Failing this check
@@ -292,16 +332,40 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             project_path = Path(row[0]).resolve()
             if project_path != workspace and workspace not in project_path.parents:
                 raise ValueError("candidate fixture contains a non-candidate project path")
+    elif maintenance_mode:
+        required = {"users", "schema_migrations"}
+        found = {
+            row[0]
+            for row in app.state.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if not required.issubset(found):
+            raise ValueError("maintenance database is not a migrated Proxima database")
     else:
         init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
         run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
         assert_master_persistence(app.state.db)
         assert_master_projection_ledger(app.state.db)
         migrate_legacy_ops_containers(app.state.db)
-    app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
+    app.state.worker_db = connect(
+        cfg["database_path"],
+        read_only=maintenance_mode,
+        deny_writes=maintenance_mode,
+        writes_fenced=maintenance.database_write_check(),
+    )  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
-    app.state.acp_manager = AcpManager()
-    app.state.app_manager = AppManager()
+    app.state.acp_manager = AcpManager(
+        contained=maintenance.process_containment_required,
+        maintenance=(
+            maintenance
+            if maintenance.process_containment_required
+            else None
+        ),
+    )
+    app.state.app_manager = AppManager(
+        contained=maintenance.process_containment_required,
+    )
     app.state.hub = EventHub()
     if cfg.get("feature_master_orchestrator", False):
         app.state.master_projection = MasterProjectionService(app)
@@ -315,6 +379,43 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     # This is a projection client, deliberately constructed without a controller
     # transport until root-owned updater enrollment supplies one.
     app.state.safe_updates = SafeUpdateCoordinator(app.state.db)
+
+    @app.middleware("http")
+    async def maintenance_write_fence(request: Request, call_next):
+        lease = maintenance.acquire()
+        maintenance_state = maintenance.status()
+        write_capable = (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            or request.url.path.startswith("/api/appview/")
+        )
+        if (
+            write_capable
+            and request.url.path != "/auth/resume"
+            and (not lease.acquired or maintenance_state is not None)
+        ):
+            lease.release()
+            return JSONResponse(
+                status_code=423,
+                content={
+                    "detail": {
+                        "code": "maintenance_write_fenced",
+                        **(
+                            maintenance_state
+                            or {
+                                "phase": "unknown",
+                                "reason": "maintenance_ingress_busy",
+                            }
+                        ),
+                    },
+                },
+            )
+        if not lease.acquired or maintenance_state is not None:
+            lease.release()
+            return await call_next(request)
+        try:
+            return await call_next(request)
+        finally:
+            lease.release()
 
     register_frontend(
         app,
@@ -334,7 +435,12 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def db():
         conn = getattr(_db_local, "conn", None)
         if conn is None:
-            conn = connect(cfg["database_path"])
+            conn = connect(
+                cfg["database_path"],
+                read_only=maintenance_mode,
+                deny_writes=maintenance_mode,
+                writes_fenced=maintenance.database_write_check(),
+            )
             _db_local.conn = conn
         return conn
 
@@ -357,7 +463,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     )
     # Durable start intent is committed before the retryable start step. Resume
     # any request that was interrupted in that gap before serving new traffic.
-    if not cfg.get("candidate_mode", False):
+    if not cfg.get("candidate_mode", False) and not maintenance_mode:
         try:
             app.state.task_delegation.resume_committed()
         except Exception:
@@ -372,8 +478,11 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cookie=Cookie,
         http_exception=HTTPException,
         status_module=status,
+        maintenance=maintenance,
     )
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
+        if maintenance_mode:
+            continue
         owner = dict(owner_row)
         _route_deps["ensure_default_profile"](owner)
         # Persistence migration remains unconditional, but operational Master
@@ -408,6 +517,8 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "database": "ok",
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
+        if maintenance_mode:
+            payload["maintenance_mode"] = "readonly"
         if cfg.get("candidate_mode", False):
             # Supplementary only: the trusted updater independently resolves the
             # immutable release and hashes assets before accepting this response.
@@ -471,15 +582,32 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg.get("preview_bind_host"),
         port_for=lambda slug: app.state.app_manager.port(slug),
         validate_token=_valid_preview_token,
+        maintenance=maintenance,
     )
 
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
     # app's dev port, HTTP + WebSocket). Gated by the proxima_preview cookie (no CF Access on
     # these subdomains, so they can be iframed). No-op when apps_domain is unset.
     app.add_middleware(PreviewProxyMiddleware, fastapi_app=app, apps_domain=cfg.get("apps_domain"),
-                       validate_token=_valid_preview_token)
+                       validate_token=_valid_preview_token,
+                       maintenance=maintenance)
 
     return app
+
+
+def create_app(config: dict[str, Any] | None = None) -> FastAPI:
+    startup_lease = None
+
+    def capture(lease) -> None:
+        nonlocal startup_lease
+        startup_lease = lease
+
+    try:
+        return _create_app(config, capture)
+    except BaseException:
+        if startup_lease is not None:
+            startup_lease.release()
+        raise
 
 
 def _config_from_env() -> dict[str, Any]:

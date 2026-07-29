@@ -42,6 +42,7 @@ from typing import Any
 from . import app_settings, scripts_library
 from .container_registry import ops_root
 from .graph import normalize_graph
+from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import augmented_path
 from .workflows import substitute
 
@@ -238,11 +239,23 @@ class ScriptRunner:
         heartbeat = asyncio.create_task(
             self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10))
         )
+        proc: asyncio.subprocess.Process | None = None
+        effect_lease = None
+        exit_verified = True
         try:
+            command = [*argv, *args]
+            if self.app.state.maintenance.process_containment_required:
+                command = pid_namespace_argv(
+                    command,
+                    cwd=str(project_root),
+                    label="script",
+                )
+                effect_lease = (
+                    self.app.state.maintenance.background_lease()
+                )
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    *argv,
-                    *args,
+                    *command,
                     cwd=str(project_root),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
@@ -257,8 +270,10 @@ class ScriptRunner:
                     proc.communicate(input=stdin_bytes), timeout=timeout
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                await terminate_and_verify(
+                    proc,
+                    label="script",
+                )
                 # No auto-continuation for scripts: a deterministic step that
                 # overruns the quota is broken or mis-sized, not "still going".
                 self._fail(run, f"script timed out after {timeout}s")
@@ -282,12 +297,28 @@ class ScriptRunner:
             answer = stdout.decode("utf-8", errors="replace").strip()
             self._complete(run, answer, run_start_ts)
         finally:
+            if proc is not None and proc.returncode is None:
+                try:
+                    await terminate_and_verify(
+                        proc,
+                        label="script",
+                    )
+                except BaseException:
+                    exit_verified = False
+            if effect_lease is not None:
+                if exit_verified:
+                    effect_lease.release()
+                else:
+                    effect_lease.suspend_admission()
+                    self.app.state.maintenance.retain(effect_lease)
             shutil.rmtree(exec_dir, ignore_errors=True)
             heartbeat.cancel()
             try:
                 await heartbeat
             except asyncio.CancelledError:
                 pass
+            if not exit_verified:
+                raise RuntimeError("script containment shutdown failed")
 
     def _complete(self, run: dict[str, Any], answer: str, run_start_ts: float) -> None:
         """Persist the output message, close the run, advance the graph."""

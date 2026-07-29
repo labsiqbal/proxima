@@ -142,7 +142,11 @@ def ensure_python_compat_shim(path_env: str) -> str | None:
             return None
 
 
-def augmented_path(path_env: str | None = None) -> str:
+def augmented_path(
+    path_env: str | None = None,
+    *,
+    create_shim: bool = True,
+) -> str:
     """PATH used by non-interactive service processes.
 
     GUI/server processes often miss Homebrew/user-local bins. Add the common
@@ -173,7 +177,7 @@ def augmented_path(path_env: str | None = None) -> str:
             parts.append(extra)
     # Build the candidate path first so the python probe does not see our shim.
     candidate = os.pathsep.join(parts)
-    shim_dir = ensure_python_compat_shim(candidate)
+    shim_dir = ensure_python_compat_shim(candidate) if create_shim else None
     if shim_dir and shim_dir not in parts:
         parts.insert(0, shim_dir)
     return os.pathsep.join(parts)
@@ -183,8 +187,13 @@ def resolve_binary(binary_name: str, path_env: str) -> str | None:
     return shutil.which(binary_name, path=path_env)
 
 
-def detect_runners(path_env: str | None = None, registry: Iterable[RunnerDefinition] = RUNNER_REGISTRY) -> list[dict]:
-    resolved_path = augmented_path(path_env)
+def detect_runners(
+    path_env: str | None = None,
+    registry: Iterable[RunnerDefinition] = RUNNER_REGISTRY,
+    *,
+    create_shim: bool = True,
+) -> list[dict]:
+    resolved_path = augmented_path(path_env, create_shim=create_shim)
     detected: list[dict] = []
 
     for runner in registry:
@@ -230,7 +239,11 @@ def detect_runners(path_env: str | None = None, registry: Iterable[RunnerDefinit
     return detected
 
 
-def runner_readiness(path_env: str | None = None) -> dict:
+def runner_readiness(
+    path_env: str | None = None,
+    *,
+    create_shim: bool = True,
+) -> dict:
     """For each runner that has a spawn spec, report whether its CLI is
     installed (selectable) and a hint for authenticating it.
 
@@ -239,7 +252,7 @@ def runner_readiness(path_env: str | None = None) -> dict:
     status checks require both the CLI and a usable login instead of claiming a
     bare binary is ready.
     """
-    resolved = augmented_path(path_env)
+    resolved = augmented_path(path_env, create_shim=create_shim)
     out: dict[str, dict] = {}
     for rid, spec in selectable_runner_specs().items():
         binary = resolve_binary(spec.binary, resolved)

@@ -19,7 +19,6 @@ from .. import brand_extract
 from .. import design_scenes
 from .. import features
 from .. import fsapi
-from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
 from .. import moodboard
@@ -29,6 +28,7 @@ from ..schemas import ImageGenRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
     profile_for_user = deps["profile_for_user"]
@@ -321,5 +321,10 @@ def register(app, deps):
         if spec.kind == "auto":
             return {"models": [], "configured": True, "kind": "auto", "model": prov.get("model")}
         if spec.kind == "higgsfield":
-            return {"models": [], "configured": bool(higgsfield.status().get("ready")), "kind": "higgsfield", "model": prov.get("model")}
+            readiness = image_providers.readiness_snapshot(
+                enabled=not maintenance.fenced(),
+                higgsfield_cli=True,
+            )
+            hstatus = readiness["higgsfield"] or {}
+            return {"models": [], "configured": bool(hstatus.get("ready")), "kind": "higgsfield", "model": prov.get("model")}
         return {"models": [], "configured": bool(prov.get("apiKey")), "kind": "http", "model": prov.get("model")}

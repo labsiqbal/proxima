@@ -230,27 +230,39 @@ proxima update
 Safe self-update is unavailable until a root-admin enrolls a managed external
 updater, trust root, launcher, qualified service-manager adapter, candidate
 sandbox, and probe bundle. `PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and
-must remain off until later switch, fault, and rollback gates are accepted.
+must remain off until target-platform service-manager, switch, fault, and rollback
+evidence is accepted for production enrollment.
 Foreground, ordinary user-service, Windows, and unqualified macOS installs fail
 closed. Local self-edit commits carry reverified provenance, not a release
 signature.
 
-The shipped candidate gate is still controller-only and not an installer feature.
-It runs the fixed offline build and clone-only migration inside a mandatory
-Bubblewrap boundary, publishes and freezes only the verified post-build tree, and
-creates a fresh-schema fixture containing synthetic rows and separate workspace and
-runner-home paths. A separately installed, digest-pinned probe bundle must pass its
-API, version, authenticated maintenance, SSE, served-asset, asset-manifest, and
-headless-browser checks. Frozen evidence is revalidated during recovery. The gate
-cannot switch a release, start an enrolled service, touch the live database, or
-remove a fence. Do not set candidate-only environment variables manually.
+The shipped candidate gate and its disabled Group 16 switch model are
+controller-only and not installer features.
+The candidate gate runs the fixed offline build and clone-only migration inside a
+mandatory Bubblewrap boundary, publishes and freezes only the verified post-build
+tree, and creates a fresh-schema fixture containing synthetic rows and separate
+workspace and runner-home paths. A separately installed, digest-pinned probe bundle
+must pass its API, version, authenticated maintenance, SSE, served-asset,
+asset-manifest, and headless-browser checks. Frozen evidence is revalidated during
+recovery. The Group 16 model can run only with an in-memory disposable test-service
+adapter, an explicitly initialized empty fixture root beneath the system temporary
+directory, and disjoint role-confined fixture paths. It exercises the transaction
+and maintenance boundaries described in the [architecture
+flow](reference/architecture.md#9-update-check-and-candidate-gate-plus-disabled-switch-fixture)
+and [security boundary](security-boundaries.md#safe-update-boundary) without
+touching an installed service or live runtime. Neither path can switch a release,
+start an enrolled service, touch the live database, or remove a production fence.
+Do not set candidate-only environment variables manually.
 
 Future enrollment must place the nonsecret maintenance fence in a dedicated
 controller-owned status directory whose ancestors are searchable by the application
 identity. The directory and fence are application-readable but not
-application-writable. Trusted release, journal, and fence directory creation is
-durably flushed at every new parent entry; a platform without qualified pinned
-candidate-tree traversal remains unenrolled.
+application-writable. The controller must provision the ingress lock before the
+application starts; the application opens that existing lock read-only and holds
+startup admission through every side-effecting initialization step. Trusted
+release, journal, and fence directory creation is durably flushed at every new
+parent entry; a platform without qualified pinned candidate-tree traversal remains
+unenrolled.
 
 ### Code checkout vs data directory
 

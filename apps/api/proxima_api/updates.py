@@ -90,6 +90,18 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _parse_release(data: dict[str, Any]) -> dict[str, Any]:
     """GitHub /releases/latest payload → the four fields we keep."""
     tag = str(data.get("tag_name") or "").strip()
@@ -162,7 +174,11 @@ class UpdateManager:
         # through /api/self-updates; this legacy endpoint cannot activate code.
         raise UpdateUnsupported("safe self-update is not enrolled; no update was started")
 
-    def _marker_state(self) -> tuple[str, str | None]:
+    def _marker_state(
+        self,
+        *,
+        reconcile: bool = True,
+    ) -> tuple[str, str | None]:
         """Derive the live update state from the marker file, self-healing it.
 
         running + we now run the target  → the update finished → "done"/idle
@@ -180,16 +196,25 @@ class UpdateManager:
         if state != "running":
             return ("idle", target)
         if target and self.current == str(target):
-            self._write_marker({**data, "state": "done"})
+            if reconcile:
+                self._write_marker({**data, "state": "done"})
             return ("idle", target)
         pid = data.get("pid")
-        if pid and _pid_alive(int(pid)):
+        alive = (
+            _pid_alive(int(pid))
+            if reconcile and pid
+            else _pid_exists(int(pid))
+            if pid
+            else False
+        )
+        if alive:
             return ("running", target)
-        self._write_marker({**data, "state": "failed"})
+        if reconcile:
+            self._write_marker({**data, "state": "failed"})
         return ("failed", target)
 
-    def status(self) -> dict[str, Any]:
-        state, _target = self._marker_state()
+    def status(self, *, reconcile: bool = True) -> dict[str, Any]:
+        state, _target = self._marker_state(reconcile=reconcile)
         latest = self._latest
         return {
             "current_version": self.current,

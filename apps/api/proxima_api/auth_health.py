@@ -9,10 +9,11 @@ the cached snapshot and kicks a background refresh when it is stale.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from . import app_settings, image_providers
 from .db import connect
@@ -69,7 +70,11 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
     """Runners referenced by at least one profile. Installed check for all; deeper
     auth check where one exists (Hermes/Grok home credentials, Codex login)."""
     used = [r["runner_id"] for r in conn.execute("SELECT DISTINCT runner_id FROM profiles ORDER BY runner_id").fetchall()]
-    readiness = runner_readiness()
+    runtime_path = os.environ.get("PATH", "")
+    readiness = runner_readiness(
+        path_env=runtime_path,
+        create_shim=False,
+    )
     checks: list[dict[str, Any]] = []
     for rid in used:
         info = readiness.get(rid)
@@ -84,7 +89,7 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
         detail = "Ready." if ok else str(info.get("authHint") or f"{info.get('displayName') or rid} is not authenticated.")
         try:
             if rid == "hermes":
-                st = hermes_status()
+                st = hermes_status(path_env=runtime_path)
                 ok = bool(st.get("ready"))
                 detail = "Ready." if ok else (st.get("guidance") or "Hermes is not ready.")
             elif rid == "codex":
@@ -100,7 +105,7 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
 def _refresh(database_path: str) -> None:
     global _snapshot, _refreshed_at, _refreshing
     try:
-        conn = connect(database_path)
+        conn = connect(database_path, read_only=True, deny_writes=True)
         try:
             checks = _media_checks(conn) + _runner_checks(conn)
         finally:
@@ -122,7 +127,12 @@ def _refresh(database_path: str) -> None:
             _refreshing = False
 
 
-def snapshot(database_path: str, *, enabled: bool = True) -> dict[str, Any]:
+def snapshot(
+    database_path: str,
+    *,
+    enabled: bool = True,
+    spawn: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
     """Latest cached snapshot, kicking a background refresh when stale.
 
     Never blocks: the first call returns {"status": "checking"} and the Home
@@ -136,6 +146,18 @@ def snapshot(database_path: str, *, enabled: bool = True) -> dict[str, Any]:
             kick = True
         snap = _snapshot
     if kick:
-        # Outside the lock: _refresh re-acquires it, and the lock is not reentrant.
-        threading.Thread(target=_refresh, args=(database_path,), daemon=True, name="auth-health-refresh").start()
+        if spawn is None:
+            threading.Thread(
+                target=_refresh,
+                args=(database_path,),
+                daemon=True,
+                name="auth-health-refresh",
+            ).start()
+        else:
+            spawn(
+                _refresh,
+                args=(database_path,),
+                daemon=True,
+                name="auth-health-refresh",
+            )
     return snap if snap is not None else {"status": "checking", "checks": []}

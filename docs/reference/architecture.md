@@ -180,7 +180,10 @@ the approval card fetches content + sha256 together (`GET …/nodes/{node_id}/sc
 and the one-time `POST …/approve-script` approval echoes that hash (409 if the file
 changed after review — audit F4), records the sha256, and reruns the step. The
 runner hashes and executes the same in-memory bytes via a private temp copy, so a
-concurrent swap of the project file cannot run unapproved content. `scripts_library.scan_catalog` also feeds the reuse-awareness
+concurrent swap of the project file cannot run unapproved content. When an
+external maintenance boundary is configured, the private copy executes inside the
+shared PID containment and its process-lifetime ingress lease is released only
+after the namespace exits. `scripts_library.scan_catalog` also feeds the reuse-awareness
 surfaces: the script catalog is injected into every project run preamble
 (`wiki_memory.build_run_preamble`) and into the plan slicer's prompt
 (`workflows.architect_system`).
@@ -1089,7 +1092,7 @@ Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
 
-### 9. Update check and candidate-only safe-update gate
+### 9. Update check and candidate gate plus disabled switch fixture
 
 ```text
 VERSION (repo root) → read_local_version() → FastAPI app.version → GET /api/health
@@ -1151,16 +1154,16 @@ matrix in
 [`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
 [ADR-0008](../adr/0008-external-safe-update-authority.md).
 
-Before any later fence or switch phase, group 15's controller-only candidate gate
-reverifies local provenance in trusted controller code. Git checks and every
-candidate-controlled command run inside the same mandatory Bubblewrap execution
-boundary. The boundary exposes only read-only system inputs and phase-specific
-candidate-local writable mounts, removes network egress, uses a namespace identity
-without host privileges, applies resource and output ceilings, and kills the
-complete process group on timeout. A fixed offline build/test/type/doc manifest
-runs in a disposable writable tree. The controller then rehashes that post-build
-tree, copies it to fresh release inodes, freezes it, and runs probes only from that
-frozen release.
+Before the fixture-only fence and switch exercise, Group 15's controller-only
+candidate gate reverifies local provenance in trusted controller code. Git checks
+and every candidate-controlled command run inside the same mandatory Bubblewrap
+execution boundary. The boundary exposes only read-only system inputs and
+phase-specific candidate-local writable mounts, removes network egress, uses a
+namespace identity without host privileges, applies resource and output ceilings,
+and kills the complete process group on timeout. A fixed offline
+build/test/type/doc manifest runs in a disposable writable tree. The controller
+then rehashes that post-build tree, copies it to fresh release inodes, freezes it,
+and runs probes only from that frozen release.
 
 SQLite's backup API creates a clone in its own writable directory. A fixed migration
 entrypoint can modify only that clone, and the controller requires an exact,
@@ -1176,9 +1179,53 @@ contains build logs, migration and fixture proof, identities, and probe results.
 Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
 commands cannot reach the journal, active or last-good pointers, fence, backups, or
 production paths. After independently revalidating the evidence, the controller
-appends its digest to the accepted-run journal as `candidate_staged`; it cannot call
-a service adapter or alter a live pointer, fence, backup, database, workspace,
-runner home, or service.
+appends its digest to the accepted-run journal as `candidate_staged`.
+
+Group 16 supplies a disabled transaction model for explicitly initialized
+disposable fixture roots beneath the system temporary directory only. It fixes the
+fence at canonical `status/fence.json`, confines live and staged databases to
+disjoint role directories, and holds the native single-flight lock. The fixture
+fences mutating HTTP, preview and terminal WebSocket ingress, and SQLite writes;
+pauses and drains the fixture service; verifies a truncate WAL checkpoint; seals
+and validates backup images; quarantines WAL/SHM sidecars; changes fixture pointers;
+runs read-only and writable proofs; and commits last-good only after the writable
+proof.
+
+Every exception before a successfully returned `last_good_committed` append
+persists a rollback-required breaker verdict before restoring the sealed backup and
+both previous fixture pointers, proving the previous fixture service, and
+finalizing the breaker state. A full or partial unacknowledged journal write
+latches fail closed after rollback, and the persisted breaker verdict takes
+precedence over a valid-looking journal tail. Recovery also rejects a safe
+candidate discard when owner-bound pending or active fence state was created before
+`write_fenced` was acknowledged. A failure after the acknowledged last-good
+boundary resumes the committed candidate or latches the breaker without rolling
+back candidate data.
+
+Maintenance activation durably publishes owner-bound pending state before taking
+the exclusive side of a controller-provisioned cross-process ingress lock. An
+interrupted activation cannot be adopted or cleared by a later run. The application
+opens that lock read-only and never provisions controller status state. Startup
+initialization, admitted HTTP requests, active agent and deterministic script runs,
+project-app and preview proxies, and terminal sessions hold shared leases through
+their possible effects. New mutating work fails closed while already admitted work
+drains before the fence is published. Runner, script, project-app, and terminal
+processes use PID namespaces under the configured boundary. Cached runners retain
+lifetime admission between turns, and pending activation stops and positively
+verifies them before releasing those leases. Script leases release only after
+namespace exit, preventing detached descendants from outliving the drain.
+
+Maintenance startup opens SQLite read-only, creates no PATH compatibility shim, and
+starts no background writers. Connections configured for dynamic fencing disable
+statement caching, allow database effects already covered by an ingress lease to
+finish, and skip write-capable WAL setup; ordinary connections retain caching and
+skip fence checks for read-only opcodes. Fenced reads avoid profile, wiki, relay,
+provider-readiness, and legacy process-reaping mutations, while normal first-use
+wiki reads still provision `index.md` under an ingress lease and the read-only
+authenticated `/auth/resume` projection remains available. The only runnable
+adapter is `DisposableServiceAdapter`; systemd and launchd remain unmanaged and
+inert. No production pointer, fence, database, service, workspace, runner home, or
+release can be touched.
 
 ## Runner abstraction
 

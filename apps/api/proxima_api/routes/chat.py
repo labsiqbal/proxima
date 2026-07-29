@@ -129,6 +129,7 @@ async def _stream_session_events(
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     feature_cfg = cfg
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
@@ -850,7 +851,11 @@ def register(app, deps):
         (keeps the stale-run reaper away), then lands the result — or the error — as
         an assistant message + run events, exactly like an agent run finishing."""
         worker = app.state.worker
-        conn = connect(database_path)
+        conn = connect(
+            database_path,
+            writes_fenced=maintenance.database_write_check(),
+        )
+        generation_thread: threading.Thread | None = None
         try:
             done = threading.Event()
             box: dict[str, Any] = {}
@@ -863,7 +868,12 @@ def register(app, deps):
                 finally:
                     done.set()
 
-            threading.Thread(target=work, daemon=True, name=f"media-run-{run_id}-gen").start()
+            generation_thread = threading.Thread(
+                target=work,
+                daemon=True,
+                name=f"media-run-{run_id}-gen",
+            )
+            generation_thread.start()
             started = time.monotonic()
             while not done.wait(20.0):
                 if time.monotonic() - started > MEDIA_RUN_MAX_SECONDS:
@@ -931,6 +941,8 @@ def register(app, deps):
                 if updated.rowcount == 1:
                     worker.add_event(run_id, session_id, project_id, "run.failed", {"error": "internal error while saving the media result"})
         finally:
+            if generation_thread is not None:
+                generation_thread.join()
             conn.close()
 
     def _start_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, generate_fn) -> dict[str, Any]:
@@ -950,12 +962,12 @@ def register(app, deps):
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         database_path = str((getattr(app.state, "config", {}) or {}).get("database_path") or "")
-        threading.Thread(
-            target=_finish_media_run,
+        maintenance.start_thread(
+            _finish_media_run,
             args=(run_id, session["id"], session["project_id"], profile["name"], generate_fn, database_path),
             daemon=True,
             name=f"media-run-{run_id}",
-        ).start()
+        )
         return {"run_id": run_id, "session_id": session["id"], "status": "queued", "media_action": kind}
 
     def _maybe_complete_chat_media(session_id: int, payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any]) -> dict[str, Any] | None:
@@ -1185,7 +1197,10 @@ def register(app, deps):
             "OR (status = 'queued' AND created_at >= datetime('now', ?)))",
             stale_params(stale_seconds),
         ).fetchone()["c"]
-        runners = detect_runners()
+        runners = detect_runners(
+            path_env=str(cfg.get("_runtime_path") or ""),
+            create_shim=False,
+        )
         system_health = {
             "activeRuns": active_runs_count,
             "failedRuns24h": failed_runs_24h,
@@ -1208,10 +1223,23 @@ def register(app, deps):
         # refreshed off the request path (checks shell out to CLIs). Gated off in unit
         # tests via start_worker so no check threads spawn there.
         app_cfg = getattr(app.state, "config", {}) or {}
-        auth_checks_enabled = bool(app_cfg.get("auth_health_checks", app_cfg.get("start_worker", True)))
+        auth_checks_enabled = (
+            bool(
+                app_cfg.get(
+                    "auth_health_checks",
+                    app_cfg.get("start_worker", True),
+                )
+            )
+            and not maintenance.fenced()
+        )
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
             enabled=auth_checks_enabled,
+            spawn=(
+                maintenance.start_thread
+                if auth_checks_enabled
+                else None
+            ),
         )
         return {
             "counts": counts, "jobsByStatus": jobs_by_status,
@@ -1256,6 +1284,9 @@ def register(app, deps):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
         proxima_session cookie — a valid session is always required. cwd = project path
         or workspace."""
+        if maintenance.fenced():
+            await websocket.close(code=4423)
+            return
         # Require a valid session (cookie or ?token=) — same stance as ws_events + the
         # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
         # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
@@ -1279,10 +1310,22 @@ def register(app, deps):
                 await websocket.close(code=4404)
                 return
             cwd = str(_project_root(project, user))
-        Path(cwd).mkdir(parents=True, exist_ok=True)
-        await websocket.accept()
-        term = TerminalSession(cwd)
-        term.start()
+        session_lease = maintenance.acquire()
+        if not session_lease.acquired or maintenance.fenced():
+            session_lease.release()
+            await websocket.close(code=4423)
+            return
+        try:
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+            await websocket.accept()
+            term = TerminalSession(
+                cwd,
+                contained=maintenance.process_containment_required,
+            )
+            term.start()
+        except Exception:
+            session_lease.release()
+            raise
         loop = asyncio.get_event_loop()
 
         async def pump_out():
@@ -1302,8 +1345,20 @@ def register(app, deps):
         out_task = asyncio.create_task(pump_out())
         try:
             while True:
-                msg = await websocket.receive()
+                if maintenance.fenced():
+                    await websocket.close(code=4423)
+                    break
+                try:
+                    msg = await asyncio.wait_for(
+                        websocket.receive(),
+                        timeout=0.25,
+                    )
+                except asyncio.TimeoutError:
+                    continue
                 if msg.get("type") == "websocket.disconnect":
+                    break
+                if maintenance.fenced():
+                    await websocket.close(code=4423)
                     break
                 if msg.get("bytes") is not None:
                     term.write(msg["bytes"])
@@ -1325,10 +1380,20 @@ def register(app, deps):
         except WebSocketDisconnect:
             pass
         finally:
-            term.close()
+            terminated = False
+            try:
+                terminated = term.close()
+            except Exception:
+                logging.getLogger("proxima.api").exception(
+                    "terminal process group shutdown failed"
+                )
             out_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await out_task
+            if terminated:
+                session_lease.release()
+            else:
+                maintenance.retain(session_lease)
 
     @app.websocket("/api/ws/sessions/{session_id}")
     async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):

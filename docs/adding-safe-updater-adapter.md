@@ -3,7 +3,10 @@
 This playbook preserves the external authority boundary in
 [ADR-0008](adr/0008-external-safe-update-authority.md). The current systemd,
 launchd, and unmanaged adapters are contract fixtures. They all report unmanaged
-and every activation method raises.
+and every activation method raises. `DisposableServiceAdapter` is a test-only
+in-memory adapter used by Group 16 transaction fixtures initialized through
+`SafeUpdateController.create_disposable_fixture()` beneath the system temporary
+directory; it is not an enrollment template and cannot execute manager commands.
 
 ## Boundary that cannot move
 

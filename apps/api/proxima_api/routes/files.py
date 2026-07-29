@@ -4,7 +4,6 @@ Extracted via the register() pattern — handler bodies verbatim. No behavior ch
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -33,6 +32,7 @@ logger = logging.getLogger("proxima.api")
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
@@ -273,9 +273,12 @@ def register(app, deps):
         cfg = _resolve_image_gen()
         key = cfg.get("apiKey")
         spec = image_providers.get_provider(cfg["provider"])
-        # Codex readiness is surfaced here so the UI can show ready/not-logged-in.
-        codex = image_providers.codex_ready() if spec.kind in ("auto", "codex") else None
-        hstatus = higgsfield.status() if spec.kind in ("auto", "higgsfield") else None
+        readiness = image_providers.readiness_snapshot(
+            enabled=not maintenance.fenced(),
+            codex=spec.kind in ("auto", "codex"),
+            higgsfield_cli=spec.kind in ("auto", "higgsfield"),
+            xai_oauth=True,
+        )
         return {
             "provider": cfg["provider"],
             "model": cfg.get("model"),
@@ -283,11 +286,11 @@ def register(app, deps):
             "hasApiKey": bool(key),
             "providers": image_providers.provider_list(),
             "defaultProvider": image_providers.DEFAULT_PROVIDER,
-            "codexReady": codex,
-            "higgsfieldReady": hstatus,
+            "codexReady": readiness["codex"],
+            "higgsfieldReady": readiness["higgsfield"],
             # Edit/reference requests can fall back to xAI OAuth when the selected
             # provider is text-to-image only — the UI keeps "Edit with AI" enabled.
-            "xaiOauthReady": image_providers.xai_oauth_ready(),
+            "xaiOauthReady": readiness["xaiOauth"],
         }
 
     @app.put("/api/settings/image-gen")
@@ -353,7 +356,14 @@ def register(app, deps):
 
     @app.get("/api/settings/higgsfield")
     def get_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
-        return {"settings": _resolve_higgsfield_settings(), "status": higgsfield.status()}
+        readiness = image_providers.readiness_snapshot(
+            enabled=not maintenance.fenced(),
+            higgsfield_cli=True,
+        )
+        return {
+            "settings": _resolve_higgsfield_settings(),
+            "status": readiness["higgsfield"],
+        }
 
     @app.put("/api/settings/higgsfield")
     def put_higgsfield_settings(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
@@ -492,7 +502,18 @@ def register(app, deps):
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not cwd.is_dir():
                 raise HTTPException(status_code=400, detail="folder not found")
-        await app.state.app_manager.start(slug, str(cwd), payload.command, int(payload.port or 5180))
+        effect_lease = maintenance.background_lease()
+        try:
+            await app.state.app_manager.start(
+                slug,
+                str(cwd),
+                payload.command,
+                int(payload.port or 5180),
+                effect_lease=effect_lease,
+            )
+        except BaseException:
+            effect_lease.release()
+            raise
         # Preview relay: the app's own remote-reachable origin (best-effort; the
         # app still runs without it and localhost preview needs no relay).
         try:
@@ -502,7 +523,10 @@ def register(app, deps):
         # Provision the remote-preview subdomain in the background (best-effort; app
         # start never waits on / fails from Cloudflare). No-op if CF isn't configured.
         if cf_hostnames.configured(app.state.config):
-            asyncio.create_task(cf_hostnames.provision(app.state.config, slug))
+            maintenance.create_task(
+                cf_hostnames.provision(app.state.config, slug),
+                name=f"cf-provision-{slug}",
+            )
         _audit_fs(user, "app.start", slug, f"{payload.dir or '.'}: {payload.command}")
         return {"ok": True}
 
@@ -512,7 +536,10 @@ def register(app, deps):
         await app.state.app_manager.stop(slug)
         await app.state.preview_relays.stop(slug)
         if cf_hostnames.configured(app.state.config):
-            asyncio.create_task(cf_hostnames.deprovision(app.state.config, slug))
+            maintenance.create_task(
+                cf_hostnames.deprovision(app.state.config, slug),
+                name=f"cf-deprovision-{slug}",
+            )
         return {"ok": True}
 
     @app.get("/api/projects/{slug}/app/status")
@@ -523,7 +550,7 @@ def register(app, deps):
             relay_port = app.state.preview_relays.port(slug)
             if relay_port:
                 status["preview_port"] = relay_port
-        else:
+        elif not maintenance.fenced():
             # The app exited on its own — reap its relay so the port is released.
             await app.state.preview_relays.stop(slug)
         return status
@@ -548,8 +575,9 @@ def register(app, deps):
         url = f"http://127.0.0.1:{port}/{path}"
         fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
         try:
+            body = await request.body()
             async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-                up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
+                up = await client.request(request.method, url, params=request.query_params, content=body, headers=fwd)
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="app not reachable yet") from None
         out = {k: v for k, v in up.headers.items() if k.lower() not in _RESPONSE_HOP}

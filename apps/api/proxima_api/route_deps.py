@@ -59,6 +59,7 @@ def build_route_deps(
     cookie: FastApiCallable,
     http_exception: Any,
     status_module: Any,
+    maintenance: Any,
 ) -> dict[str, Any]:
     """Build the dependency dictionary consumed by routes/*.register()."""
 
@@ -70,8 +71,14 @@ def build_route_deps(
             row = db().execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
             if row:
                 user = dict(row)
-                ensure_default_profile(user)
+                if not maintenance.fenced():
+                    ensure_default_profile(user)
                 return user
+            if maintenance.fenced():
+                raise http_exception(
+                    status_code=503,
+                    detail="owner unavailable during maintenance",
+                )
             cur = db().execute(
                 "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
                 (name, name, iso_now()),
@@ -249,8 +256,15 @@ def build_route_deps(
             (user["id"],),
         ).fetchone()
         if row:
+            if maintenance.fenced():
+                return dict(row)
             db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],))
             return dict(row)
+        if maintenance.fenced():
+            raise http_exception(
+                status_code=503,
+                detail="profile unavailable during maintenance",
+            )
         return create_profile_for(user, "default", "Default", is_default=True)
 
     def profile_for_user(profile_id: int | None, user: dict[str, Any]) -> dict[str, Any]:
@@ -523,6 +537,7 @@ def build_route_deps(
     return {
         "db": db,
         "cfg": cfg,
+        "maintenance": maintenance,
         "current_user": current_user,
         "current_user_strict_token": current_user_strict_token,
         "admin_user": admin_user,

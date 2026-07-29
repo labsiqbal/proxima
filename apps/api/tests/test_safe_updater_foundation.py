@@ -475,6 +475,39 @@ def test_recovery_cli_prints_stable_fail_closed_status(
     }
 
 
+def test_recovery_cli_fails_closed_when_controller_lock_is_unavailable(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    root = tmp_path / "trusted"
+    root.mkdir()
+    (root / "controller.lock").mkdir()
+    intent = tmp_path / "intent.json"
+    intent.write_text('{"candidate_commit":"' + "b" * 40 + '"}', encoding="utf-8")
+
+    result = cli_main(
+        [
+            "recovery-status",
+            "--root",
+            str(root),
+            "--run-id",
+            "a" * 32,
+            "--intent-file",
+            str(intent),
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert result == 2
+    assert output == {
+        "action": "do_not_start_any_release",
+        "journal_hash": None,
+        "reason": "safe_update_lock_unavailable",
+        "run_id": "a" * 32,
+        "safe": False,
+    }
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX service identity contract")
 def test_candidate_identity_cannot_own_or_write_trusted_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

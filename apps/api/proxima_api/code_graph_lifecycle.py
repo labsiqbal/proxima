@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import features
+from .maintenance_status import writes_fenced
 from .graph_context import (
     GraphBuildError,
     GraphContextError,
@@ -132,6 +133,8 @@ class CodeGraphLifecycle:
             )
 
     def tick(self) -> None:
+        if writes_fenced(self.config):
+            return
         if not self.enabled():
             return
         try:

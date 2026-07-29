@@ -149,13 +149,33 @@ async def _reject(scope, send, status: int, msg: str) -> None:
     await send({"type": "http.response.body", "body": msg.encode()})
 
 
-async def _proxy_http(scope, receive, send, port: int) -> None:
+def _ingress_lease(maintenance):
+    if maintenance is None:
+        return None, True
+    lease = maintenance.acquire()
+    allowed = lease.acquired and not maintenance.fenced()
+    if not allowed:
+        lease.release()
+    return lease, allowed
+
+
+async def _proxy_http(
+    scope,
+    receive,
+    send,
+    port: int,
+    maintenance=None,
+) -> None:
     body = b""
     more = True
     while more:
         m = await receive()
         body += m.get("body", b"")
         more = m.get("more_body", False)
+    lease, allowed = _ingress_lease(maintenance)
+    if not allowed:
+        await _reject(scope, send, 423, "maintenance write fenced")
+        return
     url = f"http://127.0.0.1:{port}{scope['path']}"
     qs = scope.get("query_string") or b""
     if qs:
@@ -176,9 +196,18 @@ async def _proxy_http(scope, receive, send, port: int) -> None:
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
     except httpx.RequestError:
         await _reject(scope, send, 502, "preview app not reachable yet")
+    finally:
+        if lease is not None:
+            lease.release()
 
 
-async def _proxy_ws(scope, receive, send, port: int) -> None:
+async def _proxy_ws(
+    scope,
+    receive,
+    send,
+    port: int,
+    maintenance=None,
+) -> None:
     path = scope["path"]
     qs = scope.get("query_string") or b""
     if qs:
@@ -186,29 +215,49 @@ async def _proxy_ws(scope, receive, send, port: int) -> None:
     first = await receive()
     if first["type"] != "websocket.connect":
         return
+    lease, allowed = _ingress_lease(maintenance)
+    if not allowed:
+        await _reject(scope, send, 423, "maintenance write fenced")
+        return
     subprotocols = scope.get("subprotocols") or None
     uri = f"ws://127.0.0.1:{port}{path}"
     try:
         up = await websockets.connect(uri, subprotocols=subprotocols, open_timeout=10, max_size=None)
     except Exception:
+        if lease is not None:
+            lease.release()
         await send({"type": "websocket.close", "code": 1013})
         return
     accept: dict[str, Any] = {"type": "websocket.accept"}
     if getattr(up, "subprotocol", None):
         accept["subprotocol"] = up.subprotocol
-    await send(accept)
+    try:
+        await send(accept)
+    except Exception:
+        await up.close()
+        raise
+    finally:
+        if lease is not None:
+            lease.release()
 
     async def client_to_up() -> None:
         while True:
             m = await receive()
-            t = m["type"]
-            if t == "websocket.receive":
-                if m.get("text") is not None:
-                    await up.send(m["text"])
-                elif m.get("bytes") is not None:
-                    await up.send(m["bytes"])
-            elif t == "websocket.disconnect":
+            input_lease, input_allowed = _ingress_lease(maintenance)
+            if not input_allowed:
                 return
+            try:
+                t = m["type"]
+                if t == "websocket.receive":
+                    if m.get("text") is not None:
+                        await up.send(m["text"])
+                    elif m.get("bytes") is not None:
+                        await up.send(m["bytes"])
+                elif t == "websocket.disconnect":
+                    return
+            finally:
+                if input_lease is not None:
+                    input_lease.release()
 
     async def up_to_client() -> None:
         try:
@@ -234,19 +283,48 @@ async def _proxy_ws(scope, receive, send, port: int) -> None:
             pass
 
 
-async def _serve_preview(scope, receive, send, *, validate_token, port: int | None) -> None:
+async def _serve_preview(
+    scope,
+    receive,
+    send,
+    *,
+    validate_token,
+    port: int | None,
+    maintenance=None,
+) -> None:
     """Shared request path: capability gate → target lookup → proxy."""
+    if maintenance is not None and maintenance.fenced():
+        return await _reject(scope, send, 423, "maintenance write fenced")
     if not _authed(scope, validate_token):
         return await _reject(scope, send, 403, "preview: not authorized")
     if not port:
         return await _reject(scope, send, 503, "preview app not running")
     if scope["type"] == "http":
-        return await _proxy_http(scope, receive, send, port)
-    return await _proxy_ws(scope, receive, send, port)
+        return await _proxy_http(
+            scope,
+            receive,
+            send,
+            port,
+            maintenance,
+        )
+    return await _proxy_ws(
+        scope,
+        receive,
+        send,
+        port,
+        maintenance,
+    )
 
 
 class PreviewProxyMiddleware:
-    def __init__(self, app: Any, fastapi_app: Any, apps_domain: str | None, validate_token=None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        fastapi_app: Any,
+        apps_domain: str | None,
+        validate_token=None,
+        maintenance=None,
+    ) -> None:
         self.app = app
         self.fastapi_app = fastapi_app  # for app.state.app_manager at request time
         self.suffix = ("." + apps_domain.lower()) if apps_domain else None
@@ -254,6 +332,7 @@ class PreviewProxyMiddleware:
         # so THIS is their only auth: require a short-lived preview-only capability.
         # It is never an owner API session and is never forwarded to project code.
         self.validate_token = validate_token
+        self.maintenance = maintenance
 
     def _slug_for(self, scope: dict[str, Any]) -> str | None:
         """Return the project slug if this request targets a preview subdomain."""
@@ -278,8 +357,14 @@ class PreviewProxyMiddleware:
             slug = self._slug_for(scope)
             if slug is not None:
                 port = self.fastapi_app.state.app_manager.port(slug)
-                return await _serve_preview(scope, receive, send,
-                                            validate_token=self.validate_token, port=port)
+                return await _serve_preview(
+                    scope,
+                    receive,
+                    send,
+                    validate_token=self.validate_token,
+                    port=port,
+                    maintenance=self.maintenance,
+                )
         await self.app(scope, receive, send)
 
 
@@ -303,8 +388,13 @@ class PreviewRelayManager:
     credential-stripping proxy engine as the subdomain middleware.
     """
 
-    def __init__(self, bind_host: str | None, port_for: Callable[[str], int | None],
-                 validate_token=None) -> None:
+    def __init__(
+        self,
+        bind_host: str | None,
+        port_for: Callable[[str], int | None],
+        validate_token=None,
+        maintenance=None,
+    ) -> None:
         # bind_host must be remote-reachable for remote preview to work. "auto"
         # resolves to the tailnet interface or loopback - never 0.0.0.0; "off"
         # (or empty) disables relays entirely for strict loopback-only installs.
@@ -314,6 +404,7 @@ class PreviewRelayManager:
             _LOG.info("preview relays bind %s", self.bind_host)
         self.port_for = port_for
         self.validate_token = validate_token
+        self.maintenance = maintenance
         self._relays: dict[str, dict[str, Any]] = {}
 
     def port(self, slug: str) -> int | None:
@@ -324,9 +415,14 @@ class PreviewRelayManager:
         async def relay_app(scope, receive, send):
             if scope["type"] not in ("http", "websocket"):
                 return
-            await _serve_preview(scope, receive, send,
-                                 validate_token=self.validate_token,
-                                 port=self.port_for(slug))
+            await _serve_preview(
+                scope,
+                receive,
+                send,
+                validate_token=self.validate_token,
+                port=self.port_for(slug),
+                maintenance=self.maintenance,
+            )
         return relay_app
 
     async def start(self, slug: str) -> int | None:

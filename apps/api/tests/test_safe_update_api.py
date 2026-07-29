@@ -9,15 +9,38 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from apps.safe_updater.write_fence import prepare_ingress_lock
+from proxima_api.db import connect, init_db
 from proxima_api.main import _config_from_env, create_app
+from proxima_api.migrations import run_migrations
 from proxima_api.settings import safe_update_config_from_env
 
 
 def _client(tmp_path, **config):
     app = create_app({"database_path": str(tmp_path / "db.sqlite"), "workspace_root": str(tmp_path / "work"), "start_worker": False, **config})
     client = TestClient(app)
-    client.headers["Authorization"] = f"Bearer {client.post('/auth/auto').json()['token']}"
+    login = client.post("/auth/auto")
+    if login.status_code == 200:
+        client.headers["Authorization"] = f"Bearer {login.json()['token']}"
     return client
+
+
+def _prepare_maintenance_database(tmp_path: Path, fence: Path) -> None:
+    database = tmp_path / "db.sqlite"
+    connection = connect(database)
+    init_db(
+        connection,
+        [
+            {
+                "username": "owner",
+                "os_user": "owner",
+                "role": "environment_admin",
+            }
+        ],
+    )
+    run_migrations(connection, database)
+    connection.close()
+    prepare_ingress_lock(fence)
 
 
 def test_safe_update_routes_are_disabled_by_default(tmp_path):
@@ -86,7 +109,7 @@ def test_maintenance_status_reads_no_application_truth(tmp_path):
 
 def test_maintenance_status_reads_only_configured_external_fence(tmp_path):
     fence = tmp_path / "root-owned" / "fence.json"
-    fence.parent.mkdir()
+    _prepare_maintenance_database(tmp_path, fence)
     fence.write_text(
         '{"phase":"write_fenced","run_id":"' + "a" * 32 + '"}',
         encoding="utf-8",
@@ -103,7 +126,7 @@ def test_maintenance_status_reads_only_configured_external_fence(tmp_path):
 
 def test_maintenance_status_fails_closed_for_invalid_utf8_fence(tmp_path):
     fence = tmp_path / "root-owned" / "fence.json"
-    fence.parent.mkdir()
+    _prepare_maintenance_database(tmp_path, fence)
     fence.write_bytes(b"\xff\xfe")
     response = _client(tmp_path, safe_update_fence_path=str(fence)).get(
         "/api/maintenance"
@@ -119,7 +142,7 @@ def test_maintenance_status_fails_closed_for_invalid_utf8_fence(tmp_path):
 def test_plain_api_entrypoint_reads_fence_without_repository_imports(tmp_path):
     api_root = Path(__file__).resolve().parents[1]
     fence = tmp_path / "root-owned" / "fence.json"
-    fence.parent.mkdir()
+    _prepare_maintenance_database(tmp_path, fence)
     fence.write_text(
         '{"phase":"write_fenced","run_id":"' + "a" * 32 + '"}',
         encoding="utf-8",
@@ -143,7 +166,6 @@ app = create_app({
     "safe_update_fence_path": sys.argv[3],
 })
 client = TestClient(app)
-client.headers["Authorization"] = "Bearer " + client.post("/auth/auto").json()["token"]
 print(json.dumps(client.get("/api/maintenance").json(), sort_keys=True))
 """
     environment = dict(os.environ)
@@ -153,7 +175,7 @@ print(json.dumps(client.get("/api/maintenance").json(), sort_keys=True))
             sys.executable,
             "-c",
             script,
-            str(tmp_path / "plain.sqlite"),
+            str(tmp_path / "db.sqlite"),
             str(tmp_path / "workspace"),
             str(fence),
         ],

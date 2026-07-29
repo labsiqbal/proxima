@@ -64,6 +64,15 @@ controller-owned, application-readable, and application-nonwritable. Its read cl
 lives in the API package so every documented application entrypoint has the same
 contract.
 
+Maintenance activation publishes owner-bound pending state before taking an
+exclusive ingress lock. Application work holds shared admission through its final
+side effect. Process-backed effects use one PID-containment contract and retain
+admission for the process lifetime. Cached runners are stopped when activation
+becomes pending, deterministic scripts retain admission until namespace exit, and
+shutdown failure keeps admission held. Recovery reconciles owner-bound pending and
+active fence state with the journal before declaring a pre-fence candidate safe to
+discard.
+
 Every service-manager adapter reports unmanaged until its complete qualification
 matrix passes. The foundation contains no live release switch, application-data
 migration or swap, service enrollment, or activation method. Its database changes
@@ -84,7 +93,9 @@ Negative:
 - Installation requires an administrator-managed trust root and identity split.
 - A nonterminal or unreadable journal blocks later submissions until trusted
   recovery resolves it.
-- Full update activation requires later fault, rollback, sandbox, and soak evidence.
+- Full update activation requires target-platform adapter qualification plus
+  production fault, rollback, sandbox, and soak evidence. Disposable fixture
+  evidence does not enroll a service.
 - Local provenance records identity metadata but are not release signatures.
 
 ## Related

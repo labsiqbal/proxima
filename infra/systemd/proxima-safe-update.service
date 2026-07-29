@@ -4,6 +4,6 @@ Description=Proxima safe updater controller (foundation disabled)
 [Service]
 Type=oneshot
 # Installation is intentionally withheld until administrator enrollment and
-# complete service-manager, switch, fault, and rollback qualification. This
-# placeholder must not be enabled.
+# complete target-platform service-manager, switch, fault, and rollback
+# qualification. This placeholder must not be enabled.
 ExecStart=/bin/false
