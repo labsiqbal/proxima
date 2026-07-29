@@ -78,3 +78,23 @@ class SafeUpdateController:
             )
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         return inspect(Journal(self.root / "journal" / f"{run_id}.jsonl", digest))
+
+    def qualify_candidate(self, run_id: str, intent: dict[str, Any], gate: Any, **kwargs: Any) -> Any:
+        """Run only the pre-switch candidate gate for an accepted journal.
+
+        This deliberately has no access to active pointers, fences, backups or a
+        service adapter.  Later groups own every transition after
+        ``candidate_staged``.
+        """
+        if not RUN_ID.fullmatch(run_id):
+            raise ValueError("invalid journal run id")
+        digest = hashlib.sha256(
+            json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        journal = Journal(self.root / "journal" / f"{run_id}.jsonl", digest)
+        records = journal.records()
+        if not records or records[-1].phase is not Phase.PREFLIGHT:
+            raise RuntimeError("candidate qualification requires an accepted preflight run")
+        result = gate.prepare(run_id, **kwargs)
+        journal.append(Phase.CANDIDATE_STAGED, {"candidate_evidence": result.evidence.digest})
+        return result

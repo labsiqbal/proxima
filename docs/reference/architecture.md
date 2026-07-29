@@ -1148,6 +1148,17 @@ matrix in
 [`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
 [ADR-0008](../adr/0008-external-safe-update-authority.md).
 
+Before any later fence or switch phase, group 15's controller-only candidate gate
+reverifies local provenance, publishes a commit-keyed immutable release, and runs a
+fixed offline build/test/type/doc manifest rather than candidate-selected commands.
+SQLite's backup API creates `raw-clone.db`; migration runs against that clone alone.
+The candidate server receives a scrubbed fixture DB plus separate workspace and
+runner-home paths, never the raw clone or live data. Candidate-mode startup skips
+schema mutation and every background writer. A root-owned trusted probe bundle and
+evidence store independently validate API identity, static-asset digest, readiness,
+and authenticated behaviour. This gate cannot call a service adapter or reach active
+or last-good pointers, fence, journal, backup, or production paths.
+
 ## Runner abstraction
 
 The app never hardcodes one CLI as the boundary. A _runner spec_ maps an installed

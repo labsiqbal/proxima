@@ -1414,7 +1414,7 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 21. Updates (version check + inert safe-update foundation)
+## 21. Updates (version check + candidate-only safe-update gate)
 
 **Why:** Owners should see release availability without letting the running
 application or candidate code promote itself.
@@ -1439,6 +1439,17 @@ launchd, and unmanaged adapters fail closed until the
 [adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).
+
+Group 15 adds a pre-switch gate only: controller-owned code materializes an
+immutable release keyed by the verified commit, runs a fixed offline locked build
+manifest, makes a consistent SQLite backup-API clone, and migrates only that clone.
+The browser fixture is separately assembled with no owner projects, sessions,
+paths, runner homes, or credentials. Candidate-mode API startup refuses migrations
+and all background writers. Trusted probes hash the static assets and compare the
+release, commit, and asset identities independently; their installed bundle and
+immutable evidence are controller-owned. Build, clone, migration, asset, probe, or
+port/sandbox failure stops before any live pointer, database, fence, backup, or
+service action. Activation remains unavailable.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply` (inert),
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,

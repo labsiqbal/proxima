@@ -59,6 +59,17 @@ boundary yet. See
 [ADR-0008](adr/0008-external-safe-update-authority.md) and the [adapter
 playbook](adding-safe-updater-adapter.md).
 
+The candidate gate runs before any live mutation. It uses a fixed controller build
+manifest and an offline cache, copies candidate bytes into immutable controller-owned
+release inodes, makes the migration proof with SQLite's backup API, and passes the
+candidate only a scrubbed fixture database plus candidate-local workspace and runner
+home. The candidate cannot select the migration/probe commands or replace the
+root-owned trusted probe bundle: its digest is policy-pinned independently of the
+release. Candidate-mode API startup rejects schema initialization/migration and all
+background writers. A failed build, migration, identity, static asset, probe, or
+sandbox check leaves live data, paths, runner homes, services, pointers, journal,
+fence, and backups untouched. This is not enrollment or activation.
+
 ## App Owner
 
 The single owner can:

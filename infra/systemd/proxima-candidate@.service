@@ -1,9 +1,21 @@
 [Unit]
-Description=Proxima isolated candidate (%i) (foundation disabled)
+Description=Proxima isolated candidate (%i) (not enrolled)
 
 [Service]
 Type=oneshot
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
 ExecStart=/bin/false

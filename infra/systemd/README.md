@@ -180,10 +180,11 @@ sudo systemctl restart proxima.service
 curl --fail --silent http://127.0.0.1:8765/api/health
 ```
 
-The group-14 safe-updater foundation adds contract-only root-owned controller and
-candidate unit templates. Do not make the `proxima` user own the checkout or grant
-it restart authority. The templates are intentionally `ExecStart=/bin/false` and
-must not be enabled. A later administrator-only enrollment must qualify the
+The safe-updater foundation adds contract-only root-owned controller and candidate
+unit templates. The candidate template carries defence-in-depth systemd sandbox
+directives but still has `ExecStart=/bin/false`; it is not an enrollment artifact and
+must not be enabled. Do not make the `proxima` user own the checkout or grant it
+restart authority. A later administrator-only enrollment must qualify the
 external journal/pointer/fence roots, dedicated candidate sandbox, trusted release
 keys and probes, disk reserve, and stop/start verification before enabling any
 activation. See the

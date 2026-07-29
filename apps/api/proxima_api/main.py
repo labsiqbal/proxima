@@ -94,6 +94,11 @@ def _as_int(value: Any) -> int:
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     cfg = app.state.config
     app.state.hub.bind_loop(asyncio.get_running_loop())
+    # The candidate may serve a fixture to trusted probes, but it must never run
+    # production-style writers, migrations, schedulers, refreshers or update loops.
+    if cfg.get("candidate_mode", False):
+        yield
+        return
     if cfg.get("auto_provision", True):
         try:
             backfill(app.state.db, cfg)
@@ -275,11 +280,24 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     app.state.config = cfg
     app.state.db = connect(cfg["database_path"])
     app.state.db_lock = __import__("threading").RLock()
-    init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
-    run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
-    assert_master_persistence(app.state.db)
-    assert_master_projection_ledger(app.state.db)
-    migrate_legacy_ops_containers(app.state.db)
+    if cfg.get("candidate_mode", False):
+        # A controller-prepared fixture is already migrated.  Failing this check
+        # is safer than letting the candidate create or alter anything at startup.
+        required = {"users", "schema_migrations"}
+        found = {row[0] for row in app.state.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not required.issubset(found):
+            raise ValueError("candidate fixture is not a migrated Proxima database")
+        workspace = Path(cfg["workspace_root"]).resolve()
+        for row in app.state.db.execute("SELECT path FROM projects").fetchall():
+            project_path = Path(row[0]).resolve()
+            if project_path != workspace and workspace not in project_path.parents:
+                raise ValueError("candidate fixture contains a non-candidate project path")
+    else:
+        init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
+        run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
+        assert_master_persistence(app.state.db)
+        assert_master_projection_ledger(app.state.db)
+        migrate_legacy_ops_containers(app.state.db)
     app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager()
@@ -339,10 +357,11 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     )
     # Durable start intent is committed before the retryable start step. Resume
     # any request that was interrupted in that gap before serving new traffic.
-    try:
-        app.state.task_delegation.resume_committed()
-    except Exception:
-        logger.exception("durable Task start recovery failed")
+    if not cfg.get("candidate_mode", False):
+        try:
+            app.state.task_delegation.resume_committed()
+        except Exception:
+            logger.exception("durable Task start recovery failed")
 
     _route_deps = build_route_deps(
         app,
@@ -381,7 +400,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         except Exception as exc:
             logger.exception("health check failed")
             raise HTTPException(status_code=503, detail="database unavailable") from exc
-        return {
+        payload = {
             "ok": True,
             "product": "proxima",
             "service": "proxima",
@@ -389,6 +408,15 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "database": "ok",
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
+        if cfg.get("candidate_mode", False):
+            # Supplementary only: the trusted updater independently resolves the
+            # immutable release and hashes assets before accepting this response.
+            payload.update({
+                "release_id": cfg.get("candidate_release_id"),
+                "commit": cfg.get("candidate_commit"),
+                "asset_manifest_digest": cfg.get("candidate_asset_manifest_digest"),
+            })
+        return payload
 
     routes_work.register(app, _route_deps)
     routes_graph.register(app, _route_deps)
