@@ -67,7 +67,9 @@ identity.
 Startup validates the projection table schema, indexes, foreign keys, Master
 session ownership, source links, and bounded payload equality. Reconciliation after
 restart can safely retry because an existing key produces no second message or
-event. A reused key with different ownership or source binding fails closed. Raw
+event. Each reconciliation candidate has its own failure boundary, so one invalid
+legacy source remains unprojected without starving later Task, Satpam, or Attention
+repair. A reused key with different ownership or source binding fails closed. Raw
 token, reasoning, and tool delta events are never projected, and payloads are
 limited to 16 KiB. Projection messages are also server-owned summaries: Task
 titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
@@ -84,7 +86,8 @@ explicit captured marker onto `task_delegations`. Task, Attention, and Satpam
 projections use that durable copy whenever they have a Task subject. The nullable
 origin-message link remains provenance only, so deleting the completed origin run
 cannot move a later projection into Fleet history. A legacy Task without provable
-capture fails closed instead of producing an unattributed projection.
+capture keeps its scoped lifecycle but fails closed instead of producing an
+unattributed projection.
 
 ## Session event contract
 

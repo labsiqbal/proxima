@@ -411,6 +411,18 @@ class MasterProjectionService:
             )
             return None
 
+    def safe_project_satpam(
+        self, intervention_id: int
+    ) -> dict[str, Any] | None:
+        try:
+            return self.project_satpam(intervention_id)
+        except Exception:
+            log.exception(
+                "Master Satpam projection failed for intervention %s",
+                intervention_id,
+            )
+            return None
+
     def safe_reconcile(self) -> dict[str, int]:
         try:
             return self.reconcile()
@@ -1025,7 +1037,7 @@ class MasterProjectionService:
             "ORDER BY c.ordering, c.source_id"
         ).fetchall()
         for row in jobs:
-            self.project_task(_as_int(row["source_id"]))
+            self.safe_project_task(_as_int(row["source_id"]))
         interventions = self.conn.execute(
             "WITH candidate AS ("
             "  SELECT si.id AS source_id, "
@@ -1057,7 +1069,7 @@ class MasterProjectionService:
             "ORDER BY c.source_id"
         ).fetchall()
         for row in interventions:
-            self.project_satpam(_as_int(row["source_id"]))
+            self.safe_project_satpam(_as_int(row["source_id"]))
         attentions = self.conn.execute(
             "WITH candidate AS ("
             "  SELECT ai.id AS source_id, "
@@ -1083,7 +1095,7 @@ class MasterProjectionService:
             "ORDER BY c.source_id"
         ).fetchall()
         for row in attentions:
-            self.project_attention(_as_int(row["source_id"]))
+            self.safe_project_attention(_as_int(row["source_id"]))
         after = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]

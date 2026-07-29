@@ -469,10 +469,12 @@ enqueue in the same transaction. Generic session run producers reject the Master
 session, and the database refuses any non-Master run kind or mismatched epoch there.
 Task delegations copy the captured epoch before the tool result returns, so delayed
 Task and supervision projections retain their original Focus after an origin
-message or run is deleted. The restricted Master runner process is rebuilt for
-every Master turn and its durable history is limited to the captured epoch, so
-prior Container ACP/model context cannot cross a boundary. History projection UI
-and safe-self-update remain later delivery groups. See
+message or run is deleted. Migration-era Tasks without provable attribution remain
+startable after scope validation but unprojectable, and their projection failure
+does not starve later reconciliation candidates. The restricted Master runner
+process is rebuilt for every Master turn and its durable history is limited to the
+captured epoch, so prior Container ACP/model context cannot cross a boundary.
+History projection UI and safe-self-update remain later delivery groups. See
 [ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 The shared provider bootstraps Focus and its optimistic version from the Master
@@ -567,8 +569,8 @@ permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
-second message or event. SSE reconnect accepts the existing cursor query and
-`Last-Event-ID`. No projection can approve review,
+second message or event and isolates failures per authoritative source row. SSE
+reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 

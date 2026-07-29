@@ -26,7 +26,9 @@ For a Master origin, creation copies the message's immutable Focus epoch onto th
 delegation row. Compatibility callers without an origin message capture the
 current durable Master Focus inside the same creation transaction. Fleet capture
 is an explicit marker with a null epoch. Projection code reads this durable copy,
-not the nullable origin-message link.
+not the nullable origin-message link. A migrated Task whose deleted legacy origin
+cannot prove Focus still passes the ordinary scoped start contract, while later
+projection remains fail closed.
 
 ## Idempotency
 

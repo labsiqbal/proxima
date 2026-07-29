@@ -16,6 +16,7 @@ from proxima_api.graph import normalize_graph
 from proxima_api.main import create_app
 from proxima_api.master_runtime import execute_tool
 from proxima_api.master_tool_broker import MasterToolBroker
+from proxima_api.migrations import MIGRATIONS
 from proxima_api.routes.chat import _sse_resume_cursor, _stream_session_events
 from proxima_api.task_delegation import TaskDelegationRequest
 
@@ -78,6 +79,20 @@ def _delegate(
     )
     assert result["ok"] is True
     return desk, result["result"]["jobs"]
+
+
+def _make_focus_origin_uncaptured(app, job_id: int) -> None:
+    app.state.db.execute(
+        "DROP TRIGGER task_delegations_focus_immutable"
+    )
+    app.state.db.execute(
+        "UPDATE task_delegations SET origin_focus_epoch_id = NULL, "
+        "origin_focus_captured = 0 WHERE job_id = ?",
+        (job_id,),
+    )
+    next(migration[2] for migration in MIGRATIONS if migration[0] == 40)(
+        app.state.db
+    )
 
 
 def _projection_events(
@@ -576,6 +591,79 @@ def test_idle_reconcile_ticks_do_not_reinsert_projected_rows(
         "AND projection_type = 'master.task.completed'",
         (job["id"],),
     ).fetchone()[0] == 1
+
+
+def test_uncaptured_legacy_master_task_remains_startable(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="legacy-uncaptured-start",
+        tasks=[
+            {
+                "key": "legacy",
+                "title": "Legacy Task",
+                "brief": "Continue after migration",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    _make_focus_origin_uncaptured(app, job_id)
+
+    result = app.state.task_delegation.start(job_id, {"id": 1})
+
+    assert result.started is True
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["status"] == "running"
+    assert app.state.master_projection.safe_project_task(job_id) is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE source_table = 'jobs' "
+        "AND source_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+
+
+def test_reconcile_continues_after_uncaptured_legacy_task(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="legacy-uncaptured-reconcile",
+        tasks=[
+            {
+                "key": "legacy",
+                "title": "Legacy Task",
+                "brief": "Remain unprojected",
+            },
+            {
+                "key": "current",
+                "title": "Current Task",
+                "brief": "Project after the legacy Task",
+            },
+        ],
+    )
+    legacy_id, current_id = (job["id"] for job in jobs)
+    _make_focus_origin_uncaptured(app, legacy_id)
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done', updated_at = CURRENT_TIMESTAMP "
+        "WHERE id IN (?, ?)",
+        (legacy_id, current_id),
+    )
+
+    result = app.state.master_projection.reconcile()
+
+    assert result == {"observed": 2, "created": 1}
+    projections = app.state.db.execute(
+        "SELECT source_id, projection_type FROM master_projections "
+        "WHERE source_table = 'jobs' ORDER BY source_id",
+    ).fetchall()
+    assert [
+        (row["source_id"], row["projection_type"]) for row in projections
+    ] == [(current_id, "master.task.completed")]
 
 
 def test_duplicate_and_concurrent_supervisor_ticks_claim_each_task_once(

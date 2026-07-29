@@ -475,11 +475,13 @@ once after the last turn closes. An explicit Container send performs transition
 and enqueue atomically. Generic session run producers reject the Master session,
 with a database trigger as the persistence backstop. Task delegation copies the
 captured epoch onto its durable audit row, so later Task and supervision
-projections retain attribution after the origin message or run is deleted. Every
-restricted Master turn recycles its ACP process and rebuilds history solely from
-its captured epoch, preventing old Container context from surviving in runner or
-model caches. History projection UI and safe-self-update remain later groups. See
-[ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
+projections retain attribution after the origin message or run is deleted.
+Uncaptured migration-era Tasks remain executable after scoped ownership validation
+but unprojectable, and one such row cannot stop reconciliation of later sources.
+Every restricted Master turn recycles its ACP process and rebuilds history solely
+from its captured epoch, preventing old Container context from surviving in runner
+or model caches. History projection UI and safe-self-update remain later groups.
+See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow
 

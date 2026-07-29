@@ -202,12 +202,9 @@ class TaskDelegationService:
             "profile.user_id AS profile_user_id, "
             "profile.system_kind AS profile_system_kind, "
             "delegation.origin_session_id AS delegation_origin_session_id, "
-            "delegation.origin_focus_epoch_id AS delegation_focus_epoch_id, "
-            "delegation.origin_focus_captured AS delegation_focus_captured, "
             "delegation.container_id AS delegation_container_id, "
             "delegation.target_area_id AS delegation_target_area_id, "
-            "delegation.created_by AS delegation_created_by, "
-            "focus_epoch.master_session_id AS focus_epoch_session_id "
+            "delegation.created_by AS delegation_created_by "
             "FROM jobs task "
             "LEFT JOIN sessions origin "
             "ON origin.id = task.origin_master_session_id "
@@ -217,8 +214,6 @@ class TaskDelegationService:
             "LEFT JOIN profiles profile ON profile.id = worker.profile_id "
             "LEFT JOIN task_delegations delegation "
             "ON delegation.job_id = task.id "
-            "LEFT JOIN master_focus_epochs focus_epoch "
-            "ON focus_epoch.id = delegation.origin_focus_epoch_id "
             "WHERE task.id = ?",
             (job["id"],),
         ).fetchone()
@@ -264,12 +259,6 @@ class TaskDelegationService:
                 == int(job["target_area_id"])
                 and int(row["delegation_origin_session_id"] or 0)
                 == int(job["origin_master_session_id"])
-                and int(row["delegation_focus_captured"] or 0) == 1
-                and (
-                    row["delegation_focus_epoch_id"] is None
-                    or int(row["focus_epoch_session_id"] or 0)
-                    == int(job["origin_master_session_id"])
-                )
             )
             if not delegation_valid:
                 raise TaskDelegationError(
