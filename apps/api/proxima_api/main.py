@@ -42,7 +42,7 @@ from .updates import (
     read_local_version,
 )
 from .safe_updates import SafeUpdateCoordinator
-from .maintenance_status import read_external_fence
+from .maintenance_status import active_external_fence, writes_fenced
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -143,7 +143,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     if registry_interval:
         def _refresh_registry() -> None:
-            conn = connect(cfg["database_path"])
+            conn = connect(
+                cfg["database_path"],
+                writes_fenced=lambda: writes_fenced(cfg),
+            )
             try:
                 refresh_registry_projections(conn)
             finally:
@@ -284,6 +287,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg["database_path"],
         read_only=maintenance_mode,
         deny_writes=maintenance_mode,
+        writes_fenced=lambda: writes_fenced(cfg),
     )
     app.state.db_lock = __import__("threading").RLock()
     if cfg.get("candidate_mode", False):
@@ -318,6 +322,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg["database_path"],
         read_only=maintenance_mode,
         deny_writes=maintenance_mode,
+        writes_fenced=lambda: writes_fenced(cfg),
     )  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager()
@@ -341,15 +346,21 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         # Re-read the controller-owned fence before every mutating route. This
         # closes ingress even in an already-running app; maintenance SQLite
         # connections add a second, authorizer-enforced write denial.
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/api/maintenance", "/auth/auto"}:
-            raw_path = cfg.get("safe_update_fence_path")
-            if raw_path:
-                fence = read_external_fence(Path(str(raw_path)))
-                if fence is not None:
-                    return JSONResponse(
-                        status_code=423,
-                        content={"detail": {"code": "maintenance_write_fenced", **fence}},
-                    )
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.url.path != "/auth/resume"
+        ):
+            fence = active_external_fence(cfg)
+            if fence is not None:
+                return JSONResponse(
+                    status_code=423,
+                    content={
+                        "detail": {
+                            "code": "maintenance_write_fenced",
+                            **fence,
+                        }
+                    },
+                )
         return await call_next(request)
 
     register_frontend(
@@ -374,6 +385,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
                 cfg["database_path"],
                 read_only=maintenance_mode,
                 deny_writes=maintenance_mode,
+                writes_fenced=lambda: writes_fenced(cfg),
             )
             _db_local.conn = conn
         return conn

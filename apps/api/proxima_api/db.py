@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -951,6 +952,7 @@ def connect(
     *,
     read_only: bool = False,
     deny_writes: bool = False,
+    writes_fenced: Callable[[], bool] | None = None,
 ) -> sqlite3.Connection:
     db_path = Path(path)
     if read_only:
@@ -965,22 +967,59 @@ def connect(
     if not read_only:
         conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
-    if deny_writes:
-        denied = {
-            sqlite3.SQLITE_INSERT,
-            sqlite3.SQLITE_UPDATE,
-            sqlite3.SQLITE_DELETE,
-            sqlite3.SQLITE_ATTACH,
-            sqlite3.SQLITE_ALTER_TABLE,
-            sqlite3.SQLITE_DROP_TABLE,
-            sqlite3.SQLITE_CREATE_TABLE,
-            sqlite3.SQLITE_CREATE_INDEX,
-            sqlite3.SQLITE_DROP_INDEX,
-            sqlite3.SQLITE_TRANSACTION,
-        }
+    if deny_writes or writes_fenced is not None:
+        denied = frozenset(
+            getattr(sqlite3, name)
+            for name in (
+                "SQLITE_ALTER_TABLE",
+                "SQLITE_ANALYZE",
+                "SQLITE_ATTACH",
+                "SQLITE_CREATE_INDEX",
+                "SQLITE_CREATE_TABLE",
+                "SQLITE_CREATE_TEMP_INDEX",
+                "SQLITE_CREATE_TEMP_TABLE",
+                "SQLITE_CREATE_TEMP_TRIGGER",
+                "SQLITE_CREATE_TEMP_VIEW",
+                "SQLITE_CREATE_TRIGGER",
+                "SQLITE_CREATE_VIEW",
+                "SQLITE_CREATE_VTABLE",
+                "SQLITE_DELETE",
+                "SQLITE_DETACH",
+                "SQLITE_DROP_INDEX",
+                "SQLITE_DROP_TABLE",
+                "SQLITE_DROP_TEMP_INDEX",
+                "SQLITE_DROP_TEMP_TABLE",
+                "SQLITE_DROP_TEMP_TRIGGER",
+                "SQLITE_DROP_TEMP_VIEW",
+                "SQLITE_DROP_TRIGGER",
+                "SQLITE_DROP_VIEW",
+                "SQLITE_DROP_VTABLE",
+                "SQLITE_INSERT",
+                "SQLITE_PRAGMA",
+                "SQLITE_REINDEX",
+                "SQLITE_SAVEPOINT",
+                "SQLITE_TRANSACTION",
+                "SQLITE_UPDATE",
+            )
+            if hasattr(sqlite3, name)
+        )
+
+        def authorize(
+            action: int,
+            _arg1: str | None,
+            _arg2: str | None,
+            _database: str | None,
+            _source: str | None,
+        ) -> int:
+            fenced = deny_writes or (
+                writes_fenced is not None and writes_fenced()
+            )
+            if fenced and action in denied:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
         conn.set_authorizer(
-            lambda action, _arg1, _arg2, _database, _source: sqlite3.SQLITE_DENY
-            if action in denied else sqlite3.SQLITE_OK
+            authorize
         )
     return conn
 

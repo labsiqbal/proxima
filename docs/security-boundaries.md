@@ -84,6 +84,31 @@ pointers, fence, and backups untouched. The accepted preflight journal remains
 nonterminal, and frozen failure evidence is retained for inspection. This is not
 enrollment or activation.
 
+Group 16 adds only a disabled transaction fixture. Its controller root must be an
+explicitly initialized empty directory beneath the system temporary directory,
+and fence, live-fixture database, and staged-fixture database paths are confined to
+separate role directories. The only accepted service adapter is the in-memory
+`DisposableServiceAdapter`; no system adapter gains enrollment or service-control
+authority.
+
+The fixture controller holds the native single-flight lock across switching and
+recovery. Before the durable last-good boundary, any possibly committed database
+or pointer replacement restores the sealed database and both prior pointers before
+the previous fixture service is resumed. Once `last_good_committed` is durable,
+recovery can only resume the candidate or latch the breaker. An unreadable journal
+or interrupted breaker write latches fail closed.
+
+An external maintenance fence is re-read before every mutating HTTP request and
+terminal WebSocket start or input. Existing application SQLite connections also
+deny writes dynamically while the fence exists. `POST /auth/resume` remains
+available because it only projects an already-authenticated session; session
+creation, including `/auth/auto`, is fenced. A process started directly in
+maintenance mode opens SQLite read-only with authorizer denial and starts no
+workers, schedulers, graph lifecycle tasks, registry refreshers, or Master
+supervisor. These controls validate fixture behavior only. They do not activate a
+production service, replace live data, switch a live release, grant signing
+authority, or add remote push.
+
 ## App Owner
 
 The single owner can:

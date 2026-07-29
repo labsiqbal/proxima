@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from .. import artifact_registry
 from ..db import connect
+from ..maintenance_status import writes_fenced
 from ..terminal import TerminalSession
 from .. import fsapi
 from .. import app_settings
@@ -850,7 +851,10 @@ def register(app, deps):
         (keeps the stale-run reaper away), then lands the result — or the error — as
         an assistant message + run events, exactly like an agent run finishing."""
         worker = app.state.worker
-        conn = connect(database_path)
+        conn = connect(
+            database_path,
+            writes_fenced=lambda: writes_fenced(cfg),
+        )
         try:
             done = threading.Event()
             box: dict[str, Any] = {}
@@ -1256,6 +1260,9 @@ def register(app, deps):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
         proxima_session cookie — a valid session is always required. cwd = project path
         or workspace."""
+        if writes_fenced(cfg):
+            await websocket.close(code=4423)
+            return
         # Require a valid session (cookie or ?token=) — same stance as ws_events + the
         # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
         # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
@@ -1302,7 +1309,16 @@ def register(app, deps):
         out_task = asyncio.create_task(pump_out())
         try:
             while True:
-                msg = await websocket.receive()
+                if writes_fenced(cfg):
+                    await websocket.close(code=4423)
+                    break
+                try:
+                    msg = await asyncio.wait_for(
+                        websocket.receive(),
+                        timeout=0.25,
+                    )
+                except asyncio.TimeoutError:
+                    continue
                 if msg.get("type") == "websocket.disconnect":
                     break
                 if msg.get("bytes") is not None:

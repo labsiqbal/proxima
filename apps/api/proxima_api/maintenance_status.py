@@ -16,7 +16,13 @@ def read_external_fence(path: Path) -> dict[str, str] | None:
     return {"phase": value["phase"], "run_id": str(value.get("run_id") or "")}
 
 
+def active_external_fence(config: dict[str, object]) -> dict[str, str] | None:
+    raw_path = config.get("safe_update_fence_path")
+    if not raw_path:
+        return None
+    return read_external_fence(Path(str(raw_path)))
+
+
 def writes_fenced(config: dict[str, object]) -> bool:
     """Fail closed for unreadable controller state and never cache the answer."""
-    raw_path = config.get("safe_update_fence_path")
-    return bool(raw_path) and read_external_fence(Path(str(raw_path))) is not None
+    return active_external_fence(config) is not None
