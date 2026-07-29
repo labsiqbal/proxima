@@ -74,14 +74,24 @@ class SingleFlightLock:
     def acquire(self, run_id: str, *, publish_owner: bool = True) -> LockResult:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         stream = self.path.open("a+", encoding="utf-8")
-        if not self._try_lock(stream):
-            stream.seek(0)
-            try:
-                owner = json.loads(stream.read() or "{}")
-            except json.JSONDecodeError:
-                owner = {}
+        try:
+            acquired = self._try_lock(stream)
+        except BaseException:
             stream.close()
-            return LockResult(False, owner.get("run_id"))
+            raise
+        if not acquired:
+            try:
+                stream.seek(0)
+                try:
+                    owner = json.loads(stream.read() or "{}")
+                except json.JSONDecodeError:
+                    owner = {}
+                owner_run_id = (
+                    owner.get("run_id") if isinstance(owner, dict) else None
+                )
+            finally:
+                stream.close()
+            return LockResult(False, owner_run_id)
         self._file = stream
         if publish_owner:
             self.set_owner(run_id)

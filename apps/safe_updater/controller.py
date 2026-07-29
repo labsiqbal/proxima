@@ -158,7 +158,15 @@ class SafeUpdateController:
                 None,
                 "invalid journal run id",
             )
-        acquired = self.lock.acquire(run_id, publish_owner=False)
+        try:
+            acquired = self.lock.acquire(run_id, publish_owner=False)
+        except Exception:
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                None,
+                "safe_update_lock_unavailable",
+            )
         if not acquired.acquired:
             return RecoveryStatus(
                 False,
