@@ -183,7 +183,7 @@ export type ChatMessage = {
 		focus_container_id: number | null;
 		target_mode: "auto" | "explicit";
 		target_container_id: number | null;
-		 target_area_id: number | null;
+		target_area_id: number | null;
 	};
 	/** Immutable Master attribution. Present only on the canonical Master thread. */
 	message_focus?: {

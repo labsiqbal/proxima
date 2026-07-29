@@ -7,15 +7,29 @@ import { useMasterState } from '../../master/MasterStateProvider'
 import { MasterPopup } from './MasterPopup'
 import { MasterToastRegion } from './MasterToastRegion'
 
+const popupTestState = vi.hoisted(() => ({ composerDisabled: false }))
+
 vi.mock('../../master/MasterStateProvider', () => ({ useMasterState: vi.fn() }))
 vi.mock('./MasterConversation', () => ({
   MasterConversation: () => <button type="button">Thread action</button>,
 }))
 vi.mock('./MasterComposer', () => ({
-  MasterComposer: () => <textarea aria-label="Message Master" />,
+  MasterComposer: () => (
+    <textarea
+      aria-label="Message Master"
+      disabled={popupTestState.composerDisabled}
+    />
+  ),
 }))
 
-function PopupHarness({ pending = false }: { pending?: boolean }) {
+function PopupHarness({
+  pending = false,
+  busy = false,
+}: {
+  pending?: boolean
+  busy?: boolean
+}) {
+  popupTestState.composerDisabled = busy
   const [popup, setPopup] = React.useState({
     open: false,
     preferredCorner: 'right' as const,
@@ -59,7 +73,10 @@ function PopupHarness({ pending = false }: { pending?: boolean }) {
 }
 
 describe('MasterPopup', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    popupTestState.composerDisabled = false
+  })
 
   it('opens by shortcut, traps focus, closes on Escape, and restores the trigger', async () => {
     const user = userEvent.setup()
@@ -104,6 +121,18 @@ describe('MasterPopup', () => {
 
     expect(screen.getByText('Pending Focus: Acme. Applies after this turn.'))
       .toBeInTheDocument()
+  })
+
+  it('focuses a usable popup action while the composer is disabled', async () => {
+    const user = userEvent.setup()
+    render(<PopupHarness busy />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Master popup' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Move popup to bottom left' }))
+        .toHaveFocus()
+    })
   })
 })
 

@@ -86,7 +86,7 @@ export function MasterPopup({
     wasOpenRef.current = true
     const frame = window.requestAnimationFrame(() => {
       const textarea = dialogRef.current?.querySelector<HTMLElement>(
-        'textarea[aria-label="Message Master"]',
+        'textarea[aria-label="Message Master"]:not([disabled])',
       )
       ;(textarea || focusableIn(dialogRef.current)[0])?.focus()
     })

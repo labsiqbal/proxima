@@ -14710,6 +14710,17 @@ button.moodboard-add-method:hover {
 	.master-popup-root.corner-right {
 		inset: var(--mobile-topbar-h) var(--toolrail-w) 0 0;
 	}
+	.master-popup-head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: start;
+	}
+	.master-popup-head > div > span:last-child { min-width: 0; }
+	.master-popup-head .master-focus-pending {
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
+	}
 	.master-popup {
 		width: 100%;
 		height: 100%;

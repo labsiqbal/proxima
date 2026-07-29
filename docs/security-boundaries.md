@@ -128,6 +128,16 @@ response before releasing it to Codex. Bearer material remains only in the
 provider HTTP header. Other production adapters remain unsupported for Master. See
 [runner-conformance.md](runner-conformance.md).
 
+Cross-Container isolation continues through prompts, responses, projections, and
+history UI. Every Master turn recycles the runner process and rebuilds its transcript
+only from the run's captured Focus epoch, so a prior Container's prompt and response
+are not supplied to a later Container turn. Server-owned projection summaries omit
+source prose, paths, and credentials and carry immutable Focus and subject ids. The
+Container and Fleet folders filter the canonical message ids from that attribution;
+Fleet excludes every Container-subject update, and deleting a Container cannot erase
+its ids and reclassify its history as Fleet. The Roving thread remains the owner's one
+complete canonical view. See [master-supervision.md](master-supervision.md).
+
 Master product actions cross only `MasterToolBroker`. Its closed JSON schemas accept
 bounded product IDs and text, never paths. The broker resolves owner-scoped IDs in
 trusted Proxima code and returns bounded records without absolute host or internal

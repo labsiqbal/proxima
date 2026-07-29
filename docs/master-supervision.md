@@ -81,7 +81,9 @@ stable `toast_key`. Every projection event also includes the captured Focus epoc
 Focus Container, and subject Container committed with the projected message. The
 authenticated shared frontend provider updates the
 durable thread and work panel from these events without another polling endpoint.
-Transient toast presentation remains a later UI group and is intentionally inert.
+Only named projection events with a durable message id enter the bounded,
+coalescing toast queue; raw token, reasoning, and tool deltas never produce a
+toast.
 
 Master-origin Task delegation copies the turn's captured Focus epoch and an
 explicit captured marker onto `task_delegations`. Task, Attention, and Satpam
@@ -136,9 +138,9 @@ landing, restart, or Attention gates and are never accepted as control input.
 canonical desk and session, ordered messages, active Master turn, durable resume
 cursor, one typed `EventSource`, reconnect state, unread count, composer draft and
 selection, stable scroll/work-panel state, and the selected history projection.
-`MasterConversation`,
-`MasterComposer`, and `MasterWorkPanel` are view-only shared consumers used by the
-full-page home and prepared for the later popup.
+`MasterConversation` and `MasterComposer` are view-only consumers shared by the
+full-page home and floating popup. `MasterWorkPanel` is the full-page consumer of
+the same provider state.
 
 The provider deduplicates event and message ids, preserves server ordering, and
 applies only safe final messages and server-owned Master projection summaries. Raw

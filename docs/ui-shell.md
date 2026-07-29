@@ -35,13 +35,14 @@ itself keeps the counterpart label **Master** and does not expose a fake worker 
 A compact capacity strip always states running/free out of three, queued count, and the
 saved unattended budgets. One authenticated provider owns the Master session, durable
 thread, live SSE cursor, reconnect state, unread count, composer draft/selection,
-Focus, target, popup, toast queue, scroll anchor, and work-panel state across
-navigation. The full-page home and floating popup are two views of that provider,
-so only one composer and one live connection exist. The main column is the Master
-thread plus one shared **Chat composer** stack (attach + `@` project file/artifact
-mentions) wired to Master's send API rather than a normal chat run; project context
-follows the shell active project (or an active Master job's project). The side column
-groups queued, running, review/attention, completed, and failed Master-owned Tasks,
+Focus, target, selected history projection, popup, toast queue, scroll anchor, and
+work-panel state across navigation. The full-page home and floating popup are two
+views of that provider, so only one composer and one live connection exist. The main
+column is the Master thread plus one shared **Chat composer** stack (attach + `@`
+project file/artifact mentions) wired to Master's send API rather than a normal
+chat run; project context follows the shell active project (or an active Master
+job's project). The side column groups queued, running, review/attention, completed,
+and failed Master-owned Tasks,
 then owner decisions and a job-scoped checkpoint timeline. It is **collapsible**
 (header toggle + reopen
 edge control; preference in `localStorage` as `proxima.master.sideCollapsed`; mobile
@@ -52,17 +53,23 @@ with no horizontal scroll.
 The provider uses the existing Master session SSE stream as its only live path.
 Reconnect or a detected cursor gap triggers one authoritative reconciliation; there
 is no five-second Master polling loop. Its draft, selection, and scroll anchor survive
-route changes. The header New Task control and Tasks → New task entry both seed this
-same composer while Master is enabled. The legacy standalone Task launcher remains a
-feature-off compatibility path only. Changing the shell Container affects attachment
-and mention context but never silently changes Master Focus.
+route changes and browser refresh through owner-keyed session storage; the target
+remains an owner-keyed local preference. The header New Task control and Tasks →
+New task entry both seed this same composer while Master is enabled. The legacy
+standalone Task launcher remains a feature-off compatibility path only. Changing
+the shell Container affects attachment and mention context but never silently
+changes Master Focus.
 
 The composer defaults to **Let Master route** and can explicitly target a registered
 Container. An advanced Area override appears only after a Container is explicit.
 Sent messages retain visible target metadata. If an explicit target differs from
 Master Focus, the composer warns that sending will change Focus, and the server
 records that Focus before enqueueing. The home Focus picker changes only Master
-Focus, never the shell Container.
+Focus, never the shell Container. The adjacent History picker projects the one
+canonical thread into Roving, Fleet, and per-Container folders. Selecting an
+available Fleet or Container folder explicitly requests that Focus; Roving and
+unavailable historical folders are read-only. **Focus Master here** is the only
+bridge from the shell Container into Master Focus.
 
 Normal authenticated surfaces show a labeled floating Master trigger with the
 `Ctrl`/`Command` + `Shift` + `M` shortcut. The popup persists at the bottom-left or

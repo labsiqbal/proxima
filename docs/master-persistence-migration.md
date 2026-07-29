@@ -44,6 +44,12 @@ message still proves its Focus; incomplete legacy origins remain executable afte
 normal scoped ownership validation but unprojectable rather than being guessed.
 Migration 41 makes captured message and run Focus epoch ids immutable at the
 database boundary without rewriting existing attribution.
+Migration 42 freezes the remaining history scope. It removes destructive
+Container and Area foreign keys from message Focus and routing context, backfills
+recoverable Focus, subject, and explicit-target Container ids, copies that
+attribution into existing projection/event payloads, and rejects later edits to
+message Focus, subject, target, or Area attribution. Container deletion therefore
+cannot silently move historical messages into Fleet history.
 
 Checkpoint and job-input payloads are rewritten only for known ownership keys:
 `alpha_session_id` becomes `origin_master_session_id` and
@@ -118,6 +124,8 @@ the Alpha-era messages already there.
 | Task delegation with a surviving attributed origin message | copy its epoch during migration 40 |
 | Task delegation whose legacy origin attribution is missing | preserve the Task lifecycle but fail closed on a new projection |
 | Schema 40 message and run Focus attribution | preserve existing values and install the migration 41 immutability triggers |
+| Schema 41 Master message scope | preserve recoverable Focus, subject, and explicit-target ids; synchronize projection/event attribution; install the migration 42 immutability triggers |
+| Container deletion after migration 42 | retain historical message Focus, subject, target, and Area ids for stable history projection |
 
 Feature-off startup still migrates and validates persistence, but does not
 instantiate the Master supervisor or projection service, resume committed Master
