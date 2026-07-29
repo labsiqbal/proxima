@@ -1197,10 +1197,11 @@ def register(app, deps):
             "OR (status = 'queued' AND created_at >= datetime('now', ?)))",
             stale_params(stale_seconds),
         ).fetchone()["c"]
+        process_probes_allowed = maintenance.process_probes_allowed()
         runners = detect_runners(
             path_env=str(cfg.get("_runtime_path") or ""),
             create_shim=False,
-            allow_process_probes=not maintenance.fenced(),
+            allow_process_probes=process_probes_allowed,
         )
         system_health = {
             "activeRuns": active_runs_count,
@@ -1231,7 +1232,7 @@ def register(app, deps):
                     app_cfg.get("start_worker", True),
                 )
             )
-            and not maintenance.fenced()
+            and process_probes_allowed
         )
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),

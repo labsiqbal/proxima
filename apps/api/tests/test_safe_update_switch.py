@@ -19,6 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 from apps.safe_updater.circuit_breaker import CircuitBreaker
 from apps.safe_updater import circuit_breaker as circuit_breaker_module
 from apps.safe_updater import controller as controller_module
+from apps.safe_updater import write_fence as write_fence_module
 from apps.safe_updater.controller import SafeUpdateController
 from apps.safe_updater.journal import Journal, JournalIntegrityError
 from apps.safe_updater.layout import ReleaseLayout
@@ -810,6 +811,116 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         assert client.get("/api/health").json()["maintenance_mode"] == "readonly"
     with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
         maintenance_app.state.db.execute("CREATE TABLE forbidden(value TEXT)")
+
+
+def test_fence_removal_keeps_runner_probes_blocked_until_ingress_reopens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from proxima_api import auth_health as auth_health_module
+
+    auth_health_module.reset()
+    runner_bin = tmp_path / "runner-bin"
+    runner_bin.mkdir()
+    codex = runner_bin / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex-cli 0.145.0'\n")
+    codex.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH",
+        f"{runner_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
+    database = tmp_path / "proxima.db"
+    setup = connect(database)
+    init_db(setup)
+    run_migrations(setup, database)
+    setup.close()
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(database),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "auth_health_checks": True,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+    run_id = "b" * 32
+    marker_removed = threading.Event()
+    release_removal = threading.Event()
+    removal_errors: list[BaseException] = []
+    original_fsync = write_fence_module.fsync_directory
+
+    def hold_after_marker_removal(path: Path) -> None:
+        original_fsync(path)
+        if not fence.exists():
+            marker_removed.set()
+            if not release_removal.wait(timeout=5):
+                raise AssertionError("timed out holding exclusive ingress")
+
+    def remove_fixture_fence() -> None:
+        try:
+            write_fence_module.remove(fence, run_id)
+        except BaseException as exc:
+            removal_errors.append(exc)
+
+    def unexpected_runner_probe(*_args, **_kwargs):
+        raise AssertionError("fence removal launched a runner probe")
+
+    with TestClient(app) as client:
+        login = client.post("/auth/auto")
+        assert login.status_code == 200
+        token = login.json()["token"]
+        write_fence(fence, run_id, "write_fenced")
+        monkeypatch.setattr(
+            write_fence_module,
+            "fsync_directory",
+            hold_after_marker_removal,
+        )
+        monkeypatch.setattr(
+            "proxima_api.runner_specs.subprocess.run",
+            unexpected_runner_probe,
+        )
+        remover = threading.Thread(target=remove_fixture_fence)
+        remover.start()
+        try:
+            assert marker_removed.wait(timeout=5)
+            assert fence.exists() is False
+            assert app.state.maintenance.fenced() is False
+            assert app.state.maintenance.process_probes_allowed() is False
+            runner_response = client.get(
+                "/api/runners/detect",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert runner_response.status_code == 200
+            detected_codex = next(
+                runner
+                for runner in runner_response.json()["runners"]
+                if runner["id"] == "codex"
+            )
+            assert detected_codex["installed"] is True
+            assert detected_codex["masterEligible"] is False
+            assert detected_codex["masterUnavailableReason"] == (
+                "Master runner verification is unavailable during maintenance"
+            )
+            assert client.get(
+                "/api/dashboard",
+                headers={"Authorization": f"Bearer {token}"},
+            ).status_code == 200
+        finally:
+            release_removal.set()
+            remover.join(timeout=5)
+
+        assert remover.is_alive() is False
+        assert removal_errors == []
+        admission = app.state.maintenance.acquire()
+        assert admission.acquired
+        try:
+            assert app.state.maintenance.process_probes_allowed() is True
+        finally:
+            admission.release()
+
+    auth_health_module.reset()
 
 
 def test_normal_wiki_read_seeds_index_without_dynamic_database_fence(

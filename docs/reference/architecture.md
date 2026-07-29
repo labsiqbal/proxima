@@ -536,8 +536,8 @@ cannot break unrelated routes. Migration ambiguity still fails closed.
 ```text
 GET /api/runners/detect
       -> resolve binaries on the server-controlled runtime PATH
-      -> when admitted, apply master_runner_conformance, including minimum version
-      -> when maintenance-fenced, skip process probes and fail eligibility closed
+      -> with ingress admission, apply conformance, including minimum version
+      -> when fenced or not admitted, skip process probes and fail eligibility closed
       -> publish masterChatOnly + masterEligible + masterUnavailableReason
       -> Master selector enables only masterEligible=true
       -> settings and runtime repeat conformance before mutation or spawn
@@ -593,9 +593,11 @@ controlled runtime path and publishes `masterEligible` with an exact
 entries. An unavailable stored selection remains visible only as a disabled
 explanation. The browser result is advisory presentation data: settings, message
 creation, and worker spawn each repeat the server check. During pending or active
-external maintenance, runner discovery retains read-only binary detection but
-skips process-backed conformance and reports Master ineligible with a maintenance
-reason. This applies to both the runner endpoint and the dashboard projection.
+external maintenance, and while exclusive ingress remains held during fence
+removal, runner discovery retains read-only binary detection but skips
+process-backed conformance and reports Master ineligible with a maintenance
+reason. This applies to both the runner endpoint and the dashboard projection;
+probes resume only after ingress admission resumes.
 
 Codex conformance has two pre-turn gates: strict version parsing and a behavioral
 app-server handshake that registers the exact server-owned dynamic schemas on an
