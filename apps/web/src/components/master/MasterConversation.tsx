@@ -177,7 +177,12 @@ export function MasterConversation({
 }: {
   onOpenJob: (id: number, engine?: string) => void
 }) {
-  const { messages, activeRun, view, fleet, actions } = useMasterState()
+  const state = useMasterState()
+  // Compatibility fallback keeps older embedded hosts and test harnesses on the
+  // canonical roving thread until they adopt the shared history selection.
+  const history = state.history ?? { kind: 'roving' as const }
+  const historyMessages = state.historyMessages ?? state.messages
+  const { activeRun, view, fleet, actions } = state
   const threadRef = React.useRef<HTMLDivElement>(null)
   const restoredRef = React.useRef(false)
   const frameRef = React.useRef<number | null>(null)
@@ -191,7 +196,7 @@ export function MasterConversation({
       return
     }
     if (view.followTail) thread.scrollTop = thread.scrollHeight
-  }, [messages.length, view.followTail, view.scrollTop])
+  }, [historyMessages.length, view.followTail, view.scrollTop])
 
   React.useEffect(() => () => {
     if (frameRef.current != null) window.cancelAnimationFrame(frameRef.current)
@@ -215,7 +220,13 @@ export function MasterConversation({
     })
   }
 
-  if (!messages.length && !activeRun) return <MasterEmpty />
+  if (!historyMessages.length && !activeRun) {
+    return history.kind === 'roving' ? <MasterEmpty /> : (
+      <div className="master-history-empty" role="status">
+        No Master history is attributed to this view yet.
+      </div>
+    )
+  }
 
   return (
     <div
@@ -223,12 +234,12 @@ export function MasterConversation({
       ref={threadRef}
       onScroll={recordScroll}
       role="log"
-      aria-label="Master conversation"
+      aria-label="Master conversation history"
       aria-live="polite"
       aria-relevant="additions text"
       aria-atomic="false"
     >
-      {messages.map((message, index) => {
+      {historyMessages.map((message, index) => {
         const content = message.role === 'assistant'
           ? cleanMaster(message.content)
           : message.content
@@ -291,6 +302,15 @@ export function MasterConversation({
                   : 'Proxima'}
               {message.pending && <span className="master-message-pending">Sending</span>}
             </strong>
+            {message.historyKind && (
+              <small className={`master-history-kind ${message.historyKind}`}>
+                {message.historyKind === 'system-event'
+                  ? 'System update'
+                  : message.historyKind === 'focus-boundary'
+                    ? 'Focus boundary'
+                    : 'Focused segment'}
+              </small>
+            )}
             {targetLabel && (
               <small className="master-message-target">{targetLabel}</small>
             )}

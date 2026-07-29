@@ -474,7 +474,17 @@ startable after scope validation but unprojectable, and their projection failure
 does not starve later reconciliation candidates. The restricted Master runner
 process is rebuilt for every Master turn and its durable history is limited to the
 captured epoch, so prior Container ACP/model context cannot cross a boundary.
-History projection UI and safe-self-update remain later delivery groups. See
+The Master home projects the one canonical roving thread into `Roving thread`,
+`Fleet history`, and per-Container folders without creating or copying a
+session. A Container folder contains only its immutable Focus segments plus
+asynchronous system updates whose durable subject is that Container; Fleet
+excludes Container-subject updates. Focus boundaries, focused segments, and
+system updates are visibly labelled. Selecting a Fleet or Container history
+folder explicitly changes durable Focus, while selecting the roving thread is
+read-only. The shell Container remains independent: `Focus Master here` is an
+explicit bridge, never an implicit shell-selection side effect. Pending Focus,
+explicit-target Focus effects, and Fleet mode remain visible in both shared
+home and popup state. Safe-self-update remains a later delivery group. See
 [ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 The shared provider bootstraps Focus and its optimistic version from the Master

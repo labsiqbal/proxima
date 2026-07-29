@@ -294,6 +294,11 @@ export function projectMasterEvent(
         content: text,
         run_id: event.run_id,
         created_at: event.created_at,
+        message_focus: {
+          focus_epoch_id: desk.focus.current_epoch_id,
+          focus_container_id: desk.focus.current_container_id,
+          subject_container_id: null,
+        },
       }])
     }
   } else if (event.type === 'master.focus.changed') {
@@ -339,6 +344,11 @@ export function projectMasterEvent(
             : `Master Focus changed to Container ${containerId}.`,
           run_id: null,
           created_at: event.created_at,
+          message_focus: {
+            focus_epoch_id: epochId,
+            focus_container_id: containerId,
+            subject_container_id: null,
+          },
         }])
       }
     }
@@ -359,6 +369,13 @@ export function projectMasterEvent(
         content,
         run_id: null,
         created_at: event.created_at,
+        message_focus: {
+          focus_epoch_id: positiveInteger(payload.focus_epoch_id),
+          focus_container_id: positiveInteger(payload.focus_container_id),
+          subject_container_id: positiveInteger(
+            payload.subject_container_id ?? payload.container_id,
+          ),
+        },
       }])
     }
     nextDesk = updateProjectedJob(nextDesk, event, payload)

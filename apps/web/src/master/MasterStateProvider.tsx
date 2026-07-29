@@ -24,6 +24,11 @@ import {
   projectMasterSnapshot,
   type MasterViewMessage,
 } from './masterProjection'
+import {
+  projectMasterHistory,
+  type MasterHistoryMessage,
+  type MasterHistoryScope,
+} from './masterHistory'
 
 export type { MasterViewMessage } from './masterProjection'
 
@@ -61,6 +66,8 @@ export type MasterPopupState = {
   preferredCorner: 'left' | 'right'
 }
 
+export type MasterHistoryState = MasterHistoryScope
+
 export type MasterFleetState = {
   loading: boolean
   error: string
@@ -73,6 +80,8 @@ export type MasterStateValue = {
   loading: boolean
   desk: MasterDesk | null
   messages: MasterViewMessage[]
+  history: MasterHistoryState
+  historyMessages: MasterHistoryMessage[]
   activeRun: { id: number; status: string } | null
   connection: {
     state: MasterConnectionState
@@ -116,6 +125,7 @@ export type MasterStateValue = {
       anchorMessageId: number | null
     }) => void
     setFocus: (containerId: number | null) => Promise<void>
+    setHistory: (history: MasterHistoryState) => void
     setTargetContainer: (containerId: number | null) => void
     setTargetArea: (areaId: number | null) => void
     loadTargetAreas: (containerId: number) => Promise<void>
@@ -145,6 +155,7 @@ const DEFAULT_TARGET: MasterTargetState = {
   containerId: null,
   areaId: null,
 }
+const DEFAULT_HISTORY: MasterHistoryState = { kind: 'roving' }
 
 function ownerPreferenceKey(key: string, ownerId: number): string {
   return `${key}.${ownerId}`
@@ -352,6 +363,7 @@ function MasterStateHost({
     anchorMessageId: null as number | null,
   })
   const [focus, setFocusState] = React.useState<MasterFocusState>(DEFAULT_FOCUS)
+  const [history, setHistoryState] = React.useState<MasterHistoryState>(DEFAULT_HISTORY)
   const [target, setTargetState] = React.useState<MasterTargetState>(
     () => readTarget(ownerId),
   )
@@ -456,6 +468,7 @@ function MasterStateHost({
     areaRequestsRef.current.clear()
     toastTransitionsRef.current.clear()
     setFocusState(nextFocus)
+    setHistoryState(DEFAULT_HISTORY)
     setTargetState(nextTarget)
     setPopupState(nextPopup)
     setToasts([])
@@ -924,6 +937,10 @@ function MasterStateHost({
     return request
   }, [enabled, token])
 
+  const setHistory = React.useCallback((nextHistory: MasterHistoryState) => {
+    setHistoryState(nextHistory)
+  }, [])
+
   const setTargetContainer = React.useCallback((containerId: number | null) => {
     const next: MasterTargetState = containerId == null
       ? DEFAULT_TARGET
@@ -1089,6 +1106,11 @@ function MasterStateHost({
       clientId,
       pending: true,
       master_target: masterTarget,
+      message_focus: {
+        focus_epoch_id: deskRef.current.focus.current_epoch_id,
+        focus_container_id: effectiveFocus.containerId,
+        subject_container_id: null,
+      },
     }])
     setMessages(messagesRef.current)
     try {
@@ -1104,7 +1126,15 @@ function MasterStateHost({
       ) return
       mutationRevisionRef.current += 1
       messagesRef.current = messagesRef.current.map(message => message.clientId === clientId
-        ? { ...result.message, pending: false }
+        ? {
+            ...result.message,
+            pending: false,
+            message_focus: {
+              focus_epoch_id: result.focus.current_epoch_id,
+              focus_container_id: result.focus.current_container_id,
+              subject_container_id: null,
+            },
+          }
         : message)
       messagesRef.current = orderMasterMessages(messagesRef.current)
       setMessages(messagesRef.current)
@@ -1223,11 +1253,18 @@ function MasterStateHost({
     }
   }, [enabled, token])
 
+  const historyMessages = React.useMemo(
+    () => projectMasterHistory(messages, history),
+    [history, messages],
+  )
+
   const value = React.useMemo<MasterStateValue>(() => ({
     enabled,
     loading,
     desk,
     messages,
+    history,
+    historyMessages,
     activeRun,
     connection: {
       state: connectionState,
@@ -1263,6 +1300,7 @@ function MasterStateHost({
       setSideCollapsed,
       setScrollState,
       setFocus,
+      setHistory,
       setTargetContainer,
       setTargetArea,
       loadTargetAreas,
@@ -1298,6 +1336,8 @@ function MasterStateHost({
     enabled,
     focusRequest,
     focus,
+    history,
+    historyMessages,
     fleet,
     homeActive,
     loading,
@@ -1315,6 +1355,7 @@ function MasterStateHost({
     sending,
     setDraft,
     setFocus,
+    setHistory,
     setHomeActive,
     setPopupCorner,
     setScrollState,

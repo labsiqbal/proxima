@@ -480,7 +480,13 @@ Uncaptured migration-era Tasks remain executable after scoped ownership validati
 but unprojectable, and one such row cannot stop reconciliation of later sources.
 Every restricted Master turn recycles its ACP process and rebuilds history solely
 from its captured epoch, preventing old Container context from surviving in runner
-or model caches. History projection UI and safe-self-update remain later groups.
+or model caches. The shared frontend projects the existing ordered Master message
+ids into Roving, Fleet, and Container histories without copying a session. A
+Container projection includes Focus-attributed segments and messages whose
+immutable subject is that Container; Fleet excludes those subject messages.
+History folder changes deliberately request durable Focus, while shell Container
+selection is independent unless the owner explicitly chooses `Focus Master here`.
+Safe-self-update remains a later group.
 See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow

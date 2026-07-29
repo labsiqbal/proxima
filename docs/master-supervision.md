@@ -132,7 +132,8 @@ landing, restart, or Attention gates and are never accepted as control input.
 `MasterStateProvider` mounts once around the authenticated `AppShell`. It owns the
 canonical desk and session, ordered messages, active Master turn, durable resume
 cursor, one typed `EventSource`, reconnect state, unread count, composer draft and
-selection, and stable scroll/work-panel state. `MasterConversation`,
+selection, stable scroll/work-panel state, and the selected history projection.
+`MasterConversation`,
 `MasterComposer`, and `MasterWorkPanel` are view-only shared consumers used by the
 full-page home and prepared for the later popup.
 
@@ -153,8 +154,13 @@ Focus is server-owned state, not a browser preference. Bootstrap reads the
 current epoch, pending request, and optimistic version from the desk. The picker
 writes through `PUT /api/master/focus`, explicit message targets transition Focus
 inside the message transaction, and `master.focus.changed` updates every live
-consumer from the durable boundary event. Local storage is used only for
-presentation preferences and the independent per-message target picker.
+consumer from the durable boundary event. History folders project the existing
+ordered message ids: a Container includes its immutable Focus segments and
+Container-subject system updates, Fleet excludes Container-subject updates, and
+Roving stays exact. Folder changes are explicit Focus mutations, while the shell
+Container can only request Focus through the explicit `Focus Master here` bridge.
+Local storage is used only for presentation preferences and the independent
+per-message target picker.
 
 ## Compatibility
 

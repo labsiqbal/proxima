@@ -27,6 +27,7 @@ const actions = {
   setSideCollapsed: vi.fn(),
   setScrollState: vi.fn(),
   setFocus: vi.fn().mockResolvedValue(undefined),
+  setHistory: vi.fn(),
   setTargetContainer: vi.fn(),
   setTargetArea: vi.fn(),
   loadTargetAreas: vi.fn().mockResolvedValue(undefined),
@@ -170,6 +171,30 @@ describe('MasterScreen', () => {
     expect(screen.getByRole('option', { name: 'Let Master route' }))
       .toBeInTheDocument()
     expect(actions.setFocus).not.toHaveBeenCalled()
+  })
+
+  it('only bridges the shell Container into Master after an explicit request', async () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      fleet: {
+        loading: false,
+        error: '',
+        containers: [{ id: 21, slug: 'shell-container', name: 'Shell', identity_label: 'Shell' }],
+        areasByContainer: {},
+      },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        activeProject={{ slug: 'shell-container' } as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+    expect(actions.setFocus).not.toHaveBeenCalled()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Focus Master here' }))
+    expect(actions.setFocus).toHaveBeenCalledWith(21)
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'container', containerId: 21 })
   })
 
   it('shows explicit Container metadata, an advanced Area override, and the Focus warning', async () => {

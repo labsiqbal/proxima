@@ -3,7 +3,7 @@ import type { Project, Runner } from '../types'
 import { MasterConversation, MasterEmpty } from '../components/master/MasterConversation'
 import { MasterComposer } from '../components/master/MasterComposer'
 import { MasterWorkPanel } from '../components/master/MasterWorkPanel'
-import { MasterFocusPicker } from '../components/master/MasterTargetPicker'
+import { MasterFocusPicker, MasterHistoryPicker } from '../components/master/MasterTargetPicker'
 import { IconPanelLeft } from '../components/shell/icons'
 import { useMasterState } from '../master/MasterStateProvider'
 
@@ -116,6 +116,15 @@ export function MasterScreen({
     || connection.state === 'disconnected'
   const masterBusy = state.composer.sending
     || ['queued', 'running'].includes(state.activeRun?.status || '')
+  const shellContainer = activeProject == null
+    ? null
+    : state.fleet.containers.find(container => container.slug === activeProject.slug) || null
+  const focusShellContainer = () => {
+    if (!shellContainer) return
+    void actions.setFocus(shellContainer.id)
+      .then(() => actions.setHistory({ kind: 'container', containerId: shellContainer.id }))
+      .catch(() => {})
+  }
 
   return (
     <section className={`master-view ${view.sideCollapsed ? 'master-side-collapsed' : ''}`} aria-labelledby="master-title">
@@ -126,6 +135,17 @@ export function MasterScreen({
         </div>
         <div className="master-controls code-context">
           <MasterFocusPicker />
+          <MasterHistoryPicker />
+          {shellContainer && (
+            <button
+              type="button"
+              className="ghost-button master-focus-here"
+              disabled={masterBusy || state.focus.containerId === shellContainer.id}
+              onClick={focusShellContainer}
+            >
+              Focus Master here
+            </button>
+          )}
           <span
             className={`master-connection ${connection.state}`}
             role="status"
