@@ -1,4 +1,4 @@
-"""Inert trusted controller facade for the group-14 updater foundation."""
+"""Trusted controller facade for candidate-only qualification."""
 from __future__ import annotations
 
 import hashlib
@@ -27,7 +27,7 @@ class SubmitResult:
 
 
 class SafeUpdateController:
-    """Owns lock and journal only. Its activation methods intentionally do not exist."""
+    """Owns the lock, journal and candidate gate without activation authority."""
     def __init__(self, root: Path) -> None:
         self.root = root
         self.lock = SingleFlightLock(root / "controller.lock")
@@ -67,7 +67,8 @@ class SafeUpdateController:
             self.lock.set_owner(run_id)
             journal = Journal.create(self.root, run_id, digest)
             journal.append(Phase.PREFLIGHT)
-            # Group 14 stops here: no candidate build, pointer, data, or service side effect.
+            # Submission stops at preflight. Candidate qualification is a separate,
+            # explicit step and cannot activate a release.
             return SubmitResult(True, run_id)
         finally:
             self.lock.release()

@@ -79,8 +79,10 @@ asset digest, and trusted browser scenarios. Candidate-mode startup rejects sche
 initialization, migration, and background writers. Evidence contains the fixed logs
 and proofs, is frozen at both file and directory levels, and is rehashed against the
 journal digest during recovery. A failed build, migration, identity, static asset,
-probe, or sandbox check leaves live data, paths, runner homes, services, pointers,
-journal, fence, and backups untouched. This is not enrollment or activation.
+probe, or sandbox check leaves the live database, workspace, runner homes, services,
+pointers, fence, and backups untouched. The accepted preflight journal remains
+nonterminal, and frozen failure evidence is retained for inspection. This is not
+enrollment or activation.
 
 ## App Owner
 

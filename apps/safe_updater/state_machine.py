@@ -1,8 +1,8 @@
 """Trusted, platform-neutral safe-update phase contract.
 
-This module deliberately contains no activation primitive.  Later delivery groups
-may bind side effects to these phases, but group 14 can only validate, journal,
-and recover their durable boundaries.
+This module deliberately contains no activation primitive. Current candidate
+qualification can reach only ``candidate_staged``; later delivery groups may bind
+side effects to subsequent phases.
 """
 from __future__ import annotations
 

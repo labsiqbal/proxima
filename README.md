@@ -163,8 +163,9 @@ One workspace, organized around two paths into durable work: **Chat or Master â†
 - **Schedules** â€” five-field cron for saved Recipes, with overlap
   policy and a "Run now" that exercises the real spawn path.
 - **Release checks, audit log, themes & PWA** - GitHub release availability with
-  a disabled external safe-updater foundation, an audit trail of meaningful
-  actions, six themes, installable on desktop or phone.
+  a disabled external safe-updater foundation and controller-only candidate
+  qualification, an audit trail of meaningful actions, six themes, installable on
+  desktop or phone.
 
 Video Studio and video generation were removed; ordinary video files still play
 as generic artifacts.

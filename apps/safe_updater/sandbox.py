@@ -175,6 +175,7 @@ class CandidateSandbox:
         network_loopback: bool,
         namespace_root: bool,
         memory_bytes: int,
+        process_limit: int,
     ) -> list[str]:
         bwrap = shutil.which("bwrap", path=_SYSTEM_PATH)
         if os.name != "posix" or not bwrap:
@@ -344,7 +345,7 @@ class CandidateSandbox:
                 f"--cpu={self.cpu_seconds}:{self.cpu_seconds}",
                 f"--as={memory_bytes}:{memory_bytes}",
                 f"--fsize={self.file_bytes}:{self.file_bytes}",
-                f"--nproc={self.process_limit}:{self.process_limit}",
+                f"--nproc={process_limit}:{process_limit}",
                 "--",
                 *command,
             )
@@ -372,13 +373,18 @@ class CandidateSandbox:
         network_loopback: bool = False,
         namespace_root: bool = False,
         memory_bytes: int | None = None,
+        process_limit: int | None = None,
         writable_overlays: Mapping[Path, Path] | None = None,
         timeout: int = 180,
     ) -> subprocess.CompletedProcess[bytes]:
         self.validate(())
         address_space_bytes = self.memory_bytes if memory_bytes is None else memory_bytes
+        command_process_limit = (
+            self.process_limit if process_limit is None else process_limit
+        )
         if (
             address_space_bytes <= 0
+            or command_process_limit <= 0
             or self.storage_bytes <= 0
             or self.reserve_bytes <= 0
             or self.tmpfs_bytes <= 0
@@ -435,6 +441,7 @@ class CandidateSandbox:
                 network_loopback=network_loopback,
                 namespace_root=namespace_root,
                 memory_bytes=address_space_bytes,
+                process_limit=command_process_limit,
             )
             process = subprocess.Popen(
                 command,

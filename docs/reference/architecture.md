@@ -1089,7 +1089,7 @@ Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
 
-### 9. Update check and inert safe-update foundation
+### 9. Update check and candidate-only safe-update gate
 
 ```text
 VERSION (repo root) → read_local_version() → FastAPI app.version → GET /api/health
@@ -1123,17 +1123,20 @@ never the source of promotion truth. Both production entrypoints read
 `PROXIMA_SAFE_UPDATE_FENCE_PATH`; the flag defaults off and a configured fence is
 read-only application status.
 
-The external updater owns exact regular-file manifest verification, canonical
+The external updater owns exact signed regular-file manifest verification, canonical
 Python/web lockfile digests, local provenance revalidation, native POSIX/Windows
 single-flight locking, platform-selected directory durability, the journal, and the
-recovery decision. Signed or local verification returns an immutable verified file
-set bound to the candidate commit and, for signed releases, the release identifier.
-Release publication accepts only that result, traverses candidates from pinned
-directory descriptors, copies content into fresh controller-owned staging inodes,
-revalidates that tree, freezes it, and atomically renames it inside the trusted
-releases directory. Source ownership, ancestor substitutions, and hardlinks cannot
-carry into the published release. Every created trusted directory and its parent are
-durably flushed.
+recovery decision. Local provenance additionally binds normalized file modes and
+safe in-tree file-symlink targets; authenticated-source copying materializes their
+target bytes into fresh regular files. Signed or local verification returns an
+immutable verified file set bound to the candidate commit and, for signed releases,
+the release identifier. Release publication accepts only that result, traverses
+candidates from pinned directory descriptors, copies content into fresh
+controller-owned staging inodes, revalidates digests and normalized modes, freezes
+the tree, and atomically renames it inside the trusted releases directory. Source
+ownership, ancestor substitutions, symlinks, and hardlinks cannot carry into the
+published release. Every created trusted directory and its parent are durably
+flushed.
 
 The authenticated request projection asks the external authority first. A newly
 accepted external run supersedes stale local requested/in-progress rows; a local row
@@ -1149,14 +1152,15 @@ matrix in
 [ADR-0008](../adr/0008-external-safe-update-authority.md).
 
 Before any later fence or switch phase, group 15's controller-only candidate gate
-reverifies local provenance inside the same mandatory Bubblewrap execution boundary
-used for all candidate-controlled commands. The boundary exposes only read-only
-system inputs and phase-specific candidate-local writable mounts, removes network
-egress, uses a namespace identity without host privileges, applies resource and
-output ceilings, and kills the complete process group on timeout. A fixed offline
-build/test/type/doc manifest runs in a disposable writable tree. The controller then
-rehashes that post-build tree, copies it to fresh release inodes, freezes it, and
-runs probes only from that frozen release.
+reverifies local provenance in trusted controller code. Git checks and every
+candidate-controlled command run inside the same mandatory Bubblewrap execution
+boundary. The boundary exposes only read-only system inputs and phase-specific
+candidate-local writable mounts, removes network egress, uses a namespace identity
+without host privileges, applies resource and output ceilings, and kills the
+complete process group on timeout. A fixed offline build/test/type/doc manifest
+runs in a disposable writable tree. The controller then rehashes that post-build
+tree, copies it to fresh release inodes, freezes it, and runs probes only from that
+frozen release.
 
 SQLite's backup API creates a clone in its own writable directory. A fixed migration
 entrypoint can modify only that clone, and the controller requires an exact,
@@ -1169,9 +1173,12 @@ probe suite starts the candidate inside a loopback-only namespace and requires A
 identity, version, authenticated maintenance, SSE, served static assets, the complete
 asset digest, and every trusted headless-browser scenario. The frozen evidence tree
 contains build logs, migration and fixture proof, identities, and probe results.
-Recovery revalidates its journal-pinned digest and file set. This gate cannot call a
-service adapter or reach active or last-good pointers, fence, journal, backup, or
-production paths.
+Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
+commands cannot reach the journal, active or last-good pointers, fence, backups, or
+production paths. After independently revalidating the evidence, the controller
+appends its digest to the accepted-run journal as `candidate_staged`; it cannot call
+a service adapter or alter a live pointer, fence, backup, database, workspace,
+runner home, or service.
 
 ## Runner abstraction
 

@@ -27,6 +27,7 @@ from apps.safe_updater.git_source import resolve_git_metadata
 from apps.safe_updater.manifest import local_provenance, verify_local_provenance
 from apps.safe_updater.probe_runner import (
     TRUSTED_BROWSER_ADDRESS_SPACE_BYTES,
+    TRUSTED_BROWSER_PROCESS_LIMIT,
     CandidateIdentity,
     TrustedProbeResult,
     TrustedProbeRunner,
@@ -131,7 +132,7 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
     ) == len(definitions)
 
 
-def test_trusted_probe_runner_pins_browser_address_space_ceiling(
+def test_trusted_probe_runner_pins_browser_resource_ceilings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -156,6 +157,7 @@ def test_trusted_probe_runner_pins_browser_address_space_ceiling(
 
         def run(self, argv, **kwargs):
             observed["memory_bytes"] = kwargs["memory_bytes"]
+            observed["process_limit"] = kwargs["process_limit"]
             return subprocess.CompletedProcess(
                 argv,
                 0,
@@ -181,6 +183,9 @@ def test_trusted_probe_runner_pins_browser_address_space_ceiling(
     )
     assert result.results == {"browser": {"shell": "ok"}}
     assert observed["memory_bytes"] == TRUSTED_BROWSER_ADDRESS_SPACE_BYTES
+    assert observed["memory_bytes"] == 128 * 1024 * 1024 * 1024
+    assert observed["process_limit"] == TRUSTED_BROWSER_PROCESS_LIMIT
+    assert observed["process_limit"] == 256
 
 
 def test_offline_manifest_uses_only_the_candidate_sandbox(

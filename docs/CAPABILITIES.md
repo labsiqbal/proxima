@@ -1425,17 +1425,18 @@ and run-status projections are behind the server-enforced
 managed external updater, not candidate code or the app database, owns the
 append-only fsynced journal, native single-flight lock, immutable releases, release
 pointers, maintenance fence, backups, service configuration, and recovery verdict.
-Signed release manifests and unsigned local provenance produce an immutable
-verified-file-set result only after exact regular-file, tree, and canonical
-Python/web lockfile checks. Publication consumes that result rather than deriving
-new trust from mutable candidate bytes, copies through pinned directory descriptors
-into fresh controller-owned inodes, rechecks trusted staging, and then renames it
-atomically. Directory creation fsyncs every new directory and its parent; unsupported
-durability or pinned traversal fails closed. The app exposes only authenticated owner
-projections and a package-local read-only maintenance client. Fence status is
-nonsecret and controller-owned with read-only application access. Submission consults
-the external single-flight authority before reconciling SQLite projections. systemd,
-launchd, and unmanaged adapters fail closed until the
+Signed release manifests bind an exact regular-file set. Unsigned local provenance
+also binds normalized file modes and safe in-tree file-symlink targets, which are
+materialized as regular files. Both paths bind the canonical Python/web lockfiles
+and produce an immutable verified-file-set result. Publication consumes that result
+rather than deriving new trust from mutable candidate bytes, copies through pinned
+directory descriptors into fresh controller-owned inodes, rechecks trusted staging,
+and then renames it atomically. Directory creation fsyncs every new directory and
+its parent; unsupported durability or pinned traversal fails closed. The app exposes
+only authenticated owner projections and a package-local read-only maintenance
+client. Fence status is nonsecret and controller-owned with read-only application
+access. Submission consults the external single-flight authority before reconciling
+SQLite projections. systemd, launchd, and unmanaged adapters fail closed until the
 [adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).

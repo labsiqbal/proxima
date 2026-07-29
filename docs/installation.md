@@ -230,9 +230,10 @@ proxima update
 Safe self-update is unavailable until a root-admin enrolls a managed external
 updater, trust root, launcher, qualified service-manager adapter, candidate
 sandbox, and probe bundle. `PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and
-must remain off until candidate and fault/rollback gates are accepted. Foreground,
-ordinary user-service, Windows, and unqualified macOS installs fail closed. Local
-self-edit commits carry reverified provenance, not a release signature.
+must remain off until later switch, fault, and rollback gates are accepted.
+Foreground, ordinary user-service, Windows, and unqualified macOS installs fail
+closed. Local self-edit commits carry reverified provenance, not a release
+signature.
 
 The shipped candidate gate is still controller-only and not an installer feature.
 It runs the fixed offline build and clone-only migration inside a mandatory
