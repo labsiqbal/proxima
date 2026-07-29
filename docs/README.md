@@ -24,6 +24,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | --- | --- | --- |
 | [reference/tech-stack.md](reference/tech-stack.md) | What is it built with? (backend, frontend, runtime, ops) | by hand |
 | [reference/architecture.md](reference/architecture.md) | How is it structured, and how do the main flows work? | by hand |
+| [adr/README.md](adr/README.md) | Why significant architecture and policy decisions are in force | append-only records |
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |
@@ -32,6 +33,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [task-delegation.md](task-delegation.md) | Durable scoped Task creation, replay, dependencies, recovery, and caller extension contract | by hand |
 | [master-supervision.md](master-supervision.md) | Master queue-start authority, durable Task/Satpam chat projection, and session event contract | by hand |
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
+| [master-integrated-acceptance.md](master-integrated-acceptance.md) | Final Master-orchestrator requirement matrix and disposable-fixture acceptance evidence | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification and extension contract for external updater service adapters | by hand |
@@ -88,9 +90,11 @@ python3 scripts/gen_docs.py
 apps/api/.venv/bin/python scripts/gen_docs.py
 ```
 
-This rewrites `reference/api.md` (parsed from the route decorators) and
+This updates `reference/api.md` (parsed from the route decorators) and
 `reference/database.md` (introspected from a throwaway DB built with the app's own
-`init_db` + migrations). Both files are marked **GENERATED — do not edit by hand**.
+`init_db` + migrations) only when their semantic content changes. An unchanged run
+preserves the existing generation footer so the drift check stays clean. Both files
+are marked **GENERATED - do not edit by hand**.
 
 For the hand-maintained docs, the rule of thumb: **change the code and its doc in the
 same commit.** When you add a feature, update [CAPABILITIES.md](CAPABILITIES.md); when

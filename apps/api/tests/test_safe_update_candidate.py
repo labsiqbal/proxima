@@ -97,6 +97,16 @@ def _trusted(tmp_path: Path) -> TrustedProbeBundle:
         '{"version":1,"scenarios":["shell"]}',
         encoding="utf-8",
     )
+    fixture_codex = probes / "codex-fixture"
+    shutil.copyfile(
+        Path(__file__).resolve().parents[3]
+        / "trusted-probes"
+        / "safe-update"
+        / "codex-fixture",
+        fixture_codex,
+        follow_symlinks=False,
+    )
+    fixture_codex.chmod(0o500)
     return TrustedProbeBundle.load(probes, _tree_digest(probes))
 
 
@@ -108,10 +118,14 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
             str(root / name),
             "exec",
         )
+    fixture_codex = root / "codex-fixture"
+    assert fixture_codex.is_file()
+    assert os.access(fixture_codex, os.X_OK)
+    assert "codex-cli 0.145.0" in fixture_codex.read_text(encoding="utf-8")
     scenarios = json.loads(
         (root / "browser-scenarios.json").read_text(encoding="utf-8")
     )
-    assert scenarios["version"] == 2
+    assert scenarios["version"] == 3
     definitions = scenarios["scenarios"]
     assert {scenario["name"] for scenario in definitions} == {
         "focus",
@@ -124,6 +138,19 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
         "update-status",
     }
     assert all(scenario["steps"] for scenario in definitions)
+    master_steps = next(
+        scenario["steps"]
+        for scenario in definitions
+        if scenario["name"] == "master-popup-home"
+    )
+    assert {
+        step["action"]
+        for step in master_steps
+    } >= {"assert", "assert_absent", "click"}
+    assert any(
+        "data-master-eligible" in step["selector"]
+        for step in master_steps
+    )
     assert len(
         {
             json.dumps(scenario["steps"], sort_keys=True)
@@ -143,7 +170,7 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
     for path in (release, workspace, runner_home, database.parent):
         path.mkdir(parents=True, exist_ok=True)
     database.touch()
-    observed: dict[str, int] = {}
+    observed: dict[str, object] = {}
 
     class Sandbox:
         root = tmp_path
@@ -158,6 +185,7 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
         def run(self, argv, **kwargs):
             observed["memory_bytes"] = kwargs["memory_bytes"]
             observed["process_limit"] = kwargs["process_limit"]
+            observed["auxiliary_tools"] = kwargs["auxiliary_tools"]
             return subprocess.CompletedProcess(
                 argv,
                 0,
@@ -169,9 +197,10 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
         "_browser",
         staticmethod(lambda: ("/usr/bin/true", {})),
     )
+    trusted_bundle = _trusted(tmp_path)
     result = TrustedProbeRunner().run(
         sandbox=Sandbox(),
-        trusted_bundle=_trusted(tmp_path),
+        trusted_bundle=trusted_bundle,
         identity=CandidateIdentity(
             f"sha256-{'a' * 40}-{'b' * 12}",
             "a" * 40,
@@ -186,6 +215,79 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
     assert observed["memory_bytes"] == 128 * 1024 * 1024 * 1024
     assert observed["process_limit"] == TRUSTED_BROWSER_PROCESS_LIMIT
     assert observed["process_limit"] == 256
+    auxiliary_tools = observed["auxiliary_tools"]
+    assert isinstance(auxiliary_tools, dict)
+    codex = auxiliary_tools["codex"]
+    assert isinstance(codex, Path)
+    assert codex == trusted_bundle.root / "codex-fixture"
+    assert "codex-cli 0.145.0" in codex.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="bubblewrap sandbox contract",
+)
+def test_candidate_sandbox_mounts_read_only_auxiliary_tool(tmp_path: Path):
+    root = tmp_path / "sandbox"
+    release = root / "release"
+    workspace = root / "workspace"
+    runner_home = root / "runner"
+    release.mkdir(parents=True)
+    workspace.mkdir()
+    runner_home.mkdir()
+    fixture_codex = tmp_path / "codex-fixture"
+    shutil.copyfile(
+        Path(__file__).resolve().parents[3]
+        / "trusted-probes"
+        / "safe-update"
+        / "codex-fixture",
+        fixture_codex,
+        follow_symlinks=False,
+    )
+    fixture_codex.chmod(0o777)
+    sandbox = CandidateSandbox(
+        root,
+        release,
+        root / "candidate.db",
+        workspace,
+        runner_home,
+        18764,
+        storage_bytes=32 * 1024 * 1024,
+        reserve_bytes=1024 * 1024,
+        tmpfs_bytes=8 * 1024 * 1024,
+        file_bytes=16 * 1024 * 1024,
+    )
+    script = "\n".join(
+        (
+            "import shutil, subprocess",
+            "from pathlib import Path",
+            "path = shutil.which('codex')",
+            "print(path)",
+            "print(subprocess.check_output([path, '--version'], text=True).strip())",
+            "print(subprocess.run([path, 'exec']).returncode)",
+            "try:",
+            "    Path(path).write_text('replaced', encoding='utf-8')",
+            "except OSError:",
+            "    print('read-only')",
+            "else:",
+            "    print('writable')",
+        )
+    )
+    result = sandbox.run(
+        ("/usr/bin/python3", "-c", script),
+        cwd=release,
+        writable_paths=(release, runner_home),
+        auxiliary_tools={"codex": fixture_codex},
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert (result.stdout or b"").decode().splitlines() == [
+        "/opt/proxima-tools/codex",
+        "codex-cli 0.145.0",
+        "1",
+        "read-only",
+    ]
+    assert "codex-cli 0.145.0" in fixture_codex.read_text(encoding="utf-8")
 
 
 def test_offline_manifest_uses_only_the_candidate_sandbox(

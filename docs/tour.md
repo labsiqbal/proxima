@@ -31,7 +31,7 @@ what an owner sees and how the surfaces connect.
 | Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
 | Chat send / approvals / restore | skip - no live agent turn in this pass | - |
 | Master empty | pass - production-bundle browser smoke, feature enabled | - |
-| Master runner picker (Grok listed) | pass | `grok-runner-picker.png` |
+| Master runner eligibility | pass - replayable candidate browser assertion enables only server-qualified choices | - |
 | Master populated / checkpoint restore | skip - no worker jobs in this pass | - |
 | Attention inbox (empty) | pass | `attention-inbox.png` |
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
@@ -114,9 +114,9 @@ The current production-bundle smoke captured the honest empty state in the live
 accessibility tree: capacity 0/3 free, unattended off, empty queue, empty
 Attention, and empty checkpoints. No refreshed screenshot is claimed here.
 
-The profile runner picker lists every installed runner, including Grok.
-
-![Runner picker with installed runners](screenshots/grok-runner-picker.png)
+The Master runner picker enables only server-qualified choices. Its replayable
+browser evidence is recorded in
+[Master orchestrator integrated acceptance](master-integrated-acceptance.md#reproducible-browser-evidence).
 
 Unattended budgets remain under Settings → Master when the feature is enabled.
 
@@ -229,7 +229,7 @@ Diagnostics keeps update checks, debug logs, and the owner audit trail.
   left nav, post-#37 Deck shell on every primary shot. No mix of old solid Master
   marketing empty state with current Master desk.
 - **Passed:** first-run password, onboarding Link + Create tabs, core tour (4
-  steps), empty Chat, Master desk with Grok + open runner picker, Attention,
+  steps), empty Chat, Master desk plus replayable qualified-runner picker evidence, Attention,
   Tasks list/board/launcher, Recipes home/editor/schedules, Projects, Archive
   empty registry, Design home, tool rails, Search, Settings sections, Agents
   profiles, Skills/MCP + masterplan, Wiki, Help.

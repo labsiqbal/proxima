@@ -40,6 +40,8 @@ describe('FolderLinker', () => {
     render(<FolderLinker token="tok" onLinked={onLinked} />)
 
     expect(await screen.findByText('/home/user/code')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Project display name' }))
+      .toHaveAttribute('name', 'project-display-name')
     await user.click(screen.getByRole('button', { name: /Link “code”/ }))
 
     await waitFor(() => {
@@ -55,7 +57,11 @@ describe('FolderLinker', () => {
 
     await screen.findByText('/home/user/code')
     await user.click(screen.getByRole('tab', { name: /Create new folder/ }))
+    expect(screen.getByPlaceholderText('my-project'))
+      .toHaveAttribute('name', 'folder-name')
     await user.type(screen.getByPlaceholderText('my-project'), 'fresh-app')
+    expect(screen.getByPlaceholderText('fresh-app'))
+      .toHaveAttribute('name', 'project-display-name')
     await user.type(screen.getByPlaceholderText('fresh-app'), 'Fresh App')
     await user.click(screen.getByRole('button', { name: /Create “fresh-app” here/ }))
 

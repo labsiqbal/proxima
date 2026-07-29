@@ -231,6 +231,7 @@ def register(app, deps):
         runners = detect_runners(
             path_env=runtime_path,
             create_shim=False,
+            allow_process_probes=maintenance.process_probes_allowed(),
         )
         return {
             "user": user["username"],

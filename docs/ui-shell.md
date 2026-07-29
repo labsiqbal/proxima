@@ -26,11 +26,12 @@ project adds a warning. The journal belongs to that chat session and disappears 
 
 Master navigation, settings, tours, and deep links are omitted unless the
 server-owned `feature_master_orchestrator` flag is enabled. It defaults off
-while the restricted Master runtime is still integrating. Stale local view state
-cannot bypass this gate.
+until the
+[documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
+pass. Stale local view state cannot bypass this gate.
 
 Master is a first-class destination, not a Chat tab or Tasks filter. Its header identifies
-the built-in system orchestrator and lets the owner choose the backing runner; the desk
+the built-in system orchestrator and lets the owner choose a server-qualified backing runner; the desk
 itself keeps the counterpart label **Master** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
 saved unattended budgets. One authenticated provider owns the Master session, durable
@@ -220,7 +221,7 @@ Archive is the durable deliverable registry (T4): every agent output lands as a 
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses Claude/Codex/Grok/Hermes/Pi for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome.
+Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses a server-qualified runner for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome. The qualification contract is owned by [Runner conformance](runner-conformance.md).
 
 ## Feature gates
 

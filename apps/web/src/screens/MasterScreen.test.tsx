@@ -103,7 +103,15 @@ const state = {
   actions,
 }
 
-const runners = [{ id: 'codex', displayName: 'Codex', installed: true, runnable: true }]
+const runners = [{
+  id: 'codex',
+  displayName: 'Codex',
+  installed: true,
+  runnable: true,
+  masterChatOnly: true,
+  masterEligible: true,
+  masterUnavailableReason: null,
+}]
 
 describe('resolveMasterProjectSlug', () => {
   it('uses shell Container only for attachments, then an active Task Container', () => {
@@ -134,6 +142,74 @@ describe('MasterScreen', () => {
     expect(screen.getByText('Failed Task')).toBeInTheDocument()
     expect(screen.getByLabelText('Task status summary')).toHaveTextContent('Queued')
     expect(screen.getByLabelText('Master work panel')).toBeInTheDocument()
+  })
+
+  it('offers only dynamically eligible runners for Master', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: { ...state.desk, backing_runner: 'claude-code' },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={[
+          {
+            id: 'claude-code',
+            displayName: 'Claude Code',
+            installed: true,
+            runnable: true,
+            masterChatOnly: false,
+            masterEligible: false,
+            masterUnavailableReason: 'adapter does not prove the chat-only boundary',
+          },
+          ...runners,
+          {
+            id: 'grok',
+            displayName: 'Grok',
+            installed: true,
+            runnable: true,
+            masterChatOnly: false,
+            masterEligible: false,
+            masterUnavailableReason: 'adapter does not prove the chat-only boundary',
+          },
+        ] as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('option', {
+      name: 'Claude Code (adapter does not prove the chat-only boundary)',
+    }))
+      .toBeDisabled()
+    expect(screen.getByRole('option', { name: 'Codex' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Grok' })).not.toBeInTheDocument()
+  })
+
+  it('disables a declared adapter when host conformance fails', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: { ...state.desk, backing_runner: 'codex' },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={[{
+          id: 'codex',
+          displayName: 'Codex',
+          installed: true,
+          runnable: true,
+          masterChatOnly: true,
+          masterEligible: false,
+          masterUnavailableReason: 'Codex 0.144.9 is below required 0.145.0',
+        }] as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('option', {
+      name: 'Codex (Codex 0.144.9 is below required 0.145.0)',
+    })).toBeDisabled()
+    expect(screen.queryByRole('option', { name: 'Codex' })).not.toBeInTheDocument()
   })
 
   it('does not mount a hidden home composer on another shell surface', () => {

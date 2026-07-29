@@ -212,6 +212,11 @@ class MaintenanceBoundary:
                 for token in _context_admissions.get()
             )
 
+    def process_probes_allowed(self) -> bool:
+        return not self.fenced() and (
+            not self.process_containment_required or self.admitted()
+        )
+
     def retain(self, lease: IngressLease) -> None:
         self._retained_leases.append(lease)
 

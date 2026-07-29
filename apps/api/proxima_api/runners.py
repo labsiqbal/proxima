@@ -9,6 +9,7 @@ from typing import Iterable
 
 from .runner_specs import (
     RUNNER_SPECS,
+    master_runner_conformance,
     runner_binary_names,
     selectable_runner_specs,
 )
@@ -30,6 +31,9 @@ _RUNNER_PROVIDER_ENV = {
     "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
     "OPENROUTER_API_KEY", "XAI_API_KEY",
 }
+_MASTER_PROBE_MAINTENANCE_REASON = (
+    "Master runner verification is unavailable during maintenance"
+)
 
 
 def _env_on(name: str) -> bool:
@@ -192,11 +196,39 @@ def detect_runners(
     registry: Iterable[RunnerDefinition] = RUNNER_REGISTRY,
     *,
     create_shim: bool = True,
+    allow_process_probes: bool = True,
 ) -> list[dict]:
     resolved_path = augmented_path(path_env, create_shim=create_shim)
     detected: list[dict] = []
 
     for runner in registry:
+        spec = RUNNER_SPECS.get(runner.id)
+        master_chat_only = bool(spec and spec.master_chat_only)
+        if allow_process_probes:
+            master_eligible, master_unavailable_reason = (
+                master_runner_conformance(
+                    runner.id,
+                    path_env=resolved_path,
+                )
+            )
+        else:
+            master_eligible = False
+            master_unavailable_reason = (
+                _MASTER_PROBE_MAINTENANCE_REASON
+                if master_chat_only
+                else (
+                    spec.master_unavailable_reason
+                    if spec is not None
+                    else "runner is not available"
+                )
+            )
+        master_fields = {
+            "masterChatOnly": master_chat_only,
+            "masterEligible": master_eligible,
+            "masterUnavailableReason": (
+                None if master_eligible else master_unavailable_reason
+            ),
+        }
         if not runner.binary_names:
             detected.append(
                 {
@@ -207,6 +239,7 @@ def detect_runners(
                     "hasAdapter": runner.has_adapter,
                     "detectionOnly": runner.detection_only,
                     "runnable": runner.has_adapter,
+                    **master_fields,
                     "notes": runner.notes,
                 }
             )
@@ -232,6 +265,7 @@ def detect_runners(
                 "hasAdapter": runner.has_adapter,
                 "detectionOnly": runner.detection_only,
                 "runnable": installed and runner.has_adapter,
+                **master_fields,
                 "notes": runner.notes,
             }
         )

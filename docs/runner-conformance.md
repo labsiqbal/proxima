@@ -42,6 +42,19 @@ empty selected capability roots, and dynamic tools. Installed older or
 unparseable versions fail before a turn starts. `feature_master_orchestrator`
 remains off by default.
 
+Runner discovery publishes the adapter's static `masterChatOnly` declaration and
+the host-specific `masterEligible` result plus `masterUnavailableReason`.
+Eligibility calls the same `master_runner_conformance` boundary against the
+server's controlled runtime path, so an absent, old, or unverifiable Codex is not
+enabled by the Master selector. A legacy or unavailable current selection remains
+a disabled explanatory state. Settings, message creation, and worker spawn still
+repeat conformance rather than trusting the browser result. While external
+maintenance is pending or active, or fence removal still holds exclusive ingress,
+discovery skips process-backed conformance and reports Master ineligible with a
+maintenance reason; both runner detection and the dashboard remain read-only
+without launching a runner probe. Authoritative checks resume only after fence
+state is clear and ingress admission resumes.
+
 The Codex adapter starts app-server with strict configuration that disables shell,
 browser, web search, apps, plugins, hooks, goals, image generation, subagents,
 skills, MCP orchestration, permission requests, and inherited project

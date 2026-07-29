@@ -7,6 +7,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +17,9 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from browser import run_scenario
+
+
+_CODEX_FIXTURE = "/opt/proxima-tools/codex"
 
 
 def _sha(value: bytes) -> str:
@@ -76,6 +80,37 @@ def _kill(process: subprocess.Popen[bytes]) -> None:
     process.wait()
 
 
+def _verify_codex_fixture() -> bytes:
+    if shutil.which("codex") != _CODEX_FIXTURE:
+        raise RuntimeError("candidate Codex fixture path is invalid")
+    version = subprocess.run(
+        [_CODEX_FIXTURE, "--version"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=5,
+    )
+    if version.returncode or version.stdout.strip() != b"codex-cli 0.145.0":
+        raise RuntimeError("candidate Codex fixture version is invalid")
+    refusal = subprocess.run(
+        [_CODEX_FIXTURE, "exec"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+    )
+    if refusal.returncode == 0:
+        raise RuntimeError("candidate Codex fixture can start a turn")
+    try:
+        descriptor = os.open(_CODEX_FIXTURE, os.O_WRONLY | os.O_APPEND)
+    except OSError:
+        pass
+    else:
+        os.close(descriptor)
+        raise RuntimeError("candidate Codex fixture is writable")
+    return version.stdout.strip()
+
+
 def _sse(host: str, port: int, session_id: int, token: str) -> bytes:
     connection = http.client.HTTPConnection(host, port, timeout=10)
     connection.request(
@@ -104,6 +139,7 @@ def _main(config_path: Path) -> dict:
         timeout=5,
     )
     ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)
+    codex_fixture = _verify_codex_fixture()
     server_log = config_path.parent / "candidate-server.log"
     server_output = server_log.open("wb")
     server = subprocess.Popen(
@@ -173,7 +209,7 @@ def _main(config_path: Path) -> dict:
             "update-status",
         }
         if (
-            scenarios.get("version") != 2
+            scenarios.get("version") != 3
             or not isinstance(definitions, list)
             or not definitions
         ):
@@ -197,7 +233,13 @@ def _main(config_path: Path) -> dict:
                         {"action", "selector", "text", "timeout", "value"}
                     )
                     or set(step) < {"action", "selector"}
-                    or step["action"] not in {"assert", "click", "fill", "select"}
+                    or step["action"] not in {
+                        "assert",
+                        "assert_absent",
+                        "click",
+                        "fill",
+                        "select",
+                    }
                     or not isinstance(step["selector"], str)
                     or not step["selector"]
                     or len(step["selector"]) > 256
@@ -242,6 +284,7 @@ def _main(config_path: Path) -> dict:
             "api": _sha(health_raw),
             "authenticated": _sha(maintenance_raw),
             "browser": browser_results,
+            "codex_fixture": _sha(codex_fixture),
             "served_asset": _sha(served_asset),
             "sse": _sha(sse),
             "static_manifest": expected["asset_manifest_digest"],

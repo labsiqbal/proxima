@@ -14,6 +14,9 @@ describe('AuthGate', () => {
     vi.mocked(setPassword).mockResolvedValue({ token: 't', user: { id: 1, username: 'owner', role: 'environment_admin', os_user: 'owner' } })
     render(<AuthGate mode="setup" onAuthed={onAuthed} />)
     const user = userEvent.setup()
+    expect(screen.getByPlaceholderText('Password')).toHaveAttribute('name', 'password')
+    expect(screen.getByPlaceholderText('Confirm password'))
+      .toHaveAttribute('name', 'password-confirmation')
 
     await user.type(screen.getByPlaceholderText('Password'), 'short')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'short')
