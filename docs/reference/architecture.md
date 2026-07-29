@@ -1149,15 +1149,29 @@ matrix in
 [ADR-0008](../adr/0008-external-safe-update-authority.md).
 
 Before any later fence or switch phase, group 15's controller-only candidate gate
-reverifies local provenance, publishes a commit-keyed immutable release, and runs a
-fixed offline build/test/type/doc manifest rather than candidate-selected commands.
-SQLite's backup API creates `raw-clone.db`; migration runs against that clone alone.
-The candidate server receives a scrubbed fixture DB plus separate workspace and
-runner-home paths, never the raw clone or live data. Candidate-mode startup skips
-schema mutation and every background writer. A root-owned trusted probe bundle and
-evidence store independently validate API identity, static-asset digest, readiness,
-and authenticated behaviour. This gate cannot call a service adapter or reach active
-or last-good pointers, fence, journal, backup, or production paths.
+reverifies local provenance inside the same mandatory Bubblewrap execution boundary
+used for all candidate-controlled commands. The boundary exposes only read-only
+system inputs and phase-specific candidate-local writable mounts, removes network
+egress, uses a namespace identity without host privileges, applies resource and
+output ceilings, and kills the complete process group on timeout. A fixed offline
+build/test/type/doc manifest runs in a disposable writable tree. The controller then
+rehashes that post-build tree, copies it to fresh release inodes, freezes it, and
+runs probes only from that frozen release.
+
+SQLite's backup API creates a clone in its own writable directory. A fixed migration
+entrypoint can modify only that clone, and the controller requires an exact,
+contiguous `schema_migrations` ledger through the policy-pinned expected version.
+The served fixture is created from migrated schema, not copied live rows: only
+synthetic owner, authentication, project, and session data are inserted, with
+separate candidate workspace and runner-home paths. Candidate-mode startup skips
+schema mutation and every background writer. The separately installed, hash-pinned
+probe suite starts the candidate inside a loopback-only namespace and requires API
+identity, version, authenticated maintenance, SSE, served static assets, the complete
+asset digest, and every trusted headless-browser scenario. The frozen evidence tree
+contains build logs, migration and fixture proof, identities, and probe results.
+Recovery revalidates its journal-pinned digest and file set. This gate cannot call a
+service adapter or reach active or last-good pointers, fence, journal, backup, or
+production paths.
 
 ## Runner abstraction
 

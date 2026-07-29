@@ -1,38 +1,21 @@
-"""Candidate-independent API, SSE, identity and asset probes."""
+"""Controller orchestration for the policy-pinned trusted probe suite."""
 from __future__ import annotations
 
-import hashlib
 import json
-import time
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+from typing import Any
 
+from .durability import write_all
 from .layout import COMMIT, RELEASE_ID
+from .sandbox import CandidateSandbox, SandboxError
+from .trusted_probes import TrustedProbeBundle
 
 
 class ProbeError(RuntimeError):
     pass
-
-
-def _sha(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def asset_manifest_digest(web_dist: Path) -> str:
-    if not web_dist.is_dir() or web_dist.is_symlink():
-        raise ProbeError("candidate static asset directory is unavailable")
-    files: list[tuple[str, str]] = []
-    for path in sorted(web_dist.rglob("*")):
-        if path.is_symlink() or not path.is_file():
-            if path.is_symlink():
-                raise ProbeError("candidate static assets contain a symlink")
-            continue
-        files.append((path.relative_to(web_dist).as_posix(), _sha(path.read_bytes())))
-    if not files:
-        raise ProbeError("candidate static assets are empty")
-    return _sha(json.dumps(files, separators=(",", ":")).encode())
 
 
 @dataclass(frozen=True)
@@ -40,6 +23,7 @@ class CandidateIdentity:
     release_id: str
     commit: str
     asset_digest: str
+    version: str
 
     def validate(self) -> None:
         if not RELEASE_ID.fullmatch(self.release_id) or not COMMIT.fullmatch(self.commit):
@@ -48,51 +32,154 @@ class CandidateIdentity:
             raise ProbeError("candidate release and commit identity mismatch")
         if len(self.asset_digest) != 64 or set(self.asset_digest) - set("0123456789abcdef"):
             raise ProbeError("candidate asset digest is invalid")
+        if not self.version or len(self.version) > 64 or any(ord(value) < 32 for value in self.version):
+            raise ProbeError("candidate version identity is invalid")
+
+
+@dataclass(frozen=True)
+class TrustedProbeResult:
+    raw: bytes
+    results: dict[str, Any]
+
+
+def asset_manifest_digest(web_dist: Path) -> str:
+    import hashlib
+
+    if not web_dist.is_dir() or web_dist.is_symlink():
+        raise ProbeError("candidate static asset directory is unavailable")
+    files: list[tuple[str, str]] = []
+    for path in sorted(web_dist.rglob("*")):
+        if path.is_symlink():
+            raise ProbeError("candidate static assets contain a symlink")
+        if path.is_file():
+            files.append(
+                (
+                    path.relative_to(web_dist).as_posix(),
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+            )
+    if not files:
+        raise ProbeError("candidate static assets are empty")
+    return hashlib.sha256(json.dumps(files, separators=(",", ":")).encode()).hexdigest()
 
 
 class TrustedProbeRunner:
-    """Uses fixed controller expectations, never test files from the release."""
+    """Starts the frozen release and requires the installed probe suite to pass."""
 
-    def __init__(self, *, timeout_seconds: float = 15) -> None:
-        self.timeout_seconds = timeout_seconds
+    @staticmethod
+    def _browser() -> tuple[str, dict[str, Path]]:
+        for name in ("chromium", "chromium-browser", "google-chrome"):
+            executable = shutil.which(name)
+            if executable is None:
+                continue
+            path = Path(executable).resolve()
+            if Path("/usr") in path.parents or Path("/bin") in path.parents:
+                return str(path), {}
+            return f"/opt/proxima-inputs/browser/{path.name}", {"browser": path.parent}
+        raise ProbeError("trusted browser probe executable is unavailable")
 
-    def _get_json(self, url: str, token: str | None = None) -> dict:
-        request = Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    @staticmethod
+    def _write_config(path: Path, value: dict[str, Any]) -> None:
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                if response.status != 200:
-                    raise ProbeError(f"candidate probe failed: {url}")
-                value = json.loads(response.read())
-        except (OSError, URLError, ValueError) as exc:
-            raise ProbeError(f"candidate probe unavailable: {url}") from exc
-        if not isinstance(value, dict):
-            raise ProbeError("candidate probe response is invalid")
-        return value
+            write_all(descriptor, payload)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
-    def readiness(self, base_url: str, expected: CandidateIdentity) -> dict[str, str]:
-        expected.validate()
-        payload = self._get_json(f"{base_url}/api/health")
-        observed = CandidateIdentity(
-            str(payload.get("release_id", "")), str(payload.get("commit", "")),
-            str(payload.get("asset_manifest_digest", "")),
+    def run(
+        self,
+        *,
+        sandbox: CandidateSandbox,
+        trusted_bundle: TrustedProbeBundle,
+        identity: CandidateIdentity,
+        auth_token: str,
+        session_id: int,
+    ) -> TrustedProbeResult:
+        identity.validate()
+        probe = trusted_bundle.root / "probe.py"
+        scenarios = trusted_bundle.root / "browser-scenarios.json"
+        if (
+            not probe.is_file()
+            or probe.is_symlink()
+            or not scenarios.is_file()
+            or scenarios.is_symlink()
+        ):
+            raise ProbeError("trusted probe bundle is incomplete")
+        browser, inputs = self._browser()
+        inputs["trusted-probes"] = trusted_bundle.root
+        config_path = sandbox.runner_home / "trusted-probe-config.json"
+        self._write_config(
+            config_path,
+            {
+                "auth_token": auth_token,
+                "base_url": f"http://127.0.0.1:{sandbox.port}",
+                "browser_executable": browser,
+                "browser_expected_text": "Candidate",
+                "browser_profile": str(sandbox.runner_home / "browser-profile"),
+                "browser_scenarios": "/opt/proxima-inputs/trusted-probes/browser-scenarios.json",
+                "identity": {
+                    "asset_manifest_digest": identity.asset_digest,
+                    "commit": identity.commit,
+                    "release_id": identity.release_id,
+                    "version": identity.version,
+                },
+                "port": sandbox.port,
+                "server_argv": [
+                    str(sandbox.release / "apps" / "api" / ".venv" / "bin" / "python"),
+                    "-m",
+                    "uvicorn",
+                    "proxima_api.main:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(sandbox.port),
+                ],
+                "server_cwd": str(sandbox.release / "apps" / "api"),
+                "session_id": session_id,
+                "web_dist": str(sandbox.release / "apps" / "web" / "dist"),
+            },
         )
-        if observed != expected:
-            raise ProbeError("candidate API identity mismatch")
-        return {"readiness": _sha(json.dumps(payload, sort_keys=True).encode())}
-
-    def authenticated_health(self, base_url: str, token: str) -> dict[str, str]:
-        payload = self._get_json(f"{base_url}/api/maintenance", token)
-        if payload.get("active") is not False:
-            raise ProbeError("candidate maintenance probe is unexpectedly fenced")
-        return {"authenticated_health": _sha(json.dumps(payload, sort_keys=True).encode())}
-
-    def wait_ready(self, base_url: str, expected: CandidateIdentity) -> dict[str, str]:
-        deadline = time.monotonic() + self.timeout_seconds
-        error: Exception | None = None
-        while time.monotonic() < deadline:
-            try:
-                return self.readiness(base_url, expected)
-            except ProbeError as exc:
-                error = exc
-                time.sleep(0.1)
-        raise ProbeError("candidate readiness timed out") from error
+        try:
+            completed = sandbox.run(
+                (
+                    "/usr/bin/python3",
+                    "/opt/proxima-inputs/trusted-probes/probe.py",
+                    str(config_path),
+                ),
+                cwd=sandbox.runner_home,
+                writable_paths=(
+                    sandbox.database.parent,
+                    sandbox.workspace,
+                    sandbox.runner_home,
+                ),
+                read_only_paths=(sandbox.release,),
+                inputs=inputs,
+                environment={
+                    "PROXIMA_CANDIDATE_RELEASE_ID": identity.release_id,
+                    "PROXIMA_CANDIDATE_COMMIT": identity.commit,
+                    "PROXIMA_CANDIDATE_ASSET_MANIFEST_DIGEST": identity.asset_digest,
+                    "PROXIMA_SINGLE_USER_NAME": "candidate",
+                    "PROXIMA_LINK_ROOTS": str(sandbox.workspace),
+                    "PROXIMA_CLAUDE_LIVE_HOME": "0",
+                },
+                network_loopback=True,
+                timeout=180,
+            )
+        except SandboxError as exc:
+            raise ProbeError(str(exc)) from exc
+        if completed.returncode:
+            raise ProbeError("trusted candidate probe suite failed")
+        raw = completed.stdout or b""
+        try:
+            report = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ProbeError("trusted candidate probe report is invalid") from exc
+        if (
+            not isinstance(report, dict)
+            or report.get("ok") is not True
+            or not isinstance(report.get("results"), dict)
+        ):
+            raise ProbeError("trusted candidate probe report is invalid")
+        return TrustedProbeResult(raw, dict(report["results"]))

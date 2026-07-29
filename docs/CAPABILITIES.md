@@ -1440,16 +1440,25 @@ launchd, and unmanaged adapters fail closed until the
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).
 
-Group 15 adds a pre-switch gate only: controller-owned code materializes an
-immutable release keyed by the verified commit, runs a fixed offline locked build
-manifest, makes a consistent SQLite backup-API clone, and migrates only that clone.
-The browser fixture is separately assembled with no owner projects, sessions,
-paths, runner homes, or credentials. Candidate-mode API startup refuses migrations
-and all background writers. Trusted probes hash the static assets and compare the
-release, commit, and asset identities independently; their installed bundle and
-immutable evidence are controller-owned. Build, clone, migration, asset, probe, or
-port/sandbox failure stops before any live pointer, database, fence, backup, or
-service action. Activation remains unavailable.
+Group 15 adds a pre-switch gate only. Controller-owned code copies verified source
+and the offline cache into disposable candidate storage, then runs every fixed
+build, test, type, documentation, migration, server, and browser command inside a
+Bubblewrap user, mount, PID, and network namespace with bounded resources, output,
+time, and process cleanup. Only candidate-local writable mounts are visible. The
+exact post-build tree is rehashed, published into fresh release inodes, and frozen
+before probing. SQLite's backup API creates the raw clone; a fixed sandbox command
+migrates only its dedicated clone directory, and the controller requires the
+complete `schema_migrations` ledger through its policy-pinned expected version.
+The browser fixture is a fresh copy of migrated schema with synthetic owner,
+session, and project rows only, plus separate workspace and runner-home paths.
+Candidate-mode startup refuses migrations and background writers. The separately
+installed, hash-pinned probe suite starts the frozen release and requires API
+identity, version, authenticated maintenance, SSE, served-static-asset, complete
+asset-manifest, and headless-browser scenario results. Evidence includes fixed
+build logs, migration proof, fixture metadata, assets, and probe results; its files
+and directories are frozen, and recovery rehashes the journal-pinned bundle before
+reporting a run safe. Any failure stops before a live pointer, database, fence,
+backup, or service action. Activation remains unavailable.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply` (inert),
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,

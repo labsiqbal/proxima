@@ -9,7 +9,13 @@ import tempfile
 from pathlib import Path
 
 from .durability import DurabilityError, ensure_durable_directory, fsync_directory
-from .tree import TreeError, VerifiedTree, copy_regular_tree, regular_file_digests
+from .tree import (
+    TreeError,
+    VerifiedTree,
+    copy_regular_tree,
+    regular_file_digests,
+    release_file_mode,
+)
 
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 RELEASE_ID = re.compile(r"^sha256-[a-f0-9]{40}-[a-f0-9]{12}$")
@@ -79,7 +85,11 @@ class ReleaseLayout:
                 key=lambda value: len(value.parts),
                 reverse=True,
             ):
-                path.chmod(0o555 if path.is_dir() else 0o444)
+                path.chmod(
+                    0o555
+                    if path.is_dir()
+                    else release_file_mode(path.relative_to(staging).as_posix())
+                )
             staging.chmod(0o555)
             if regular_file_digests(staging) != expected:
                 raise LayoutError("published tree verification failed")

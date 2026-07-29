@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import subprocess
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from .manifest import REQUIRED_LOCK_PATHS
+from .sandbox import CandidateSandbox, SandboxError
 
 
 class BuildError(RuntimeError):
@@ -20,6 +19,7 @@ class BuildStep:
     name: str
     argv: tuple[str, ...]
     cwd: str = "."
+    timeout: int = 300
 
 
 # Do not derive this from candidate files. Changing it requires updater bootstrap.
@@ -48,37 +48,71 @@ def _sha(path: Path) -> str:
 
 
 class OfflineBuilder:
-    """Executes only the controller manifest with an empty network proxy env."""
+    """Executes only the controller manifest inside the candidate sandbox."""
 
-    def __init__(self, run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run) -> None:
-        self.run = run
+    @staticmethod
+    def _tools() -> dict[str, Path]:
+        result: dict[str, Path] = {}
+        for step in BUILD_MANIFEST:
+            name = step.argv[0]
+            if "/" in name or name in result:
+                continue
+            executable = shutil.which(name)
+            if executable is None:
+                raise BuildError(f"build manifest tool is unavailable: {name}")
+            path = Path(executable)
+            if not any(
+                path.resolve() == root or root in path.resolve().parents
+                for root in (Path("/usr"), Path("/bin"), Path("/sbin"))
+            ):
+                result[name] = path.resolve()
+        return result
 
-    def build(self, release: Path, *, cache_root: Path) -> BuildResult:
-        if not release.is_dir() or release.is_symlink() or not cache_root.is_dir():
+    def build(
+        self,
+        release: Path,
+        *,
+        cache_root: Path,
+        sandbox: CandidateSandbox,
+    ) -> BuildResult:
+        if (
+            not release.is_dir()
+            or release.is_symlink()
+            or not cache_root.is_dir()
+            or cache_root.is_symlink()
+            or sandbox.release.resolve() != release.resolve()
+        ):
             raise BuildError("candidate release or offline cache is unavailable")
         locks = {rel: release.joinpath(*rel.split("/")).resolve() for rel in REQUIRED_LOCK_PATHS}
         if any(not path.is_file() or release.resolve() not in path.parents for path in locks.values()):
             raise BuildError("candidate lockfile is missing or unsafe")
         environment = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": str(cache_root),
             "UV_OFFLINE": "1",
+            "UV_NO_MANAGED_PYTHON": "1",
+            "UV_CACHE_DIR": str(cache_root / ".cache" / "uv"),
             "npm_config_offline": "true",
-            "NO_PROXY": "*",
-            "http_proxy": "",
-            "https_proxy": "",
-            "HTTP_PROXY": "",
-            "HTTPS_PROXY": "",
+            "npm_config_cache": str(cache_root / ".npm"),
+            "npm_config_logs_dir": str(sandbox.runner_home / "npm-logs"),
+            "npm_config_update_notifier": "false",
+            "GIT_OPTIONAL_LOCKS": "0",
         }
+        tools = self._tools()
         logs: dict[str, bytes] = {}
         for step in BUILD_MANIFEST:
             cwd = release / step.cwd
             if not cwd.is_dir():
                 raise BuildError(f"build manifest working directory is missing: {step.name}")
-            completed = self.run(
-                list(step.argv), cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-            )
+            try:
+                completed = sandbox.run(
+                    step.argv,
+                    cwd=cwd,
+                    writable_paths=(release, cache_root, sandbox.runner_home),
+                    tools=tools,
+                    environment=environment,
+                    timeout=step.timeout,
+                )
+            except SandboxError as exc:
+                raise BuildError(str(exc)) from exc
             output = completed.stdout or b""
             logs[step.name] = output
             if completed.returncode:

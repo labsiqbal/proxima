@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -187,6 +188,88 @@ def regular_file_digests(root: Path) -> dict[str, str]:
     return dict(sorted(digests.items()))
 
 
+def release_file_mode(relpath: str) -> int:
+    path = PurePosixPath(relpath)
+    executable = (
+        path.parts[:4] == ("apps", "api", ".venv", "bin")
+        and path.name.startswith("python")
+    )
+    return 0o555 if executable else 0o444
+
+
+def materialize_build_symlinks(root: Path) -> None:
+    root = root.resolve()
+    external_roots = (Path("/usr/bin"), Path("/usr/local/bin"))
+    replacements = 0
+    while True:
+        directory_links: list[Path] = []
+        file_links: list[Path] = []
+        for current, directories, files in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            directory_links.extend(
+                current_path / name
+                for name in directories
+                if (current_path / name).is_symlink()
+            )
+            file_links.extend(
+                current_path / name
+                for name in files
+                if (current_path / name).is_symlink()
+            )
+        if not directory_links and not file_links:
+            return
+        replacements += len(directory_links) + len(file_links)
+        if replacements > 100_000:
+            raise TreeError("candidate build contains too many symlinks")
+        for path in directory_links:
+            target = path.resolve(strict=True)
+            if (
+                root not in target.parents
+                or not target.is_dir()
+                or target == path.parent
+                or target in path.parents
+            ):
+                raise TreeError("candidate build directory symlink target is unsafe")
+            path.unlink()
+            shutil.copytree(target, path, symlinks=True)
+            fsync_directory(path.parent)
+        for path in file_links:
+            if not path.is_symlink():
+                continue
+            relpath = path.relative_to(root).as_posix()
+            target = path.resolve(strict=True)
+            internal = target == root or root in target.parents
+            external_python = (
+                PurePosixPath(relpath).parts[:4]
+                == ("apps", "api", ".venv", "bin")
+                and PurePosixPath(relpath).name.startswith("python")
+                and target.parent in external_roots
+                and target.name.startswith("python")
+            )
+            if (
+                (not internal and not external_python)
+                or not target.is_file()
+                or target.is_symlink()
+            ):
+                raise TreeError("candidate build symlink target is unsafe")
+            payload = target.read_bytes()
+            path.unlink()
+            descriptor = os.open(
+                path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+            try:
+                write_all(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            fsync_directory(path.parent)
+
+
 def copy_regular_tree(
     source: Path,
     destination: Path,
@@ -226,7 +309,7 @@ def copy_regular_tree(
             destination_descriptor = os.open(
                 destination_path,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | binary,
-                0o600,
+                0o700 if release_file_mode(relpath) == 0o555 else 0o600,
             )
             try:
                 digest = hashlib.sha256()
@@ -236,6 +319,10 @@ def copy_regular_tree(
                         break
                     digest.update(chunk)
                     write_all(destination_descriptor, chunk)
+                os.fchmod(
+                    destination_descriptor,
+                    0o700 if release_file_mode(relpath) == 0o555 else 0o600,
+                )
                 os.fsync(destination_descriptor)
             finally:
                 os.close(destination_descriptor)

@@ -234,13 +234,15 @@ must remain off until candidate and fault/rollback gates are accepted. Foregroun
 ordinary user-service, Windows, and unqualified macOS installs fail closed. Local
 self-edit commits carry reverified provenance, not a release signature.
 
-The shipped candidate gate is still controller-only and not an installer feature. It
-can build an immutable candidate with offline locked dependencies, clone the live
-database through SQLite's backup API for migration proof, and create a scrubbed
-candidate fixture with separate workspace and runner-home paths. It records
-controller-owned evidence for fixed API/browser/asset probes, but it cannot switch a
-release, start an enrolled candidate service, touch the live database, or remove a
-fence. Do not set candidate-only environment variables manually.
+The shipped candidate gate is still controller-only and not an installer feature.
+It runs the fixed offline build and clone-only migration inside a mandatory
+Bubblewrap boundary, publishes and freezes only the verified post-build tree, and
+creates a fresh-schema fixture containing synthetic rows and separate workspace and
+runner-home paths. A separately installed, digest-pinned probe bundle must pass its
+API, version, authenticated maintenance, SSE, served-asset, asset-manifest, and
+headless-browser checks. Frozen evidence is revalidated during recovery. The gate
+cannot switch a release, start an enrolled service, touch the live database, or
+remove a fence. Do not set candidate-only environment variables manually.
 
 Future enrollment must place the nonsecret maintenance fence in a dedicated
 controller-owned status directory whose ancestors are searchable by the application
