@@ -1,4 +1,4 @@
-"""Release update routes: status, manual check, one-click self-update."""
+"""Release check routes. Legacy apply is intentionally inert."""
 from __future__ import annotations
 
 from typing import Any

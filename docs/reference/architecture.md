@@ -1098,11 +1098,12 @@ VERSION (repo root) → read_local_version() → FastAPI app.version → GET /ap
 UpdateManager: every 6h → GET api.github.com/repos/<repo>/releases/latest
                            (never raises — offline/404/hiccup → last_error)
                                     │
-   GET /api/update/status · POST /api/update/check · POST /api/update/apply
+   GET /api/update/status · POST /api/update/check (legacy apply is inert)
                                     │
-        apply() → detached `scripts/proxima update` (git pull --ff-only,
-        rebuild, restart only after a clean build) → update-status.json
-        marker in the data dir, reconciled again on the next startup
+  feature_safe_self_update (default off) → authenticated request/status projection
+                                    │
+ external root-owned controller → flock + fsynced hash-chained journal → immutable
+ releases / external fence / service adapter (all activation remains unavailable)
                                     │
 Sidebar pill → release-notes modal → Update now → blocking overlay polls
 GET /api/health every 2s until version == target → reload
@@ -1113,13 +1114,13 @@ unauthenticated GitHub Releases GET on a 6-hour timer (first check 60s after
 boot), holding only in-memory state (current version, latest release,
 `checked_at`, `last_error`) — `PROXIMA_UPDATE_CHECK=0` disables just that
 loop (the manual check route still works) and `PROXIMA_UPDATE_REPO` defaults to
-`labsiqbal/proxima`; forks can point it at their own repo. `apply()` is Windows-gated (`UpdateUnsupported`
-→ manual command) and otherwise `Popen`s the updater detached
-(`start_new_session=True`) so its own `systemctl`/`launchd` restart can safely
-kill the parent once the new code is on disk; the `update-status.json` marker
-self-heals (updater pid gone → `failed`, current version reaches target →
-`done`) and is reconciled again at every startup in case a restart interrupted
-it mid-flight.
+`labsiqbal/proxima`; forks can point it at their own repo. `apply()` now always
+fails closed. Group 14 adds `self_update_runs` as an owner-visible mirror plus
+`/api/self-updates/*` and `/api/maintenance`; the mirror is never the source of
+promotion truth. The external updater owns the release manifest verification,
+provenance, single-flight lock, journal and recovery decision. Its systemd and
+launchd contracts are deliberately unavailable for activation until installer
+qualification and later candidate/fault gates land.
 
 ## Runner abstraction
 

@@ -183,3 +183,9 @@ curl --fail --silent http://127.0.0.1:8765/api/health
 Granting self-update would require the `proxima` user to own every mutable build
 path and a narrowly scoped privilege to restart the unit. This repository does not
 ship that privilege escalation policy; use the administrator-driven flow above.
+
+The group-14 safe-updater foundation adds contract-only root-owned controller and
+candidate unit templates. They are intentionally `ExecStart=/bin/false` and must
+not be enabled. A later administrator-only enrollment must qualify the external
+journal/pointer/fence roots, dedicated candidate sandbox, trusted release keys and
+probes, disk reserve, and stop/start verification before enabling any activation.

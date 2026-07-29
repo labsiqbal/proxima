@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -104,7 +102,7 @@ def _parse_release(data: dict[str, Any]) -> dict[str, Any]:
 
 
 class UpdateManager:
-    """Holds update-check state and runs the self-update. One per app."""
+    """Holds release-check state only. Promotion belongs to the external updater."""
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         self.repo = str(cfg.get("update_repo") or "")
@@ -159,37 +157,10 @@ class UpdateManager:
         self._marker_state()
 
     def apply(self) -> dict[str, Any]:
-        with self._apply_lock:
-            state, _ = self._marker_state()
-            if state == "running":
-                raise UpdateInProgress("an update is already running")
-            if sys.platform == "win32":
-                raise UpdateUnsupported(MANUAL_UPDATE_COMMAND)
-            latest = self._latest
-            if not latest or not is_newer(latest["version"], self.current):
-                raise NoUpdateAvailable("no newer release is known")
-            target = latest["version"]
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            # Detached (start_new_session): the updater's only kill arrives from the
-            # `systemctl restart` it issues itself AFTER a successful pull+build, at
-            # which point the new code is already on disk — dying there is harmless.
-            # On macOS/launchd the detached child simply survives the restart.
-            with open(self.log_path, "ab") as log_file:
-                log_file.write(f"\n===== update to v{target} started {iso_now()} =====\n".encode())
-                proc = subprocess.Popen(
-                    ["bash", str(self.repo_root / "scripts" / "proxima"), "update"],
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                    cwd=str(self.repo_root),
-                )
-            self._write_marker({
-                "state": "running",
-                "target": target,
-                "started_at": iso_now(),
-                "pid": proc.pid,
-            })
-            return {"started": True, "target": target}
+        # Never revive the live-checkout pull/build/restart path.  A future
+        # enrolled external controller receives an explicitly verified request
+        # through /api/self-updates; this legacy endpoint cannot activate code.
+        raise UpdateUnsupported("safe self-update is not enrolled; no update was started")
 
     def _marker_state(self) -> tuple[str, str | None]:
         """Derive the live update state from the marker file, self-healing it.
@@ -228,8 +199,8 @@ class UpdateManager:
             "checked_at": self.checked_at,
             "last_error": self.last_error,
             "log_tail": self._log_tail() if state in ("running", "failed") else None,
-            "apply_supported": sys.platform != "win32",
-            "manual_command": MANUAL_UPDATE_COMMAND,
+            "apply_supported": False,
+            "manual_command": "Safe self-update requires an enrolled external updater; no in-app activation is available.",
         }
 
     def _log_tail(self, lines: int = LOG_TAIL_LINES) -> str | None:

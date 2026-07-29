@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-183 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+188 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -21,6 +21,7 @@
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
 - [`routes/projects.py`](#routes-projects-py) - 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
+- [`routes/self_updates.py`](#routes-self-updates-py) - 5 endpoints
 - [`routes/update.py`](#routes-update-py) - 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) - 8 endpoints
 - [`routes/work.py`](#routes-work-py) - 23 endpoints
@@ -251,6 +252,17 @@
 | POST | `/api/messages/{message_id}/reviews` | `create_message_review` |  |
 
 
+## routes/self_updates.py
+
+| Method | Path | Handler | Description |
+| --- | --- | --- | --- |
+| GET | `/api/maintenance` | `maintenance_status` | Read the updater-owned fence without treating app state as truth. |
+| POST | `/api/self-updates` | `submit` |  |
+| GET | `/api/self-updates/capability` | `capability` |  |
+| GET | `/api/self-updates/{run_id}` | `get` |  |
+| POST | `/api/self-updates/{run_id}/recovery-status` | `recovery_status` |  |
+
+
 ## routes/update.py
 
 | Method | Path | Handler | Description |
@@ -313,4 +325,4 @@
 
 
 ---
-_Generated 2026-07-29 03:57 UTC._
+_Generated 2026-07-29 05:02 UTC._

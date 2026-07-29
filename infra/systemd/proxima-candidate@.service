@@ -1,0 +1,6 @@
+[Unit]
+Description=Proxima isolated candidate (%i) (foundation disabled)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/false

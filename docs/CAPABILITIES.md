@@ -1419,22 +1419,18 @@ media result, message-review result, collaboration synthesis, draft, or graph up
 
 **Why:** Every install should be one click away from the latest release without
 the owner babysitting `git pull`.
-**How:** `UpdateManager` polls GitHub Releases every 6h (silent failure — an
-offline host, private repo, or GitHub hiccup never surfaces to the user); the
-owner can also trigger a manual check from a **Check for updates** button in
-Settings → Updates. When a newer release exists, the sidebar shows an update
-pill that opens a release-notes modal (rendered markdown) with a one-click
-**Update now**, which requires a clean checkout and runs `scripts/proxima update`
-(`git pull --ff-only` + locked build/tests + restart + health check, tracked via an
-`update-status.json` marker file) behind a
-blocking overlay that polls `/api/health` until the new version answers, then
-reloads. A build failure happens before restart, while a failed post-restart health
-check is surfaced for manual log inspection (there is no automatic checkout/DB rollback).
-**Windows:** check/notify
-works the same; one-click apply is unsupported and returns a manual `git pull`
-command instead.
+**How:** `UpdateManager` may check GitHub release metadata every 6h, but its old
+live-checkout apply route is inert. The safe-update foundation is behind the
+server-enforced `feature_safe_self_update` flag, default off. A managed external
+updater, not candidate code or the app database, owns the append-only fsynced
+journal, lock, immutable release pointers, maintenance fence, backups, and
+recovery verdict. The app exposes only authenticated owner projections. systemd,
+launchd, and unmanaged installs fail closed until later installer qualification,
+candidate proof, and rollback fault testing. Local candidates carry provenance,
+not a release signature.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
-`POST /api/update/apply`.
+`GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,
+`GET /api/self-updates/{id}`, `POST /api/self-updates/{id}/recovery-status`.
 
 ---
 

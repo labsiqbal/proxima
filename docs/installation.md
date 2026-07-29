@@ -151,6 +151,7 @@ PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0
+PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
 PROXIMA_MASTER_MAX_PARALLEL=3
 PROXIMA_GRAPH_SEMANTIC_EGRESS=0
 PROXIMA_RUNNER_ENV_ALLOWLIST=
@@ -212,12 +213,14 @@ immediately; hard-refresh or use an incognito window if a service worker is stal
 
 ## Updating
 
-Proxima checks GitHub Releases for a newer version every 6 hours (and on
-Settings → "Check for updates"). When one exists, the sidebar shows an update
-pill; it opens the release notes with a one-click **Update now** button
-(Linux/macOS). The update runs `git pull --ff-only`, rebuilds, restarts the
-service, and the UI reloads on the new version. Build failures happen before restart;
-a failed post-restart health check is reported for manual inspection because automatic
+Proxima can check for newer GitHub release metadata, but it no longer applies an
+update from the running checkout. The former in-app pull/build/restart path is inert.
+Safe self-update is available only after a root-admin enrolls a managed external
+updater, its trust root, launcher, service-manager adapter, sandbox, and probe bundle.
+`PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and must remain off until the
+candidate and fault/rollback gates are qualified. Foreground, ordinary user-service,
+Windows, and unqualified macOS installs fail closed and require an administrator's
+manual update procedure. Local self-edit commits are provenance-recorded, not signed.
 checkout/DB rollback is intentionally not attempted. The log lives at
 `$DATA_DIR/update.log` (default `~/.local/share/proxima/update.log`).
 
@@ -274,11 +277,10 @@ PROXIMA_UPDATE_CHECK=0
 PROXIMA_UPDATE_REPO=your-account/your-fork
 ```
 
-The one-click updater requires the Proxima process to own a writable checkout and
-build artifacts and to be allowed to restart its service. The recommended
-root-owned system-wide deployment deliberately does not grant those permissions:
-it disables the periodic check and is updated by an administrator. User installs
-retain the self-update path.
+The external updater owns its lock, fsynced journal, release pointers, maintenance
+fence, backup location, and service configuration outside the candidate release.
+The application can only submit an authenticated, typed request and render status;
+it cannot promote code or modify those trusted files.
 
 ## Development
 

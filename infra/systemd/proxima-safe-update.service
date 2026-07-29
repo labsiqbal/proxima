@@ -1,0 +1,8 @@
+[Unit]
+Description=Proxima safe updater controller (foundation disabled)
+
+[Service]
+Type=oneshot
+# Installation is intentionally withheld until administrator enrollment and
+# candidate sandbox qualification. This placeholder must not be enabled.
+ExecStart=/bin/false

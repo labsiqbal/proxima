@@ -60,6 +60,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Durable Master data is migrated unconditionally. Runtime behavior stays
     # off until the integrated Master slices pass their acceptance gate.
     "feature_master_orchestrator": False,
+    # Group 14 creates only the external updater contracts. Promotion stays
+    # disabled until installer qualification plus groups 15-16 fault evidence.
+    "feature_safe_self_update": False,
+    # Read-only app projection of a root-owned fence. The app never creates or
+    # removes it; an absent path means no maintenance fence is active.
+    "safe_update_fence_path": None,
     # Maximum queued/running Task-agent runs owned by Master. The supervisor
     # and worker claim guard share this value.
     "master_max_parallel": 3,
@@ -131,6 +137,7 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["feature_master_orchestrator"] = _bool_flag(
         cfg.get("feature_master_orchestrator")
     )
+    cfg["feature_safe_self_update"] = _bool_flag(cfg.get("feature_safe_self_update"))
     cfg["graph_semantic_egress_enabled"] = _bool_flag(
         cfg.get("graph_semantic_egress_enabled")
     )

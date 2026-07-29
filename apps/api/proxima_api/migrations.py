@@ -1824,6 +1824,34 @@ def _freeze_master_focus_attribution(conn: sqlite3.Connection) -> None:
             )
 
 
+def _add_self_update_runs(conn: sqlite3.Connection) -> None:
+    """Owner-visible mirror only.  The external journal remains authoritative."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS self_update_runs (
+          id TEXT PRIMARY KEY,
+          origin_job_id TEXT,
+          base_commit TEXT NOT NULL,
+          candidate_commit TEXT NOT NULL,
+          previous_release_id TEXT,
+          candidate_release_id TEXT,
+          previous_schema_version INTEGER,
+          candidate_schema_version INTEGER,
+          phase TEXT NOT NULL,
+          status TEXT NOT NULL,
+          journal_digest TEXT,
+          journal_ref TEXT,
+          evidence_summary TEXT NOT NULL DEFAULT '{}',
+          failure_class TEXT,
+          rollback_status TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_self_update_runs_status ON self_update_runs(status, created_at DESC)")
+
+
 def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
     tables = {
         str(row[0])
@@ -2396,6 +2424,7 @@ MIGRATIONS: list[Migration] = [
         _preserve_master_history_scope,
         {"no_auto_tx": True},
     ),
+    (43, "add external safe-update owner projection", _add_self_update_runs),
 ]
 
 

@@ -34,6 +34,17 @@ Anyone with physical access, SSH, AnyDesk, sudo, or direct filesystem access can
 inspect source code, runtime data, DB files, runner profile homes, and project
 files. This is outside Proxima app control.
 
+## Safe-update boundary
+
+Safe self-update is not an app privilege. When enrolled in a future managed
+installation, a root-owned external updater owns the release journal, pointers,
+maintenance fence, backups, trust metadata, service configuration, and recovery
+authority outside candidate code and runtime data. The app's authenticated
+`self_update_runs` record is an owner-visible projection, not the decision record.
+Candidate code cannot use it to promote itself. Until the installer qualifies a
+manager and sandbox, `feature_safe_self_update` is off and all activation fails
+closed.
+
 ## App Owner
 
 The single owner can:

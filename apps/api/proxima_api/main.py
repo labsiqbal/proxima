@@ -36,6 +36,7 @@ from .updates import (
     UpdateManager,
     read_local_version,
 )
+from .safe_updates import SafeUpdateCoordinator
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -68,6 +69,7 @@ from .routes import (
     projects as routes_projects,
     reviews as routes_reviews,
     update as routes_update,
+    self_updates as routes_self_updates,
     wiki as routes_wiki,
     work as routes_work,
 )
@@ -286,6 +288,9 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         app.state.master_projection = None
         app.state.master_supervisor = None
     app.state.updates = UpdateManager(cfg)
+    # This is a projection client, deliberately constructed without a controller
+    # transport until root-owned updater enrollment supplies one.
+    app.state.safe_updates = SafeUpdateCoordinator(app.state.db)
 
     register_frontend(
         app,
@@ -392,6 +397,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_wiki.register(app, _route_deps)
     routes_admin.register(app, _route_deps)
     routes_update.register(app, _route_deps)
+    routes_self_updates.register(app, _route_deps)
     routes_chat.register(app, _route_deps)
     routes_reviews.register(app, _route_deps)
     routes_auth.register(app, _route_deps)
