@@ -14,8 +14,12 @@ maintenance status path while preserving controller ownership. It must also qual
 pinned candidate-tree traversal, controller-owned ancestry, empty candidate
 capability sets, and no privilege escalation before any adapter can report managed.
 
-`install-safe-updater` is intentionally fail-closed until the later candidate
-sandbox, trusted probe, and service-manager qualification work lands.
+`install-safe-updater` remains intentionally fail-closed. The repository includes
+controller-only candidate qualification with mandatory Bubblewrap isolation,
+clone-only migration, immutable release and evidence trees, and hash-pinned trusted
+probes, but the installer does not enroll it. Service-manager enrollment and the
+later switch, fault, and rollback gates remain outstanding; no updater unit may be
+enabled.
 
 Read-only recovery status is available as stable JSON:
 

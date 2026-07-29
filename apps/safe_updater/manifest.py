@@ -9,7 +9,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from .layout import COMMIT, RELEASE_ID
-from .tree import TreeError, VerifiedTree, regular_file_digests
+from .tree import (
+    TreeError,
+    VerifiedTree,
+    regular_file_digests,
+    source_tree_metadata,
+)
 
 HEX = re.compile(r"^[a-f0-9]{64}$")
 REQUIRED_LOCK_PATHS = frozenset({"apps/api/uv.lock", "apps/web/package-lock.json"})
@@ -44,10 +49,28 @@ def _safe_path(value: str) -> bool:
     )
 
 
-def _digest_tree(files: Mapping[str, str]) -> str:
+def _digest_tree(
+    files: Mapping[str, str],
+    modes: Mapping[str, int] | None = None,
+    symlinks: Mapping[str, str] | None = None,
+) -> str:
     digest = hashlib.sha256()
     for relpath, value in sorted(files.items()):
-        digest.update(relpath.encode() + b"\0" + value.encode() + b"\n")
+        if modes is None and symlinks is None:
+            digest.update(relpath.encode() + b"\0" + value.encode() + b"\n")
+            continue
+        mode = "" if modes is None else oct(modes[relpath])
+        target = "" if symlinks is None else symlinks.get(relpath, "")
+        digest.update(
+            relpath.encode()
+            + b"\0"
+            + value.encode()
+            + b"\0"
+            + mode.encode()
+            + b"\0"
+            + target.encode()
+            + b"\n"
+        )
     return digest.hexdigest()
 
 
@@ -64,6 +87,41 @@ def _validated_digest_map(value: Any) -> dict[str, str]:
         ):
             raise ManifestError("manifest digest invalid")
         result[path] = digest
+    return result
+
+
+def _validated_modes(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict) or not value:
+        raise ManifestError("manifest mode map invalid")
+    result: dict[str, int] = {}
+    for path, mode in value.items():
+        if (
+            not isinstance(path, str)
+            or not _safe_path(path)
+            or not isinstance(mode, int)
+            or isinstance(mode, bool)
+            or mode not in {0o444, 0o555}
+        ):
+            raise ManifestError("manifest mode invalid")
+        result[path] = mode
+    return result
+
+
+def _validated_symlinks(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ManifestError("manifest symlink map invalid")
+    result: dict[str, str] = {}
+    for path, target in value.items():
+        if (
+            not isinstance(path, str)
+            or not _safe_path(path)
+            or not isinstance(target, str)
+            or not target
+            or "\0" in target
+            or PurePosixPath(target).is_absolute()
+        ):
+            raise ManifestError("manifest symlink invalid")
+        result[path] = target
     return result
 
 
@@ -188,7 +246,7 @@ def local_provenance(
 ) -> dict[str, Any]:
     _validate_local_metadata(task_id, base_commit, candidate_commit, origin)
     try:
-        files = regular_file_digests(candidate_root)
+        files, modes, symlinks = source_tree_metadata(candidate_root)
     except TreeError as exc:
         raise ManifestError(str(exc)) from exc
     if not REQUIRED_LOCK_PATHS.issubset(files):
@@ -196,8 +254,10 @@ def local_provenance(
     return {
         "kind": "local_provenance_not_signed", "task_id": task_id, "base_commit": base_commit,
         "candidate_commit": candidate_commit, "origin": origin,
-        "tree_digest": _digest_tree(files),
+        "tree_digest": _digest_tree(files, modes, symlinks),
         "lock_digests": {path: files[path] for path in sorted(REQUIRED_LOCK_PATHS)},
+        "file_modes": modes,
+        "symlink_targets": symlinks,
     }
 
 
@@ -213,6 +273,8 @@ def verify_local_provenance(
         "origin",
         "tree_digest",
         "lock_digests",
+        "file_modes",
+        "symlink_targets",
     } or value.get("kind") != "local_provenance_not_signed":
         raise ManifestError("local provenance fields invalid")
     task_id = value.get("task_id")
@@ -228,11 +290,20 @@ def verify_local_provenance(
     lock_digests = _validated_digest_map(value.get("lock_digests"))
     if set(lock_digests) != REQUIRED_LOCK_PATHS:
         raise ManifestError("local candidate lock set invalid")
+    modes = _validated_modes(value.get("file_modes"))
+    symlinks = _validated_symlinks(value.get("symlink_targets"))
+    if not set(symlinks).issubset(modes):
+        raise ManifestError("local candidate symlink set invalid")
     try:
-        files = regular_file_digests(candidate_root)
+        files, actual_modes, actual_symlinks = source_tree_metadata(candidate_root)
     except TreeError as exc:
         raise ManifestError(str(exc)) from exc
-    if _digest_tree(files) != tree_digest:
+    if (
+        set(modes) != set(files)
+        or modes != actual_modes
+        or symlinks != actual_symlinks
+        or _digest_tree(files, actual_modes, actual_symlinks) != tree_digest
+    ):
         raise ManifestError("local candidate tree substitution")
     if any(files.get(path) != digest for path, digest in lock_digests.items()):
         raise ManifestError("local candidate lock substitution")
@@ -240,4 +311,6 @@ def verify_local_provenance(
         release_id=None,
         commit=candidate_commit,
         file_digests=tuple(sorted(files.items())),
+        file_modes=tuple(sorted(actual_modes.items())),
+        symlink_targets=tuple(sorted(actual_symlinks.items())),
     )

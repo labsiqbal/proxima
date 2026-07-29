@@ -6,7 +6,7 @@ from ..service_adapter import ManagerCapability
 
 
 class SystemdAdapter:
-    """Narrow contract fixture adapter. Activation remains disabled in group 14."""
+    """Narrow contract fixture adapter. Activation remains disabled."""
     def __init__(self, unit: str, runner=subprocess.run) -> None:
         if not unit.endswith(".service") or "/" in unit:
             raise ValueError("invalid systemd unit")

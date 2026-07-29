@@ -48,15 +48,17 @@ An adapter needs evidence for all of these:
   partial, unterminated, malformed, reordered, and replayed records fail closed.
 - Cross-process lock contention works on the target platform. A nonterminal
   journal continues to block later submissions after the kernel lock is released.
-- Manifest signature verification binds the exact regular file set, tree digest,
-  `apps/api/uv.lock`, and `apps/web/package-lock.json`. Symlinks, special files,
-  traversal, extras, and substitutions are rejected before publish. Verification
-  returns the immutable file set consumed by publication, so candidate changes
-  cannot redefine expected content. Every source component is opened relative to a
-  pinned directory descriptor. Hosts without a qualified pinned traversal backend
-  remain unenrolled. Publication copies content into fresh controller-owned inodes,
-  rechecks trusted staging, and atomically renames it without preserving candidate
-  hardlinks or ownership.
+- Signed manifest verification binds the exact regular file set, tree digest,
+  `apps/api/uv.lock`, and `apps/web/package-lock.json`, and rejects symlinks, special
+  files, traversal, extras, and substitutions. Unsigned local provenance also binds
+  normalized file modes and safe in-tree file-symlink targets, then materializes
+  their target bytes into regular files. Both paths return the immutable file set
+  consumed by publication, so candidate changes cannot redefine expected content.
+  Every source component is opened relative to a pinned directory descriptor. Hosts
+  without a qualified pinned traversal backend remain unenrolled. Publication
+  copies content into fresh controller-owned inodes, rechecks trusted staging, and
+  atomically renames it without preserving candidate symlinks, hardlinks, or
+  ownership.
 - Trusted namespace creation durably flushes each new directory and its parent.
   The maintenance status directory is searchable and the nonsecret fence file is
   readable by the application identity, while neither grants that identity write

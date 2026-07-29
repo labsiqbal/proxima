@@ -1,4 +1,4 @@
-"""Inert trusted controller facade for the group-14 updater foundation."""
+"""Trusted controller facade for candidate-only qualification."""
 from __future__ import annotations
 
 import hashlib
@@ -6,13 +6,17 @@ import json
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from .evidence import EvidenceStore
 from .journal import Journal
 from .layout import RUN_ID
 from .locks import SingleFlightLock
 from .recovery import RecoveryStatus, inspect
 from .state_machine import Phase
+
+if TYPE_CHECKING:
+    from .candidate import CandidateGate, CandidateGateResult
 
 
 @dataclass(frozen=True)
@@ -23,7 +27,7 @@ class SubmitResult:
 
 
 class SafeUpdateController:
-    """Owns lock and journal only. Its activation methods intentionally do not exist."""
+    """Owns the lock, journal and candidate gate without activation authority."""
     def __init__(self, root: Path) -> None:
         self.root = root
         self.lock = SingleFlightLock(root / "controller.lock")
@@ -63,7 +67,8 @@ class SafeUpdateController:
             self.lock.set_owner(run_id)
             journal = Journal.create(self.root, run_id, digest)
             journal.append(Phase.PREFLIGHT)
-            # Group 14 stops here: no candidate build, pointer, data, or service side effect.
+            # Submission stops at preflight. Candidate qualification is a separate,
+            # explicit step and cannot activate a release.
             return SubmitResult(True, run_id)
         finally:
             self.lock.release()
@@ -77,4 +82,35 @@ class SafeUpdateController:
                 "invalid journal run id",
             )
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
-        return inspect(Journal(self.root / "journal" / f"{run_id}.jsonl", digest))
+        return inspect(
+            Journal(self.root / "journal" / f"{run_id}.jsonl", digest),
+            evidence_store=EvidenceStore(self.root),
+            run_id=run_id,
+        )
+
+    def qualify_candidate(
+        self,
+        run_id: str,
+        intent: dict[str, Any],
+        gate: CandidateGate,
+        **kwargs: Any,
+    ) -> CandidateGateResult:
+        """Run only the pre-switch candidate gate for an accepted journal.
+
+        This deliberately has no access to active pointers, fences, backups or a
+        service adapter.  Later groups own every transition after
+        ``candidate_staged``.
+        """
+        if not RUN_ID.fullmatch(run_id):
+            raise ValueError("invalid journal run id")
+        digest = hashlib.sha256(
+            json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        journal = Journal(self.root / "journal" / f"{run_id}.jsonl", digest)
+        records = journal.records()
+        if not records or records[-1].phase is not Phase.PREFLIGHT:
+            raise RuntimeError("candidate qualification requires an accepted preflight run")
+        result = gate.prepare(run_id, **kwargs)
+        EvidenceStore(self.root).load(run_id, result.evidence.digest)
+        journal.append(Phase.CANDIDATE_STAGED, {"candidate_evidence": result.evidence.digest})
+        return result

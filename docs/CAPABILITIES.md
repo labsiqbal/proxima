@@ -1414,7 +1414,7 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 21. Updates (version check + inert safe-update foundation)
+## 21. Updates (version check + candidate-only safe-update gate)
 
 **Why:** Owners should see release availability without letting the running
 application or candidate code promote itself.
@@ -1425,20 +1425,41 @@ and run-status projections are behind the server-enforced
 managed external updater, not candidate code or the app database, owns the
 append-only fsynced journal, native single-flight lock, immutable releases, release
 pointers, maintenance fence, backups, service configuration, and recovery verdict.
-Signed release manifests and unsigned local provenance produce an immutable
-verified-file-set result only after exact regular-file, tree, and canonical
-Python/web lockfile checks. Publication consumes that result rather than deriving
-new trust from mutable candidate bytes, copies through pinned directory descriptors
-into fresh controller-owned inodes, rechecks trusted staging, and then renames it
-atomically. Directory creation fsyncs every new directory and its parent; unsupported
-durability or pinned traversal fails closed. The app exposes only authenticated owner
-projections and a package-local read-only maintenance client. Fence status is
-nonsecret and controller-owned with read-only application access. Submission consults
-the external single-flight authority before reconciling SQLite projections. systemd,
-launchd, and unmanaged adapters fail closed until the
+Signed release manifests bind an exact regular-file set. Unsigned local provenance
+also binds normalized file modes and safe in-tree file-symlink targets, which are
+materialized as regular files. Both paths bind the canonical Python/web lockfiles
+and produce an immutable verified-file-set result. Publication consumes that result
+rather than deriving new trust from mutable candidate bytes, copies through pinned
+directory descriptors into fresh controller-owned inodes, rechecks trusted staging,
+and then renames it atomically. Directory creation fsyncs every new directory and
+its parent; unsupported durability or pinned traversal fails closed. The app exposes
+only authenticated owner projections and a package-local read-only maintenance
+client. Fence status is nonsecret and controller-owned with read-only application
+access. Submission consults the external single-flight authority before reconciling
+SQLite projections. systemd, launchd, and unmanaged adapters fail closed until the
 [adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).
+
+Group 15 adds a pre-switch gate only. Controller-owned code copies verified source
+and the offline cache into disposable candidate storage, then runs every fixed
+build, test, type, documentation, migration, server, and browser command inside a
+Bubblewrap user, mount, PID, and network namespace with bounded resources, output,
+time, and process cleanup. Only candidate-local writable mounts are visible. The
+exact post-build tree is rehashed, published into fresh release inodes, and frozen
+before probing. SQLite's backup API creates the raw clone; a fixed sandbox command
+migrates only its dedicated clone directory, and the controller requires the
+complete `schema_migrations` ledger through its policy-pinned expected version.
+The browser fixture is a fresh copy of migrated schema with synthetic owner,
+session, and project rows only, plus separate workspace and runner-home paths.
+Candidate-mode startup refuses migrations and background writers. The separately
+installed, hash-pinned probe suite starts the frozen release and requires API
+identity, version, authenticated maintenance, SSE, served-static-asset, complete
+asset-manifest, and headless-browser scenario results. Evidence includes fixed
+build logs, migration proof, fixture metadata, assets, and probe results; its files
+and directories are frozen, and recovery rehashes the journal-pinned bundle before
+reporting a run safe. Any failure stops before a live pointer, database, fence,
+backup, or service action. Activation remains unavailable.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply` (inert),
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,

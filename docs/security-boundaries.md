@@ -59,6 +59,31 @@ boundary yet. See
 [ADR-0008](adr/0008-external-safe-update-authority.md) and the [adapter
 playbook](adding-safe-updater-adapter.md).
 
+The candidate gate runs before any live mutation. Candidate-controlled Git checks,
+package hooks, tests, builds, documentation generation, migrations, API servers, and
+browsers all pass through one Bubblewrap boundary with no host network, no host
+privilege, no ambient environment, phase-specific read-only and candidate-local
+writable mounts, bounded resources and output, timeouts, and process-group cleanup.
+The build uses a disposable writable copy and offline cache. Only the exact verified
+post-build tree is copied into fresh controller-owned release inodes and frozen.
+SQLite's backup API makes the raw clone; a fixed migration entrypoint can write only
+its clone directory, and controller validation checks the complete
+`schema_migrations` ledger. The served fixture is fresh migrated schema populated
+only with synthetic rows and candidate-local workspace and runner-home paths.
+
+The candidate cannot select migration or probe commands or replace the separately
+installed trusted probe bundle, whose complete tree digest is policy-pinned. That
+suite starts the frozen candidate in a loopback-only network namespace and exercises
+API identity, version, authenticated maintenance, SSE, served assets, the complete
+asset digest, and trusted browser scenarios. Candidate-mode startup rejects schema
+initialization, migration, and background writers. Evidence contains the fixed logs
+and proofs, is frozen at both file and directory levels, and is rehashed against the
+journal digest during recovery. A failed build, migration, identity, static asset,
+probe, or sandbox check leaves the live database, workspace, runner homes, services,
+pointers, fence, and backups untouched. The accepted preflight journal remains
+nonterminal, and frozen failure evidence is retained for inspection. This is not
+enrollment or activation.
+
 ## App Owner
 
 The single owner can:

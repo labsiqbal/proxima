@@ -9,7 +9,13 @@ import tempfile
 from pathlib import Path
 
 from .durability import DurabilityError, ensure_durable_directory, fsync_directory
-from .tree import TreeError, VerifiedTree, copy_regular_tree, regular_file_digests
+from .tree import (
+    TreeError,
+    VerifiedTree,
+    copy_regular_tree,
+    regular_file_digests,
+    regular_file_modes,
+)
 
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 RELEASE_ID = re.compile(r"^sha256-[a-f0-9]{40}-[a-f0-9]{12}$")
@@ -59,6 +65,7 @@ class ReleaseLayout:
         ):
             raise LayoutError("verified tree release identity mismatch")
         expected = verified.files()
+        modes = verified.modes()
         try:
             ensure_durable_directory(destination.parent, 0o755)
         except DurabilityError as exc:
@@ -73,15 +80,22 @@ class ReleaseLayout:
         published = False
         renamed = False
         try:
-            copy_regular_tree(source, staging, expected)
+            copy_regular_tree(source, staging, expected, modes)
             for path in sorted(
                 staging.rglob("*"),
                 key=lambda value: len(value.parts),
                 reverse=True,
             ):
-                path.chmod(0o555 if path.is_dir() else 0o444)
+                path.chmod(
+                    0o555
+                    if path.is_dir()
+                    else modes[path.relative_to(staging).as_posix()]
+                )
             staging.chmod(0o555)
-            if regular_file_digests(staging) != expected:
+            if (
+                regular_file_digests(staging) != expected
+                or regular_file_modes(staging) != modes
+            ):
                 raise LayoutError("published tree verification failed")
             if os.path.lexists(destination):
                 raise LayoutError("release id already exists")
