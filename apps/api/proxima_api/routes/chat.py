@@ -855,6 +855,7 @@ def register(app, deps):
             database_path,
             writes_fenced=maintenance.database_write_check(),
         )
+        generation_thread: threading.Thread | None = None
         try:
             done = threading.Event()
             box: dict[str, Any] = {}
@@ -867,7 +868,12 @@ def register(app, deps):
                 finally:
                     done.set()
 
-            threading.Thread(target=work, daemon=True, name=f"media-run-{run_id}-gen").start()
+            generation_thread = threading.Thread(
+                target=work,
+                daemon=True,
+                name=f"media-run-{run_id}-gen",
+            )
+            generation_thread.start()
             started = time.monotonic()
             while not done.wait(20.0):
                 if time.monotonic() - started > MEDIA_RUN_MAX_SECONDS:
@@ -935,6 +941,8 @@ def register(app, deps):
                 if updated.rowcount == 1:
                     worker.add_event(run_id, session_id, project_id, "run.failed", {"error": "internal error while saving the media result"})
         finally:
+            if generation_thread is not None:
+                generation_thread.join()
             conn.close()
 
     def _start_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, generate_fn) -> dict[str, Any]:
@@ -954,12 +962,12 @@ def register(app, deps):
         app.state.worker.add_event(run_id, session["id"], session["project_id"], "run.started", {})
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session["id"],))
         database_path = str((getattr(app.state, "config", {}) or {}).get("database_path") or "")
-        threading.Thread(
-            target=_finish_media_run,
+        maintenance.start_thread(
+            _finish_media_run,
             args=(run_id, session["id"], session["project_id"], profile["name"], generate_fn, database_path),
             daemon=True,
             name=f"media-run-{run_id}",
-        ).start()
+        )
         return {"run_id": run_id, "session_id": session["id"], "status": "queued", "media_action": kind}
 
     def _maybe_complete_chat_media(session_id: int, payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any]) -> dict[str, Any] | None:
@@ -1227,6 +1235,11 @@ def register(app, deps):
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
             enabled=auth_checks_enabled,
+            spawn=(
+                maintenance.start_thread
+                if auth_checks_enabled
+                else None
+            ),
         )
         return {
             "counts": counts, "jobsByStatus": jobs_by_status,
@@ -1305,7 +1318,10 @@ def register(app, deps):
         try:
             Path(cwd).mkdir(parents=True, exist_ok=True)
             await websocket.accept()
-            term = TerminalSession(cwd)
+            term = TerminalSession(
+                cwd,
+                contained=maintenance.process_containment_required,
+            )
             term.start()
         except Exception:
             session_lease.release()

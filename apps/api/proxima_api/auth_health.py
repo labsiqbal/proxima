@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from . import app_settings, image_providers
 from .db import connect
@@ -127,7 +127,12 @@ def _refresh(database_path: str) -> None:
             _refreshing = False
 
 
-def snapshot(database_path: str, *, enabled: bool = True) -> dict[str, Any]:
+def snapshot(
+    database_path: str,
+    *,
+    enabled: bool = True,
+    spawn: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
     """Latest cached snapshot, kicking a background refresh when stale.
 
     Never blocks: the first call returns {"status": "checking"} and the Home
@@ -141,6 +146,18 @@ def snapshot(database_path: str, *, enabled: bool = True) -> dict[str, Any]:
             kick = True
         snap = _snapshot
     if kick:
-        # Outside the lock: _refresh re-acquires it, and the lock is not reentrant.
-        threading.Thread(target=_refresh, args=(database_path,), daemon=True, name="auth-health-refresh").start()
+        if spawn is None:
+            threading.Thread(
+                target=_refresh,
+                args=(database_path,),
+                daemon=True,
+                name="auth-health-refresh",
+            ).start()
+        else:
+            spawn(
+                _refresh,
+                args=(database_path,),
+                daemon=True,
+                name="auth-health-refresh",
+            )
     return snap if snap is not None else {"status": "checking", "checks": []}

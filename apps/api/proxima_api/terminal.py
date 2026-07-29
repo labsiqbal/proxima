@@ -4,6 +4,7 @@ import fcntl
 import logging
 import os
 import pty
+import shutil
 import signal
 import struct
 import subprocess
@@ -81,14 +82,43 @@ class TerminalSession:
     bidirectional I/O. Child inherits the server's environment (so PATH, etc. are
     already correct) plus TERM for proper rendering in xterm.js."""
 
-    def __init__(self, cwd: str, shell: str = "bash") -> None:
+    def __init__(
+        self,
+        cwd: str,
+        shell: str = "bash",
+        *,
+        contained: bool = False,
+    ) -> None:
         self.cwd = cwd
         self.shell = shell
+        self.contained = contained
         self.pid: int | None = None
         self.sid: int | None = None
         self.fd: int | None = None
 
+    def _argv(self) -> list[str]:
+        if not self.contained:
+            return [self.shell, "-l"]
+        bwrap = shutil.which("bwrap")
+        if os.name != "posix" or bwrap is None:
+            raise RuntimeError("terminal containment is unavailable")
+        return [
+            bwrap,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-pid",
+            "--bind",
+            "/",
+            "/",
+            "--chdir",
+            self.cwd,
+            "--",
+            self.shell,
+            "-l",
+        ]
+
     def start(self) -> None:
+        argv = self._argv()
         pid, fd = pty.fork()
         if pid == 0:
             # ── child ──
@@ -98,7 +128,7 @@ class TerminalSession:
                 pass
             os.environ["TERM"] = "xterm-256color"
             try:
-                os.execvp(self.shell, [self.shell, "-l"])
+                os.execvp(argv[0], argv)
             except Exception:
                 os._exit(1)
         # ── parent ──

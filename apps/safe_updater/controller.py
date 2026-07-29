@@ -20,6 +20,7 @@ from .recovery import RecoveryStatus, inspect
 from .service_adapter import DisposableServiceAdapter
 from .sqlite_image import SealedImage, checkpoint_truncate, quarantine_sidecars, replace_from_sealed, seal_backup
 from .state_machine import ORDER, Phase
+from .write_fence import IngressDrainTimeout
 from .write_fence import remove as remove_fence
 from .write_fence import write as write_fence
 
@@ -358,7 +359,8 @@ class SafeUpdateController:
                             pass
                         raise RuntimeError("safe_update_breaker_latched") from committed_recovery_error
 
-                rollback_failed = False
+                ingress_timeout = isinstance(exc, IngressDrainTimeout)
+                rollback_failed = ingress_timeout
                 try:
                     breaker.begin_rollback(type(exc).__name__)
                 except Exception as breaker_error:
@@ -385,7 +387,7 @@ class SafeUpdateController:
                         probe("rollback", previous_release_id)
                     if writers_pause_attempted:
                         adapter.resume_autonomous_writers()
-                    if fence_attempted:
+                    if fence_attempted and not ingress_timeout:
                         remove_fence(fence_path)
                 except Exception:
                     rollback_failed = True

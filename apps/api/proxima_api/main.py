@@ -7,7 +7,7 @@ import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -92,7 +92,7 @@ def _as_int(value: Any) -> int:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
     cfg = app.state.config
     startup_lease = app.state.startup_lease
     app.state.hub.bind_loop(asyncio.get_running_loop())
@@ -282,11 +282,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.preview_relays.shutdown()
 
 
-def create_app(config: dict[str, Any] | None = None) -> FastAPI:
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    try:
+        async with _lifespan_impl(app):
+            yield
+    except BaseException:
+        app.state.startup_lease.release()
+        raise
+
+
+def _create_app(
+    config: dict[str, Any] | None,
+    lease_sink: Callable[[Any], None],
+) -> FastAPI:
     cfg = normalize_config(config)
     os.environ.setdefault("PROXIMA_WORKSPACE_ROOT", str(cfg["workspace_root"]))
     maintenance = MaintenanceBoundary(cfg)
     startup_lease = maintenance.acquire(process_wide=True)
+    lease_sink(startup_lease)
     maintenance_mode = not startup_lease.acquired or maintenance.fenced()
     if maintenance_mode:
         cfg["_safe_update_startup_read_only"] = True
@@ -570,6 +584,21 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
                        maintenance=maintenance)
 
     return app
+
+
+def create_app(config: dict[str, Any] | None = None) -> FastAPI:
+    startup_lease = None
+
+    def capture(lease) -> None:
+        nonlocal startup_lease
+        startup_lease = lease
+
+    try:
+        return _create_app(config, capture)
+    except BaseException:
+        if startup_lease is not None:
+            startup_lease.release()
+        raise
 
 
 def _config_from_env() -> dict[str, Any]:

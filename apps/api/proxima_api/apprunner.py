@@ -13,7 +13,7 @@ import signal
 import socket
 import subprocess
 import time
-from typing import Any
+from typing import Any, Protocol
 
 
 def _port_open(port: int) -> bool:
@@ -66,14 +66,41 @@ _PORT_RE = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{
 _PORT_RE2 = re.compile(r"(?:listening|running|server).{0,20}?\bport\b[^\d]{0,4}(\d{2,5})", re.I)
 
 
+class EffectLease(Protocol):
+    def release(self) -> None: ...
+
+
 class AppManager:
     def __init__(self) -> None:
         self._apps: dict[str, dict[str, Any]] = {}
         # Last self-exit payload per slug, kept until the next start so the UI
         # can show failure logs after the process is reaped (status polls every 2s).
         self._last_exit: dict[str, dict[str, Any]] = {}
+        self._retained_effects: list[EffectLease] = []
 
-    async def start(self, slug: str, cwd: str, command: str, port: int) -> None:
+    def _finish_effect(
+        self,
+        app: dict[str, Any],
+        *,
+        terminated: bool,
+    ) -> None:
+        lease = app.pop("effect_lease", None)
+        if lease is None:
+            return
+        if terminated:
+            lease.release()
+        else:
+            self._retained_effects.append(lease)
+
+    async def start(
+        self,
+        slug: str,
+        cwd: str,
+        command: str,
+        port: int,
+        *,
+        effect_lease: EffectLease | None = None,
+    ) -> None:
         await self.stop(slug)
         self._last_exit.pop(slug, None)
         env = subprocess_env(
@@ -95,32 +122,54 @@ class AppManager:
         else:
             shell_argv = ["bash", "-lc", command]
             extra = {"start_new_session": True}
-        proc = await asyncio.create_subprocess_exec(
-            *shell_argv, cwd=cwd, env=env,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            **extra,
-        )
-        self._apps[slug] = {"proc": proc, "port": port, "command": command, "started_at": time.time(), "log": []}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *shell_argv, cwd=cwd, env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                **extra,
+            )
+        except BaseException:
+            if effect_lease is not None:
+                effect_lease.release()
+            raise
+        self._apps[slug] = {
+            "proc": proc,
+            "port": port,
+            "command": command,
+            "started_at": time.time(),
+            "log": [],
+            "effect_lease": effect_lease,
+        }
         asyncio.create_task(self._drain(slug, proc))
 
     async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
         assert proc.stdout
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                app = self._apps.get(slug)
+                if app and app.get("proc") is proc:
+                    text = line.decode("utf-8", "replace").rstrip()
+                    app["log"].append(text)
+                    del app["log"][:-200]
+                    if not app.get("detected_port"):
+                        m = _PORT_RE.search(text) or _PORT_RE2.search(text)
+                        if m:
+                            found = int(m.group(1))
+                            if 1024 <= found <= 65535:
+                                app["detected_port"] = found
+            wait = getattr(proc, "wait", None)
+            if wait is not None:
+                await wait()
+        finally:
             app = self._apps.get(slug)
             if app and app.get("proc") is proc:
-                text = line.decode("utf-8", "replace").rstrip()
-                app["log"].append(text)
-                del app["log"][:-200]
-                # Sniff the real listening port from the server's own output.
-                if not app.get("detected_port"):
-                    m = _PORT_RE.search(text) or _PORT_RE2.search(text)
-                    if m:
-                        found = int(m.group(1))
-                        if 1024 <= found <= 65535:
-                            app["detected_port"] = found
+                self._finish_effect(
+                    app,
+                    terminated=proc.returncode is not None,
+                )
 
     async def stop(self, slug: str) -> None:
         app = self._apps.pop(slug, None)
@@ -152,6 +201,10 @@ class AppManager:
                     await asyncio.wait_for(proc.wait(), timeout=2)
                 except Exception:
                     pass
+        self._finish_effect(
+            app,
+            terminated=proc.returncode is not None,
+        )
 
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
@@ -159,6 +212,7 @@ class AppManager:
             return self._last_exit.get(slug) or {"running": False}
         if app["proc"].returncode is not None:  # exited on its own
             self._apps.pop(slug, None)
+            self._finish_effect(app, terminated=True)
             # exit_code + exited stay sticky across 2s polls so the UI can say
             # "Finished" vs "Failed" instead of a bare log dump after a short run.
             result = {

@@ -113,3 +113,28 @@ def test_app_runner_reports_ready_when_port_accepts_connections():
             await manager.shutdown()
 
     asyncio.run(run_case())
+
+
+def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    manager = AppManager()
+    lease = Lease()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 30",
+            5180,
+            effect_lease=lease,
+        )
+        assert lease.released is False
+        await manager.stop("demo")
+        assert lease.released is True
+
+    asyncio.run(run_case())

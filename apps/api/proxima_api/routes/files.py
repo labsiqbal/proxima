@@ -4,7 +4,6 @@ Extracted via the register() pattern — handler bodies verbatim. No behavior ch
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -503,7 +502,18 @@ def register(app, deps):
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not cwd.is_dir():
                 raise HTTPException(status_code=400, detail="folder not found")
-        await app.state.app_manager.start(slug, str(cwd), payload.command, int(payload.port or 5180))
+        effect_lease = maintenance.background_lease()
+        try:
+            await app.state.app_manager.start(
+                slug,
+                str(cwd),
+                payload.command,
+                int(payload.port or 5180),
+                effect_lease=effect_lease,
+            )
+        except BaseException:
+            effect_lease.release()
+            raise
         # Preview relay: the app's own remote-reachable origin (best-effort; the
         # app still runs without it and localhost preview needs no relay).
         try:
@@ -513,7 +523,10 @@ def register(app, deps):
         # Provision the remote-preview subdomain in the background (best-effort; app
         # start never waits on / fails from Cloudflare). No-op if CF isn't configured.
         if cf_hostnames.configured(app.state.config):
-            asyncio.create_task(cf_hostnames.provision(app.state.config, slug))
+            maintenance.create_task(
+                cf_hostnames.provision(app.state.config, slug),
+                name=f"cf-provision-{slug}",
+            )
         _audit_fs(user, "app.start", slug, f"{payload.dir or '.'}: {payload.command}")
         return {"ok": True}
 
@@ -523,7 +536,10 @@ def register(app, deps):
         await app.state.app_manager.stop(slug)
         await app.state.preview_relays.stop(slug)
         if cf_hostnames.configured(app.state.config):
-            asyncio.create_task(cf_hostnames.deprovision(app.state.config, slug))
+            maintenance.create_task(
+                cf_hostnames.deprovision(app.state.config, slug),
+                name=f"cf-deprovision-{slug}",
+            )
         return {"ok": True}
 
     @app.get("/api/projects/{slug}/app/status")

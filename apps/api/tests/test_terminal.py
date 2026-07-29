@@ -56,3 +56,29 @@ def test_close_fails_closed_when_session_cannot_be_verified(
     )
 
     assert terminal.close() is False
+
+
+def test_contained_terminal_terminates_detached_descendant(tmp_path):
+    child_path = tmp_path / "detached.pid"
+    escaped_path = tmp_path / "escaped.txt"
+    terminal = TerminalSession(str(tmp_path), contained=True)
+    terminal.start()
+    terminal.write(
+        b"setsid sh -c 'echo $$ > detached.pid; "
+        b"sleep 30; echo escaped > escaped.txt' "
+        b"</dev/null >/dev/null 2>&1 &\n"
+    )
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not child_path.is_file():
+        time.sleep(0.01)
+    assert child_path.is_file()
+    child_pid = int(child_path.read_text(encoding="utf-8").strip())
+
+    assert terminal.close() is True
+    try:
+        os.kill(child_pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("detached terminal descendant survived close")
+    assert not escaped_path.exists()

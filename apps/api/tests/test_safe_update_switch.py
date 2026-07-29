@@ -25,6 +25,7 @@ from apps.safe_updater.layout import ReleaseLayout
 from apps.safe_updater.service_adapter import DisposableServiceAdapter
 from apps.safe_updater.state_machine import Phase
 from apps.safe_updater.write_fence import (
+    IngressDrainTimeout,
     ingress_pending_path,
     prepare_ingress_lock,
     write as write_fence,
@@ -1225,7 +1226,7 @@ def test_established_terminal_drains_session_before_fence_activation(
     writes: list[bytes] = []
 
     class FakeTerminal:
-        def __init__(self, _cwd: str) -> None:
+        def __init__(self, _cwd: str, **_kwargs) -> None:
             pass
 
         def start(self) -> None:
@@ -1292,3 +1293,259 @@ def test_established_terminal_drains_session_before_fence_activation(
             assert fence.is_file()
 
     assert writes == [b"admitted-input"]
+
+
+def test_fenced_update_status_does_not_reconcile_marker(tmp_path: Path):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+
+    with TestClient(app) as client:
+        token = client.post("/auth/auto").json()["token"]
+        marker = tmp_path / "update-status.json"
+        payload = {
+            "state": "running",
+            "target": "999.0.0",
+            "pid": 99999999,
+        }
+        marker.write_text(json.dumps(payload), encoding="utf-8")
+        write_fence(fence, "2" * 32, "write_fenced")
+        response = client.get(
+            "/api/update/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "failed"
+    assert json.loads(marker.read_text(encoding="utf-8")) == payload
+
+
+def test_background_thread_retains_ingress_until_completion(
+    tmp_path: Path,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    maintenance = MaintenanceBoundary(
+        {"safe_update_fence_path": str(fence)}
+    )
+    request_lease = maintenance.acquire()
+    started = threading.Event()
+    finish = threading.Event()
+
+    def effect() -> None:
+        started.set()
+        finish.wait(timeout=5)
+
+    background = maintenance.start_thread(
+        effect,
+        name="safe-update-background-effect",
+    )
+    assert started.wait(timeout=2)
+    request_lease.release()
+    fence_errors: list[BaseException] = []
+
+    def activate_fence() -> None:
+        try:
+            write_fence(
+                fence,
+                "3" * 32,
+                "write_fenced",
+                drain_timeout_seconds=2,
+            )
+        except BaseException as exc:
+            fence_errors.append(exc)
+
+    fence_thread = threading.Thread(target=activate_fence)
+    fence_thread.start()
+    _wait_for_path(ingress_pending_path(fence))
+    assert fence_thread.is_alive()
+    assert not fence.exists()
+    finish.set()
+    background.join(timeout=5)
+    fence_thread.join(timeout=5)
+    assert not background.is_alive()
+    assert not fence_thread.is_alive()
+    assert fence_errors == []
+    assert fence.is_file()
+
+
+def test_background_task_retains_ingress_until_completion(
+    tmp_path: Path,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    maintenance = MaintenanceBoundary(
+        {"safe_update_fence_path": str(fence)}
+    )
+
+    async def run_case() -> None:
+        request_lease = maintenance.acquire()
+        started = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def effect() -> None:
+            started.set()
+            await finish.wait()
+
+        background = maintenance.create_task(
+            effect(),
+            name="safe-update-background-task",
+        )
+        await started.wait()
+        request_lease.release()
+        fence_errors: list[BaseException] = []
+
+        def activate_fence() -> None:
+            try:
+                write_fence(
+                    fence,
+                    "7" * 32,
+                    "write_fenced",
+                    drain_timeout_seconds=2,
+                )
+            except BaseException as exc:
+                fence_errors.append(exc)
+
+        fence_thread = threading.Thread(target=activate_fence)
+        fence_thread.start()
+        await asyncio.to_thread(
+            _wait_for_path,
+            ingress_pending_path(fence),
+        )
+        assert fence_thread.is_alive()
+        assert not fence.exists()
+        finish.set()
+        await background
+        fence_thread.join(timeout=5)
+        assert not fence_thread.is_alive()
+        assert fence_errors == []
+        assert fence.is_file()
+
+    asyncio.run(run_case())
+
+
+def test_ingress_drain_timeout_leaves_pending_state(tmp_path: Path):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    maintenance = MaintenanceBoundary(
+        {"safe_update_fence_path": str(fence)}
+    )
+    lease = maintenance.acquire()
+    try:
+        with pytest.raises(
+            IngressDrainTimeout,
+            match="ingress drain timed out",
+        ):
+            write_fence(
+                fence,
+                "4" * 32,
+                "write_fenced",
+                drain_timeout_seconds=0.05,
+            )
+    finally:
+        lease.release()
+
+    assert ingress_pending_path(fence).is_file()
+    assert not fence.exists()
+
+
+def test_ingress_timeout_latches_controller_breaker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+
+    def timeout(*_args, **_kwargs) -> None:
+        raise IngressDrainTimeout("maintenance ingress drain timed out")
+
+    monkeypatch.setattr(controller_module, "write_fence", timeout)
+    with pytest.raises(
+        RuntimeError,
+        match="safe_update_breaker_latched",
+    ):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            DisposableServiceAdapter(PREVIOUS),
+            fence,
+            live,
+            staged,
+        )
+
+    assert CircuitBreaker(root).status().latched is True
+    assert _database_value(live) == "previous"
+
+
+def test_construction_failure_releases_startup_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+
+    def fail_init(*_args, **_kwargs) -> None:
+        raise RuntimeError("injected startup failure")
+
+    monkeypatch.setattr(main_module, "init_db", fail_init)
+    with pytest.raises(RuntimeError, match="injected startup failure"):
+        create_app(
+            {
+                "database_path": str(tmp_path / "proxima.db"),
+                "workspace_root": str(tmp_path / "workspace"),
+                "start_worker": False,
+                "safe_update_fence_path": str(fence),
+            }
+        )
+
+    write_fence(
+        fence,
+        "5" * 32,
+        "write_fenced",
+        drain_timeout_seconds=0.2,
+    )
+    assert fence.is_file()
+
+
+def test_lifespan_failure_releases_startup_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+
+    def fail_bind(_loop) -> None:
+        raise RuntimeError("injected lifespan failure")
+
+    monkeypatch.setattr(app.state.hub, "bind_loop", fail_bind)
+    with pytest.raises(RuntimeError, match="injected lifespan failure"):
+        with TestClient(app):
+            pass
+
+    write_fence(
+        fence,
+        "6" * 32,
+        "write_fenced",
+        drain_timeout_seconds=0.2,
+    )
+    assert fence.is_file()

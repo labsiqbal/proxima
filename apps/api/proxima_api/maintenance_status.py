@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import secrets
 import stat
 import threading
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 
-_admission_depths: ContextVar[dict[str, int]] = ContextVar(
-    "maintenance_admission_depths",
-    default={},
+_context_admissions: ContextVar[frozenset[str]] = ContextVar(
+    "maintenance_context_admissions",
+    default=frozenset(),
 )
+_active_admissions: dict[str, str] = {}
 _process_admissions: dict[str, int] = {}
 _process_lock = threading.Lock()
 
@@ -42,7 +45,9 @@ class IngressLease:
         self.process_wide = process_wide
         self.descriptor: int | None = None
         self.acquired = self.path is None
-        self.admission_active = False
+        self.token = secrets.token_hex(16)
+        self.registered = False
+        self.context_active = False
 
     def acquire(self) -> "IngressLease":
         if self.path is None:
@@ -76,15 +81,38 @@ class IngressLease:
             return self
         self.descriptor = descriptor
         self.acquired = True
-        self.boundary._admit(process_wide=self.process_wide)
-        self.admission_active = True
+        self.boundary._register(
+            self.token,
+            process_wide=self.process_wide,
+        )
+        self.registered = True
+        if not self.process_wide:
+            self.boundary._activate(self.token)
+            self.context_active = True
         return self
 
     def suspend_admission(self) -> None:
-        if not self.admission_active:
+        if self.process_wide:
+            if self.registered:
+                self.boundary._unregister(
+                    self.token,
+                    process_wide=True,
+                )
+                self.registered = False
             return
-        self.boundary._withdraw(process_wide=self.process_wide)
-        self.admission_active = False
+        if self.context_active:
+            self.boundary._deactivate(self.token)
+            self.context_active = False
+
+    def activate_admission(self) -> None:
+        if (
+            self.process_wide
+            or not self.registered
+            or self.context_active
+        ):
+            return
+        self.boundary._activate(self.token)
+        self.context_active = True
 
     def release(self) -> None:
         if self.descriptor is None:
@@ -103,9 +131,15 @@ class IngressLease:
             os.close(self.descriptor)
             self.descriptor = None
             self.acquired = False
-            if self.admission_active:
-                self.boundary._withdraw(process_wide=self.process_wide)
-                self.admission_active = False
+            if self.context_active:
+                self.boundary._deactivate(self.token)
+                self.context_active = False
+            if self.registered:
+                self.boundary._unregister(
+                    self.token,
+                    process_wide=self.process_wide,
+                )
+                self.registered = False
 
 
 class MaintenanceBoundary:
@@ -124,26 +158,22 @@ class MaintenanceBoundary:
         )
         self._retained_leases: list[IngressLease] = []
 
-    def _admit(self, *, process_wide: bool) -> None:
+    def _register(self, token: str, *, process_wide: bool) -> None:
         if self._admission_key is None:
             return
-        if process_wide:
-            with _process_lock:
+        with _process_lock:
+            if process_wide:
                 _process_admissions[self._admission_key] = (
                     _process_admissions.get(self._admission_key, 0) + 1
                 )
-            return
-        depths = dict(_admission_depths.get())
-        depths[self._admission_key] = (
-            depths.get(self._admission_key, 0) + 1
-        )
-        _admission_depths.set(depths)
+            else:
+                _active_admissions[token] = self._admission_key
 
-    def _withdraw(self, *, process_wide: bool) -> None:
+    def _unregister(self, token: str, *, process_wide: bool) -> None:
         if self._admission_key is None:
             return
-        if process_wide:
-            with _process_lock:
+        with _process_lock:
+            if process_wide:
                 remaining = max(
                     0,
                     _process_admissions.get(self._admission_key, 0) - 1,
@@ -152,14 +182,18 @@ class MaintenanceBoundary:
                     _process_admissions[self._admission_key] = remaining
                 else:
                     _process_admissions.pop(self._admission_key, None)
-            return
-        depths = dict(_admission_depths.get())
-        remaining = max(0, depths.get(self._admission_key, 0) - 1)
-        if remaining:
-            depths[self._admission_key] = remaining
-        else:
-            depths.pop(self._admission_key, None)
-        _admission_depths.set(depths)
+            elif _active_admissions.get(token) == self._admission_key:
+                _active_admissions.pop(token, None)
+
+    def _activate(self, token: str) -> None:
+        _context_admissions.set(
+            _context_admissions.get() | {token}
+        )
+
+    def _deactivate(self, token: str) -> None:
+        _context_admissions.set(
+            _context_admissions.get() - {token}
+        )
 
     def acquire(self, *, process_wide: bool = False) -> IngressLease:
         return IngressLease(
@@ -170,13 +204,79 @@ class MaintenanceBoundary:
     def admitted(self) -> bool:
         if self._admission_key is None:
             return False
-        if _admission_depths.get().get(self._admission_key, 0) > 0:
-            return True
         with _process_lock:
-            return _process_admissions.get(self._admission_key, 0) > 0
+            if _process_admissions.get(self._admission_key, 0) > 0:
+                return True
+            return any(
+                _active_admissions.get(token) == self._admission_key
+                for token in _context_admissions.get()
+            )
 
     def retain(self, lease: IngressLease) -> None:
         self._retained_leases.append(lease)
+
+    def background_lease(self) -> IngressLease:
+        if self.lock_path is not None and not self.admitted():
+            raise RuntimeError("background effect lacks ingress admission")
+        lease = self.acquire()
+        if not lease.acquired:
+            raise RuntimeError("background effect ingress is unavailable")
+        lease.suspend_admission()
+        return lease
+
+    def start_thread(
+        self,
+        target: Callable[..., Any],
+        *,
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+        name: str | None = None,
+        daemon: bool = True,
+    ) -> threading.Thread:
+        lease = self.background_lease()
+
+        def run() -> None:
+            lease.activate_admission()
+            try:
+                target(*args, **(kwargs or {}))
+            finally:
+                lease.release()
+
+        thread = threading.Thread(
+            target=run,
+            daemon=daemon,
+            name=name,
+        )
+        try:
+            thread.start()
+        except BaseException:
+            lease.release()
+            raise
+        return thread
+
+    def create_task(
+        self,
+        awaitable,
+        *,
+        name: str | None = None,
+    ) -> asyncio.Task:
+        lease = self.background_lease()
+
+        async def run():
+            lease.activate_admission()
+            try:
+                return await awaitable
+            finally:
+                lease.release()
+
+        try:
+            return asyncio.create_task(run(), name=name)
+        except BaseException:
+            lease.release()
+            close = getattr(awaitable, "close", None)
+            if close is not None:
+                close()
+            raise
 
     def status(self) -> dict[str, str] | None:
         status = active_maintenance(self.config)
@@ -199,6 +299,10 @@ class MaintenanceBoundary:
 
     def write_fenced(self) -> bool:
         return not self.admitted() and self.fenced()
+
+    @property
+    def process_containment_required(self) -> bool:
+        return self.lock_path is not None
 
     def database_write_check(self) -> Callable[[], bool] | None:
         if self.fence_path is None:
