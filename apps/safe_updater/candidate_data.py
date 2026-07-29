@@ -1,6 +1,7 @@
 """Consistent SQLite cloning and mandatory clone-only migration."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,5 +129,23 @@ def migrate_clone_in_sandbox(
         raise CandidateDataError(str(exc)) from exc
     if completed.returncode:
         raise CandidateDataError("candidate migration subprocess failed")
+    output = completed.stdout or b""
+    try:
+        value = json.loads(output)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CandidateDataError("candidate migration report is invalid") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"applied", "candidate_expected_version"}
+        or not isinstance(value["candidate_expected_version"], int)
+        or isinstance(value["candidate_expected_version"], bool)
+        or value["candidate_expected_version"] != expected_version
+        or not isinstance(value["applied"], list)
+        or any(
+            not isinstance(version, int) or isinstance(version, bool) or version < 1
+            for version in value["applied"]
+        )
+    ):
+        raise CandidateDataError("candidate migration version differs from policy")
     report = validate_migrated_clone(clone, expected_version)
-    return MigrationReport(report, completed.stdout or b"")
+    return MigrationReport(report, output)

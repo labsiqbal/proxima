@@ -99,10 +99,13 @@ class TrustedProbeRunner:
     ) -> TrustedProbeResult:
         identity.validate()
         probe = trusted_bundle.root / "probe.py"
+        browser_driver = trusted_bundle.root / "browser.py"
         scenarios = trusted_bundle.root / "browser-scenarios.json"
         if (
             not probe.is_file()
             or probe.is_symlink()
+            or not browser_driver.is_file()
+            or browser_driver.is_symlink()
             or not scenarios.is_file()
             or scenarios.is_symlink()
         ):
@@ -116,7 +119,6 @@ class TrustedProbeRunner:
                 "auth_token": auth_token,
                 "base_url": f"http://127.0.0.1:{sandbox.port}",
                 "browser_executable": browser,
-                "browser_expected_text": "Candidate",
                 "browser_profile": str(sandbox.runner_home / "browser-profile"),
                 "browser_scenarios": "/opt/proxima-inputs/trusted-probes/browser-scenarios.json",
                 "identity": {
@@ -163,6 +165,8 @@ class TrustedProbeRunner:
                     "PROXIMA_SINGLE_USER_NAME": "candidate",
                     "PROXIMA_LINK_ROOTS": str(sandbox.workspace),
                     "PROXIMA_CLAUDE_LIVE_HOME": "0",
+                    "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
+                    "PROXIMA_FEATURE_WORKFLOW_GRAPH": "1",
                 },
                 network_loopback=True,
                 timeout=180,

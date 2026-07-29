@@ -15,6 +15,8 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from browser import run_scenario
+
 
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -54,6 +56,9 @@ def _asset_digest(root: Path) -> str:
 def _drop_prefix() -> list[str]:
     return [
         "/usr/bin/setpriv",
+        "--reuid=65534",
+        "--regid=65534",
+        "--clear-groups",
         "--no-new-privs",
         "--bounding-set=-all",
         "--inh-caps=-all",
@@ -68,57 +73,6 @@ def _kill(process: subprocess.Popen[bytes]) -> None:
     except ProcessLookupError:
         pass
     process.wait()
-
-
-def _browser(
-    executable: str,
-    base_url: str,
-    scenario: str,
-    profile: Path,
-    extension: Path,
-    expected_text: str,
-) -> bytes:
-    command = [
-        *_drop_prefix(),
-        executable,
-        "--headless=new",
-        "--no-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--metrics-recording-only",
-        "--no-first-run",
-        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
-        f"--disable-extensions-except={extension}",
-        f"--load-extension={extension}",
-        f"--user-data-dir={profile}",
-        "--virtual-time-budget=5000",
-        "--dump-dom",
-        f"{base_url}/?safe-update-probe={quote(scenario)}",
-    ]
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    try:
-        stdout, _stderr = process.communicate(timeout=20)
-    except subprocess.TimeoutExpired as exc:
-        _kill(process)
-        raise RuntimeError(f"browser scenario timed out: {scenario}") from exc
-    if process.returncode or len(stdout) > 4 * 1024 * 1024:
-        raise RuntimeError(f"browser scenario failed: {scenario}")
-    if (
-        b"<title>Proxima" not in stdout
-        or not re.search(br"""id=["']root["']""", stdout)
-        or expected_text.encode() not in stdout
-    ):
-        raise RuntimeError(f"browser scenario rendered an invalid shell: {scenario}")
-    return stdout
 
 
 def _sse(host: str, port: int, session_id: int, token: str) -> bytes:
@@ -206,57 +160,83 @@ def _main(config_path: Path) -> dict:
             config["auth_token"],
         )
         scenarios = json.loads(Path(config["browser_scenarios"]).read_text(encoding="utf-8"))
-        names = scenarios.get("scenarios") if isinstance(scenarios, dict) else None
+        definitions = scenarios.get("scenarios") if isinstance(scenarios, dict) else None
+        required = {
+            "focus",
+            "graph-freshness",
+            "login",
+            "master-popup-home",
+            "ops-task",
+            "repo-task",
+            "review",
+            "update-status",
+        }
         if (
-            scenarios.get("version") != 1
-            or not isinstance(names, list)
-            or not names
-            or any(not isinstance(name, str) or not name for name in names)
-            or len(set(names)) != len(names)
+            scenarios.get("version") != 2
+            or not isinstance(definitions, list)
+            or not definitions
         ):
             raise RuntimeError("trusted browser scenario manifest is invalid")
+        names: list[str] = []
+        for scenario in definitions:
+            if (
+                not isinstance(scenario, dict)
+                or set(scenario) != {"authenticated", "name", "steps"}
+                or not isinstance(scenario["name"], str)
+                or not isinstance(scenario["authenticated"], bool)
+                or not isinstance(scenario["steps"], list)
+                or not scenario["steps"]
+            ):
+                raise RuntimeError("trusted browser scenario manifest is invalid")
+            names.append(scenario["name"])
+            for step in scenario["steps"]:
+                if (
+                    not isinstance(step, dict)
+                    or not set(step).issubset(
+                        {"action", "selector", "text", "timeout", "value"}
+                    )
+                    or set(step) < {"action", "selector"}
+                    or step["action"] not in {"assert", "click", "fill", "select"}
+                    or not isinstance(step["selector"], str)
+                    or not step["selector"]
+                    or len(step["selector"]) > 256
+                    or (
+                        "text" in step
+                        and (
+                            not isinstance(step["text"], str)
+                            or len(step["text"]) > 256
+                        )
+                    )
+                    or (
+                        step["action"] in {"fill", "select"}
+                        and not isinstance(step.get("value"), str)
+                    )
+                    or (
+                        "timeout" in step
+                        and (
+                            not isinstance(step["timeout"], int)
+                            or isinstance(step["timeout"], bool)
+                            or not 1 <= step["timeout"] <= 30
+                        )
+                    )
+                ):
+                    raise RuntimeError("trusted browser scenario manifest is invalid")
+        if set(names) != required or len(names) != len(set(names)):
+            raise RuntimeError("trusted browser scenario manifest is incomplete")
         browser_results: dict[str, str] = {}
         browser_root = Path(config["browser_profile"])
-        browser_root.mkdir(mode=0o700)
-        extension = browser_root / "auth-extension"
-        extension.mkdir(mode=0o700)
-        (extension / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "content_scripts": [
-                        {
-                            "js": ["session.js"],
-                            "matches": ["http://127.0.0.1/*"],
-                            "run_at": "document_start",
-                        }
-                    ],
-                    "manifest_version": 3,
-                    "name": "Proxima trusted candidate probe",
-                    "version": "1.0",
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            encoding="utf-8",
-        )
-        (extension / "session.js").write_text(
-            "document.cookie="
-            + json.dumps(
-                f"proxima_session={config['auth_token']}; Path=/; SameSite=Lax"
+        browser_root.mkdir(mode=0o777)
+        browser_root.chmod(0o777)
+        for position, scenario in enumerate(definitions):
+            transcript = run_scenario(
+                executable=config["browser_executable"],
+                base_url=base_url,
+                scenario=scenario,
+                profile=browser_root / str(position),
+                auth_token=config["auth_token"],
+                drop_prefix=_drop_prefix(),
             )
-            + ";\n",
-            encoding="utf-8",
-        )
-        for position, name in enumerate(names):
-            dom = _browser(
-                config["browser_executable"],
-                base_url,
-                name,
-                browser_root / str(position),
-                extension,
-                config["browser_expected_text"],
-            )
-            browser_results[name] = _sha(dom)
+            browser_results[scenario["name"]] = _sha(transcript)
         return {
             "api": _sha(health_raw),
             "authenticated": _sha(maintenance_raw),

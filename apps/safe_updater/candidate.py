@@ -15,6 +15,7 @@ from .candidate_data import (
 )
 from .evidence import EvidenceBundle, EvidenceStore
 from .fixture_assembler import FixtureResult, assemble_fixture
+from .git_source import GitSourceError, verify_git_source
 from .layout import ReleaseLayout
 from .manifest import verify_local_provenance
 from .probe_runner import (
@@ -25,9 +26,11 @@ from .probe_runner import (
 from .sandbox import CandidateSandbox, SandboxError
 from .tree import (
     VerifiedTree,
+    copy_verified_source,
     copy_regular_tree,
     materialize_build_symlinks,
     regular_file_digests,
+    regular_file_modes,
 )
 from .trusted_probes import TrustedProbeBundle
 
@@ -39,7 +42,10 @@ class CandidateGateError(RuntimeError):
 def release_id_for(verified: VerifiedTree) -> str:
     digest = hashlib.sha256(
         json.dumps(
-            verified.files(),
+            {
+                "files": verified.files(),
+                "modes": verified.modes(),
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -79,47 +85,14 @@ class CandidateGate:
     def _source_is_clean(
         source: Path,
         commit: str,
+        verified: VerifiedTree,
         sandbox: CandidateSandbox,
     ) -> bool:
-        prefix = (
-            "git",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-C",
-            str(source),
-        )
-        environment = {
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_OPTIONAL_LOCKS": "0",
-        }
         try:
-            status = sandbox.run(
-                (*prefix, "status", "--porcelain", "--untracked-files=all"),
-                cwd=source,
-                writable_paths=(sandbox.runner_home,),
-                read_only_paths=(source,),
-                environment=environment,
-                timeout=30,
-            )
-            head = sandbox.run(
-                (*prefix, "rev-parse", "HEAD"),
-                cwd=source,
-                writable_paths=(sandbox.runner_home,),
-                read_only_paths=(source,),
-                environment=environment,
-                timeout=30,
-            )
-        except SandboxError:
+            verify_git_source(source, commit, verified, sandbox)
+        except (GitSourceError, SandboxError):
             return False
-        return (
-            status.returncode == 0
-            and not (status.stdout or b"").strip()
-            and head.returncode == 0
-            and (head.stdout or b"").decode(errors="replace").strip() == commit
-        )
+        return True
 
     @staticmethod
     def _copy_cache(source: Path, destination: Path) -> None:
@@ -139,6 +112,56 @@ class CandidateGate:
         if not value or len(value) > 64 or any(ord(character) < 32 for character in value):
             raise CandidateGateError("candidate version identity is invalid")
         return value
+
+    @staticmethod
+    def _copy_build_artifact(
+        source: Path,
+        destination: Path,
+        *,
+        python_environment: bool = False,
+    ) -> None:
+        if not source.is_dir() or source.is_symlink() or destination.exists():
+            raise CandidateGateError("candidate build artifact is unavailable")
+        external = (
+            tuple(
+                path
+                for path in (source / "bin").glob("python*")
+                if path.is_symlink()
+            )
+            if python_environment
+            else ()
+        )
+        materialize_build_symlinks(
+            source,
+            external_executables=external,
+        )
+        files = regular_file_digests(source)
+        modes = regular_file_modes(source)
+        if not files:
+            raise CandidateGateError("candidate build artifact is empty")
+        copy_regular_tree(source, destination, files, modes)
+
+    @staticmethod
+    def _freeze_tree(root: Path) -> None:
+        for path in sorted(
+            [root, *root.rglob("*")],
+            key=lambda value: len(value.parts),
+            reverse=True,
+        ):
+            if path.is_symlink():
+                raise CandidateGateError("candidate build contains a symlink")
+            if path.is_dir():
+                path.chmod(0o555)
+            else:
+                path.chmod(0o555 if path.stat().st_mode & 0o111 else 0o444)
+
+    @staticmethod
+    def _remove_tree(root: Path) -> None:
+        for path in [root, *root.rglob("*")]:
+            if path.is_symlink():
+                continue
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        shutil.rmtree(root)
 
     @staticmethod
     def _evidence_records(
@@ -238,18 +261,23 @@ class CandidateGate:
                 candidate_port,
             )
             source_sandbox.validate(protected)
-            if not self._source_is_clean(candidate_source, verified.commit, source_sandbox):
+            if not self._source_is_clean(
+                candidate_source,
+                verified.commit,
+                verified,
+                source_sandbox,
+            ):
                 raise CandidateGateError("candidate source is dirty or commit identity is unavailable")
 
-            build_root = run_root / "build"
-            copy_regular_tree(candidate_source, build_root, verified.files())
+            authenticated_source = run_root / "authenticated-source"
+            copy_verified_source(candidate_source, authenticated_source, verified)
             clone = run_root / "database" / "raw-clone.db"
             clone_live_database(live_database, clone)
             candidate_cache = run_root / "offline-cache"
             self._copy_cache(cache_root, candidate_cache)
             build_sandbox = CandidateSandbox(
                 run_root,
-                build_root,
+                authenticated_source,
                 clone,
                 build_workspace,
                 build_home,
@@ -257,21 +285,52 @@ class CandidateGate:
             )
             build_sandbox.validate(protected)
             build = self.builder.build(
-                build_root,
+                authenticated_source,
                 cache_root=candidate_cache,
                 sandbox=build_sandbox,
             )
+            build_root = run_root / "build"
+            copy_regular_tree(
+                authenticated_source,
+                build_root,
+                verified.files(),
+                verified.modes(),
+            )
+            self._copy_build_artifact(
+                build.artifact("python-environment"),
+                build_root / "apps" / "api" / ".venv",
+                python_environment=True,
+            )
+            self._copy_build_artifact(
+                build.artifact("web-dependencies"),
+                build_root / "apps" / "web" / "node_modules",
+            )
+            self._copy_build_artifact(
+                build.artifact("web-dist"),
+                build_root / "apps" / "web" / "dist",
+            )
+            materialize_build_symlinks(build_root)
+            self._freeze_tree(build_root)
+            migration_sandbox = CandidateSandbox(
+                run_root,
+                build_root,
+                clone,
+                build_workspace,
+                build_home,
+                candidate_port,
+            )
+            migration_sandbox.validate(protected)
             migration = migrate_clone_in_sandbox(
                 clone,
-                build_sandbox,
+                migration_sandbox,
                 self.expected_migration_version,
             )
 
-            materialize_build_symlinks(build_root)
             built_tree = VerifiedTree(
                 release_id=None,
                 commit=verified.commit,
                 file_digests=tuple(sorted(regular_file_digests(build_root).items())),
+                file_modes=tuple(sorted(regular_file_modes(build_root).items())),
             )
             release_id = release_id_for(built_tree)
             release = self.layout.create_immutable_release(
@@ -310,7 +369,9 @@ class CandidateGate:
                 auth_token=fixture.auth_token,
                 session_id=fixture.session_id,
             )
-            shutil.rmtree(build_root)
+            self._remove_tree(build_root)
+            self._remove_tree(authenticated_source)
+            shutil.rmtree(run_root / "build-outputs")
             shutil.rmtree(candidate_cache)
             bundle = self.evidence.persist(
                 run_id,

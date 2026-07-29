@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from .durability import write_all
 from .manifest import REQUIRED_LOCK_PATHS
 from .sandbox import CandidateSandbox, SandboxError
+from .tree import regular_file_digests
 
 
 class BuildError(RuntimeError):
@@ -32,7 +35,6 @@ BUILD_MANIFEST: tuple[BuildStep, ...] = (
     BuildStep("web-types", ("npx", "tsc", "--noEmit"), "apps/web"),
     BuildStep("web-build", ("npm", "run", "build"), "apps/web"),
     BuildStep("docs", (".venv/bin/python", "../../scripts/gen_docs.py"), "apps/api"),
-    BuildStep("docs-clean", ("git", "diff", "--exit-code", "--", "docs/reference/api.md", "docs/reference/database.md")),
     BuildStep("migration-tests", ("uv", "run", "pytest", "-q", "tests/test_migrations.py"), "apps/api"),
 )
 
@@ -41,6 +43,13 @@ BUILD_MANIFEST: tuple[BuildStep, ...] = (
 class BuildResult:
     logs: dict[str, bytes]
     lock_digests: dict[str, str]
+    artifacts: tuple[tuple[str, Path], ...] = ()
+
+    def artifact(self, name: str) -> Path:
+        result = dict(self.artifacts).get(name)
+        if result is None:
+            raise BuildError(f"candidate build artifact is unavailable: {name}")
+        return result
 
 
 def _sha(path: Path) -> str:
@@ -86,6 +95,55 @@ class OfflineBuilder:
         locks = {rel: release.joinpath(*rel.split("/")).resolve() for rel in REQUIRED_LOCK_PATHS}
         if any(not path.is_file() or release.resolve() not in path.parents for path in locks.values()):
             raise BuildError("candidate lockfile is missing or unsafe")
+        initial_locks = {rel: _sha(path) for rel, path in locks.items()}
+        output_root = sandbox.root / "build-outputs"
+        if output_root.exists() or output_root.is_symlink():
+            raise BuildError("candidate build output root must be new")
+        outputs = {
+            "python-environment": output_root / "python-environment",
+            "web-dependencies": output_root / "web-dependencies",
+            "web-dist": output_root / "web-dist",
+            "docs-reference": output_root / "docs-reference",
+        }
+        output_root.mkdir(mode=0o700)
+        for path in outputs.values():
+            path.mkdir(mode=0o700)
+        for name in ("api.md", "database.md"):
+            source = release / "docs" / "reference" / name
+            if not source.is_file() or source.is_symlink():
+                raise BuildError("candidate generated documentation source is unavailable")
+            destination = outputs["docs-reference"] / name
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                payload = source.read_bytes()
+                write_all(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        placeholders = {
+            release / "apps" / "api" / ".venv",
+            release / "apps" / "web" / "node_modules",
+            release / "apps" / "web" / "dist",
+        }
+        for path in placeholders:
+            if path.exists() or path.is_symlink():
+                raise BuildError("authenticated source contains a build output")
+            path.mkdir(mode=0o700)
+        for path in sorted(
+            [release, *release.rglob("*")],
+            key=lambda value: len(value.parts),
+            reverse=True,
+        ):
+            if path.is_symlink():
+                raise BuildError("materialized candidate source contains a symlink")
+            if path.is_dir():
+                path.chmod(0o555)
+            else:
+                path.chmod(0o555 if path.stat().st_mode & 0o111 else 0o444)
         environment = {
             "UV_OFFLINE": "1",
             "UV_NO_MANAGED_PYTHON": "1",
@@ -95,6 +153,15 @@ class OfflineBuilder:
             "npm_config_logs_dir": str(sandbox.runner_home / "npm-logs"),
             "npm_config_update_notifier": "false",
             "GIT_OPTIONAL_LOCKS": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTEST_ADDOPTS": "-p no:cacheprovider",
+            "RUFF_CACHE_DIR": str(sandbox.runner_home / "ruff-cache"),
+        }
+        overlays = {
+            outputs["python-environment"]: release / "apps" / "api" / ".venv",
+            outputs["web-dependencies"]: release / "apps" / "web" / "node_modules",
+            outputs["web-dist"]: release / "apps" / "web" / "dist",
+            outputs["docs-reference"]: release / "docs" / "reference",
         }
         tools = self._tools()
         logs: dict[str, bytes] = {}
@@ -106,7 +173,9 @@ class OfflineBuilder:
                 completed = sandbox.run(
                     step.argv,
                     cwd=cwd,
-                    writable_paths=(release, cache_root, sandbox.runner_home),
+                    writable_paths=(cache_root, sandbox.runner_home),
+                    read_only_paths=(release,),
+                    writable_overlays=overlays,
                     tools=tools,
                     environment=environment,
                     timeout=step.timeout,
@@ -117,4 +186,17 @@ class OfflineBuilder:
             logs[step.name] = output
             if completed.returncode:
                 raise BuildError(f"candidate build step failed: {step.name}")
-        return BuildResult(logs, {rel: _sha(path) for rel, path in locks.items()})
+        for name in ("api.md", "database.md"):
+            if _sha(outputs["docs-reference"] / name) != _sha(
+                release / "docs" / "reference" / name
+            ):
+                raise BuildError("generated candidate documentation differs from authenticated source")
+        if {rel: _sha(path) for rel, path in locks.items()} != initial_locks:
+            raise BuildError("candidate lockfiles changed during the isolated build")
+        if not regular_file_digests(outputs["web-dist"]):
+            raise BuildError("candidate web build produced no static assets")
+        return BuildResult(
+            logs,
+            initial_locks,
+            tuple(sorted(outputs.items())),
+        )

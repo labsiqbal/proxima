@@ -17,12 +17,15 @@ from apps.safe_updater.candidate import CandidateGate, CandidateGateError
 from apps.safe_updater.candidate_data import (
     CandidateDataError,
     MigrationReport,
+    migrate_clone_in_sandbox,
     validate_migrated_clone,
 )
 from apps.safe_updater.controller import SafeUpdateController
-from apps.safe_updater.manifest import local_provenance
+from apps.safe_updater.git_source import resolve_git_metadata
+from apps.safe_updater.manifest import local_provenance, verify_local_provenance
 from apps.safe_updater.probe_runner import TrustedProbeResult
-from apps.safe_updater.sandbox import CandidateSandbox
+from apps.safe_updater.sandbox import CandidateSandbox, SandboxError
+from apps.safe_updater.tree import copy_verified_source
 from apps.safe_updater.trusted_probes import TrustedProbeBundle, _tree_digest
 from proxima_api.db import connect, init_db
 from proxima_api.main import create_app
@@ -35,16 +38,18 @@ EXPECTED_MIGRATION_VERSION = max(entry[0] for entry in MIGRATIONS)
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     (source / "apps/api").mkdir(parents=True)
-    (source / "apps/web/dist/assets").mkdir(parents=True)
+    (source / "apps/web").mkdir(parents=True)
+    (source / "docs/reference").mkdir(parents=True)
     (source / "scripts").mkdir()
     (source / "apps/api/uv.lock").write_text("lock", encoding="utf-8")
     (source / "apps/web/package-lock.json").write_text("{}", encoding="utf-8")
-    (source / "apps/web/dist/index.html").write_text(
-        '<html><head><title>Proxima</title></head><body><div id="root"></div>'
-        '<script src="/assets/main.js"></script></body></html>',
-        encoding="utf-8",
-    )
-    (source / "apps/web/dist/assets/main.js").write_text("fixture", encoding="utf-8")
+    (source / "docs/reference/api.md").write_text("api\n", encoding="utf-8")
+    (source / "docs/reference/database.md").write_text("database\n", encoding="utf-8")
+    (source / "AGENTS.md").write_text("candidate rules\n", encoding="utf-8")
+    (source / "CLAUDE.md").symlink_to("AGENTS.md")
+    launcher = source / "scripts/proxima"
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
     (source / "VERSION").write_text("1.0.2\n", encoding="utf-8")
     return source
 
@@ -79,6 +84,7 @@ def _trusted(tmp_path: Path) -> TrustedProbeBundle:
     probes = tmp_path / "probes"
     probes.mkdir()
     (probes / "probe.py").write_text("trusted", encoding="utf-8")
+    (probes / "browser.py").write_text("trusted", encoding="utf-8")
     (probes / "browser-scenarios.json").write_text(
         '{"version":1,"scenarios":["shell"]}',
         encoding="utf-8",
@@ -88,23 +94,47 @@ def _trusted(tmp_path: Path) -> TrustedProbeBundle:
 
 def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
     root = Path(__file__).resolve().parents[3] / "trusted-probes" / "safe-update"
-    compile(
-        (root / "probe.py").read_text(encoding="utf-8"),
-        str(root / "probe.py"),
-        "exec",
-    )
+    for name in ("browser.py", "probe.py"):
+        compile(
+            (root / name).read_text(encoding="utf-8"),
+            str(root / name),
+            "exec",
+        )
     scenarios = json.loads(
         (root / "browser-scenarios.json").read_text(encoding="utf-8")
     )
-    assert scenarios["version"] == 1
-    assert scenarios["scenarios"]
+    assert scenarios["version"] == 2
+    definitions = scenarios["scenarios"]
+    assert {scenario["name"] for scenario in definitions} == {
+        "focus",
+        "graph-freshness",
+        "login",
+        "master-popup-home",
+        "ops-task",
+        "repo-task",
+        "review",
+        "update-status",
+    }
+    assert all(scenario["steps"] for scenario in definitions)
+    assert len(
+        {
+            json.dumps(scenario["steps"], sort_keys=True)
+            for scenario in definitions
+        }
+    ) == len(definitions)
 
 
 def test_offline_manifest_uses_only_the_candidate_sandbox(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    release = _source(tmp_path)
+    candidate = _source(tmp_path)
+    verified = verify_local_provenance(
+        local_provenance("task", "a" * 40, "b" * 40, "local", candidate),
+        candidate,
+    )
+    release = tmp_path / "materialized-source"
+    copy_verified_source(candidate, release, verified)
     cache = tmp_path / "cache"
     cache.mkdir()
     home = tmp_path / "home"
@@ -113,17 +143,68 @@ def test_offline_manifest_uses_only_the_candidate_sandbox(
 
     class Sandbox:
         def __init__(self):
+            self.root = tmp_path
             self.runner_home = home
             self.release = release
 
-        def run(self, argv, *, cwd, **_kwargs):
+        def run(self, argv, *, cwd, **kwargs):
             calls.append((tuple(argv), cwd))
+            assert release in kwargs["read_only_paths"]
+            assert release not in kwargs["writable_paths"]
+            if tuple(argv) == next(
+                step.argv for step in BUILD_MANIFEST if step.name == "web-build"
+            ):
+                dist = next(
+                    source
+                    for source, target in kwargs["writable_overlays"].items()
+                    if target == release / "apps/web/dist"
+                )
+                (dist / "assets").mkdir()
+                (dist / "assets/main.js").write_text("built", encoding="utf-8")
             return subprocess.CompletedProcess(argv, 0, b"ok")
 
     monkeypatch.setattr(OfflineBuilder, "_tools", staticmethod(lambda: {}))
     result = OfflineBuilder().build(release, cache_root=cache, sandbox=Sandbox())
     assert [call[0] for call in calls] == [step.argv for step in BUILD_MANIFEST]
     assert result.logs == {step.name: b"ok" for step in BUILD_MANIFEST}
+    assert set(dict(result.artifacts)) == {
+        "docs-reference",
+        "python-environment",
+        "web-dependencies",
+        "web-dist",
+    }
+
+
+def test_local_source_materializes_safe_symlinks_and_executable_modes(tmp_path: Path):
+    source = _source(tmp_path)
+    provenance = local_provenance("task", "a" * 40, "b" * 40, "local", source)
+    verified = verify_local_provenance(provenance, source)
+    assert verified.symlinks() == {"CLAUDE.md": "AGENTS.md"}
+    assert verified.modes()["scripts/proxima"] == 0o555
+    destination = tmp_path / "materialized"
+    copy_verified_source(source, destination, verified)
+    assert (destination / "CLAUDE.md").is_file()
+    assert not (destination / "CLAUDE.md").is_symlink()
+    assert (destination / "scripts/proxima").stat().st_mode & 0o111
+
+    escaping = source / "escape"
+    escaping.symlink_to("../outside")
+    with pytest.raises(ValueError, match="symlink"):
+        local_provenance("task", "a" * 40, "b" * 40, "local", source)
+
+
+def test_git_worktree_pointer_resolves_to_one_read_only_common_root(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    common = tmp_path / "git-common"
+    git_dir = common / "worktrees" / "candidate"
+    git_dir.mkdir(parents=True)
+    (git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    (source / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+
+    metadata = resolve_git_metadata(source)
+
+    assert metadata.read_only_roots == (common,)
 
 
 @pytest.mark.skipif(
@@ -147,6 +228,10 @@ def test_candidate_sandbox_hides_host_paths_drops_uid_and_denies_egress(tmp_path
         workspace,
         runner_home,
         18765,
+        storage_bytes=32 * 1024 * 1024,
+        reserve_bytes=1024 * 1024,
+        tmpfs_bytes=8 * 1024 * 1024,
+        file_bytes=16 * 1024 * 1024,
     )
     script = (
         "import os,socket,sys;"
@@ -165,6 +250,44 @@ def test_candidate_sandbox_hides_host_paths_drops_uid_and_denies_egress(tmp_path
     assert result.returncode == 0
     assert lines[:2] == ["65534", "False"]
     assert int(lines[2]) != 0
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="bubblewrap sandbox contract",
+)
+def test_candidate_sandbox_enforces_aggregate_storage_quota(tmp_path: Path):
+    root = tmp_path / "sandbox"
+    release = root / "release"
+    workspace = root / "workspace"
+    runner_home = root / "runner"
+    release.mkdir(parents=True)
+    workspace.mkdir()
+    runner_home.mkdir()
+    sandbox = CandidateSandbox(
+        root,
+        release,
+        root / "candidate.db",
+        workspace,
+        runner_home,
+        18766,
+        storage_bytes=2 * 1024 * 1024,
+        reserve_bytes=1024 * 1024,
+        tmpfs_bytes=8 * 1024 * 1024,
+        file_bytes=1024 * 1024,
+    )
+    script = (
+        "from pathlib import Path;"
+        "root=Path('.');"
+        "[(root/f'fill-{n}').write_bytes(b'x'*(900*1024)) for n in range(3)]"
+    )
+    with pytest.raises(SandboxError, match="storage quota"):
+        sandbox.run(
+            ("/usr/bin/python3", "-c", script),
+            cwd=release,
+            writable_paths=(release, runner_home),
+            timeout=10,
+        )
 
 
 def test_candidate_gate_builds_before_freezing_scrubs_fixture_and_revalidates_evidence(
@@ -190,17 +313,39 @@ def test_candidate_gate_builds_before_freezing_scrubs_fixture_and_revalidates_ev
     monkeypatch.setattr(
         CandidateGate,
         "_source_is_clean",
-        staticmethod(lambda _source, _commit, _sandbox: True),
+        staticmethod(lambda _source, _commit, _verified, _sandbox: True),
     )
 
     def build(release, *, cache_root, sandbox):
         assert sandbox.release == release
         assert cache_root.is_dir()
-        (release / "post-build-output").write_text("built", encoding="utf-8")
-        interpreter = release / "apps" / "api" / ".venv" / "bin" / "python"
+        output_root = sandbox.root / "build-outputs"
+        python = output_root / "python-environment"
+        dependencies = output_root / "web-dependencies"
+        dist = output_root / "web-dist"
+        docs = output_root / "docs-reference"
+        for path in (python, dependencies, dist / "assets", docs):
+            path.mkdir(parents=True)
+        interpreter = python / "bin" / "python"
         interpreter.parent.mkdir(parents=True)
         interpreter.symlink_to(Path("/usr/bin/python3"))
-        return BuildResult({"fixed": b"ok"}, {"apps/api/uv.lock": "a" * 64})
+        (dependencies / "package.js").write_text("dependency", encoding="utf-8")
+        (dist / "index.html").write_text(
+            '<html><head><title>Proxima</title></head><body><div id="root"></div>'
+            '<script src="/assets/main.js"></script></body></html>',
+            encoding="utf-8",
+        )
+        (dist / "assets/main.js").write_text("fixture", encoding="utf-8")
+        return BuildResult(
+            {"fixed": b"ok"},
+            {"apps/api/uv.lock": "a" * 64},
+            (
+                ("docs-reference", docs),
+                ("python-environment", python),
+                ("web-dependencies", dependencies),
+                ("web-dist", dist),
+            ),
+        )
 
     monkeypatch.setattr(gate.builder, "build", build)
 
@@ -233,10 +378,13 @@ def test_candidate_gate_builds_before_freezing_scrubs_fixture_and_revalidates_ev
 
     assert hashlib.sha256(live.read_bytes()).hexdigest() == before
     assert observed_probes == [result.release]
-    assert (result.release / "post-build-output").read_text(encoding="utf-8") == "built"
     interpreter = result.release / "apps" / "api" / ".venv" / "bin" / "python"
     assert interpreter.is_file() and not interpreter.is_symlink()
     assert interpreter.stat().st_mode & 0o111
+    launcher = result.release / "scripts/proxima"
+    assert launcher.stat().st_mode & 0o111
+    assert (result.release / "CLAUDE.md").is_file()
+    assert not (result.release / "CLAUDE.md").is_symlink()
     assert result.release.stat().st_mode & 0o222 == 0
     assert not (tmp_path / "controller" / "candidates" / accepted.run_id / "build").exists()
     fixture = sqlite3.connect(result.fixture)
@@ -290,6 +438,39 @@ def test_migration_validation_rejects_a_noop_with_an_incomplete_ledger(tmp_path:
     conn.close()
     with pytest.raises(CandidateDataError, match="ledger is incomplete"):
         validate_migrated_clone(database, EXPECTED_MIGRATION_VERSION)
+
+
+def test_migration_rejects_candidate_whose_maximum_is_older_than_policy(tmp_path: Path):
+    database = tmp_path / "candidate.db"
+    _live_database(database)
+
+    class Sandbox:
+        def __init__(self):
+            self.database = database
+            self.release = tmp_path / "release"
+            self.runner_home = tmp_path / "runner"
+
+        def run(self, *_args, **_kwargs):
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                json.dumps(
+                    {
+                        "applied": [],
+                        "candidate_expected_version": EXPECTED_MIGRATION_VERSION - 1,
+                    }
+                ).encode(),
+            )
+
+    sandbox = Sandbox()
+    (sandbox.release / "apps/api").mkdir(parents=True)
+    sandbox.runner_home.mkdir()
+    with pytest.raises(CandidateDataError, match="differs from policy"):
+        migrate_clone_in_sandbox(
+            database,
+            sandbox,
+            EXPECTED_MIGRATION_VERSION,
+        )
 
 
 def test_candidate_gate_refuses_a_missing_trusted_probe_bundle(tmp_path: Path):

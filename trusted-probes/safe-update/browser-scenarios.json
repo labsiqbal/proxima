@@ -1,1 +1,89 @@
-{"version":1,"scenarios":["login","master-popup-home","focus","ops-task","repo-task","review","graph-freshness","update-status"]}
+{
+  "version": 2,
+  "scenarios": [
+    {
+      "name": "login",
+      "authenticated": false,
+      "steps": [
+        {"action": "assert", "selector": "h1.auth-title", "text": "Welcome back"},
+        {"action": "fill", "selector": "input[type='password']", "value": "candidate-invalid-password"},
+        {"action": "click", "selector": "button[type='submit']", "text": "Log in"},
+        {"action": "assert", "selector": ".auth-error", "text": "Incorrect password."}
+      ]
+    },
+    {
+      "name": "master-popup-home",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Master"},
+        {"action": "assert", "selector": "h1", "text": "Master"},
+        {"action": "click", "selector": "button[aria-label='Hide work panel']"},
+        {"action": "assert", "selector": "button[aria-label='Show work panel']"},
+        {"action": "click", "selector": "button[aria-label='Show work panel']"}
+      ]
+    },
+    {
+      "name": "focus",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Master"},
+        {"action": "assert", "selector": "select[aria-label='Master Focus']"},
+        {"action": "select", "selector": "select[aria-label='Master history folder']", "value": "fleet"},
+        {"action": "assert", "selector": "select[aria-label='Master history folder'] option[value='fleet']", "text": "Fleet history"}
+      ]
+    },
+    {
+      "name": "ops-task",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Tasks"},
+        {"action": "assert", "selector": "h1", "text": "Tasks"},
+        {"action": "click", "selector": ".tasks-head button", "text": "List"},
+        {"action": "assert", "selector": ".teaching-empty-title", "text": "No tasks yet"}
+      ]
+    },
+    {
+      "name": "repo-task",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Tasks"},
+        {"action": "click", "selector": ".tasks-head button", "text": "Board"},
+        {"action": "assert", "selector": ".kanban"},
+        {"action": "assert", "selector": ".kanban-col-head", "text": "Queued"}
+      ]
+    },
+    {
+      "name": "review",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Tasks"},
+        {"action": "click", "selector": ".tasks-head button", "text": "Review"},
+        {"action": "assert", "selector": ".teaching-empty-title", "text": "Nothing waiting for review"}
+      ]
+    },
+    {
+      "name": "graph-freshness",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "nav button", "text": "Workflows"},
+        {"action": "assert", "selector": "h1", "text": "Workflows"},
+        {"action": "click", "selector": "[role='tab']", "text": "Workflows"},
+        {"action": "assert", "selector": ".workflow-home-empty", "text": "No manual workflows."},
+        {"action": "click", "selector": "[role='tab']", "text": "Runs"},
+        {"action": "assert", "selector": ".workflow-home-empty", "text": "No workflow runs yet."}
+      ]
+    },
+    {
+      "name": "update-status",
+      "authenticated": true,
+      "steps": [
+        {"action": "click", "selector": "button[aria-label='Account actions']"},
+        {"action": "click", "selector": ".user-menu button", "text": "Settings"},
+        {"action": "assert", "selector": "section.settings-view"},
+        {"action": "click", "selector": "button[aria-label^='Diagnostics.']"},
+        {"action": "assert", "selector": ".settings-content h2", "text": "Diagnostics"},
+        {"action": "assert", "selector": ".settings-updates button", "text": "Check for updates"}
+      ]
+    }
+  ]
+}

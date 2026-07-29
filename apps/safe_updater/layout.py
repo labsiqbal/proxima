@@ -14,7 +14,7 @@ from .tree import (
     VerifiedTree,
     copy_regular_tree,
     regular_file_digests,
-    release_file_mode,
+    regular_file_modes,
 )
 
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -65,6 +65,7 @@ class ReleaseLayout:
         ):
             raise LayoutError("verified tree release identity mismatch")
         expected = verified.files()
+        modes = verified.modes()
         try:
             ensure_durable_directory(destination.parent, 0o755)
         except DurabilityError as exc:
@@ -79,7 +80,7 @@ class ReleaseLayout:
         published = False
         renamed = False
         try:
-            copy_regular_tree(source, staging, expected)
+            copy_regular_tree(source, staging, expected, modes)
             for path in sorted(
                 staging.rglob("*"),
                 key=lambda value: len(value.parts),
@@ -88,10 +89,13 @@ class ReleaseLayout:
                 path.chmod(
                     0o555
                     if path.is_dir()
-                    else release_file_mode(path.relative_to(staging).as_posix())
+                    else modes[path.relative_to(staging).as_posix()]
                 )
             staging.chmod(0o555)
-            if regular_file_digests(staging) != expected:
+            if (
+                regular_file_digests(staging) != expected
+                or regular_file_modes(staging) != modes
+            ):
                 raise LayoutError("published tree verification failed")
             if os.path.lexists(destination):
                 raise LayoutError("release id already exists")
