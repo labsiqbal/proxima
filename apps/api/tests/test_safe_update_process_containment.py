@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.safe_updater import controller as controller_module
 from apps.safe_updater.controller import SafeUpdateController
 from apps.safe_updater.evidence import EvidenceStore
 from apps.safe_updater.journal import Journal
@@ -78,6 +79,79 @@ def test_recovery_rejects_unacknowledged_maintenance_activation(
     assert recovered.reason == (
         "maintenance activation was not acknowledged by the journal"
     )
+
+
+def test_recovery_fails_closed_while_controller_lock_is_busy(tmp_path: Path):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller = SafeUpdateController.create_disposable_fixture(root)
+    intent = {"candidate_commit": "c" * 40}
+    accepted = controller.submit(intent)
+    holder = SafeUpdateController(root)
+    acquired = holder.lock.acquire("d" * 32)
+    assert acquired.acquired
+
+    try:
+        recovered = controller.recovery_status(accepted.run_id, intent)
+    finally:
+        holder.lock.release()
+
+    assert recovered.safe is False
+    assert recovered.action == "do_not_start_any_release"
+    assert recovered.reason == "safe_update_in_progress"
+
+
+def test_recovery_holds_controller_lock_across_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller = SafeUpdateController.create_disposable_fixture(root)
+    intent = {"candidate_commit": "c" * 40}
+    accepted = controller.submit(intent)
+    entered = threading.Event()
+    proceed = threading.Event()
+    original_read_activation_state = controller_module.read_activation_state
+
+    def read_activation_state(path: Path):
+        entered.set()
+        if not proceed.wait(2):
+            raise RuntimeError("timed out waiting to inspect activation")
+        return original_read_activation_state(path)
+
+    monkeypatch.setattr(
+        controller_module,
+        "read_activation_state",
+        read_activation_state,
+    )
+    results = []
+    errors = []
+
+    def recover() -> None:
+        try:
+            results.append(controller.recovery_status(accepted.run_id, intent))
+        except BaseException as exc:
+            errors.append(exc)
+
+    recovery_thread = threading.Thread(target=recover)
+    recovery_thread.start()
+    contender = SafeUpdateController(root)
+    try:
+        assert entered.wait(2)
+        acquired = contender.lock.acquire("e" * 32, publish_owner=False)
+        if acquired.acquired:
+            contender.lock.release()
+        assert acquired.acquired is False
+    finally:
+        proceed.set()
+        recovery_thread.join(2)
+
+    assert recovery_thread.is_alive() is False
+    assert errors == []
+    assert len(results) == 1
+    assert results[0].safe is True
+    assert results[0].action == "discard_candidate"
 
 
 def test_fixture_fence_path_is_canonical_for_recovery(tmp_path: Path):

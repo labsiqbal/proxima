@@ -158,50 +158,68 @@ class SafeUpdateController:
                 None,
                 "invalid journal run id",
             )
-        breaker = CircuitBreaker(self.root).status()
-        if breaker.latched:
+        acquired = self.lock.acquire(run_id, publish_owner=False)
+        if not acquired.acquired:
             return RecoveryStatus(
                 False,
                 "do_not_start_any_release",
                 None,
-                breaker.reason or "safe_update_breaker_latched",
+                "safe_update_in_progress",
             )
-        digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
-        recovered = inspect(
-            Journal(self.root / "journal" / f"{run_id}.jsonl", digest),
-            evidence_store=EvidenceStore(self.root),
-            run_id=run_id,
-        )
         try:
-            activation = read_activation_state(
-                self.root / "status" / "fence.json"
+            breaker = CircuitBreaker(self.root).status()
+            if breaker.latched:
+                return RecoveryStatus(
+                    False,
+                    "do_not_start_any_release",
+                    None,
+                    breaker.reason or "safe_update_breaker_latched",
+                )
+            digest = hashlib.sha256(
+                json.dumps(
+                    intent,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode()
+            ).hexdigest()
+            recovered = inspect(
+                Journal(self.root / "journal" / f"{run_id}.jsonl", digest),
+                evidence_store=EvidenceStore(self.root),
+                run_id=run_id,
             )
-        except RuntimeError as exc:
-            return RecoveryStatus(
-                False,
-                "do_not_start_any_release",
-                recovered.journal_hash,
-                str(exc),
-            )
-        if activation is not None and activation.run_id != run_id:
-            return RecoveryStatus(
-                False,
-                "do_not_start_any_release",
-                recovered.journal_hash,
-                "maintenance activation belongs to another run",
-            )
-        if (
-            activation is not None
-            and recovered.safe
-            and recovered.action == "discard_candidate"
-        ):
-            return RecoveryStatus(
-                False,
-                "do_not_start_any_release",
-                recovered.journal_hash,
-                "maintenance activation was not acknowledged by the journal",
-            )
-        return recovered
+            try:
+                activation = read_activation_state(
+                    self.root / "status" / "fence.json"
+                )
+            except RuntimeError as exc:
+                return RecoveryStatus(
+                    False,
+                    "do_not_start_any_release",
+                    recovered.journal_hash,
+                    str(exc),
+                )
+            if activation is not None and activation.run_id != run_id:
+                return RecoveryStatus(
+                    False,
+                    "do_not_start_any_release",
+                    recovered.journal_hash,
+                    "maintenance activation belongs to another run",
+                )
+            if (
+                activation is not None
+                and recovered.safe
+                and recovered.action == "discard_candidate"
+            ):
+                return RecoveryStatus(
+                    False,
+                    "do_not_start_any_release",
+                    recovered.journal_hash,
+                    "maintenance activation was not acknowledged by the journal",
+                )
+            return recovered
+        finally:
+            self.lock.release()
 
     def qualify_candidate(
         self,
