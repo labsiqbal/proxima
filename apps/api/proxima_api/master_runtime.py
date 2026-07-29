@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Mapping
 from fastapi import HTTPException
 
 from . import app_settings
+from . import master_focus
 from .auth import iso_now
 from .job_checkpoints import create_checkpoint
 from .master_persistence import master_identity_rows
@@ -1252,9 +1253,12 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
         result_json = json.dumps(calls, ensure_ascii=False, indent=2)
         conn.execute("SAVEPOINT master_tool_result")
         try:
-            conn.execute(
+            message = conn.execute(
                 "INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'system', ?, 'Proxima', ?)",
                 (run["session_id"], "Master tool results:\n```json\n" + result_json + "\n```", run["id"]),
+            )
+            master_focus.stamp_message_for_run(
+                conn, message_id=_as_int(message.lastrowid), run_id=_as_int(run["id"])
             )
             conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (run["session_id"],))
             next_run_id = None
@@ -1268,13 +1272,14 @@ def handle_master_response(app, conn, run: dict[str, Any], answer: str) -> list[
                 cur = conn.execute(
                     "INSERT INTO runs(session_id, project_id, user_id, profile_id, "
                     "runner_id, kind, status, prompt, model, hermes_home, "
-                    "continued_from_run_id, continuation_count) "
-                    "VALUES (?, NULL, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                    "continued_from_run_id, continuation_count, focus_epoch_id) "
+                    "VALUES (?, NULL, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
                     (
                         run["session_id"], run["user_id"], run["profile_id"], run["runner_id"],
                         f"master_tool_{round_number + 1}", prompt, run.get("model"),
                         run.get("hermes_home"), run["id"],
                         _as_int(run.get("continuation_count") or 0) + 1,
+                        run.get("focus_epoch_id"),
                     ),
                 )
                 next_run_id = _as_int(cur.lastrowid)

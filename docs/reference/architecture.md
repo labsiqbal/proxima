@@ -240,7 +240,8 @@ makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktre
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
 Scoped Work, Home, Master, and future orchestration creation share
 `TaskDelegationService`. `task_delegations` is the one-to-one origin, routing,
-idempotency, and durable-start audit for a job. `task_dependencies` stores explicit
+idempotency, durable-start, and captured Master Focus audit for a job.
+`task_dependencies` stores explicit
 Task-to-prerequisite edges with a required `review` or `done` status. A unique pair,
 self-edge check, and recursive insert/update triggers make the stored graph
 cycle-safe. The prerequisite foreign key is restrictive, so deleting a Task or
@@ -464,7 +465,23 @@ checks, so a source that became part of a nested repository after publication is
 refused. There is no public graph query route; the Master broker returns validated
 Ops/Area-relative citation paths but never absolute host or internal graph paths.
 
-Focus epochs, history projection, and safe-self-update remain later groups.
+Focus is a durable context-isolation boundary. Fleet mode has no epoch; a
+Container Focus has one open `master_focus_epochs` row and a versioned
+`master_focus_state` record. Focus transitions are optimistic, append a boundary
+message and `master.focus.changed` event, and stamp the captured epoch on the
+user message, run, response, tool result, and Master projection. While a turn is
+active the only allowed Focus mutation is one durable pending Focus, applied
+once after the last turn closes. An explicit Container send performs transition
+and enqueue atomically. Generic session run producers reject the Master session,
+with a database trigger as the persistence backstop. Task delegation copies the
+captured epoch onto its durable audit row, so later Task and supervision
+projections retain attribution after the origin message or run is deleted.
+Uncaptured migration-era Tasks remain executable after scoped ownership validation
+but unprojectable, and one such row cannot stop reconciliation of later sources.
+Every restricted Master turn recycles its ACP process and rebuilds history solely
+from its captured epoch, preventing old Container context from surviving in runner
+or model caches. History projection UI and safe-self-update remain later groups.
+See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow
 
@@ -610,15 +627,22 @@ event, or explicit retry, not a primary poll. The SSE stream
 emits an immediate comment on an idle connection so browser `EventSource.onopen`
 reports the healthy transport without waiting for the keepalive interval.
 
-Each accepted owner message gets one `master_message_context` row. The API validates
+Each accepted owner message gets one `master_message_context` row plus immutable
+`message_focus` attribution. The API validates
 every referenced Container against the authenticated owner and every Area against
-that Container. Explicit targeting changes the recorded Focus to the target
-Container inside the same transaction that inserts the message and run. The run's
-stored prompt remains the raw owner text; trusted routing ids are appended only
-while building the restricted runner prompt. `MasterToolBroker` overrides model
+that Container. Explicit targeting changes the durable current Focus to the target
+Container inside the same transaction that inserts the message and run; the run
+captures that epoch before it can execute. The run's stored prompt remains the raw
+owner text; trusted routing ids are appended only while building the restricted
+runner prompt. The runner process is recycled and its bounded durable history is
+filtered to that captured epoch before every Master turn. `MasterToolBroker` overrides model
 Container/Area arguments for explicit targets and confines automatic routing to a
-Container Focus. Fleet Focus leaves the full owner Fleet available. Deleting a
-Container nulls historical ids without deleting the durable message.
+Container Focus. Fleet Focus discards model-supplied Container and Area graph
+scope, so automatic routing can read only Fleet and Live layers. Deleting an idle
+focused Container first closes its epoch and transitions durable Focus; the
+historical epoch keeps its immutable numeric Container identity while optional
+message and target links null safely. An active Master turn refuses deletion before
+any filesystem change.
 
 The shell popup is available only on ordinary authenticated surfaces. Auth,
 onboarding, the full Master home, update application, drawers, search, account

@@ -54,6 +54,7 @@ from .prompt_collaborations import (
 )
 from . import graph as graph_mod
 from . import workflows as wf
+from . import master_focus
 from .graph_advancers import GraphAdvancers  # pyright: ignore[reportMissingImports]
 from .graph_executor import GRAPH_NODE_RUN_KIND, SCRIPT_NODE_RUN_KIND, GraphExecutor  # pyright: ignore[reportMissingImports]
 from .script_runner import ScriptRunner  # pyright: ignore[reportMissingImports]
@@ -461,6 +462,15 @@ class RunWorker:
                 "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
                 (reason, run_id),
             )
+            mode = db.execute(
+                "SELECT mode FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if mode and mode["mode"] == "master":
+                changed = master_focus.apply_pending_if_idle(
+                    db, master_session_id=session_id
+                )
+                if changed:
+                    self.app.state.hub.notify(session_id)
         self._fail_job(session_id, reason, run_id)
 
     def _is_recoverable_agent_history_error(self, exc: Exception) -> bool:
@@ -919,8 +929,9 @@ class RunWorker:
                 self._fail_collaboration_run(run_id, session_id, project_id, detail)
                 return True
             cur = db.execute(
-                "INSERT INTO messages(session_id, role, content) VALUES (?, 'error', ?)",
-                (session_id, f"Run failed: {detail}"),
+                "INSERT INTO messages(session_id, role, content, run_id) "
+                "VALUES (?, 'error', ?, ?)",
+                (session_id, f"Run failed: {detail}", run_id),
             )
             self.add_event(
                 run_id,
@@ -930,6 +941,9 @@ class RunWorker:
                 {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"},
             )
             self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
+            mode = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if mode and mode["mode"] == "master":
+                master_focus.apply_pending_if_idle(db, master_session_id=session_id)
         self._fail_job(session_id, detail, run_id)
         return True
 
@@ -1486,6 +1500,10 @@ class RunWorker:
                         run_id,
                     ),
                 )
+                message_id = _as_int(db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+                master_focus.stamp_message_for_run(
+                    db, message_id=message_id, run_id=run_id
+                )
                 db.execute(
                     "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP "
                     "WHERE id = ?",
@@ -1907,6 +1925,23 @@ class RunWorker:
                 with suppress(asyncio.CancelledError):
                     await hb_task
             self.active_runs.pop(run_id, None)
+            # The terminal run is the only point at which a pending Focus may
+            # become current.  Re-checking durable run state makes restart and
+            # retry races deterministic.
+            try:
+                with self.app.state.db_lock:
+                    mode = db.execute(
+                        "SELECT s.mode FROM runs r JOIN sessions s ON s.id = r.session_id WHERE r.id = ?",
+                        (run_id,),
+                    ).fetchone()
+                    if mode and mode["mode"] == "master":
+                        changed = master_focus.apply_pending_if_idle(
+                            db, master_session_id=session_id
+                        )
+                        if changed:
+                            self.app.state.hub.notify(session_id)
+            except Exception:
+                logging.getLogger("proxima.worker").exception("pending Master Focus apply failed")
 
     def cancel(self, run_id: int) -> None:
         entry = self.active_runs.get(run_id)

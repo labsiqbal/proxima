@@ -54,6 +54,32 @@ def _container(api: TestClient, headers: dict[str, str], slug: str) -> dict:
     return payload
 
 
+def _focused_broker(
+    api: TestClient,
+    session_id: int,
+    container_id: int,
+) -> MasterToolBroker:
+    message_id = api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Use durable Container Focus')",
+        (session_id,),
+    ).lastrowid
+    api.app.state.db.execute(
+        "INSERT INTO master_message_context("
+        "message_id, focus_mode, focus_container_id, target_mode, "
+        "target_container_id, target_area_id"
+        ") VALUES (?, 'container', ?, 'auto', NULL, NULL)",
+        (message_id, container_id),
+    )
+    return MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        session_id,
+        origin_message_id=message_id,
+    )
+
+
 def test_classify_layers_routes_intents():
     assert classify_layers("What is running?") == ["live"]
     assert classify_layers("Are any tasks failing?") == ["live"]
@@ -278,6 +304,47 @@ def test_query_context_uses_durable_scope_and_rejects_model_overrides(
     assert cross_container["error"]["code"] == "context_scope_conflict"
 
 
+def test_fleet_auto_routing_discards_model_graph_scope(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    first = _container(api, headers, "fleet-one")
+    second = _container(api, headers, "fleet-two")
+    session_id = api.get(
+        "/api/master/desk",
+        headers=headers,
+    ).json()["session"]["id"]
+    second_area_id = api.app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops'",
+        (second["id"],),
+    ).fetchone()["id"]
+    broker = MasterToolBroker(
+        api.app.state.db,
+        api.app,
+        {"id": 1},
+        session_id,
+    )
+
+    result = broker.execute(
+        "query_context",
+        {
+            "query": "Where is the implementation?",
+            "container_id": second["id"],
+            "area_id": second_area_id,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["layers"] == ["fleet", "live"]
+    assert {
+        item["id"]
+        for item in result["result"]["results"][0]["items"]
+    } == {first["id"], second["id"]}
+    assert all(
+        item["layer"] in {"fleet", "live"}
+        for item in result["result"]["results"]
+    )
+
+
 @pytest.mark.parametrize(
     ("error", "code", "message"),
     [
@@ -303,11 +370,10 @@ def test_query_context_maps_graph_errors_to_path_free_public_failures(
     api, headers = _api(tmp_path)
     project = _container(api, headers, "graph-error")
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        int(project["id"]),
     )
 
     def fail_query(**_kwargs):
@@ -339,11 +405,10 @@ def test_what_is_running_is_correct_with_missing_graphs(tmp_path: Path):
         (container_id,),
     )
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        container_id,
     )
     result = broker.execute(
         "query_context",
@@ -379,11 +444,10 @@ def test_terminal_status_queries_filter_live_jobs_before_result_limit(
             (container_id, title, status),
         )
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        container_id,
     )
 
     for query, expected_status in (
@@ -423,11 +487,10 @@ def test_blocked_live_query_includes_dependency_blocked_queued_jobs(
             (container_id, title, status, blocked_reason),
         )
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        container_id,
     )
 
     result = broker.execute(
@@ -469,11 +532,10 @@ def test_knowledge_context_stays_in_focused_container(tmp_path: Path):
         assert rebuilt.status_code == 200, rebuilt.text
 
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        int(acme["id"]),
     )
     result = broker.execute(
         "query_context",
@@ -511,11 +573,10 @@ def test_mixed_request_is_bounded_and_does_not_merge_graphs(tmp_path: Path):
         json={"kind": "knowledge"},
     )
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        int(project["id"]),
     )
     result = broker.execute(
         "query_context",
@@ -555,11 +616,10 @@ def test_query_context_preserves_provenance_and_budgets(tmp_path: Path):
     )
     assert rebuilt.status_code == 200, rebuilt.text
     desk = api.get("/api/master/desk", headers=headers).json()
-    broker = MasterToolBroker(
-        api.app.state.db,
-        api.app,
-        {"id": 1},
+    broker = _focused_broker(
+        api,
         desk["session"]["id"],
+        int(project["id"]),
     )
     result = broker.execute(
         "query_context",

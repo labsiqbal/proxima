@@ -15,11 +15,20 @@ A new scoped Task has:
 - guarded or autonomous in-run execution policy
 - one caller-owned idempotency key
 - optional Recipe input, origin session/message, and prerequisite Tasks
+- a captured Focus marker and epoch when the origin is Master
 
 Creation writes the worker session, job, `task_delegations` row, and every
 `task_dependencies` edge in one transaction. Start happens after commit. A caller
 that wants immediate execution sets durable start intent, so startup recovery can
 retry the same Task after a timeout or process stop.
+
+For a Master origin, creation copies the message's immutable Focus epoch onto the
+delegation row. Compatibility callers without an origin message capture the
+current durable Master Focus inside the same creation transaction. Fleet capture
+is an explicit marker with a null epoch. Projection code reads this durable copy,
+not the nullable origin-message link. A migrated Task whose deleted legacy origin
+cannot prove Focus still passes the ordinary scoped start contract, while later
+projection remains fail closed.
 
 ## Idempotency
 

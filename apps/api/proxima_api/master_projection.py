@@ -13,6 +13,7 @@ import sqlite3
 from typing import Any, Mapping
 
 from .event_types import MASTER_PROJECTION_EVENT_TYPES
+from . import master_focus
 
 log = logging.getLogger("proxima.master_projection")
 MAX_PROJECTION_PAYLOAD_BYTES = 16 * 1024
@@ -410,6 +411,18 @@ class MasterProjectionService:
             )
             return None
 
+    def safe_project_satpam(
+        self, intervention_id: int
+    ) -> dict[str, Any] | None:
+        try:
+            return self.project_satpam(intervention_id)
+        except Exception:
+            log.exception(
+                "Master Satpam projection failed for intervention %s",
+                intervention_id,
+            )
+            return None
+
     def safe_reconcile(self) -> dict[str, int]:
         try:
             return self.reconcile()
@@ -433,6 +446,7 @@ class MasterProjectionService:
         content: str,
         payload: dict[str, Any],
         task_id: int | None = None,
+        origin_message_id: int | None = None,
     ) -> dict[str, Any]:
         if projection_type not in MASTER_PROJECTION_EVENT_TYPES:
             raise ValueError(f"unknown Master projection type {projection_type!r}")
@@ -522,6 +536,56 @@ class MasterProjectionService:
                     (master_session_id, content[:2000]),
                 )
                 message_id = _as_int(message_cursor.lastrowid)
+                focus_epoch_id = None
+                subject_container_id = payload.get("container_id")
+                if task_id is not None:
+                    source = conn.execute(
+                        "SELECT delegation.origin_focus_epoch_id, "
+                        "delegation.origin_focus_captured, "
+                        "delegation.container_id, "
+                        "epoch.master_session_id AS epoch_session_id "
+                        "FROM task_delegations AS delegation "
+                        "LEFT JOIN master_focus_epochs AS epoch "
+                        "ON epoch.id = delegation.origin_focus_epoch_id "
+                        "WHERE delegation.job_id = ?",
+                        (task_id,),
+                    ).fetchone()
+                    if (
+                        source is None
+                        or not source["origin_focus_captured"]
+                        or (
+                            source["origin_focus_epoch_id"] is not None
+                            and source["epoch_session_id"] != master_session_id
+                        )
+                    ):
+                        raise ValueError(
+                            "projection Focus origin is unavailable"
+                        )
+                    subject_container_id = source["container_id"]
+                    focus_epoch_id = source["origin_focus_epoch_id"]
+                elif origin_message_id is not None:
+                    captured = conn.execute(
+                        "SELECT focus.focus_epoch_id "
+                        "FROM message_focus AS focus "
+                        "JOIN messages AS message "
+                        "ON message.id = focus.message_id "
+                        "WHERE focus.message_id = ? "
+                        "AND message.session_id = ?",
+                        (origin_message_id, master_session_id),
+                    ).fetchone()
+                    if captured is None:
+                        raise ValueError(
+                            "projection Focus origin is unavailable"
+                        )
+                    focus_epoch_id = captured["focus_epoch_id"]
+                # Notifications retain originating Focus while their subject
+                # Container remains separate. They never swap current Focus.
+                master_focus.stamp_message(
+                    conn,
+                    message_id=message_id,
+                    focus_epoch_id=focus_epoch_id,
+                    subject_container_id=subject_container_id,
+                )
                 event_payload = {
                     "projection_id": projection_id,
                     "projection_key": projection_key,
@@ -771,6 +835,7 @@ class MasterProjectionService:
             if len(parts) >= 3 and parts[0] == "master":
                 master_session_id = parts[1]
         task_id = target.get("job_id")
+        origin_message_id = target.get("origin_message_id")
         task = None
         if task_id is not None:
             task = self.conn.execute(
@@ -800,6 +865,11 @@ class MasterProjectionService:
         if master_session_id is None:
             return None
         master_session_id = _as_int(master_session_id)
+        origin_message_id_value = (
+            _as_int(origin_message_id)
+            if origin_message_id is not None
+            else None
+        )
         if task is None:
             valid_source = (
                 row["kind"] == "master_decision"
@@ -862,6 +932,7 @@ class MasterProjectionService:
             source_table="attention_items",
             source_id=attention_id,
             task_id=task_id_value,
+            origin_message_id=origin_message_id_value,
             content=content,
             payload={
                 "attention_id": attention_id,
@@ -966,7 +1037,7 @@ class MasterProjectionService:
             "ORDER BY c.ordering, c.source_id"
         ).fetchall()
         for row in jobs:
-            self.project_task(_as_int(row["source_id"]))
+            self.safe_project_task(_as_int(row["source_id"]))
         interventions = self.conn.execute(
             "WITH candidate AS ("
             "  SELECT si.id AS source_id, "
@@ -998,7 +1069,7 @@ class MasterProjectionService:
             "ORDER BY c.source_id"
         ).fetchall()
         for row in interventions:
-            self.project_satpam(_as_int(row["source_id"]))
+            self.safe_project_satpam(_as_int(row["source_id"]))
         attentions = self.conn.execute(
             "WITH candidate AS ("
             "  SELECT ai.id AS source_id, "
@@ -1024,7 +1095,7 @@ class MasterProjectionService:
             "ORDER BY c.source_id"
         ).fetchall()
         for row in attentions:
-            self.project_attention(_as_int(row["source_id"]))
+            self.safe_project_attention(_as_int(row["source_id"]))
         after = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]

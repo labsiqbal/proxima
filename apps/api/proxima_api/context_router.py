@@ -166,6 +166,7 @@ class ContextRouter:
         container_id: int | None = None,
         area_id: int | None = None,
         focus_container_id: int | None = None,
+        fleet_only: bool = False,
         token_budget: int | None = None,
         result_limit: int | None = None,
     ) -> dict[str, Any]:
@@ -177,6 +178,12 @@ class ContextRouter:
             query,
             container_scoped=resolved_container_id is not None,
         )
+        if fleet_only:
+            matched = [
+                layer
+                for layer in matched
+                if layer in {LAYER_FLEET, LAYER_LIVE}
+            ] or [LAYER_FLEET, LAYER_LIVE]
         # Cap mixed requests so one turn cannot open every graph in the fleet.
         # Prefer specific layers (code/knowledge) over broad ones (fleet) when trimming.
         max_layers = max(1, min(4, int(self.config.get("context_router_max_layers", 3))))

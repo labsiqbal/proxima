@@ -238,10 +238,10 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
     )
     app.state.worker_db.execute(
         "INSERT INTO task_delegations("
-        "origin_session_id, container_id, target_area_id, job_id, routing_mode, "
-        "created_by, idempotency_key, idempotency_identity, request_fingerprint, "
-        "start_requested, start_state"
-        ") VALUES (?, ?, ?, ?, 'explicit', ?, 'feature-off', "
+        "origin_session_id, origin_focus_captured, container_id, "
+        "target_area_id, job_id, routing_mode, created_by, idempotency_key, "
+        "idempotency_identity, request_fingerprint, start_requested, start_state"
+        ") VALUES (?, 1, ?, ?, ?, 'explicit', ?, 'feature-off', "
         "'feature-off-identity', 'feature-off-fingerprint', 1, 'pending')",
         (
             master_session_id,

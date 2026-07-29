@@ -3,7 +3,9 @@ import {
   getMasterDesk,
   saveMasterSettings,
   sendMasterMessage,
+  updateMasterFocus,
   type MasterDesk,
+  type MasterFocusSnapshot,
   type MasterMessageContext,
   type MasterSettings,
 } from '../api/master'
@@ -113,7 +115,7 @@ export type MasterStateValue = {
       followTail: boolean
       anchorMessageId: number | null
     }) => void
-    setFocus: (containerId: number | null) => void
+    setFocus: (containerId: number | null) => Promise<void>
     setTargetContainer: (containerId: number | null) => void
     setTargetArea: (areaId: number | null) => void
     loadTargetAreas: (containerId: number) => Promise<void>
@@ -131,7 +133,6 @@ export type MasterStateValue = {
 const MasterStateContext = React.createContext<MasterStateValue | null>(null)
 
 const SIDE_COLLAPSED_KEY = 'proxima.master.sideCollapsed'
-const MASTER_FOCUS_KEY = 'proxima.master.focus'
 const MASTER_TARGET_KEY = 'proxima.master.target'
 const MASTER_POPUP_CORNER_KEY = 'proxima.master.popupCorner'
 const EVENT_DEDUPE_LIMIT = 2000
@@ -147,25 +148,6 @@ const DEFAULT_TARGET: MasterTargetState = {
 
 function ownerPreferenceKey(key: string, ownerId: number): string {
   return `${key}.${ownerId}`
-}
-
-function readFocus(ownerId: number): MasterFocusState {
-  if (typeof localStorage === 'undefined') return DEFAULT_FOCUS
-  try {
-    const value = JSON.parse(
-      localStorage.getItem(ownerPreferenceKey(MASTER_FOCUS_KEY, ownerId)) || 'null',
-    )
-    if (
-      value?.mode === 'container'
-      && Number.isSafeInteger(value.containerId)
-      && value.containerId > 0
-    ) {
-      return { mode: 'container', containerId: value.containerId }
-    }
-  } catch {
-    // Preference recovery is best effort.
-  }
-  return DEFAULT_FOCUS
 }
 
 function readTarget(ownerId: number): MasterTargetState {
@@ -212,6 +194,22 @@ function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
     ? value
     : null
+}
+
+function focusState(snapshot: MasterFocusSnapshot): MasterFocusState {
+  return snapshot.current_container_id == null
+    ? DEFAULT_FOCUS
+    : {
+        mode: 'container',
+        containerId: snapshot.current_container_id,
+      }
+}
+
+function latestFocusSnapshot(
+  current: MasterFocusSnapshot,
+  incoming: MasterFocusSnapshot,
+): MasterFocusSnapshot {
+  return current.version > incoming.version ? current : incoming
 }
 
 function toastForEvent(event: RunEvent): Omit<MasterToast, 'id'> | null {
@@ -353,9 +351,7 @@ function MasterStateHost({
     followTail: true,
     anchorMessageId: null as number | null,
   })
-  const [focus, setFocusState] = React.useState<MasterFocusState>(
-    () => readFocus(ownerId),
-  )
+  const [focus, setFocusState] = React.useState<MasterFocusState>(DEFAULT_FOCUS)
   const [target, setTargetState] = React.useState<MasterTargetState>(
     () => readTarget(ownerId),
   )
@@ -382,6 +378,8 @@ function MasterStateHost({
   const lifecycleAbortRef = React.useRef<AbortController | null>(null)
   const sendAbortRef = React.useRef<AbortController | null>(null)
   const settingsAbortRef = React.useRef<AbortController | null>(null)
+  const focusAbortRef = React.useRef<AbortController | null>(null)
+  const focusPromiseRef = React.useRef<Promise<void>>(Promise.resolve())
   const reconcileAbortRef = React.useRef<AbortController | null>(null)
   const reconcilePromiseRef = React.useRef<Promise<void> | null>(null)
   const reconcileRequestRef = React.useRef<{
@@ -440,7 +438,7 @@ function MasterStateHost({
     setHomeActiveState(false)
     homeActiveRef.current = false
     setScrollStateValue({ scrollTop: 0, followTail: true, anchorMessageId: null })
-    const nextFocus = readFocus(ownerId)
+    const nextFocus = DEFAULT_FOCUS
     const nextTarget = readTarget(ownerId)
     const nextPopup = {
       open: false,
@@ -564,8 +562,11 @@ function MasterStateHost({
           }
           deskRef.current = projected.desk
           messagesRef.current = nextMessages
+          const nextFocus = focusState(projected.desk.focus)
+          focusRef.current = nextFocus
           setDesk(projected.desk)
           setMessages(nextMessages)
+          setFocusState(nextFocus)
           if (
             !homeActiveRef.current
             && !popupOpenRef.current
@@ -658,7 +659,10 @@ function MasterStateHost({
     )
     if (projected.desk !== currentDesk) {
       deskRef.current = projected.desk
+      const nextFocus = focusState(projected.desk.focus)
+      focusRef.current = nextFocus
       setDesk(projected.desk)
+      setFocusState(nextFocus)
     }
     if (projected.messages !== messagesRef.current) {
       messagesRef.current = projected.messages
@@ -699,6 +703,7 @@ function MasterStateHost({
     lifecycleAbortRef.current?.abort()
     sendAbortRef.current?.abort()
     settingsAbortRef.current?.abort()
+    focusAbortRef.current?.abort()
     reconcileAbortRef.current?.abort()
     reconcilePromiseRef.current = null
     clearOwnedState(enabled)
@@ -724,18 +729,12 @@ function MasterStateHost({
             controller.signal.aborted
             || generation !== generationRef.current
           ) return
-          let nextFocus = focusRef.current
+          let nextFocus = focusState(initialDesk.focus)
           let nextTarget = targetRef.current
           if (fleetOutcome.result) {
             const availableIds = new Set(
               fleetOutcome.result.containers.map(container => container.id),
             )
-            if (
-              nextFocus.mode === 'container'
-              && !availableIds.has(nextFocus.containerId || 0)
-            ) {
-              nextFocus = DEFAULT_FOCUS
-            }
             if (
               nextTarget.mode === 'explicit'
               && !availableIds.has(nextTarget.containerId || 0)
@@ -843,6 +842,8 @@ function MasterStateHost({
       sendAbortRef.current = null
       settingsAbortRef.current?.abort()
       settingsAbortRef.current = null
+      focusAbortRef.current?.abort()
+      focusAbortRef.current = null
       reconcileAbortRef.current?.abort()
       reconcileAbortRef.current = null
       sendLockRef.current = false
@@ -861,13 +862,67 @@ function MasterStateHost({
   }, [])
 
   const setFocus = React.useCallback((containerId: number | null) => {
-    const next: MasterFocusState = containerId == null
-      ? DEFAULT_FOCUS
-      : { mode: 'container', containerId }
-    focusRef.current = next
-    setFocusState(next)
-    writePreference(MASTER_FOCUS_KEY, ownerId, next)
-  }, [ownerId])
+    const requestedGeneration = generationRef.current
+    const apply = async () => {
+      const currentDesk = deskRef.current
+      if (
+        !enabled
+        || !token
+        || !currentDesk
+        || requestedGeneration !== generationRef.current
+        || (
+          currentDesk.focus.current_container_id === containerId
+          && !currentDesk.focus.pending
+        )
+      ) return
+      const controller = new AbortController()
+      focusAbortRef.current = controller
+      try {
+        const result = await updateMasterFocus(
+          token,
+          containerId,
+          currentDesk.focus.version,
+          controller.signal,
+        )
+        if (
+          controller.signal.aborted
+          || requestedGeneration !== generationRef.current
+        ) return
+        mutationRevisionRef.current += 1
+        const latestDesk = deskRef.current
+        if (!latestDesk || latestDesk.session.id !== currentDesk.session.id) return
+        const resolvedFocus = latestFocusSnapshot(
+          latestDesk.focus,
+          result.focus,
+        )
+        const nextFocus = focusState(resolvedFocus)
+        focusRef.current = nextFocus
+        deskRef.current = {
+          ...latestDesk,
+          focus: resolvedFocus,
+        }
+        setDesk(deskRef.current)
+        setFocusState(nextFocus)
+        setConnectionError('')
+      } catch (error) {
+        if (
+          !controller.signal.aborted
+          && requestedGeneration === generationRef.current
+        ) {
+          setConnectionError(errorMessage(error))
+          void reconcileRef.current('manual', cursorRef.current)
+          throw error
+        }
+      } finally {
+        if (focusAbortRef.current === controller) {
+          focusAbortRef.current = null
+        }
+      }
+    }
+    const request = focusPromiseRef.current.then(apply, apply)
+    focusPromiseRef.current = request.catch(() => {})
+    return request
+  }, [enabled, token])
 
   const setTargetContainer = React.useCallback((containerId: number | null) => {
     const next: MasterTargetState = containerId == null
@@ -1003,7 +1058,6 @@ function MasterStateHost({
         || effectiveFocus.containerId !== selectedTarget.containerId
       )
     ) {
-      setFocus(selectedTarget.containerId)
       effectiveFocus = {
         mode: 'container',
         containerId: selectedTarget.containerId,
@@ -1054,12 +1108,21 @@ function MasterStateHost({
         : message)
       messagesRef.current = orderMasterMessages(messagesRef.current)
       setMessages(messagesRef.current)
-      setDesk(current => {
-        if (!current) return current
-        const next = { id: result.run_id, status: result.status }
-        deskRef.current = { ...current, master_run: next }
-        return deskRef.current
-      })
+      const latestDesk = deskRef.current
+      if (!latestDesk) return
+      const resolvedFocus = latestFocusSnapshot(
+        latestDesk.focus,
+        result.focus,
+      )
+      const nextFocus = focusState(resolvedFocus)
+      focusRef.current = nextFocus
+      deskRef.current = {
+        ...latestDesk,
+        master_run: { id: result.run_id, status: result.status },
+        focus: resolvedFocus,
+      }
+      setDesk(deskRef.current)
+      setFocusState(nextFocus)
       setDraftState('')
       setSelection({ start: 0, end: 0 })
     } catch (error) {
@@ -1081,7 +1144,7 @@ function MasterStateHost({
       }
       if (sendAbortRef.current === controller) sendAbortRef.current = null
     }
-  }, [activeRun?.status, draft, enabled, setFocus, token])
+  }, [activeRun?.status, draft, enabled, token])
 
   const setHomeActive = React.useCallback((active: boolean) => {
     homeActiveRef.current = active

@@ -833,6 +833,9 @@ class MasterToolBroker:
                 )
             container_id = _as_int(raw_container)
             area_id = requested_area_id
+        else:
+            container_id = None
+            area_id = None
         if durable_scope and (
             (
                 requested_container_id is not None
@@ -871,6 +874,7 @@ class MasterToolBroker:
             query=str(args["query"]),
             container_id=container_id,
             area_id=area_id,
+            fleet_only=not durable_scope,
         )
 
     def _task_request(
@@ -1076,19 +1080,19 @@ class MasterToolBroker:
                 "create_attention requires a turn-derived idempotency key",
             )
         source_key = f"master:{self.origin_master_session_id}:{key}"
+        target: dict[str, Any] = {
+            "view": "master",
+            "message": str(args["message"]).strip(),
+        }
+        if self.origin_message_id is not None:
+            target["origin_message_id"] = self.origin_message_id
         self.conn.execute(
             "INSERT OR IGNORE INTO attention_items("
             "kind, title, target_json, inline_ok, status, source_key"
             ") VALUES ('master_decision', ?, ?, 0, 'open', ?)",
             (
                 str(args["title"]).strip(),
-                json.dumps(
-                    {
-                        "view": "master",
-                        "message": str(args["message"]).strip(),
-                    },
-                    ensure_ascii=False,
-                ),
+                json.dumps(target, ensure_ascii=False),
                 source_key,
             ),
         )

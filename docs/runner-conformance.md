@@ -53,6 +53,13 @@ allowlist escape hatches. It receives only the process variables needed to launc
 Codex, the applicable OpenAI authentication, and HOME, XDG, TEMP, TMP, and TMPDIR
 roots inside its dedicated managed home.
 
+Every Master turn deletes its stored ACP session mapping and recycles the
+restricted runner process before creating the next thread. Proxima then reapplies
+the empty capability selection, reattests the exact dynamic broker schemas, and
+rebuilds the bounded transcript from the run's immutable Focus epoch. No
+provider-side conversation cache or prior Container process state is reused,
+including consecutive turns inside the same Focus.
+
 Codex may still construct runner-native utility schemas internally. A private
 loopback provider firewall therefore discards the complete Codex tool carrier and
 reconstructs it from `MasterToolBroker` definitions. It validates the exact names,

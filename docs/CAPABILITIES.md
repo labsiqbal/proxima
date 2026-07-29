@@ -456,12 +456,38 @@ Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**
   docs. Cloud semantic egress stays off unless an explicit future captain policy
   enables a real adapter; configured cloud credentials never unlock egress.
 
-Focus epochs, history projection, and safe-self-update remain later delivery
-groups.
+**Focus epochs and prompt isolation:** Master begins in fleet mode with no Focus
+epoch. `master_focus_state` durably records the current Focus plus one pending
+Fleet or Container Focus, while immutable `message_focus` and
+`runs.focus_epoch_id` capture the
+epoch that actually owned each user turn, response, tool result, and projection.
+An idle Focus change uses an optimistic version check, closes and opens epochs,
+adds a boundary message, and emits `master.focus.changed`. A running turn can
+only record one pending Focus; sends return 409 until it closes, then the pending
+Focus applies exactly once. Explicit cross-Container sends change Focus and
+enqueue in the same transaction. Generic session run producers reject the Master
+session, and the database refuses any non-Master run kind or mismatched epoch there.
+Task delegations copy the captured epoch before the tool result returns, so delayed
+Task and supervision projections retain their original Focus after an origin
+message or run is deleted. Migration-era Tasks without provable attribution remain
+startable after scope validation but unprojectable, and their projection failure
+does not starve later reconciliation candidates. The restricted Master runner
+process is rebuilt for every Master turn and its durable history is limited to the
+captured epoch, so prior Container ACP/model context cannot cross a boundary.
+History projection UI and safe-self-update remain later delivery groups. See
+[ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
+
+The shared provider bootstraps Focus and its optimistic version from the Master
+desk, writes picker changes through the durable Focus endpoint, and consumes
+`master.focus.changed` on the existing session stream. Focus is never restored
+from local storage. Deleting an idle focused Container closes its epoch and moves
+Master safely onward while retaining the historical epoch identity; deletion is
+refused before filesystem changes while that Master turn is active.
 
 **Endpoints:** `GET /api/containers/{slug}/graphs`,
 `POST /api/containers/{slug}/graphs/rebuild`,
-`GET /api/settings/master` (includes `graph_policy`).
+`GET /api/settings/master` (includes `graph_policy`), and
+`PUT /api/master/focus` (versioned current or pending Focus).
 
 `delegate_tasks` and `start_tasks` call `TaskDelegationService`; they do not create
 or start jobs directly. A Master batch may name client-local Task keys and
@@ -543,8 +569,8 @@ permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
-second message or event. SSE reconnect accepts the existing cursor query and
-`Last-Event-ID`. No projection can approve review,
+second message or event and isolates failures per authoritative source row. SSE
+reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 

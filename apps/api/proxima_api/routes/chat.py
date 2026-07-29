@@ -37,6 +37,7 @@ from .. import kinds
 from .. import scripts_library
 from .. import state
 from .. import image_providers
+from .. import master_focus
 from .. import wiki_memory
 from .. import workflows as wf
 from ..prompt_collaborations import collaboration_card_payload
@@ -132,6 +133,7 @@ def register(app, deps):
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
+    require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
     session_payload = deps["session_payload"]
     _project_root = deps["_project_root"]
@@ -312,9 +314,14 @@ def register(app, deps):
             "mc.focus_container_id AS master_focus_container_id, "
             "mc.target_mode AS master_target_mode, "
             "mc.target_container_id AS master_target_container_id, "
-            "mc.target_area_id AS master_target_area_id "
+            "mc.target_area_id AS master_target_area_id, "
+            "mf.message_id AS focus_message_id, "
+            "mf.focus_epoch_id AS master_focus_epoch_id, "
+            "mf.focus_container_id AS message_focus_container_id, "
+            "mf.subject_container_id AS message_subject_container_id "
             "FROM messages m LEFT JOIN master_message_context mc "
             "ON mc.message_id = m.id "
+            "LEFT JOIN message_focus mf ON mf.message_id = m.id "
             "WHERE m.session_id = ? ORDER BY m.id ASC",
             (session_id,),
         ).fetchall()
@@ -375,6 +382,10 @@ def register(app, deps):
                 "master_target_container_id", None
             )
             master_target_area_id = m.pop("master_target_area_id", None)
+            focus_message_id = m.pop("focus_message_id", None)
+            master_focus_epoch_id = m.pop("master_focus_epoch_id", None)
+            message_focus_container_id = m.pop("message_focus_container_id", None)
+            message_subject_container_id = m.pop("message_subject_container_id", None)
             if master_target_mode is not None and master_focus_mode is not None:
                 m["master_target"] = {
                     "focus_mode": master_focus_mode,
@@ -382,6 +393,12 @@ def register(app, deps):
                     "target_mode": master_target_mode,
                     "target_container_id": master_target_container_id,
                     "target_area_id": master_target_area_id,
+                }
+            if focus_message_id is not None:
+                m["message_focus"] = {
+                    "focus_epoch_id": master_focus_epoch_id,
+                    "focus_container_id": message_focus_container_id,
+                    "subject_container_id": message_subject_container_id,
                 }
             try:
                 links = _decode_json(m.pop("output_links", "[]") or "[]")
@@ -416,6 +433,8 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.content)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        if session["mode"] == "master":
+            raise HTTPException(status_code=409, detail="Master messages must use /api/master/messages")
         author = user["username"] if payload.role == "user" else None
         cur = db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, ?, ?, ?)", (session_id, payload.role, payload.content, author))
         db().execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
@@ -430,6 +449,7 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.message)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
         profile = profile_for_user(payload.profile_id, user)
@@ -536,6 +556,7 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.objective)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         db().execute(
             "UPDATE sessions SET goal_text = ?, goal_status = 'running', goal_iteration = 0, goal_max = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -572,6 +593,14 @@ def register(app, deps):
             for r in active:
                 app.state.worker.add_event(_as_int(r["id"]), session_id, r["project_id"], "run.cancelled", {})
                 app.state.worker.cancel(_as_int(r["id"]))
+            if session["mode"] == "master":
+                with app.state.db_lock:
+                    changed_focus = master_focus.apply_pending_if_idle(
+                        db(),
+                        master_session_id=session_id,
+                    )
+                if changed_focus:
+                    app.state.hub.notify(session_id)
         lr = db().execute("SELECT id FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
         if lr:
             app.state.worker.add_event(_as_int(lr["id"]), session_id, session["project_id"], "goal.update", {"status": "cancelled"})
@@ -589,6 +618,7 @@ def register(app, deps):
     def wiki_note_draft(session_id: int, payload: WikiDraftRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         wiki_root = _session_wiki_root(session, user)
         if wiki_root is None:
             raise HTTPException(status_code=400, detail="This chat has no project, so there is no wiki to save to.")
@@ -610,6 +640,7 @@ def register(app, deps):
     def promote_workflow(session_id: int, payload: PromoteWorkflowRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         rows = db().execute(
             "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 50", (session_id,)
@@ -1477,6 +1508,18 @@ def register(app, deps):
                 int(job["id"]),
                 connection=db(),
             )
+        session = db().execute(
+            "SELECT mode FROM sessions WHERE id = ?",
+            (row["session_id"],),
+        ).fetchone()
+        if changed and session and session["mode"] == "master":
+            with app.state.db_lock:
+                changed_focus = master_focus.apply_pending_if_idle(
+                    db(),
+                    master_session_id=row["session_id"],
+                )
+            if changed_focus:
+                app.state.hub.notify(row["session_id"])
         fresh = db().execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
         return {"ok": True, "run_id": run_id, "status": fresh["status"] if fresh else row["status"]}
 

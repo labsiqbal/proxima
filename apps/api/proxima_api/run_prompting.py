@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import re
+import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -303,6 +304,19 @@ class RunPrompting:
         """Get an ACP process and a per-home ACP session for this Proxima session."""
         db = self.app.state.worker_db
         restricted = master_dynamic_tools is not None
+        if restricted:
+            # A Master Focus boundary must not survive in an ACP process or a
+            # provider-side conversation cache.  Master sessions are rebuilt
+            # from the captured immutable epoch below, so recycle before every
+            # restricted turn rather than relying on adapter cache semantics.
+            with self.app.state.db_lock:
+                db.execute(
+                    "DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?",
+                    (session_id, hermes_home),
+                )
+            await self.app.state.acp_manager.recycle(
+                spec, hermes_home, cwd, master_chat_only=True
+            )
         proc = (
             await self.app.state.acp_manager.get(
                 spec,
@@ -384,6 +398,7 @@ class RunPrompting:
                     db,
                     session_id,
                     current_prompt=str(run["prompt"]),
+                    focus_epoch_id=run.get("focus_epoch_id"),
                 )
                 if history:
                     prompt_text = (
@@ -506,18 +521,30 @@ class RunPrompting:
         session_id: int,
         *,
         current_prompt: str,
+        focus_epoch_id: int | None = None,
     ) -> str:
-        """Render a bounded durable transcript for a fresh restricted thread."""
-        rows = [
-            dict(row)
-            for row in db.execute(
-                "SELECT role, content FROM messages "
-                "WHERE session_id = ? "
+        """Render one captured Focus epoch, never a cross-Container splice."""
+        try:
+            query = (
+                "SELECT m.role, m.content FROM messages m "
+                "JOIN message_focus mf ON mf.message_id = m.id "
+                "WHERE m.session_id = ? "
                 "AND role IN ('user', 'assistant', 'system', 'error') "
-                "ORDER BY id",
+                "AND ((? IS NULL AND mf.focus_epoch_id IS NULL) OR mf.focus_epoch_id = ?) "
+                "ORDER BY m.id"
+            )
+            rows = [dict(row) for row in db.execute(
+                query, (session_id, focus_epoch_id, focus_epoch_id)
+            ).fetchall()]
+        except sqlite3.OperationalError:
+            # Tiny compatibility fixtures which predate the Focus schema model
+            # a legacy fleet-only transcript. Real initialized databases always
+            # take the epoch-scoped branch above.
+            rows = [dict(row) for row in db.execute(
+                "SELECT role, content FROM messages WHERE session_id = ? "
+                "AND role IN ('user', 'assistant', 'system', 'error') ORDER BY id",
                 (session_id,),
-            ).fetchall()
-        ]
+            ).fetchall()]
         if (
             rows
             and rows[-1]["role"] == "user"

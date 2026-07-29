@@ -26,7 +26,7 @@ const actions = {
   markRead: vi.fn(),
   setSideCollapsed: vi.fn(),
   setScrollState: vi.fn(),
-  setFocus: vi.fn(),
+  setFocus: vi.fn().mockResolvedValue(undefined),
   setTargetContainer: vi.fn(),
   setTargetArea: vi.fn(),
   loadTargetAreas: vi.fn().mockResolvedValue(undefined),

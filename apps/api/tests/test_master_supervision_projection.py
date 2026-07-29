@@ -10,12 +10,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import app_settings, satpam, worktrees
+from proxima_api import app_settings, master_focus, satpam, worktrees
 from proxima_api.db import connect
 from proxima_api.graph import normalize_graph
 from proxima_api.main import create_app
 from proxima_api.master_runtime import execute_tool
 from proxima_api.master_tool_broker import MasterToolBroker
+from proxima_api.migrations import MIGRATIONS
 from proxima_api.routes.chat import _sse_resume_cursor, _stream_session_events
 from proxima_api.task_delegation import TaskDelegationRequest
 
@@ -78,6 +79,20 @@ def _delegate(
     )
     assert result["ok"] is True
     return desk, result["result"]["jobs"]
+
+
+def _make_focus_origin_uncaptured(app, job_id: int) -> None:
+    app.state.db.execute(
+        "DROP TRIGGER task_delegations_focus_immutable"
+    )
+    app.state.db.execute(
+        "UPDATE task_delegations SET origin_focus_epoch_id = NULL, "
+        "origin_focus_captured = 0 WHERE job_id = ?",
+        (job_id,),
+    )
+    next(migration[2] for migration in MIGRATIONS if migration[0] == 40)(
+        app.state.db
+    )
 
 
 def _projection_events(
@@ -576,6 +591,79 @@ def test_idle_reconcile_ticks_do_not_reinsert_projected_rows(
         "AND projection_type = 'master.task.completed'",
         (job["id"],),
     ).fetchone()[0] == 1
+
+
+def test_uncaptured_legacy_master_task_remains_startable(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="legacy-uncaptured-start",
+        tasks=[
+            {
+                "key": "legacy",
+                "title": "Legacy Task",
+                "brief": "Continue after migration",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    _make_focus_origin_uncaptured(app, job_id)
+
+    result = app.state.task_delegation.start(job_id, {"id": 1})
+
+    assert result.started is True
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["status"] == "running"
+    assert app.state.master_projection.safe_project_task(job_id) is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE source_table = 'jobs' "
+        "AND source_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+
+
+def test_reconcile_continues_after_uncaptured_legacy_task(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="legacy-uncaptured-reconcile",
+        tasks=[
+            {
+                "key": "legacy",
+                "title": "Legacy Task",
+                "brief": "Remain unprojected",
+            },
+            {
+                "key": "current",
+                "title": "Current Task",
+                "brief": "Project after the legacy Task",
+            },
+        ],
+    )
+    legacy_id, current_id = (job["id"] for job in jobs)
+    _make_focus_origin_uncaptured(app, legacy_id)
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done', updated_at = CURRENT_TIMESTAMP "
+        "WHERE id IN (?, ?)",
+        (legacy_id, current_id),
+    )
+
+    result = app.state.master_projection.reconcile()
+
+    assert result == {"observed": 2, "created": 1}
+    projections = app.state.db.execute(
+        "SELECT source_id, projection_type FROM master_projections "
+        "WHERE source_table = 'jobs' ORDER BY source_id",
+    ).fetchall()
+    assert [
+        (row["source_id"], row["projection_type"]) for row in projections
+    ] == [(current_id, "master.task.completed")]
 
 
 def test_duplicate_and_concurrent_supervisor_ticks_claim_each_task_once(
@@ -1198,6 +1286,105 @@ def test_projection_links_survive_task_delete_and_restrict_delivery_delete(
     create_app(dict(app.state.config))
 
 
+def test_task_projection_focus_survives_origin_run_deletion(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app, client, project = _app_and_client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    desk = client.get("/api/master/desk").json()
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?",
+        (project["slug"],),
+    ).fetchone()["id"]
+    area_id = app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops'",
+        (project_id,),
+    ).fetchone()["id"]
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
+    focus = client.put(
+        "/api/master/focus",
+        json={"container_id": project_id, "version": 0},
+    ).json()["focus"]
+    turn = client.post(
+        "/api/master/messages",
+        json={"content": "Delegate a durable focused Task"},
+    ).json()
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        origin_message_id=turn["message"]["id"],
+    )
+    delegated = broker.execute(
+        "delegate_tasks",
+        {
+            "idempotency_key": "durable-focus-origin",
+            "start": False,
+            "tasks": [
+                {
+                    "title": "Keep Focus",
+                    "brief": "Finish after the origin run is deleted",
+                    "container_id": project_id,
+                    "area_id": area_id,
+                    "profile_id": profile_id,
+                }
+            ],
+        },
+    )
+    job_id = delegated["result"]["tasks"][0]["id"]
+    captured = app.state.db.execute(
+        "SELECT origin_message_id, origin_focus_epoch_id, "
+        "origin_focus_captured FROM task_delegations WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(captured) == {
+        "origin_message_id": turn["message"]["id"],
+        "origin_focus_epoch_id": focus["current_epoch_id"],
+        "origin_focus_captured": 1,
+    }
+
+    app.state.db.execute(
+        "UPDATE runs SET status = 'completed', "
+        "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (turn["run_id"],),
+    )
+    deleted = client.delete(f"/api/runs/{turn['run_id']}")
+    assert deleted.status_code == 200
+    durable = app.state.db.execute(
+        "SELECT origin_message_id, origin_focus_epoch_id, "
+        "origin_focus_captured FROM task_delegations WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(durable) == {
+        "origin_message_id": None,
+        "origin_focus_epoch_id": focus["current_epoch_id"],
+        "origin_focus_captured": 1,
+    }
+
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?",
+        (job_id,),
+    )
+    projection = app.state.master_projection.project_task(job_id)
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (projection["message_id"],),
+    ).fetchone()
+    assert dict(attribution) == {
+        "focus_epoch_id": focus["current_epoch_id"],
+        "focus_container_id": project_id,
+    }
+
+
 def test_feature_off_does_not_instantiate_or_project_master_services(
     tmp_path: Path,
 ):
@@ -1269,13 +1456,34 @@ def test_projection_refuses_forged_taskless_attention_owner(tmp_path: Path):
 def test_retried_attention_tool_projects_one_action_required_message(
     tmp_path: Path,
 ):
-    app, client, _project = _app_and_client(tmp_path)
+    app, client, project = _app_and_client(tmp_path)
     desk = client.get("/api/master/desk").json()
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?",
+        (project["slug"],),
+    ).fetchone()["id"]
+    focus = master_focus.change_focus(
+        app.state.db,
+        master_session_id=desk["session"]["id"],
+        container_id=project_id,
+        expected_version=0,
+    )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'user', 'Ask for a decision')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=focus["current_epoch_id"],
+    )
     broker = MasterToolBroker(
         app.state.db,
         app,
         {"id": 1},
         desk["session"]["id"],
+        origin_message_id=origin.lastrowid,
     )
     args = {
         "title": "Choose a direction",
@@ -1299,6 +1507,16 @@ def test_retried_attention_tool_projects_one_action_required_message(
     ]
     assert len(attention_events) == 1
     assert attention_events[0]["payload"]["attention_required"] is True
+    projection_message_id = attention_events[0]["payload"]["message_id"]
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (projection_message_id,),
+    ).fetchone()
+    assert dict(attribution) == {
+        "focus_epoch_id": focus["current_epoch_id"],
+        "focus_container_id": project_id,
+    }
 
 
 def test_projection_summaries_exclude_untrusted_paths_commands_and_secrets(

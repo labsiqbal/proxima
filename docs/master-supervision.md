@@ -67,7 +67,9 @@ identity.
 Startup validates the projection table schema, indexes, foreign keys, Master
 session ownership, source links, and bounded payload equality. Reconciliation after
 restart can safely retry because an existing key produces no second message or
-event. A reused key with different ownership or source binding fails closed. Raw
+event. Each reconciliation candidate has its own failure boundary, so one invalid
+legacy source remains unprojected without starving later Task, Satpam, or Attention
+repair. A reused key with different ownership or source binding fails closed. Raw
 token, reasoning, and tool delta events are never projected, and payloads are
 limited to 16 KiB. Projection messages are also server-owned summaries: Task
 titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
@@ -78,6 +80,14 @@ checkpoint ids. Attention and Satpam payloads include their source row ids and a
 stable `toast_key`. The authenticated shared frontend provider now updates the
 durable thread and work panel from these events without another polling endpoint.
 Transient toast presentation remains a later UI group and is intentionally inert.
+
+Master-origin Task delegation copies the turn's captured Focus epoch and an
+explicit captured marker onto `task_delegations`. Task, Attention, and Satpam
+projections use that durable copy whenever they have a Task subject. The nullable
+origin-message link remains provenance only, so deleting the completed origin run
+cannot move a later projection into Fleet history. A legacy Task without provable
+capture keeps its scoped lifecycle but fails closed instead of producing an
+unattributed projection.
 
 ## Session event contract
 
@@ -99,6 +109,10 @@ Supervision events:
 - `master.satpam.restarted`
 - `master.satpam.recovery_failed`
 - `master.satpam.escalated`
+
+Focus events:
+
+- `master.focus.changed`
 
 These are named events on
 `GET /api/sessions/{master_session_id}/events/stream`. The existing global
@@ -134,6 +148,13 @@ message, replacing the pending row with its durable id before streamed replies a
 ordered. Lifecycle generations and abort controllers ignore late responses, close
 replaced streams, and clear all owner-scoped state on token/owner change,
 feature-off, logout, onboarding, or update application.
+
+Focus is server-owned state, not a browser preference. Bootstrap reads the
+current epoch, pending request, and optimistic version from the desk. The picker
+writes through `PUT /api/master/focus`, explicit message targets transition Focus
+inside the message transaction, and `master.focus.changed` updates every live
+consumer from the durable boundary event. Local storage is used only for
+presentation preferences and the independent per-message target picker.
 
 ## Compatibility
 

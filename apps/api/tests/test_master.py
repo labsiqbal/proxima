@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
@@ -11,6 +13,7 @@ from proxima_api.run_prompting import RunPrompting
 from proxima_api.job_checkpoints import create_checkpoint, restore_checkpoint
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
+from proxima_api import master_focus
 
 
 def _client(tmp_path: Path):
@@ -144,6 +147,193 @@ def test_master_message_acceptance_returns_canonical_durable_message(
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
 
 
+def test_generic_run_producers_refuse_the_master_session(tmp_path: Path):
+    app, client = _client(tmp_path)
+    session_id = client.get("/api/master/desk").json()["session"]["id"]
+    assistant = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'assistant', 'Master answer', 'Master')",
+        (session_id,),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=assistant.lastrowid,
+        focus_epoch_id=None,
+    )
+    before = {
+        "messages": app.state.db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0],
+        "runs": app.state.db.execute(
+            "SELECT COUNT(*) FROM runs WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0],
+    }
+
+    responses = [
+        client.post(
+            f"/api/sessions/{session_id}/messages",
+            json={"role": "user", "content": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/runs",
+            json={"message": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/goal",
+            json={"objective": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/wiki-note/draft",
+            json={},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/promote-workflow",
+            json={},
+        ),
+        client.post(
+            f"/api/messages/{assistant.lastrowid}/reviews",
+            json={},
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [409] * 6
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0] == before["messages"]
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0] == before["runs"]
+    goal = app.state.db.execute(
+        "SELECT goal_text, goal_status FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    assert dict(goal) == {"goal_text": None, "goal_status": None}
+
+
+def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
+    tmp_path: Path, monkeypatch
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    first = client.post("/api/projects", json={"slug": "focus-one", "name": "Focus one"}).json()
+    second = client.post("/api/projects", json={"slug": "focus-two", "name": "Focus two"}).json()
+    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
+    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+
+    desk = client.get("/api/master/desk").json()
+    assert desk["focus"] == {
+        "current_epoch_id": None,
+        "current_container_id": None,
+        "pending_container_id": None,
+        "pending": False,
+        "version": 0,
+    }
+    changed = client.put("/api/master/focus", json={"container_id": first_id, "version": 0})
+    assert changed.status_code == 200
+    focus = changed.json()["focus"]
+    assert focus["current_container_id"] == first_id
+    assert focus["current_epoch_id"] is not None
+    assert focus["version"] == 1
+    assert client.put("/api/master/focus", json={"container_id": second_id, "version": 0}).status_code == 409
+
+    queued = client.post("/api/master/messages", json={"content": "Stay in the first Container"})
+    assert queued.status_code == 202
+    run_id = queued.json()["run_id"]
+    assert app.state.db.execute("SELECT focus_epoch_id FROM runs WHERE id = ?", (run_id,)).fetchone()["focus_epoch_id"] == focus["current_epoch_id"]
+    pending = client.put("/api/master/focus", json={"container_id": second_id, "version": 1})
+    assert pending.status_code == 200
+    assert pending.json()["pending"] is True
+    assert pending.json()["focus"]["current_container_id"] == first_id
+    assert pending.json()["focus"]["pending_container_id"] == second_id
+    assert pending.json()["focus"]["pending"] is True
+    assert client.post("/api/master/messages", json={"content": "Must not queue"}).status_code == 409
+
+    app.state.db.execute("UPDATE runs SET status = 'completed' WHERE id = ?", (run_id,))
+    applied = master_focus.apply_pending_if_idle(
+        app.state.db, master_session_id=desk["session"]["id"]
+    )
+    assert applied and applied["current_container_id"] == second_id
+    assert applied["pending_container_id"] is None
+    assert applied["pending"] is False
+    assert applied["version"] == 3
+
+    fleet_turn = client.post(
+        "/api/master/messages",
+        json={"content": "Finish in Fleet mode"},
+    )
+    assert fleet_turn.status_code == 202
+    fleet_pending = client.put(
+        "/api/master/focus",
+        json={"container_id": None, "version": 3},
+    )
+    assert fleet_pending.status_code == 200
+    assert fleet_pending.json()["focus"] == {
+        "current_epoch_id": applied["current_epoch_id"],
+        "current_container_id": second_id,
+        "pending_container_id": None,
+        "pending": True,
+        "version": 4,
+    }
+    cancelled = client.post(
+        f"/api/runs/{fleet_turn.json()['run_id']}/cancel"
+    )
+    assert cancelled.status_code == 200
+    after_cancel = client.get("/api/master/desk").json()["focus"]
+    assert after_cancel == {
+        "current_epoch_id": None,
+        "current_container_id": None,
+        "pending_container_id": None,
+        "pending": False,
+        "version": 5,
+    }
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ? AND content LIKE 'Master Focus changed%'",
+        (desk["session"]["id"],),
+    ).fetchone()[0] == 3
+
+
+def test_master_prompt_history_never_splices_prior_focus_epoch(tmp_path: Path):
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    session_id = desk["session"]["id"]
+    first = client.post("/api/projects", json={"slug": "history-one", "name": "History one"}).json()
+    second = client.post("/api/projects", json={"slug": "history-two", "name": "History two"}).json()
+    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
+    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+    epoch_one = master_focus.change_focus(
+        app.state.db, master_session_id=session_id, container_id=first_id, expected_version=0
+    )["current_epoch_id"]
+    old = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) VALUES (?, 'assistant', 'HOSTILE-A-ONLY')",
+        (session_id,),
+    )
+    master_focus.stamp_message(app.state.db, message_id=old.lastrowid, focus_epoch_id=epoch_one)
+    epoch_two = master_focus.change_focus(
+        app.state.db, master_session_id=session_id, container_id=second_id, expected_version=1
+    )["current_epoch_id"]
+    current = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) VALUES (?, 'user', 'Container B request')",
+        (session_id,),
+    )
+    master_focus.stamp_message(app.state.db, message_id=current.lastrowid, focus_epoch_id=epoch_two)
+
+    history = RunPrompting._master_history(
+        app.state.db,
+        session_id,
+        current_prompt="Container B request",
+        focus_epoch_id=epoch_two,
+    )
+    assert "HOSTILE-A-ONLY" not in history
+    assert f"Container {second_id}" in history
+
+
 def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
     tmp_path: Path, monkeypatch
 ):
@@ -216,6 +406,14 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
     assert rejected.status_code == 422
     assert "not in the selected Container" in rejected.json()["detail"]
 
+    blocked_delete = client.delete("/api/projects/explicit-target")
+    assert blocked_delete.status_code == 409
+    assert Path(target["path"]).exists()
+    app.state.db.execute(
+        "UPDATE runs SET status = 'completed' WHERE id = ?",
+        (response.json()["run_id"],),
+    )
+    epoch_id = response.json()["focus"]["current_epoch_id"]
     deleted = client.delete("/api/projects/explicit-target")
     assert deleted.status_code == 200
     historical_context = app.state.db.execute(
@@ -231,6 +429,71 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
         "target_container_id": None,
         "target_area_id": None,
     }
+    epoch = app.state.db.execute(
+        "SELECT container_id, ended_at FROM master_focus_epochs WHERE id = ?",
+        (epoch_id,),
+    ).fetchone()
+    assert epoch["container_id"] == target_id
+    assert epoch["ended_at"] is not None
+    assert client.get("/api/master/desk").json()["focus"][
+        "current_container_id"
+    ] is None
+
+
+def test_master_run_messages_are_attributed_at_persistence_boundary(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app, client = _client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    container_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'master-project'"
+    ).fetchone()["id"]
+    desk = client.get("/api/master/desk").json()
+    focused = client.put(
+        "/api/master/focus",
+        json={"container_id": container_id, "version": 0},
+    ).json()["focus"]
+    turn = client.post(
+        "/api/master/messages",
+        json={"content": "Keep failures in this Focus"},
+    ).json()
+
+    message = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, run_id) "
+        "VALUES (?, 'error', 'Run failed safely', ?)",
+        (desk["session"]["id"], turn["run_id"]),
+    )
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (message.lastrowid,),
+    ).fetchone()
+
+    assert dict(attribution) == {
+        "focus_epoch_id": focused["current_epoch_id"],
+        "focus_container_id": container_id,
+    }
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Message Focus epoch attribution is immutable",
+    ):
+        app.state.db.execute(
+            "UPDATE message_focus SET focus_epoch_id = NULL "
+            "WHERE message_id = ?",
+            (message.lastrowid,),
+        )
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Run Focus epoch attribution is immutable",
+    ):
+        app.state.db.execute(
+            "UPDATE runs SET focus_epoch_id = NULL WHERE id = ?",
+            (turn["run_id"],),
+        )
 
 
 def test_master_desk_cursor_never_leads_the_snapshot(tmp_path: Path):

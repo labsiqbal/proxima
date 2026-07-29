@@ -394,6 +394,8 @@ class TaskDelegationService:
             )
 
         origin_session = None
+        origin_focus_epoch_id = None
+        origin_focus_captured = False
         if request.origin_session_id is not None:
             origin_session = conn.execute(
                 "SELECT * FROM sessions WHERE id = ? AND owner_user_id = ?",
@@ -427,6 +429,44 @@ class TaskDelegationService:
                     "Origin message was not found in the origin session",
                     404,
                 )
+        if origin_session is not None and origin_session["mode"] == "master":
+            if request.origin_message_id is not None:
+                focus = conn.execute(
+                    "SELECT attribution.focus_epoch_id, "
+                    "epoch.master_session_id AS epoch_session_id "
+                    "FROM message_focus AS attribution "
+                    "JOIN messages AS message "
+                    "ON message.id = attribution.message_id "
+                    "LEFT JOIN master_focus_epochs AS epoch "
+                    "ON epoch.id = attribution.focus_epoch_id "
+                    "WHERE attribution.message_id = ? "
+                    "AND message.session_id = ?",
+                    (request.origin_message_id, origin_session["id"]),
+                ).fetchone()
+            else:
+                focus = conn.execute(
+                    "SELECT state.current_epoch_id AS focus_epoch_id, "
+                    "epoch.master_session_id AS epoch_session_id "
+                    "FROM master_focus_state AS state "
+                    "LEFT JOIN master_focus_epochs AS epoch "
+                    "ON epoch.id = state.current_epoch_id "
+                    "WHERE state.master_session_id = ?",
+                    (origin_session["id"],),
+                ).fetchone()
+            if (
+                focus is None
+                or (
+                    focus["focus_epoch_id"] is not None
+                    and focus["epoch_session_id"] != origin_session["id"]
+                )
+            ):
+                raise TaskDelegationError(
+                    "origin_focus_unavailable",
+                    "Master Task origin has no durable Focus attribution",
+                    409,
+                )
+            origin_focus_epoch_id = focus["focus_epoch_id"]
+            origin_focus_captured = True
 
         recipe = None
         engine = "linear"
@@ -509,6 +549,8 @@ class TaskDelegationService:
             "area": area,
             "profile": profile,
             "origin_session": origin_session,
+            "origin_focus_epoch_id": origin_focus_epoch_id,
+            "origin_focus_captured": origin_focus_captured,
             "recipe": recipe,
             "engine": engine,
             "graph": graph,
@@ -678,14 +720,18 @@ class TaskDelegationService:
                         )
                         conn.execute(
                             "INSERT INTO task_delegations("
-                            "origin_session_id, origin_message_id, container_id, "
-                            "target_area_id, job_id, routing_mode, routing_reason, "
-                            "created_by, idempotency_key, idempotency_identity, "
-                            "request_fingerprint, start_requested"
-                            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "origin_session_id, origin_message_id, "
+                            "origin_focus_epoch_id, origin_focus_captured, "
+                            "container_id, target_area_id, job_id, routing_mode, "
+                            "routing_reason, created_by, idempotency_key, "
+                            "idempotency_identity, request_fingerprint, "
+                            "start_requested"
+                            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 request.origin_session_id,
                                 request.origin_message_id,
+                                item["origin_focus_epoch_id"],
+                                int(item["origin_focus_captured"]),
                                 item["container"]["id"],
                                 item["area"]["id"],
                                 job_id,

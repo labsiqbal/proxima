@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import artifact_registry
+from . import master_focus
 from .container_registry import ops_root
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
 from .prompt_collaborations import strip_runner_preamble
@@ -55,6 +56,9 @@ class RunOutputs:
             cur = db.execute(
                 "INSERT INTO messages(session_id, role, content, author, run_id, output_links) VALUES (?, 'assistant', ?, ?, ?, ?)",
                 (session_id, answer, author, run_id, json.dumps(output_links)),
+            )
+            master_focus.stamp_message_for_run(
+                db, message_id=int(cur.lastrowid), run_id=run_id
             )
             db.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
             add_event(run_id, session_id, project_id, "message.complete", {"message_id": cur.lastrowid, "text": answer, "output_links": output_links})

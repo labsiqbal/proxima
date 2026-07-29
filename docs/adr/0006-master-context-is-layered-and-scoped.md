@@ -58,8 +58,8 @@ alone never unlock egress.
   and legacy Ops roots that still overlap Code Areas.
 - Graph absence or staleness degrades context visibility without blocking Tasks
   or Live state.
-- Focus epochs and history projection (Slice 5) build on this layering but are
-  separate delivery groups.
+- Durable Focus epochs now build on this layering; history projection UI remains
+  a separate later delivery group.
 
 ## Related
 

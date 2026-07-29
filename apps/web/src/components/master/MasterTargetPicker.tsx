@@ -18,7 +18,9 @@ export function MasterFocusPicker() {
         disabled={fleet.loading}
         aria-label="Master Focus"
         onChange={event => {
-          actions.setFocus(event.target.value ? Number(event.target.value) : null)
+          void actions.setFocus(
+            event.target.value ? Number(event.target.value) : null,
+          ).catch(() => {})
         }}
       >
         <option value="">Fleet</option>
