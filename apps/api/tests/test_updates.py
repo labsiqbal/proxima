@@ -208,8 +208,6 @@ import pytest
 
 import proxima_api.updates as updates_mod
 from proxima_api.updates import (
-    NoUpdateAvailable,
-    UpdateInProgress,
     UpdateUnsupported,
 )
 
@@ -218,50 +216,26 @@ def seed_latest(m, version="0.9.0"):
     m._latest = {"version": version, "notes": "", "url": "", "published_at": None}
 
 
-class FakeProc:
-    pid = 4242
-
-
-def test_apply_spawns_detached_updater_and_writes_marker(tmp_path, monkeypatch):
+def test_apply_is_inert_and_never_spawns_legacy_live_checkout_updater(tmp_path):
     m = make_manager(tmp_path)
     m.current = "0.2.0"
     seed_latest(m, "0.9.0")
-    calls = {}
-
-    def fake_popen(argv, **kwargs):
-        calls["argv"] = argv
-        calls["kwargs"] = kwargs
-        return FakeProc()
-
-    monkeypatch.setattr(updates_mod.subprocess, "Popen", fake_popen)
-
-    result = m.apply()
-
-    assert result == {"started": True, "target": "0.9.0"}
-    assert calls["argv"][0] == "bash"
-    assert calls["argv"][1].endswith("scripts/proxima")
-    assert calls["argv"][2] == "update"
-    assert calls["kwargs"]["start_new_session"] is True
-    marker = json.loads(m.marker_path.read_text())
-    assert marker["state"] == "running"
-    assert marker["target"] == "0.9.0"
-    assert marker["pid"] == 4242
-    # pid 4242 is a fake and almost certainly dead in the test env, so status()
-    # may already self-heal running → failed; both prove the marker is consumed.
-    assert m.status()["state"] in ("running", "failed")
+    with pytest.raises(UpdateUnsupported):
+        m.apply()
+    assert not m.marker_path.exists()
 
 
 def test_apply_rejects_when_no_update_known(tmp_path):
     m = make_manager(tmp_path)
     m.current = "0.2.0"
-    with pytest.raises(NoUpdateAvailable):
+    with pytest.raises(UpdateUnsupported):
         m.apply()
     seed_latest(m, "0.2.0")  # same version is not an update
-    with pytest.raises(NoUpdateAvailable):
+    with pytest.raises(UpdateUnsupported):
         m.apply()
 
 
-def test_apply_rejects_while_running(tmp_path):
+def test_apply_rejects_while_legacy_marker_is_present(tmp_path):
     m = make_manager(tmp_path)
     m.current = "0.2.0"
     seed_latest(m)
@@ -269,15 +243,14 @@ def test_apply_rejects_while_running(tmp_path):
     m.marker_path.write_text(json.dumps({
         "state": "running", "target": "0.9.0", "started_at": "x", "pid": os.getpid(),
     }))
-    with pytest.raises(UpdateInProgress):
+    with pytest.raises(UpdateUnsupported):
         m.apply()
 
 
-def test_apply_rejects_on_windows(tmp_path, monkeypatch):
+def test_apply_rejects_on_windows(tmp_path):
     m = make_manager(tmp_path)
     m.current = "0.2.0"
     seed_latest(m)
-    monkeypatch.setattr(updates_mod.sys, "platform", "win32")
     with pytest.raises(UpdateUnsupported):
         m.apply()
 
@@ -369,7 +342,7 @@ def test_update_check_route_refreshes(tmp_path, monkeypatch):
     assert r.json()["latest"]["version"] == "99.0.0"
 
 
-def test_update_apply_route_guards(tmp_path, monkeypatch):
+def test_update_apply_route_guards(tmp_path):
     app = make_app(tmp_path)
     c = auth_client(app)
 
@@ -377,17 +350,15 @@ def test_update_apply_route_guards(tmp_path, monkeypatch):
     assert r.status_code == 400
 
     app.state.updates._latest = {"version": "99.0.0", "notes": "", "url": "", "published_at": None}
-    monkeypatch.setattr(updates_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
     r = c.post("/api/update/apply")
-    assert r.status_code == 200, r.text
-    assert r.json() == {"started": True, "target": "99.0.0"}
+    assert r.status_code == 400
 
     # marker now says running (pid 4242 is dead → may demote to failed; force running)
     app.state.updates.marker_path.write_text(json.dumps({
         "state": "running", "target": "99.0.0", "started_at": "x", "pid": os.getpid(),
     }))
     r = c.post("/api/update/apply")
-    assert r.status_code == 409
+    assert r.status_code == 400
 
 
 def test_update_routes_match_peer_admin_route_behavior(tmp_path, monkeypatch):

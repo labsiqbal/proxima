@@ -58,6 +58,7 @@ def test_public_config_defaults_shipped_features_on_and_master_off(tmp_path):
         "workflow_graph": True,
         "repo_worktrees": True,
         "master_orchestrator": False,
+        "safe_self_update": False,
     }
 
 
@@ -75,6 +76,7 @@ def test_public_config_reports_explicit_boot_opt_out(tmp_path):
         "workflow_graph": True,
         "repo_worktrees": False,
         "master_orchestrator": False,
+        "safe_self_update": False,
     }
 
 
@@ -136,6 +138,7 @@ def test_programmatic_zero_values_do_not_enable_features():
         "workflow_graph": False,
         "repo_worktrees": False,
         "master_orchestrator": False,
+        "safe_self_update": False,
     }
 
 

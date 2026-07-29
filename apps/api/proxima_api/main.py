@@ -29,13 +29,19 @@ from .preview_proxy import (
     valid_preview_token,
 )
 from .runners import augmented_path
-from .settings import DEFAULT_CONFIG, hermes_home_for, normalize_config
+from .settings import (
+    DEFAULT_CONFIG,
+    hermes_home_for,
+    normalize_config,
+    safe_update_config_from_env,
+)
 from .updates import (
     UPDATE_CHECK_INTERVAL_SECONDS,
     UPDATE_FIRST_CHECK_DELAY_SECONDS,
     UpdateManager,
     read_local_version,
 )
+from .safe_updates import SafeUpdateCoordinator
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -68,6 +74,7 @@ from .routes import (
     projects as routes_projects,
     reviews as routes_reviews,
     update as routes_update,
+    self_updates as routes_self_updates,
     wiki as routes_wiki,
     work as routes_work,
 )
@@ -213,7 +220,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 except Exception as _exc:
                     logging.getLogger("proxima.scheduler").exception("scheduler tick failed")
         scheduler_task = asyncio.create_task(_scheduler_loop())
-    app.state.updates.reconcile_marker()  # finalize a marker left by a self-update restart
+    # Reconcile markers left by the removed live-checkout updater.
+    app.state.updates.reconcile_marker()
     update_task: asyncio.Task | None = None
     if cfg.get("update_check", True):
         async def _update_check_loop() -> None:
@@ -286,6 +294,9 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         app.state.master_projection = None
         app.state.master_supervisor = None
     app.state.updates = UpdateManager(cfg)
+    # This is a projection client, deliberately constructed without a controller
+    # transport until root-owned updater enrollment supplies one.
+    app.state.safe_updates = SafeUpdateCoordinator(app.state.db)
 
     register_frontend(
         app,
@@ -392,6 +403,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     routes_wiki.register(app, _route_deps)
     routes_admin.register(app, _route_deps)
     routes_update.register(app, _route_deps)
+    routes_self_updates.register(app, _route_deps)
     routes_chat.register(app, _route_deps)
     routes_reviews.register(app, _route_deps)
     routes_auth.register(app, _route_deps)
@@ -551,6 +563,7 @@ def _config_from_env() -> dict[str, Any]:
         "feature_master_orchestrator": os.environ.get(
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "0"
         ).lower() in ("1", "true", "yes", "on"),
+        **safe_update_config_from_env(),
         # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
         "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
     }

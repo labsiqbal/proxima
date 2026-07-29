@@ -34,6 +34,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
+| [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification and extension contract for external updater service adapters | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
@@ -109,6 +110,7 @@ docs/
 ├── CAPABILITIES.md        ← feature map (source of truth for "what does X do")
 ├── workflow-graph.md      ← graph workflow feature and operator guide
 ├── adding-workflow-node-type.md ← graph extension playbook
+├── adding-safe-updater-adapter.md ← external updater adapter playbook
 ├── product/               ← vision + core flows
 ├── *.md (ops/dev/security)← installation, backup, developing, security…
 ├── plans/                 ← pending design (meeting-mode)

@@ -490,8 +490,7 @@ Container history folder explicitly changes durable Focus, while selecting the
 roving thread or an unavailable historical folder is read-only. The shell Container
 remains independent: `Focus Master here` is an explicit bridge, never an implicit
 shell-selection side effect. Pending Focus, explicit-target Focus effects, and Fleet
-mode remain visible in both shared home and popup state. Safe-self-update remains a
-later delivery group. See
+mode remain visible in both shared home and popup state. See
 [ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 The shared provider bootstraps Focus and its optimistic version from the Master
@@ -1415,26 +1414,35 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 21. Updates (version check + self-update)
+## 21. Updates (version check + inert safe-update foundation)
 
-**Why:** Every install should be one click away from the latest release without
-the owner babysitting `git pull`.
-**How:** `UpdateManager` polls GitHub Releases every 6h (silent failure — an
-offline host, private repo, or GitHub hiccup never surfaces to the user); the
-owner can also trigger a manual check from a **Check for updates** button in
-Settings → Updates. When a newer release exists, the sidebar shows an update
-pill that opens a release-notes modal (rendered markdown) with a one-click
-**Update now**, which requires a clean checkout and runs `scripts/proxima update`
-(`git pull --ff-only` + locked build/tests + restart + health check, tracked via an
-`update-status.json` marker file) behind a
-blocking overlay that polls `/api/health` until the new version answers, then
-reloads. A build failure happens before restart, while a failed post-restart health
-check is surfaced for manual log inspection (there is no automatic checkout/DB rollback).
-**Windows:** check/notify
-works the same; one-click apply is unsupported and returns a manual `git pull`
-command instead.
+**Why:** Owners should see release availability without letting the running
+application or candidate code promote itself.
+**How:** `UpdateManager` may check GitHub release metadata every 6h, but its old
+live-checkout apply route and `proxima update` are inert. The safe-update request
+and run-status projections are behind the server-enforced
+`feature_safe_self_update` flag, default off in both production entrypoints. A
+managed external updater, not candidate code or the app database, owns the
+append-only fsynced journal, native single-flight lock, immutable releases, release
+pointers, maintenance fence, backups, service configuration, and recovery verdict.
+Signed release manifests and unsigned local provenance produce an immutable
+verified-file-set result only after exact regular-file, tree, and canonical
+Python/web lockfile checks. Publication consumes that result rather than deriving
+new trust from mutable candidate bytes, copies through pinned directory descriptors
+into fresh controller-owned inodes, rechecks trusted staging, and then renames it
+atomically. Directory creation fsyncs every new directory and its parent; unsupported
+durability or pinned traversal fails closed. The app exposes only authenticated owner
+projections and a package-local read-only maintenance client. Fence status is
+nonsecret and controller-owned with read-only application access. Submission consults
+the external single-flight authority before reconciling SQLite projections. systemd,
+launchd, and unmanaged adapters fail closed until the
+[adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
+and rollback fault testing pass. The authority decision is recorded in
+[ADR-0008](adr/0008-external-safe-update-authority.md).
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
-`POST /api/update/apply`.
+`POST /api/update/apply` (inert),
+`GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,
+`GET /api/self-updates/{id}`, `POST /api/self-updates/{id}/recovery-status`.
 
 ---
 

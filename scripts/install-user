@@ -131,8 +131,8 @@ else
   loginctl enable-linger "$USER" >/dev/null 2>&1 || echo "   (note: enable-linger skipped — service runs while you're logged in)"
 fi
 
-# Put the `proxima` command on PATH so `proxima update` / `proxima restart`
-# work from anywhere (not just ./scripts/proxima inside the checkout).
+# Put the `proxima` command on PATH for service management. The update command
+# remains a fail-closed status stub until external updater enrollment ships.
 echo "==> Linking 'proxima' command into ~/.local/bin"
 run mkdir -p "$HOME/.local/bin"
 run ln -sf "$ROOT/scripts/proxima" "$HOME/.local/bin/proxima"
@@ -160,7 +160,7 @@ cat <<EOF
 ✅ Proxima is installed and running as a service.
 
    Open:        http://127.0.0.1:$PORT      (first launch asks you to create the admin account)
-   Update:      proxima update      (git pull + rebuild + restart)
+   Update:      unavailable         (safe updater activation is disabled)
    Restart:     proxima restart
    Status:      proxima status
    Logs:        proxima logs

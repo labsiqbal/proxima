@@ -488,8 +488,7 @@ excludes those subject messages. Message Focus, subject, target, and Area ids su
 Container deletion, and the unavailable historical folder remains selectable.
 History folder changes for available Containers deliberately request durable Focus,
 while unavailable folders are read-only and shell Container selection is independent
-unless the owner explicitly chooses `Focus Master here`. Safe-self-update remains a
-later group.
+unless the owner explicitly chooses `Focus Master here`.
 See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow
@@ -1090,7 +1089,7 @@ Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
 
-### 9. Update check & self-update
+### 9. Update check and inert safe-update foundation
 
 ```text
 VERSION (repo root) → read_local_version() → FastAPI app.version → GET /api/health
@@ -1098,14 +1097,16 @@ VERSION (repo root) → read_local_version() → FastAPI app.version → GET /ap
 UpdateManager: every 6h → GET api.github.com/repos/<repo>/releases/latest
                            (never raises — offline/404/hiccup → last_error)
                                     │
-   GET /api/update/status · POST /api/update/check · POST /api/update/apply
-                                    │
-        apply() → detached `scripts/proxima update` (git pull --ff-only,
-        rebuild, restart only after a clean build) → update-status.json
-        marker in the data dir, reconciled again on the next startup
-                                    │
-Sidebar pill → release-notes modal → Update now → blocking overlay polls
-GET /api/health every 2s until version == target → reload
+   GET /api/update/status · POST /api/update/check (metadata only)
+
+App integration
+  ├─ GET /api/maintenance → authenticated read-only external-fence projection
+  └─ feature_safe_self_update (default off) → authenticated request/run projection
+                                                  │
+       external root-owned controller → native lock + fsynced hash-chained journal
+                                                  │
+       exact manifest/provenance tree → immutable releases / external fence / adapter
+                            (legacy HTTP and CLI apply paths remain inert)
 ```
 
 `UpdateManager` (`updates.py`) is the one thing that phones home: an
@@ -1113,13 +1114,39 @@ unauthenticated GitHub Releases GET on a 6-hour timer (first check 60s after
 boot), holding only in-memory state (current version, latest release,
 `checked_at`, `last_error`) — `PROXIMA_UPDATE_CHECK=0` disables just that
 loop (the manual check route still works) and `PROXIMA_UPDATE_REPO` defaults to
-`labsiqbal/proxima`; forks can point it at their own repo. `apply()` is Windows-gated (`UpdateUnsupported`
-→ manual command) and otherwise `Popen`s the updater detached
-(`start_new_session=True`) so its own `systemctl`/`launchd` restart can safely
-kill the parent once the new code is on disk; the `update-status.json` marker
-self-heals (updater pid gone → `failed`, current version reaches target →
-`done`) and is reconciled again at every startup in case a restart interrupted
-it mid-flight.
+`labsiqbal/proxima`; forks can point it at their own repo. `apply()` now always
+fails closed. Group 14 adds the feature-gated `/api/self-updates/*` request and
+run-status projection plus the always-available authenticated, read-only
+`/api/maintenance` fence projection. `self_update_runs` is an owner-visible mirror,
+never the source of promotion truth. Both production entrypoints read
+`PROXIMA_FEATURE_SAFE_SELF_UPDATE` and the optional absolute
+`PROXIMA_SAFE_UPDATE_FENCE_PATH`; the flag defaults off and a configured fence is
+read-only application status.
+
+The external updater owns exact regular-file manifest verification, canonical
+Python/web lockfile digests, local provenance revalidation, native POSIX/Windows
+single-flight locking, platform-selected directory durability, the journal, and the
+recovery decision. Signed or local verification returns an immutable verified file
+set bound to the candidate commit and, for signed releases, the release identifier.
+Release publication accepts only that result, traverses candidates from pinned
+directory descriptors, copies content into fresh controller-owned staging inodes,
+revalidates that tree, freezes it, and atomically renames it inside the trusted
+releases directory. Source ownership, ancestor substitutions, and hardlinks cannot
+carry into the published release. Every created trusted directory and its parent are
+durably flushed.
+
+The authenticated request projection asks the external authority first. A newly
+accepted external run supersedes stale local requested/in-progress rows; a local row
+never vetoes submission. The API package reads the nonsecret root-owned fence without
+importing repository-only controller code. Its dedicated parent and file are
+searchable/readable but not writable by the application identity. A nonterminal
+journal continues to own single-flight after the kernel lock is released. Missing,
+truncated, unterminated, unreadable, or hostile-path journals produce
+`do_not_start_any_release`, including through the machine-readable recovery CLI.
+systemd, launchd, and unmanaged adapters remain unmanaged until the qualification
+matrix in
+[`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
+[ADR-0008](../adr/0008-external-safe-update-authority.md).
 
 ## Runner abstraction
 

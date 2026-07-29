@@ -10,11 +10,12 @@ Proxima is under **active development**. Expect bugs, incomplete polish, and
 occasional broken UI after updates. That is normal for this stage - report issues
 rather than treating the product as finished SaaS polish.
 
-Updates refresh **application code** only. Sessions, chat history, projects, and
-other owner data live in the **data directory** (SQLite and workspace files), not
-in the git checkout. A normal `proxima update` / one-click update does **not** wipe
-chat or history. Details: [Updating](#updating) (code vs data, when history can
-look "gone", recovery).
+Sessions, chat history, projects, and other owner data live in the **data
+directory** (SQLite and workspace files), not in the git checkout. The current
+safe-update activation paths change neither code nor live data: both HTTP apply
+and `proxima update` refuse activation. Normal startup still applies migration 43,
+which adds the app-owned `self_update_runs` projection table. Details:
+[Updating](#updating).
 
 ## Requirements
 
@@ -151,6 +152,8 @@ PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0
+PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
+PROXIMA_SAFE_UPDATE_FENCE_PATH=
 PROXIMA_MASTER_MAX_PARALLEL=3
 PROXIMA_GRAPH_SEMANTIC_EGRESS=0
 PROXIMA_RUNNER_ENV_ALLOWLIST=
@@ -176,6 +179,9 @@ Notes:
 - Master persistence migration always runs. The Master runtime and UI default to
   off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until integrated acceptance
   enables them for production.
+- Safe self-update defaults off. Only a future administrator enrollment may set
+  `PROXIMA_FEATURE_SAFE_SELF_UPDATE=1` and an absolute, root-owned
+  `PROXIMA_SAFE_UPDATE_FENCE_PATH`; the application only reads that fence.
 - Graphify structural extraction for Code and allowlisted Ops Knowledge is local.
   Keep `PROXIMA_GRAPH_SEMANTIC_EGRESS=0`. Setting the reserved opt-in to `1` is
   visible in graph policy, state, and logs, but Knowledge rebuilds fail closed
@@ -212,37 +218,41 @@ immediately; hard-refresh or use an incognito window if a service worker is stal
 
 ## Updating
 
-Proxima checks GitHub Releases for a newer version every 6 hours (and on
-Settings → "Check for updates"). When one exists, the sidebar shows an update
-pill; it opens the release notes with a one-click **Update now** button
-(Linux/macOS). The update runs `git pull --ff-only`, rebuilds, restarts the
-service, and the UI reloads on the new version. Build failures happen before restart;
-a failed post-restart health check is reported for manual inspection because automatic
-checkout/DB rollback is intentionally not attempted. The log lives at
-`$DATA_DIR/update.log` (default `~/.local/share/proxima/update.log`).
-
-CLI equivalent (also the Windows path):
+Proxima can check for newer GitHub release metadata, but it does not apply an
+update from the running checkout. The former in-app pull/build/restart path and
+the legacy CLI path are both inert:
 
 ```bash
 proxima update
+# exits nonzero without changing the checkout, data, database, or service
 ```
+
+Safe self-update is unavailable until a root-admin enrolls a managed external
+updater, trust root, launcher, qualified service-manager adapter, candidate
+sandbox, and probe bundle. `PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and
+must remain off until candidate and fault/rollback gates are accepted. Foreground,
+ordinary user-service, Windows, and unqualified macOS installs fail closed. Local
+self-edit commits carry reverified provenance, not a release signature.
+
+Future enrollment must place the nonsecret maintenance fence in a dedicated
+controller-owned status directory whose ancestors are searchable by the application
+identity. The directory and fence are application-readable but not
+application-writable. Trusted release, journal, and fence directory creation is
+durably flushed at every new parent entry; a platform without qualified pinned
+candidate-tree traversal remains unenrolled.
 
 ### Code checkout vs data directory
 
-One-click update and `proxima update` only update the **code checkout**. They do
-not delete or replace the data directory.
+The inert activation path keeps the two locations separate:
 
-| Location | Contents | Touched by update? |
+| Location | Contents | Safe-update foundation effect |
 | --- | --- | --- |
-| **Git checkout** (install source) | App code | **Yes** - `git pull --ff-only` + rebuild |
-| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | **No** - update must not delete this |
+| **Git checkout** (install source) | App code | No activation write |
+| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Migration 43 adds the app-owned projection table; no application-data migration, swap, or activation |
 
 Chat history lives in **SQLite under the data dir** (`PROXIMA_DB_PATH`, default
-`$DATA_DIR/proxima.db`), not in the git tree. A correct update leaves it in place.
-
-If the checkout has **local changes**, update **refuses** and prints `git status`.
-That is not data loss: the old version keeps running until the working tree is clean
-(or you update by another deliberate path).
+`$DATA_DIR/proxima.db`), not in the git tree. Any future qualified updater must
+preserve that boundary and use updater-owned backups and recovery evidence.
 
 ### When history can look "gone"
 
@@ -274,11 +284,11 @@ PROXIMA_UPDATE_CHECK=0
 PROXIMA_UPDATE_REPO=your-account/your-fork
 ```
 
-The one-click updater requires the Proxima process to own a writable checkout and
-build artifacts and to be allowed to restart its service. The recommended
-root-owned system-wide deployment deliberately does not grant those permissions:
-it disables the periodic check and is updated by an administrator. User installs
-retain the self-update path.
+The external updater owns its lock, fsynced journal, release pointers, maintenance
+fence, backup location, and service configuration outside the candidate release.
+The application exposes only authenticated, typed request/status projections; it
+cannot promote code or modify those trusted files. Adapter qualification is defined
+in [Adding a Safe-Updater Service Adapter](adding-safe-updater-adapter.md).
 
 ## Development
 

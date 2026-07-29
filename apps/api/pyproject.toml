@@ -27,7 +27,7 @@ select = ["F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "../.."]
 filterwarnings = [
   "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
