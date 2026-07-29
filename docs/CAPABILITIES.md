@@ -1417,7 +1417,7 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
-## 21. Updates (version check + candidate-only safe-update gate)
+## 21. Updates (version check + disabled safe-update fixtures)
 
 **Why:** Owners should see release availability without letting the running
 application or candidate code promote itself.
@@ -1444,6 +1444,10 @@ SQLite projections. systemd, launchd, and unmanaged adapters fail closed until t
 and rollback fault testing pass. The authority decision is recorded in
 [ADR-0008](adr/0008-external-safe-update-authority.md).
 
+The update modal treats external recovery evidence as authoritative: timeout and
+failure states do not claim that either release is healthy, and manual promotion
+remains unavailable.
+
 Group 15 adds a pre-switch gate only. Controller-owned code copies verified source
 and the offline cache into disposable candidate storage, then runs every fixed
 build, test, type, documentation, migration, server, and browser command inside a
@@ -1461,7 +1465,21 @@ identity, version, authenticated maintenance, SSE, served-static-asset, complete
 asset-manifest, and headless-browser scenario results. Evidence includes fixed
 build logs, migration proof, fixture metadata, assets, and probe results; its files
 and directories are frozen, and recovery rehashes the journal-pinned bundle before
-reporting a run safe. Group 16 adds a disabled, disposable-fixture transaction harness that records fence, drain, stopped-service, WAL checkpoint, final backup, staged-image, sidecar, pointer, read-only soak, writable-proof, and last-good boundaries. It accepts only the in-memory disposable service adapter, an explicitly initialized temporary fixture root, canonical `status/fence.json`, and disjoint role-confined live and staged database paths. The controller lock covers promotion and recovery; faults before an acknowledged last-good append restore the sealed database and both prior pointers, while unacknowledged journal tails latch fail closed and post-commit faults resume the candidate or latch the breaker. A persisted rollback-required verdict precedes every physical restoration and remains authoritative over a valid-looking journal tail until rollback finishes. Recovery also rejects a safe candidate discard when owner-bound pending or active fence state exists without a `write_fenced` journal acknowledgement. Controller activation alone provisions the ingress lock, publishes a durable owner-bound pending marker, and takes its exclusive side; a later run cannot clear an interrupted activation, and the application opens the lock read-only. Startup initialization, HTTP, active agent and deterministic script runs, project-app and preview proxies, terminal WebSocket sessions, and SQLite write ingress hold shared leases until admitted side effects finish. Runner, script, project-app, and terminal processes use PID namespaces under the configured boundary. Cached runners retain lifetime admission between turns, and pending activation stops and positively verifies them before those leases release. Script leases release only after namespace exit, so detached descendants cannot outlive the drain. New ingress fails closed while the controller drains existing leases, and admitted database work can finish before the lease is released. Connections configured for dynamic fencing disable statement caching, while ordinary connections retain it and skip fence checks for read-only opcodes. Fenced reads avoid profile and relay mutations, PATH shim creation, provider readiness probes, and legacy process reaping; normal first-use wiki reads still seed `index.md` under a lease, and authenticated read-only session resume remains available. It is exercised by real WAL/SHM quarantine, rollback, lock-contention, hostile-path, breaker-write, statement-cache, ingress-drain, terminal-transition, process-lifetime, and interruption-boundary fixtures only; it cannot enroll an updater, control a real service, switch a live release, replace live data, or remove a production fence. Activation remains unavailable.
+reporting a run safe.
+
+Group 16 adds a disabled disposable-fixture A/B transaction harness. It accepts
+only the in-memory disposable service adapter, an explicitly initialized temporary
+fixture root, canonical `status/fence.json`, and disjoint role-confined live and
+staged database paths. The harness exercises fencing and ingress drain, service
+stop and restart, WAL/SHM handling, sealed database images, both-pointer rollback,
+read-only and writable probes, process-lifetime containment, and interruption
+recovery. The detailed sequence is owned by the [architecture
+flow](reference/architecture.md#9-update-check-and-candidate-gate-plus-disabled-switch-fixture);
+the rollback, breaker, and maintenance invariants are owned by the [safe-update
+security boundary](security-boundaries.md#safe-update-boundary). The harness cannot
+enroll an updater, control a real service, switch a live release, replace live data,
+or remove a production fence. Activation remains unavailable.
+
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply` (inert),
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,

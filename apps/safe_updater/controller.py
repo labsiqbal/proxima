@@ -239,8 +239,8 @@ class SafeUpdateController:
         """Run only the pre-switch candidate gate for an accepted journal.
 
         This deliberately has no access to active pointers, fences, backups or a
-        service adapter.  Later groups own every transition after
-        ``candidate_staged``.
+        service adapter. Production transitions remain separate; Group 16 only
+        exercises disposable fixture state after ``candidate_staged``.
         """
         if not RUN_ID.fullmatch(run_id):
             raise ValueError("invalid journal run id")

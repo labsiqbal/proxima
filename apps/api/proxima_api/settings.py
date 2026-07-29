@@ -60,8 +60,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Durable Master data is migrated unconditionally. Runtime behavior stays
     # off until the integrated Master slices pass their acceptance gate.
     "feature_master_orchestrator": False,
-    # Group 14 creates only the external updater contracts. Promotion stays
-    # disabled until installer qualification plus groups 15-16 fault evidence.
+    # Group 14 creates only the external updater contracts. Group 15/16 evidence
+    # is disposable and cannot replace installer and service-manager qualification.
     "feature_safe_self_update": False,
     # Read-only app projection of a root-owned fence. The app never creates or
     # removes it; an absent path means no maintenance fence is active.

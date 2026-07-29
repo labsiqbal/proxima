@@ -230,31 +230,29 @@ proxima update
 Safe self-update is unavailable until a root-admin enrolls a managed external
 updater, trust root, launcher, qualified service-manager adapter, candidate
 sandbox, and probe bundle. `PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and
-must remain off until later switch, fault, and rollback gates are accepted.
+must remain off until target-platform service-manager, switch, fault, and rollback
+evidence is accepted for production enrollment.
 Foreground, ordinary user-service, Windows, and unqualified macOS installs fail
 closed. Local self-edit commits carry reverified provenance, not a release
 signature.
 
-The shipped candidate gate and its disabled Group 16 switch model are controller-only and not installer features.
-It runs the fixed offline build and clone-only migration inside a mandatory
-Bubblewrap boundary, publishes and freezes only the verified post-build tree, and
-creates a fresh-schema fixture containing synthetic rows and separate workspace and
-runner-home paths. A separately installed, digest-pinned probe bundle must pass its
-API, version, authenticated maintenance, SSE, served-asset, asset-manifest, and
-headless-browser checks. Frozen evidence is revalidated during recovery. The Group
-16 model can run only with an in-memory disposable test-service adapter, an
-explicitly initialized empty fixture root beneath the system temporary directory,
-and disjoint role-confined fixture paths. It serializes promotion and owner-bound
-recovery snapshots under the native lock. It exercises leased HTTP, project-app
-and preview proxy, terminal WebSocket, cached-runner lifetime admission with
-verified shutdown, deterministic-script PID containment, and dynamically uncached
-SQLite write fencing, durable pending state, bounded ingress drain, no-write
-maintenance readiness, WAL checkpointing, single-file images, sidecar quarantine,
-both-pointer rollback, read-only soak, writable proof, acknowledged post-commit
-resume, and authoritative fail-closed breaker recovery without touching an
-installed service or live runtime. Neither path can switch a release, start an
-enrolled service, touch the live database, or remove a production fence. Do not
-set candidate-only environment variables manually.
+The shipped candidate gate and its disabled Group 16 switch model are
+controller-only and not installer features.
+The candidate gate runs the fixed offline build and clone-only migration inside a
+mandatory Bubblewrap boundary, publishes and freezes only the verified post-build
+tree, and creates a fresh-schema fixture containing synthetic rows and separate
+workspace and runner-home paths. A separately installed, digest-pinned probe bundle
+must pass its API, version, authenticated maintenance, SSE, served-asset,
+asset-manifest, and headless-browser checks. Frozen evidence is revalidated during
+recovery. The Group 16 model can run only with an in-memory disposable test-service
+adapter, an explicitly initialized empty fixture root beneath the system temporary
+directory, and disjoint role-confined fixture paths. It exercises the transaction
+and maintenance boundaries described in the [architecture
+flow](reference/architecture.md#9-update-check-and-candidate-gate-plus-disabled-switch-fixture)
+and [security boundary](security-boundaries.md#safe-update-boundary) without
+touching an installed service or live runtime. Neither path can switch a release,
+start an enrolled service, touch the live database, or remove a production fence.
+Do not set candidate-only environment variables manually.
 
 Future enrollment must place the nonsecret maintenance fence in a dedicated
 controller-owned status directory whose ancestors are searchable by the application

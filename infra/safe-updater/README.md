@@ -17,9 +17,10 @@ capability sets, and no privilege escalation before any adapter can report manag
 `install-safe-updater` remains intentionally fail-closed. The repository includes
 controller-only candidate qualification with mandatory Bubblewrap isolation,
 clone-only migration, immutable release and evidence trees, and hash-pinned trusted
-probes, but the installer does not enroll it. Service-manager enrollment and the
-later switch, fault, and rollback gates remain outstanding; no updater unit may be
-enabled.
+probes, plus a disabled disposable A/B transaction fixture, but the installer does
+not enroll either path. Production service-manager enrollment and target-platform
+switch, fault, and rollback qualification remain outstanding; no updater unit may
+be enabled.
 
 Read-only recovery status is available as stable JSON:
 

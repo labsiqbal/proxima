@@ -93,7 +93,9 @@ Negative:
 - Installation requires an administrator-managed trust root and identity split.
 - A nonterminal or unreadable journal blocks later submissions until trusted
   recovery resolves it.
-- Full update activation requires later fault, rollback, sandbox, and soak evidence.
+- Full update activation requires target-platform adapter qualification plus
+  production fault, rollback, sandbox, and soak evidence. Disposable fixture
+  evidence does not enroll a service.
 - Local provenance records identity metadata but are not release signatures.
 
 ## Related

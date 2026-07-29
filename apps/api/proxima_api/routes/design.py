@@ -19,7 +19,6 @@ from .. import brand_extract
 from .. import design_scenes
 from .. import features
 from .. import fsapi
-from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
 from .. import moodboard
