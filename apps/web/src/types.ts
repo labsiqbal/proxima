@@ -103,6 +103,8 @@ export type Runner = {
 	hasAdapter: boolean;
 	detectionOnly: boolean;
 	runnable: boolean;
+	/** Server-declared static prerequisite for the Master chat-only contract. */
+	masterChatOnly?: boolean;
 	notes?: string;
 };
 export type AppFeatures = {

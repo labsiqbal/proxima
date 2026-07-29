@@ -271,7 +271,9 @@ built-in orchestrator without manually composing every worker task.
 > unconditional and safe with the flag in either state, while feature-off
 > startup and unrelated routes do not provision a Master runner home. Codex
 > app-server 0.145.0 or newer is the one supported production Master adapter.
-> Every other adapter still fails closed before a turn starts.
+> Every other adapter still fails closed before a turn starts. Runner discovery
+> marks the chat-only declaration, and the Master selector only offers declared
+> adapters; a legacy backing runner remains a disabled explanatory state.
 
 **Master identity and desk:** when the feature is enabled, the authenticated Master
 entry point creates or reuses exactly one hidden

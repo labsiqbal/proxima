@@ -42,6 +42,12 @@ empty selected capability roots, and dynamic tools. Installed older or
 unparseable versions fail before a turn starts. `feature_master_orchestrator`
 remains off by default.
 
+Runner discovery publishes the adapter's static `masterChatOnly` declaration.
+The Master backing-runner selector renders only declared chat-only adapters; a
+legacy or unavailable current selection is shown as disabled explanatory state,
+never as a new choice. The server still repeats the installed-version conformance
+check before saving a selection or queueing a turn.
+
 The Codex adapter starts app-server with strict configuration that disables shell,
 browser, web search, apps, plugins, hooks, goals, image generation, subagents,
 skills, MCP orchestration, permission requests, and inherited project

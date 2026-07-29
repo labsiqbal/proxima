@@ -36,6 +36,7 @@ OUT_DIR = REPO / "docs" / "reference"
 STAMP = "> **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.\n"
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+_GENERATED_FOOTER = re.compile(r"\n---\n_Generated [^\n]+\._\n?$")
 
 
 # --------------------------------------------------------------------------- API
@@ -196,24 +197,43 @@ def _render_db(conn: sqlite3.Connection) -> str:
     return "\n".join(o) + "\n"
 
 
+def _write_generated(path: Path, body: str, timestamp: str) -> bool:
+    """Write generated content only when its semantic body changed.
+
+    The footer records when a changed document was generated, but must not make
+    the required drift check dirty an otherwise unchanged checkout on every run.
+    """
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if _GENERATED_FOOTER.search(existing) and _GENERATED_FOOTER.sub("", existing) == body:
+        return False
+    path.write_text(f"{body}\n---\n_Generated {timestamp}._\n", encoding="utf-8")
+    return True
+
+
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     endpoints = _collect_endpoints()
-    api_md = _render_api(endpoints) + f"\n---\n_Generated {ts}._\n"
-    (OUT_DIR / "api.md").write_text(api_md)
+    api_md = _render_api(endpoints)
+    api_changed = _write_generated(OUT_DIR / "api.md", api_md, ts)
     total = sum(len(v) for v in endpoints.values())
-    print(f"wrote docs/reference/api.md  ({total} endpoints, {len(endpoints)} modules)")
+    print(
+        f"{'wrote' if api_changed else 'unchanged'} docs/reference/api.md  "
+        f"({total} endpoints, {len(endpoints)} modules)"
+    )
 
     conn = _build_temp_db()
     try:
-        db_md = _render_db(conn) + f"\n---\n_Generated {ts}._\n"
+        db_md = _render_db(conn)
     finally:
         conn.close()
-    (OUT_DIR / "database.md").write_text(db_md)
+    db_changed = _write_generated(OUT_DIR / "database.md", db_md, ts)
     ntables = db_md.count("\n### ")
-    print(f"wrote docs/reference/database.md  ({ntables} tables)")
+    print(
+        f"{'wrote' if db_changed else 'unchanged'} docs/reference/database.md  "
+        f"({ntables} tables)"
+    )
     return 0
 
 

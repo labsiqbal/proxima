@@ -207,6 +207,10 @@ def detect_runners(
                     "hasAdapter": runner.has_adapter,
                     "detectionOnly": runner.detection_only,
                     "runnable": runner.has_adapter,
+                    "masterChatOnly": bool(
+                        RUNNER_SPECS.get(runner.id)
+                        and RUNNER_SPECS[runner.id].master_chat_only
+                    ),
                     "notes": runner.notes,
                 }
             )
@@ -232,6 +236,10 @@ def detect_runners(
                 "hasAdapter": runner.has_adapter,
                 "detectionOnly": runner.detection_only,
                 "runnable": installed and runner.has_adapter,
+                "masterChatOnly": bool(
+                    RUNNER_SPECS.get(runner.id)
+                    and RUNNER_SPECS[runner.id].master_chat_only
+                ),
                 "notes": runner.notes,
             }
         )

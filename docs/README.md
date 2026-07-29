@@ -32,6 +32,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [task-delegation.md](task-delegation.md) | Durable scoped Task creation, replay, dependencies, recovery, and caller extension contract | by hand |
 | [master-supervision.md](master-supervision.md) | Master queue-start authority, durable Task/Satpam chat projection, and session event contract | by hand |
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
+| [master-integrated-acceptance.md](master-integrated-acceptance.md) | Final Master-orchestrator requirement matrix and disposable-fixture acceptance evidence | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification and extension contract for external updater service adapters | by hand |

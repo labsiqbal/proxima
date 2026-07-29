@@ -103,7 +103,7 @@ const state = {
   actions,
 }
 
-const runners = [{ id: 'codex', displayName: 'Codex', installed: true, runnable: true }]
+const runners = [{ id: 'codex', displayName: 'Codex', installed: true, runnable: true, masterChatOnly: true }]
 
 describe('resolveMasterProjectSlug', () => {
   it('uses shell Container only for attachments, then an active Task Container', () => {
@@ -134,6 +134,29 @@ describe('MasterScreen', () => {
     expect(screen.getByText('Failed Task')).toBeInTheDocument()
     expect(screen.getByLabelText('Task status summary')).toHaveTextContent('Queued')
     expect(screen.getByLabelText('Master work panel')).toBeInTheDocument()
+  })
+
+  it('offers only chat-only-conforming runners for Master', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: { ...state.desk, backing_runner: 'claude-code' },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={[
+          { id: 'claude-code', displayName: 'Claude Code', installed: true, runnable: true, masterChatOnly: false },
+          ...runners,
+          { id: 'grok', displayName: 'Grok', installed: true, runnable: true, masterChatOnly: false },
+        ] as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('option', { name: 'Claude Code (not qualified for Master)' }))
+      .toBeDisabled()
+    expect(screen.getByRole('option', { name: 'Codex' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Grok' })).not.toBeInTheDocument()
   })
 
   it('does not mount a hidden home composer on another shell surface', () => {

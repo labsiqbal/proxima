@@ -15,6 +15,7 @@ export function MasterFocusPicker() {
         <span>Focus</span>
         <select
           className="ui-select"
+          name="master-focus"
           value={focus.containerId ?? ''}
           disabled={fleet.loading}
           aria-label="Master Focus"
@@ -85,6 +86,7 @@ export function MasterHistoryPicker() {
       <span>History</span>
       <select
         className="ui-select"
+        name="master-history"
         aria-label="Master history folder"
         value={value}
         disabled={fleet.loading}
@@ -156,6 +158,7 @@ export function MasterTargetPicker() {
         <span>Target</span>
         <select
           className="ui-select"
+          name="master-message-target"
           value={target.containerId ?? ''}
           disabled={fleet.loading}
           aria-label="Master message target"
@@ -180,6 +183,7 @@ export function MasterTargetPicker() {
             <span className="sr-only">Target Area override</span>
             <select
               className="ui-select"
+              name="master-target-area"
               value={target.areaId ?? ''}
               aria-label="Target Area override"
               disabled={!areas}

@@ -192,9 +192,11 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
 
     assert result["codex"]["installed"] is True
     assert result["codex"]["runnable"] is True
+    assert result["codex"]["masterChatOnly"] is True
 
     assert result["grok"]["installed"] is True
     assert result["grok"]["runnable"] is True
+    assert result["grok"]["masterChatOnly"] is False
     assert result["grok"]["path"] == str(bin_dir / "grok")
 
     assert result["claude-code"]["installed"] is False
