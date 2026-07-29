@@ -16,10 +16,13 @@ import shutil
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from .process_containment import pid_namespace_argv
+from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
+
+if TYPE_CHECKING:
+    from .maintenance_status import IngressLease, MaintenanceBoundary
 
 logger = logging.getLogger("proxima.acp")
 
@@ -477,20 +480,20 @@ class AcpProcess:
             self._reader.cancel()
         if self._stderr_reader:
             self._stderr_reader.cancel()
-        if self.proc and self.proc.returncode is None:
-            self.proc.terminate()
-            try:
-                await asyncio.wait_for(self.proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                logger.warning("acp: process did not terminate, killing pid=%s", getattr(self.proc, "pid", None))
-                self.proc.kill()
-                with suppress(Exception):
-                    await asyncio.wait_for(self.proc.wait(), timeout=5)
+        failure: BaseException | None = None
+        try:
+            await terminate_and_verify(self.proc, label="ACP runner")
+        except BaseException as exc:
+            failure = exc
         for task in (self._reader, self._stderr_reader):
             if task:
                 with suppress(asyncio.CancelledError):
                     await task
-        self._started = False
+        self._started = bool(
+            self.proc is not None and self.proc.returncode is None
+        )
+        if failure is not None:
+            raise failure
 
 
 def _process_class(spec):
@@ -511,10 +514,51 @@ class AcpManager:
     working directory — so each project needs its own process rooted there.
     """
 
-    def __init__(self, *, contained: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        contained: bool = False,
+        maintenance: MaintenanceBoundary | None = None,
+    ) -> None:
         self.contained = contained
+        self.maintenance = maintenance
         self._procs: dict[tuple[str, str, str, bool], Any] = {}
+        self._effect_leases: dict[
+            tuple[str, str, str, bool],
+            IngressLease,
+        ] = {}
         self._lock = asyncio.Lock()
+
+    def _finish_effect_lease(
+        self,
+        lease: IngressLease | None,
+        *,
+        verified: bool,
+    ) -> None:
+        if lease is None:
+            return
+        if verified:
+            lease.release()
+            return
+        lease.suspend_admission()
+        if self.maintenance is not None:
+            self.maintenance.retain(lease)
+
+    async def _stop_detached(
+        self,
+        proc: Any,
+        lease: IngressLease | None,
+    ) -> None:
+        try:
+            await proc.stop()
+        except BaseException:
+            self._finish_effect_lease(lease, verified=False)
+            raise
+        process = getattr(proc, "proc", None)
+        if process is not None and process.returncode is None:
+            self._finish_effect_lease(lease, verified=False)
+            raise RuntimeError("runner process exit was not verified")
+        self._finish_effect_lease(lease, verified=True)
 
     async def get(
         self,
@@ -527,14 +571,19 @@ class AcpManager:
         key = (spec.id, home, cwd, master_chat_only)
         async with self._lock:
             proc = self._procs.get(key)
-            if proc and proc._started:
-                # Recycle if MCP/skill config changed since this process started,
-                # so newly added tools load on the next run (no manual restart).
-                if proc.config_sig == config_sig(home):
+            if proc is not None:
+                if (
+                    proc._started
+                    and proc.config_sig == config_sig(home)
+                ):
                     return proc
-                logger.info("acp: tool config changed, recycling process for %s", home)
-                await proc.stop()
+                logger.info(
+                    "acp: recycling unavailable or stale process for %s",
+                    home,
+                )
                 self._procs.pop(key, None)
+                lease = self._effect_leases.pop(key, None)
+                await self._stop_detached(proc, lease)
             process_class = _process_class(spec)
             if getattr(spec, "protocol", "acp") == "codex-app-server":
                 proc = process_class(
@@ -555,8 +604,26 @@ class AcpManager:
                     cwd,
                     contained=self.contained,
                 )
-            await proc.start()
+            lease = (
+                self.maintenance.background_lease()
+                if self.maintenance is not None
+                else None
+            )
+            try:
+                await proc.start()
+            except BaseException:
+                process = getattr(proc, "proc", None)
+                self._finish_effect_lease(
+                    lease,
+                    verified=(
+                        process is None
+                        or process.returncode is not None
+                    ),
+                )
+                raise
             self._procs[key] = proc
+            if lease is not None:
+                self._effect_leases[key] = lease
             return proc
 
     def resolve_permission(self, request_id: str, option_id: str) -> bool:
@@ -586,16 +653,24 @@ class AcpManager:
         key = (spec.id, home, cwd, master_chat_only)
         async with self._lock:
             proc = self._procs.pop(key, None)
+            lease = self._effect_leases.pop(key, None)
         if proc:
             logger.info("acp: recycling process for %s (cwd=%s)", home, cwd)
-            await proc.stop()
+            await self._stop_detached(proc, lease)
 
     async def shutdown(self) -> None:
         async with self._lock:
-            processes = list(self._procs.values())
+            processes = [
+                (proc, self._effect_leases.get(key))
+                for key, proc in self._procs.items()
+            ]
             self._procs.clear()
+            self._effect_leases.clear()
         results = await asyncio.gather(
-            *(proc.stop() for proc in processes),
+            *(
+                self._stop_detached(proc, lease)
+                for proc, lease in processes
+            ),
             return_exceptions=True,
         )
         failures = [

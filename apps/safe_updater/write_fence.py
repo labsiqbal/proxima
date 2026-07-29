@@ -6,6 +6,7 @@ import os
 import tempfile
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -30,6 +31,13 @@ class IngressActivationPending(IngressActivationError):
 class IngressDrainTimeout(IngressActivationError, TimeoutError):
     def __init__(self, message: str, *, pending_owned: bool = True) -> None:
         super().__init__(message, pending_owned=pending_owned)
+
+
+@dataclass(frozen=True)
+class IngressActivationState:
+    run_id: str
+    active: bool
+    pending: bool
 
 
 def ingress_lock_path(path: Path) -> Path:
@@ -214,6 +222,31 @@ def _state_run_id(path: Path, label: str) -> str:
     if not isinstance(value, dict) or not isinstance(value.get("run_id"), str):
         raise RuntimeError(f"{label} has no owner")
     return value["run_id"]
+
+
+def read_activation_state(path: Path) -> IngressActivationState | None:
+    owners: list[str] = []
+    active = path.exists() or path.is_symlink()
+    if active:
+        owners.append(_state_run_id(path, "maintenance fence"))
+    pending_path = ingress_pending_path(path)
+    pending = pending_path.exists() or pending_path.is_symlink()
+    if pending:
+        owners.append(
+            _state_run_id(
+                pending_path,
+                "maintenance ingress pending state",
+            )
+        )
+    if not owners:
+        return None
+    if len(set(owners)) != 1:
+        raise RuntimeError("maintenance activation owners diverge")
+    return IngressActivationState(
+        run_id=owners[0],
+        active=active,
+        pending=pending,
+    )
 
 
 def remove(

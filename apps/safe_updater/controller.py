@@ -21,6 +21,7 @@ from .service_adapter import DisposableServiceAdapter
 from .sqlite_image import SealedImage, checkpoint_truncate, quarantine_sidecars, replace_from_sealed, seal_backup
 from .state_machine import ORDER, Phase
 from .write_fence import IngressActivationError
+from .write_fence import read_activation_state
 from .write_fence import remove as remove_fence
 from .write_fence import write as write_fence
 
@@ -96,6 +97,13 @@ class SafeUpdateController:
             role_root = root / role
             if role_root not in resolved.parents:
                 raise RuntimeError(f"promotion fixture {role} path is outside its role root")
+            if (
+                role == "status"
+                and resolved != role_root / "fence.json"
+            ):
+                raise RuntimeError(
+                    "promotion fixture status path must be canonical"
+                )
             resolved_paths.append(resolved)
         if len(set(resolved_paths)) != len(resolved_paths):
             raise RuntimeError("promotion fixture paths must be distinct")
@@ -159,11 +167,41 @@ class SafeUpdateController:
                 breaker.reason or "safe_update_breaker_latched",
             )
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
-        return inspect(
+        recovered = inspect(
             Journal(self.root / "journal" / f"{run_id}.jsonl", digest),
             evidence_store=EvidenceStore(self.root),
             run_id=run_id,
         )
+        try:
+            activation = read_activation_state(
+                self.root / "status" / "fence.json"
+            )
+        except RuntimeError as exc:
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                recovered.journal_hash,
+                str(exc),
+            )
+        if activation is not None and activation.run_id != run_id:
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                recovered.journal_hash,
+                "maintenance activation belongs to another run",
+            )
+        if (
+            activation is not None
+            and recovered.safe
+            and recovered.action == "discard_candidate"
+        ):
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                recovered.journal_hash,
+                "maintenance activation was not acknowledged by the journal",
+            )
+        return recovered
 
     def qualify_candidate(
         self,

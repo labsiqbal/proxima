@@ -38,7 +38,7 @@ from typing import Any, Callable
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
 from .codex_master_proxy import CodexMasterModelProxy
 from .master_tool_broker import TOOL_SCHEMAS, master_dynamic_tools
-from .process_containment import pid_namespace_argv
+from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.codex")
@@ -743,23 +743,28 @@ class CodexAppServerProcess:
         for task in (self._reader, self._stderr_reader):
             if task:
                 task.cancel()
-        if self.proc and self.proc.returncode is None:
-            self.proc.terminate()
-            try:
-                await asyncio.wait_for(self.proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                logger.warning("codex: process did not terminate, killing pid=%s", getattr(self.proc, "pid", None))
-                self.proc.kill()
-                with suppress(Exception):
-                    await asyncio.wait_for(self.proc.wait(), timeout=5)
+        failure: BaseException | None = None
+        try:
+            await terminate_and_verify(self.proc, label="Codex runner")
+        except BaseException as exc:
+            failure = exc
         for task in (self._reader, self._stderr_reader):
             if task:
                 with suppress(asyncio.CancelledError):
                     await task
         if self._master_proxy is not None:
-            await self._master_proxy.stop()
-            self._master_proxy = None
-        self._started = False
+            try:
+                await self._master_proxy.stop()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+            else:
+                self._master_proxy = None
+        self._started = bool(
+            self.proc is not None and self.proc.returncode is None
+        )
+        if failure is not None:
+            raise failure
 
 
 def _tool_title(item: dict[str, Any]) -> str:

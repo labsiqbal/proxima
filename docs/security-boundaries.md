@@ -86,8 +86,9 @@ enrollment or activation.
 
 Group 16 adds only a disabled transaction fixture. Its controller root must be an
 explicitly initialized empty directory beneath the system temporary directory,
-and fence, live-fixture database, and staged-fixture database paths are confined to
-separate role directories. The only accepted service adapter is the in-memory
+its fence uses the canonical `status/fence.json` path, and live-fixture and
+staged-fixture database paths are confined to separate role directories. The only
+accepted service adapter is the in-memory
 `DisposableServiceAdapter`; no system adapter gains enrollment or service-control
 authority.
 
@@ -104,7 +105,9 @@ Before the first physical rollback mutation, the controller persists a
 `rollback_required` verdict and finalizes that verdict only after database,
 pointer, service, writer, and fence restoration finishes. An unreadable journal
 or interrupted breaker write leaves a durable pending marker and latches fail
-closed.
+closed. Recovery also reconciles the fixture's owner-bound pending and active
+fence state with the journal, so a fence created before `write_fenced` was
+acknowledged cannot be reported as a safe candidate discard.
 
 External maintenance activation first publishes a durable pending marker, then
 takes an exclusive ingress lock that only the controller provisions. The
@@ -112,13 +115,15 @@ application opens that existing lock read-only and never creates or modifies the
 controller status directory. Pending state records its activation owner, and a
 later controller run cannot adopt or clear an interrupted activation. Startup
 initialization, HTTP requests, active agent runs, project-app and preview proxy
-requests, and terminal WebSocket sessions hold a shared ingress lease through
-their last possible side effect. Terminal and project-app processes use a PID
-namespace while this boundary is configured, and active agent-run processes are
-stopped inside the same containment before their leases release after activation
-begins. Detached descendants therefore cannot outlive the drain. New ingress fails
-closed as soon as activation is pending, while the controller waits for already
-admitted operations to drain before publishing the fence. Read endpoints do not
+requests, deterministic script runs, and terminal WebSocket sessions hold a
+shared ingress lease through their last possible side effect. Terminal,
+project-app, agent-runner, and deterministic script processes use a PID namespace
+while this boundary is configured. Cached runners retain a lifetime lease after a
+turn, and pending activation stops and positively verifies those namespaces before
+their leases release. Script leases release only after the script namespace exits.
+Detached descendants therefore cannot outlive the drain. New ingress fails closed
+as soon as activation is pending, while the controller waits for already admitted
+operations to drain before publishing the fence. Read endpoints do not
 initialize personal wiki or profile state, stop preview relays, create PATH
 compatibility shims, launch provider readiness probes, or reap legacy update
 processes while fenced. Normal
@@ -327,6 +332,10 @@ card shows the script's actual content + sha256 (read together), the approve req
 must echo that hash (409 if the file changed after review), and the run executes the
 hashed bytes from a private temp copy taken at hash time — so neither an
 edit-before-click nor a swap-after-hash can run content the owner never saw.
+When the disabled external maintenance boundary is configured, a PID namespace
+ensures the script and any detached descendants exit before its ingress lease
+releases. This process-lifetime control does not reduce the script's filesystem or
+service-user authority and does not turn approval into a general sandbox.
 
 ## Push after merge (pinned target, hardened invocation)
 

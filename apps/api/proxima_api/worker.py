@@ -208,6 +208,12 @@ class RunWorker:
                 try:
                     cycle_lease = maintenance.claim_effect()
                 except RuntimeError:
+                    try:
+                        await self.app.state.acp_manager.shutdown()
+                    except BaseException:
+                        logging.getLogger("proxima.worker").exception(
+                            "cached runner shutdown failed during maintenance"
+                        )
                     await asyncio.sleep(poll)
                     continue
                 try:

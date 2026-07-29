@@ -357,6 +357,11 @@ def _create_app(
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager(
         contained=maintenance.process_containment_required,
+        maintenance=(
+            maintenance
+            if maintenance.process_containment_required
+            else None
+        ),
     )
     app.state.app_manager = AppManager(
         contained=maintenance.process_containment_required,
