@@ -4,12 +4,13 @@ import fcntl
 import logging
 import os
 import pty
-import shutil
 import signal
 import struct
 import subprocess
 import termios
 import time
+
+from .process_containment import pid_namespace_argv
 
 logger = logging.getLogger("proxima.terminal")
 
@@ -99,23 +100,11 @@ class TerminalSession:
     def _argv(self) -> list[str]:
         if not self.contained:
             return [self.shell, "-l"]
-        bwrap = shutil.which("bwrap")
-        if os.name != "posix" or bwrap is None:
-            raise RuntimeError("terminal containment is unavailable")
-        return [
-            bwrap,
-            "--die-with-parent",
-            "--new-session",
-            "--unshare-pid",
-            "--bind",
-            "/",
-            "/",
-            "--chdir",
-            self.cwd,
-            "--",
-            self.shell,
-            "-l",
-        ]
+        return pid_namespace_argv(
+            [self.shell, "-l"],
+            cwd=self.cwd,
+            label="terminal",
+        )
 
     def start(self) -> None:
         argv = self._argv()

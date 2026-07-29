@@ -314,6 +314,27 @@ def test_pid_alive_reaps_zombie_children():
     assert alive is False
 
 
+def test_non_reconciling_status_does_not_reap_process(
+    tmp_path,
+    monkeypatch,
+):
+    manager = make_manager(tmp_path)
+    manager.marker_path.write_text(json.dumps({
+        "state": "running",
+        "target": "999.0.0",
+        "pid": os.getpid(),
+    }))
+    monkeypatch.setattr(
+        updates_mod.os,
+        "waitpid",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("status reaped a process")
+        ),
+    )
+
+    assert manager.status(reconcile=False)["state"] == "running"
+
+
 # ── routes (Task 4) ─────────────────────────────────────────────────
 
 

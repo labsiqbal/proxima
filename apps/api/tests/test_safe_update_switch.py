@@ -25,6 +25,7 @@ from apps.safe_updater.layout import ReleaseLayout
 from apps.safe_updater.service_adapter import DisposableServiceAdapter
 from apps.safe_updater.state_machine import Phase
 from apps.safe_updater.write_fence import (
+    IngressActivationPending,
     IngressDrainTimeout,
     ingress_pending_path,
     prepare_ingress_lock,
@@ -410,12 +411,12 @@ def test_acknowledged_last_good_recovers_candidate_after_finalize_failure(
     original_remove = controller_module.remove_fence
     attempts = 0
 
-    def remove_once(path: Path) -> None:
+    def remove_once(path: Path, owner_run_id: str) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("injected finalize interruption")
-        original_remove(path)
+        original_remove(path, owner_run_id)
 
     monkeypatch.setattr(controller_module, "remove_fence", remove_once)
 
@@ -1317,10 +1318,17 @@ def test_fenced_update_status_does_not_reconcile_marker(tmp_path: Path):
         }
         marker.write_text(json.dumps(payload), encoding="utf-8")
         write_fence(fence, "2" * 32, "write_fenced")
-        response = client.get(
-            "/api/update/status",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "proxima_api.updates.os.waitpid",
+                lambda *_args: (_ for _ in ()).throw(
+                    AssertionError("read-only status reaped a process")
+                ),
+            )
+            response = client.get(
+                "/api/update/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
 
     assert response.status_code == 200
     assert response.json()["state"] == "failed"
@@ -1487,6 +1495,127 @@ def test_ingress_timeout_latches_controller_breaker(
 
     assert CircuitBreaker(root).status().latched is True
     assert _database_value(live) == "previous"
+
+
+def test_interrupted_pending_activation_is_preserved(
+    tmp_path: Path,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+    _provision_ingress(fence)
+    pending = ingress_pending_path(fence)
+    payload = {"run_id": "9" * 32}
+    pending.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        RuntimeError,
+        match="safe_update_breaker_latched",
+    ):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            DisposableServiceAdapter(PREVIOUS),
+            fence,
+            live,
+            staged,
+        )
+
+    assert json.loads(pending.read_text(encoding="utf-8")) == payload
+    assert CircuitBreaker(root).status().latched is True
+    assert _database_value(live) == "previous"
+
+
+def test_write_fence_rejects_preexisting_pending_owner(
+    tmp_path: Path,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    pending = ingress_pending_path(fence)
+    payload = {"run_id": "8" * 32}
+    pending.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(IngressActivationPending):
+        write_fence(fence, "7" * 32, "write_fenced")
+
+    assert json.loads(pending.read_text(encoding="utf-8")) == payload
+
+
+def test_active_worker_run_holds_ingress_until_completion(
+    tmp_path: Path,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+            "run_worker_poll_interval_ms": 50,
+        }
+    )
+
+    async def run_case() -> None:
+        worker = app.state.worker
+        started = asyncio.Event()
+        finish = asyncio.Event()
+        runner_stopped = asyncio.Event()
+        pending_runs = [{"id": 41}]
+
+        worker.reap_stale_runs = lambda _seconds: None
+        worker.reap_orphaned_jobs = lambda: None
+        worker.satpam.maybe_tick = lambda _now: None
+        worker.claim_run = (
+            lambda: pending_runs.pop(0) if pending_runs else None
+        )
+
+        async def execute(_run) -> None:
+            started.set()
+            await finish.wait()
+
+        async def shutdown_runner() -> None:
+            runner_stopped.set()
+
+        worker.execute_run = execute
+        app.state.acp_manager.shutdown = shutdown_runner
+        app.state.startup_lease.release()
+        worker.start()
+        await started.wait()
+        fence_errors: list[BaseException] = []
+
+        def activate_fence() -> None:
+            try:
+                write_fence(
+                    fence,
+                    "6" * 32,
+                    "write_fenced",
+                    drain_timeout_seconds=2,
+                )
+            except BaseException as exc:
+                fence_errors.append(exc)
+
+        fence_thread = threading.Thread(target=activate_fence)
+        fence_thread.start()
+        await asyncio.to_thread(
+            _wait_for_path,
+            ingress_pending_path(fence),
+        )
+        assert fence_thread.is_alive()
+        assert not fence.exists()
+        finish.set()
+        await asyncio.wait_for(runner_stopped.wait(), timeout=2)
+        await asyncio.to_thread(fence_thread.join, 5)
+        await worker.stop()
+        assert not fence_thread.is_alive()
+        assert fence_errors == []
+        assert fence.is_file()
+
+    asyncio.run(run_case())
 
 
 def test_construction_failure_releases_startup_admission(

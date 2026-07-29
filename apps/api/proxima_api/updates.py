@@ -90,6 +90,18 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _parse_release(data: dict[str, Any]) -> dict[str, Any]:
     """GitHub /releases/latest payload → the four fields we keep."""
     tag = str(data.get("tag_name") or "").strip()
@@ -188,7 +200,14 @@ class UpdateManager:
                 self._write_marker({**data, "state": "done"})
             return ("idle", target)
         pid = data.get("pid")
-        if pid and _pid_alive(int(pid)):
+        alive = (
+            _pid_alive(int(pid))
+            if reconcile and pid
+            else _pid_exists(int(pid))
+            if pid
+            else False
+        )
+        if alive:
             return ("running", target)
         if reconcile:
             self._write_marker({**data, "state": "failed"})

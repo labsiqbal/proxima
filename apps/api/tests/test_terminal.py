@@ -65,20 +65,14 @@ def test_contained_terminal_terminates_detached_descendant(tmp_path):
     terminal.start()
     terminal.write(
         b"setsid sh -c 'echo $$ > detached.pid; "
-        b"sleep 30; echo escaped > escaped.txt' "
+        b"sleep 0.4; echo escaped > escaped.txt' "
         b"</dev/null >/dev/null 2>&1 &\n"
     )
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.01)
     assert child_path.is_file()
-    child_pid = int(child_path.read_text(encoding="utf-8").strip())
 
     assert terminal.close() is True
-    try:
-        os.kill(child_pid, 0)
-    except ProcessLookupError:
-        pass
-    else:
-        raise AssertionError("detached terminal descendant survived close")
+    time.sleep(0.6)
     assert not escaped_path.exists()

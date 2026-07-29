@@ -16,8 +16,20 @@ FENCE_FILE_MODE = 0o644
 INGRESS_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
-class IngressDrainTimeout(TimeoutError):
-    pass
+class IngressActivationError(RuntimeError):
+    def __init__(self, message: str, *, pending_owned: bool) -> None:
+        super().__init__(message)
+        self.pending_owned = pending_owned
+
+
+class IngressActivationPending(IngressActivationError):
+    def __init__(self, message: str, *, pending_owned: bool = False) -> None:
+        super().__init__(message, pending_owned=pending_owned)
+
+
+class IngressDrainTimeout(IngressActivationError, TimeoutError):
+    def __init__(self, message: str, *, pending_owned: bool = True) -> None:
+        super().__init__(message, pending_owned=pending_owned)
 
 
 def ingress_lock_path(path: Path) -> Path:
@@ -84,7 +96,8 @@ def _exclusive_ingress(
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise IngressDrainTimeout(
-                        "maintenance ingress drain timed out"
+                        "maintenance ingress drain timed out",
+                        pending_owned=True,
                     ) from exc
                 time.sleep(min(0.01, remaining))
         yield
@@ -101,19 +114,41 @@ def _exclusive_ingress(
         os.close(descriptor)
 
 
-def _write_pending(path: Path) -> Path:
+def _write_pending(path: Path, run_id: str) -> Path:
     pending = ingress_pending_path(path)
-    descriptor = os.open(
-        pending,
-        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-        FENCE_FILE_MODE,
-    )
     try:
-        write_all(descriptor, b"pending\n")
-        os.fsync(descriptor)
+        descriptor = os.open(
+            pending,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            FENCE_FILE_MODE,
+        )
+    except FileExistsError as exc:
+        raise IngressActivationPending(
+            "maintenance ingress activation is already pending",
+            pending_owned=False,
+        ) from exc
+    try:
+        try:
+            payload = json.dumps(
+                {"run_id": run_id},
+                sort_keys=True,
+            ).encode("utf-8")
+            write_all(descriptor, payload)
+            os.fsync(descriptor)
+        except Exception as exc:
+            raise IngressActivationError(
+                "maintenance ingress pending state is ambiguous",
+                pending_owned=True,
+            ) from exc
     finally:
         os.close(descriptor)
-    fsync_directory(path.parent)
+    try:
+        fsync_directory(path.parent)
+    except Exception as exc:
+        raise IngressActivationError(
+            "maintenance ingress pending state is ambiguous",
+            pending_owned=True,
+        ) from exc
     return pending
 
 
@@ -126,43 +161,64 @@ def write(
 ) -> None:
     prepare_ingress_lock(path)
     path.parent.chmod(FENCE_DIRECTORY_MODE)
-    pending = _write_pending(path)
+    pending = _write_pending(path, run_id)
     payload = json.dumps(
         {"run_id": run_id, "phase": phase},
         sort_keys=True,
     ).encode("utf-8")
-    with _exclusive_ingress(
-        path,
-        timeout_seconds=drain_timeout_seconds,
-    ):
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.",
-            dir=path.parent,
-        )
-        temporary = Path(temporary_name)
-        try:
+    try:
+        with _exclusive_ingress(
+            path,
+            timeout_seconds=drain_timeout_seconds,
+        ):
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.",
+                dir=path.parent,
+            )
+            temporary = Path(temporary_name)
             try:
-                if hasattr(os, "fchmod"):
-                    os.fchmod(descriptor, FENCE_FILE_MODE)
-                else:
-                    temporary.chmod(FENCE_FILE_MODE)
-                write_all(descriptor, payload)
-                os.fsync(descriptor)
+                try:
+                    if hasattr(os, "fchmod"):
+                        os.fchmod(descriptor, FENCE_FILE_MODE)
+                    else:
+                        temporary.chmod(FENCE_FILE_MODE)
+                    write_all(descriptor, payload)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.replace(temporary, path)
+                fsync_directory(path.parent)
             finally:
-                os.close(descriptor)
-            os.replace(temporary, path)
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+            pending.unlink()
             fsync_directory(path.parent)
-        finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-        pending.unlink()
-        fsync_directory(path.parent)
+    except IngressActivationError:
+        raise
+    except Exception as exc:
+        raise IngressActivationError(
+            "maintenance ingress activation is ambiguous",
+            pending_owned=True,
+        ) from exc
+
+
+def _state_run_id(path: Path, label: str) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"{label} is invalid")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{label} is unreadable") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("run_id"), str):
+        raise RuntimeError(f"{label} has no owner")
+    return value["run_id"]
 
 
 def remove(
     path: Path,
+    run_id: str,
     *,
     drain_timeout_seconds: float = INGRESS_DRAIN_TIMEOUT_SECONDS,
 ) -> None:
@@ -173,14 +229,17 @@ def remove(
     ):
         changed = False
         if path.exists() or path.is_symlink():
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeError("maintenance fence is not a regular file")
+            if _state_run_id(path, "maintenance fence") != run_id:
+                raise RuntimeError("maintenance fence owner does not match")
             path.unlink()
             changed = True
         pending = ingress_pending_path(path)
         if pending.exists() or pending.is_symlink():
-            if pending.is_symlink() or not pending.is_file():
-                raise RuntimeError("maintenance ingress pending state is invalid")
+            if _state_run_id(
+                pending,
+                "maintenance ingress pending state",
+            ) != run_id:
+                raise RuntimeError("maintenance ingress pending owner does not match")
             pending.unlink()
             changed = True
         if changed:

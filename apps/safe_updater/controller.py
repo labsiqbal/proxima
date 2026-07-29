@@ -20,7 +20,7 @@ from .recovery import RecoveryStatus, inspect
 from .service_adapter import DisposableServiceAdapter
 from .sqlite_image import SealedImage, checkpoint_truncate, quarantine_sidecars, replace_from_sealed, seal_backup
 from .state_machine import ORDER, Phase
-from .write_fence import IngressDrainTimeout
+from .write_fence import IngressActivationError
 from .write_fence import remove as remove_fence
 from .write_fence import write as write_fence
 
@@ -247,7 +247,7 @@ class SafeUpdateController:
             backup: SealedImage | None = None
             acknowledged_phase = records[-1].phase
             journal_append_failed = False
-            fence_attempted = False
+            fence_installed = False
             writers_pause_attempted = False
             service_stop_attempted = False
             database_swap_attempted = False
@@ -267,8 +267,8 @@ class SafeUpdateController:
                 acknowledged_phase = record.phase
 
             try:
-                fence_attempted = True
                 write_fence(fence_path, run_id, Phase.WRITE_FENCED.value)
+                fence_installed = True
                 append_phase(Phase.WRITE_FENCED)
                 writers_pause_attempted = True
                 adapter.pause_autonomous_writers()
@@ -318,7 +318,7 @@ class SafeUpdateController:
                 layout.set_pointer("last-good", candidate_release_id)
                 append_phase(Phase.LAST_GOOD_COMMITTED)
                 adapter.resume_autonomous_writers()
-                remove_fence(fence_path)
+                remove_fence(fence_path, run_id)
                 append_phase(Phase.COMPLETED)
                 return "candidate_good"
             except Exception as exc:
@@ -336,7 +336,7 @@ class SafeUpdateController:
                         adapter.stop_candidate()
                         adapter.start_writable_candidate(candidate_release_id)
                         adapter.resume_autonomous_writers()
-                        remove_fence(fence_path)
+                        remove_fence(fence_path, run_id)
                         if (
                             acknowledged_phase is Phase.LAST_GOOD_COMMITTED
                             and not journal_append_failed
@@ -359,8 +359,11 @@ class SafeUpdateController:
                             pass
                         raise RuntimeError("safe_update_breaker_latched") from committed_recovery_error
 
-                ingress_timeout = isinstance(exc, IngressDrainTimeout)
-                rollback_failed = ingress_timeout
+                activation_ambiguous = isinstance(
+                    exc,
+                    IngressActivationError,
+                )
+                rollback_failed = activation_ambiguous
                 try:
                     breaker.begin_rollback(type(exc).__name__)
                 except Exception as breaker_error:
@@ -387,8 +390,8 @@ class SafeUpdateController:
                         probe("rollback", previous_release_id)
                     if writers_pause_attempted:
                         adapter.resume_autonomous_writers()
-                    if fence_attempted and not ingress_timeout:
-                        remove_fence(fence_path)
+                    if fence_installed:
+                        remove_fence(fence_path, run_id)
                 except Exception:
                     rollback_failed = True
                 try:

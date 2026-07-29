@@ -224,6 +224,13 @@ class MaintenanceBoundary:
         lease.suspend_admission()
         return lease
 
+    def claim_effect(self) -> IngressLease:
+        lease = self.acquire()
+        if not lease.acquired or self.status() is not None:
+            lease.release()
+            raise RuntimeError("background effect ingress is unavailable")
+        return lease
+
     def start_thread(
         self,
         target: Callable[..., Any],

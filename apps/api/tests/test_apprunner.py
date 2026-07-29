@@ -138,3 +138,34 @@ def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
         assert lease.released is True
 
     asyncio.run(run_case())
+
+
+def test_contained_app_runner_kills_detached_descendants(tmp_path):
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    manager = AppManager(contained=True)
+    lease = Lease()
+    escaped = tmp_path / "escaped.txt"
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "setsid sh -c 'sleep 0.4; echo escaped > escaped.txt' "
+            "</dev/null >/dev/null 2>&1 &",
+            5180,
+            effect_lease=lease,
+        )
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not lease.released:
+            await asyncio.sleep(0.01)
+        assert lease.released is True
+        await asyncio.sleep(0.6)
+        assert not escaped.exists()
+        await manager.shutdown()
+
+    asyncio.run(run_case())

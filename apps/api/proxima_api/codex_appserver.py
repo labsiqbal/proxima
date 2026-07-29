@@ -38,6 +38,7 @@ from typing import Any, Callable
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
 from .codex_master_proxy import CodexMasterModelProxy
 from .master_tool_broker import TOOL_SCHEMAS, master_dynamic_tools
+from .process_containment import pid_namespace_argv
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.codex")
@@ -123,12 +124,14 @@ class CodexAppServerProcess:
         cwd: str,
         *,
         master_chat_only: bool = False,
+        contained: bool = False,
     ):
         self.spec = spec
         self.home = home
         self.hermes_home = home  # alias kept for parity with AcpProcess
         self.cwd = cwd
         self.master_chat_only = master_chat_only
+        self.contained = contained
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -269,6 +272,12 @@ class CodexAppServerProcess:
         if resolved:
             self._codex_path = resolved
             argv[0] = resolved
+        if self.contained:
+            argv = pid_namespace_argv(
+                argv,
+                cwd=self.cwd,
+                label="runner",
+            )
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 *argv,

@@ -109,14 +109,19 @@ closed.
 External maintenance activation first publishes a durable pending marker, then
 takes an exclusive ingress lock that only the controller provisions. The
 application opens that existing lock read-only and never creates or modifies the
-controller status directory. Startup initialization, HTTP requests, project-app
-and preview proxy requests, and terminal WebSocket sessions hold a shared ingress
-lease through their last possible side effect. A terminal lease remains held
-until its shell session descendants are stopped and verified. New ingress fails
+controller status directory. Pending state records its activation owner, and a
+later controller run cannot adopt or clear an interrupted activation. Startup
+initialization, HTTP requests, active agent runs, project-app and preview proxy
+requests, and terminal WebSocket sessions hold a shared ingress lease through
+their last possible side effect. Terminal and project-app processes use a PID
+namespace while this boundary is configured, and active agent-run processes are
+stopped inside the same containment before their leases release after activation
+begins. Detached descendants therefore cannot outlive the drain. New ingress fails
 closed as soon as activation is pending, while the controller waits for already
 admitted operations to drain before publishing the fence. Read endpoints do not
 initialize personal wiki or profile state, stop preview relays, create PATH
-compatibility shims, or launch provider readiness probes while fenced. Normal
+compatibility shims, launch provider readiness probes, or reap legacy update
+processes while fenced. Normal
 first-use personal wiki reads still seed `index.md` while holding the ingress
 lease. Application SQLite connections configured for an external fence disable
 prepared-statement caching, allow an admitted operation to finish its database

@@ -355,8 +355,12 @@ def _create_app(
         writes_fenced=maintenance.database_write_check(),
     )  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
-    app.state.acp_manager = AcpManager()
-    app.state.app_manager = AppManager()
+    app.state.acp_manager = AcpManager(
+        contained=maintenance.process_containment_required,
+    )
+    app.state.app_manager = AppManager(
+        contained=maintenance.process_containment_required,
+    )
     app.state.hub = EventHub()
     if cfg.get("feature_master_orchestrator", False):
         app.state.master_projection = MasterProjectionService(app)

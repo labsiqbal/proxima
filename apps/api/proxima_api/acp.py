@@ -18,6 +18,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable
 
+from .process_containment import pid_namespace_argv
 from .runners import subprocess_env
 
 logger = logging.getLogger("proxima.acp")
@@ -183,11 +184,19 @@ def _rpc_error_from_dict(err: dict[str, Any]) -> str:
 
 
 class AcpProcess:
-    def __init__(self, spec, home: str, cwd: str):
+    def __init__(
+        self,
+        spec,
+        home: str,
+        cwd: str,
+        *,
+        contained: bool = False,
+    ):
         self.spec = spec
         self.home = home
         self.hermes_home = home  # alias kept for any external references
         self.cwd = cwd
+        self.contained = contained
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -228,6 +237,12 @@ class AcpProcess:
         resolved = shutil.which(argv[0], path=env["PATH"])
         if resolved:
             argv[0] = resolved
+        if self.contained:
+            argv = pid_namespace_argv(
+                argv,
+                cwd=self.cwd,
+                label="runner",
+            )
         self.proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -496,7 +511,8 @@ class AcpManager:
     working directory — so each project needs its own process rooted there.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, contained: bool = False) -> None:
+        self.contained = contained
         self._procs: dict[tuple[str, str, str, bool], Any] = {}
         self._lock = asyncio.Lock()
 
@@ -526,13 +542,19 @@ class AcpManager:
                     home,
                     cwd,
                     master_chat_only=master_chat_only,
+                    contained=self.contained,
                 )
             else:
                 if master_chat_only:
                     raise AcpError(
                         "runner does not implement a restricted Master process"
                     )
-                proc = process_class(spec, home, cwd)
+                proc = process_class(
+                    spec,
+                    home,
+                    cwd,
+                    contained=self.contained,
+                )
             await proc.start()
             self._procs[key] = proc
             return proc
@@ -569,5 +591,17 @@ class AcpManager:
             await proc.stop()
 
     async def shutdown(self) -> None:
-        await asyncio.gather(*(proc.stop() for proc in list(self._procs.values())), return_exceptions=True)
-        self._procs.clear()
+        async with self._lock:
+            processes = list(self._procs.values())
+            self._procs.clear()
+        results = await asyncio.gather(
+            *(proc.stop() for proc in processes),
+            return_exceptions=True,
+        )
+        failures = [
+            result
+            for result in results
+            if isinstance(result, BaseException)
+        ]
+        if failures:
+            raise RuntimeError("runner containment shutdown failed") from failures[0]

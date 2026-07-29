@@ -15,6 +15,9 @@ import subprocess
 import time
 from typing import Any, Protocol
 
+from .process_containment import pid_namespace_argv
+from .runners import subprocess_env
+
 
 def _port_open(port: int) -> bool:
     try:
@@ -56,8 +59,6 @@ def port_bound_non_loopback(port: int) -> bool | None:
                     broad = True
     return broad if checked else None
 
-from .runners import subprocess_env
-
 IS_WINDOWS = os.name == "nt"
 
 # Dev servers often ignore $PORT and bind to their own (Vite→5173, etc.), printing
@@ -71,7 +72,8 @@ class EffectLease(Protocol):
 
 
 class AppManager:
-    def __init__(self) -> None:
+    def __init__(self, *, contained: bool = False) -> None:
+        self.contained = contained
         self._apps: dict[str, dict[str, Any]] = {}
         # Last self-exit payload per slug, kept until the next start so the UI
         # can show failure logs after the process is reaped (status polls every 2s).
@@ -116,13 +118,19 @@ class AppManager:
         env.setdefault("HOST", "127.0.0.1")
         # Run the command string through the platform shell, in its own process
         # group so we can clean-kill the whole tree later.
-        if IS_WINDOWS:
-            shell_argv = ["cmd", "/c", command]
-            extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        else:
-            shell_argv = ["bash", "-lc", command]
-            extra = {"start_new_session": True}
         try:
+            if IS_WINDOWS:
+                shell_argv = ["cmd", "/c", command]
+                extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            else:
+                shell_argv = ["bash", "-lc", command]
+                extra = {"start_new_session": True}
+            if self.contained:
+                shell_argv = pid_namespace_argv(
+                    shell_argv,
+                    cwd=cwd,
+                    label="project app",
+                )
             proc = await asyncio.create_subprocess_exec(
                 *shell_argv, cwd=cwd, env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
