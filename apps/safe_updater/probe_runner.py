@@ -18,6 +18,13 @@ class ProbeError(RuntimeError):
     pass
 
 
+# Chromium reserves a 32 GiB virtual sandbox cage before rendering. RLIMIT_AS
+# measures that reservation rather than resident memory, so the trusted browser
+# needs a larger, still finite address-space ceiling than build and migration
+# commands.
+TRUSTED_BROWSER_ADDRESS_SPACE_BYTES = 64 * 1024 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class CandidateIdentity:
     release_id: str
@@ -169,6 +176,7 @@ class TrustedProbeRunner:
                     "PROXIMA_FEATURE_WORKFLOW_GRAPH": "1",
                 },
                 network_loopback=True,
+                memory_bytes=TRUSTED_BROWSER_ADDRESS_SPACE_BYTES,
                 timeout=180,
             )
         except SandboxError as exc:

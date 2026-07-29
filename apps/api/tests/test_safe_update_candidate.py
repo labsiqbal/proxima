@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,12 @@ from apps.safe_updater.candidate_data import (
 from apps.safe_updater.controller import SafeUpdateController
 from apps.safe_updater.git_source import resolve_git_metadata
 from apps.safe_updater.manifest import local_provenance, verify_local_provenance
-from apps.safe_updater.probe_runner import TrustedProbeResult
+from apps.safe_updater.probe_runner import (
+    TRUSTED_BROWSER_ADDRESS_SPACE_BYTES,
+    CandidateIdentity,
+    TrustedProbeResult,
+    TrustedProbeRunner,
+)
 from apps.safe_updater.sandbox import CandidateSandbox, SandboxError
 from apps.safe_updater.tree import copy_verified_source
 from apps.safe_updater.trusted_probes import TrustedProbeBundle, _tree_digest
@@ -122,6 +129,58 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
             for scenario in definitions
         }
     ) == len(definitions)
+
+
+def test_trusted_probe_runner_pins_browser_address_space_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    release = tmp_path / "release"
+    workspace = tmp_path / "workspace"
+    runner_home = tmp_path / "runner"
+    database = tmp_path / "database" / "fixture.db"
+    for path in (release, workspace, runner_home, database.parent):
+        path.mkdir(parents=True, exist_ok=True)
+    database.touch()
+    observed: dict[str, int] = {}
+
+    class Sandbox:
+        root = tmp_path
+        port = 18768
+
+        def __init__(self):
+            self.release = release
+            self.workspace = workspace
+            self.runner_home = runner_home
+            self.database = database
+
+        def run(self, argv, **kwargs):
+            observed["memory_bytes"] = kwargs["memory_bytes"]
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                b'{"ok":true,"results":{"browser":{"shell":"ok"}}}',
+            )
+
+    monkeypatch.setattr(
+        TrustedProbeRunner,
+        "_browser",
+        staticmethod(lambda: ("/usr/bin/true", {})),
+    )
+    result = TrustedProbeRunner().run(
+        sandbox=Sandbox(),
+        trusted_bundle=_trusted(tmp_path),
+        identity=CandidateIdentity(
+            f"sha256-{'a' * 40}-{'b' * 12}",
+            "a" * 40,
+            "c" * 64,
+            "1.0.2",
+        ),
+        auth_token="candidate-token",
+        session_id=1,
+    )
+    assert result.results == {"browser": {"shell": "ok"}}
+    assert observed["memory_bytes"] == TRUSTED_BROWSER_ADDRESS_SPACE_BYTES
 
 
 def test_offline_manifest_uses_only_the_candidate_sandbox(
@@ -288,6 +347,71 @@ def test_candidate_sandbox_enforces_aggregate_storage_quota(tmp_path: Path):
             writable_paths=(release, runner_home),
             timeout=10,
         )
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="bubblewrap sandbox contract",
+)
+def test_loopback_probe_children_drop_all_namespace_capabilities(tmp_path: Path):
+    root = tmp_path / "sandbox"
+    release = root / "release"
+    workspace = root / "workspace"
+    runner_home = root / "runner"
+    release.mkdir(parents=True)
+    workspace.mkdir()
+    runner_home.mkdir()
+    sandbox = CandidateSandbox(
+        root,
+        release,
+        root / "candidate.db",
+        workspace,
+        runner_home,
+        18767,
+        storage_bytes=32 * 1024 * 1024,
+        reserve_bytes=1024 * 1024,
+        tmpfs_bytes=8 * 1024 * 1024,
+        file_bytes=16 * 1024 * 1024,
+    )
+    probe_root = (
+        Path(__file__).resolve().parents[3] / "trusted-probes" / "safe-update"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "safe_update_trusted_probe",
+        probe_root / "probe.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(probe_root))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(probe_root))
+    script = (
+        "from pathlib import Path;"
+        "status=Path('/proc/self/status').read_text();"
+        "wanted=('CapInh:', 'CapPrm:', 'CapEff:', 'CapBnd:', "
+        "'CapAmb:', 'NoNewPrivs:');"
+        "print(''.join(line for line in status.splitlines(True) "
+        "if line.startswith(wanted)),end='')"
+    )
+    result = sandbox.run(
+        (*module._drop_prefix(), "/usr/bin/python3", "-c", script),
+        cwd=runner_home,
+        writable_paths=(workspace, runner_home),
+        read_only_paths=(release,),
+        network_loopback=True,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert (result.stdout or b"").decode().splitlines() == [
+        "CapInh:\t0000000000000000",
+        "CapPrm:\t0000000000000000",
+        "CapEff:\t0000000000000000",
+        "CapBnd:\t0000000000000000",
+        "CapAmb:\t0000000000000000",
+        "NoNewPrivs:\t1",
+    ]
 
 
 def test_candidate_gate_builds_before_freezing_scrubs_fixture_and_revalidates_evidence(

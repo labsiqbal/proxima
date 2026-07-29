@@ -54,11 +54,12 @@ def _asset_digest(root: Path) -> str:
 
 
 def _drop_prefix() -> list[str]:
+    # Bubblewrap maps only namespace uid/gid 0 for the loopback namespace.
+    # A transition to nobody therefore fails before the candidate can start.
+    # Namespace root has no host privilege; strip every capability before
+    # launching the server or browser so neither child retains CAP_NET_ADMIN.
     return [
         "/usr/bin/setpriv",
-        "--reuid=65534",
-        "--regid=65534",
-        "--clear-groups",
         "--no-new-privs",
         "--bounding-set=-all",
         "--inh-caps=-all",
