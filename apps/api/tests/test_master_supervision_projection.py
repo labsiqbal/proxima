@@ -1507,6 +1507,18 @@ def test_retried_attention_tool_projects_one_action_required_message(
     ]
     assert len(attention_events) == 1
     assert attention_events[0]["payload"]["attention_required"] is True
+    assert {
+        key: attention_events[0]["payload"][key]
+        for key in (
+            "focus_epoch_id",
+            "focus_container_id",
+            "subject_container_id",
+        )
+    } == {
+        "focus_epoch_id": focus["current_epoch_id"],
+        "focus_container_id": project_id,
+        "subject_container_id": None,
+    }
     projection_message_id = attention_events[0]["payload"]["message_id"]
     attribution = app.state.db.execute(
         "SELECT focus_epoch_id, focus_container_id "

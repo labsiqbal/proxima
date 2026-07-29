@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 39 tables. Applied migration version: **41**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 39 tables. Applied migration version: **42**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -286,10 +286,10 @@ SQLite (WAL mode). 39 tables. Applied migration version: **41**. This is the exa
 | --- | --- | --- | --- | --- |
 | `message_id` | INTEGER | yes |  | PK → `messages.id` (ON DELETE CASCADE) |
 | `focus_mode` | TEXT | NO |  |  |
-| `focus_container_id` | INTEGER | yes |  | → `projects.id` (ON DELETE SET NULL) |
+| `focus_container_id` | INTEGER | yes |  |  |
 | `target_mode` | TEXT | NO |  |  |
-| `target_container_id` | INTEGER | yes |  | → `projects.id` (ON DELETE SET NULL) |
-| `target_area_id` | INTEGER | yes |  | → `project_areas.id` (ON DELETE SET NULL) |
+| `target_container_id` | INTEGER | yes |  |  |
+| `target_area_id` | INTEGER | yes |  |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `idx_master_message_context_target` - (target_container_id, target_area_id, message_id); `idx_master_message_context_focus` - (focus_container_id, message_id)
@@ -339,8 +339,8 @@ SQLite (WAL mode). 39 tables. Applied migration version: **41**. This is the exa
 | --- | --- | --- | --- | --- |
 | `message_id` | INTEGER | yes |  | PK → `messages.id` (ON DELETE CASCADE) |
 | `focus_epoch_id` | INTEGER | yes |  | → `master_focus_epochs.id` (ON DELETE SET NULL) |
-| `focus_container_id` | INTEGER | yes |  | → `projects.id` (ON DELETE SET NULL) |
-| `subject_container_id` | INTEGER | yes |  | → `projects.id` (ON DELETE SET NULL) |
+| `focus_container_id` | INTEGER | yes |  |  |
+| `subject_container_id` | INTEGER | yes |  |  |
 
 **Indexes:** `idx_message_focus_subject` - (subject_container_id, message_id); `idx_message_focus_epoch` - (focus_epoch_id, message_id)
 
@@ -718,4 +718,4 @@ SQLite (WAL mode). 39 tables. Applied migration version: **41**. This is the exa
 
 
 ---
-_Generated 2026-07-29 02:20 UTC._
+_Generated 2026-07-29 03:57 UTC._

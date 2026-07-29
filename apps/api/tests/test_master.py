@@ -424,11 +424,25 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
     ).fetchone()
     assert dict(historical_context) == {
         "focus_mode": "container",
-        "focus_container_id": None,
+        "focus_container_id": target_id,
         "target_mode": "explicit",
-        "target_container_id": None,
-        "target_area_id": None,
+        "target_container_id": target_id,
+        "target_area_id": target_area_id,
     }
+    listed = client.get(
+        f"/api/sessions/{response.json()['session_id']}/messages"
+    ).json()["messages"]
+    historical_message = next(
+        message
+        for message in listed
+        if message["id"] == response.json()["message"]["id"]
+    )
+    assert historical_message["message_focus"] == {
+        "focus_epoch_id": epoch_id,
+        "focus_container_id": target_id,
+        "subject_container_id": None,
+    }
+    assert historical_message["master_target"] == dict(historical_context)
     epoch = app.state.db.execute(
         "SELECT container_id, ended_at FROM master_focus_epochs WHERE id = ?",
         (epoch_id,),

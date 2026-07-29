@@ -77,9 +77,13 @@ and credentials are not copied into the Master conversation or event payload.
 
 Review-ready payloads include the stable Task, Container, Area, and latest
 checkpoint ids. Attention and Satpam payloads include their source row ids and a
-stable `toast_key`. The authenticated shared frontend provider now updates the
+stable `toast_key`. Every projection event also includes the captured Focus epoch,
+Focus Container, and subject Container committed with the projected message. The
+authenticated shared frontend provider updates the
 durable thread and work panel from these events without another polling endpoint.
-Transient toast presentation remains a later UI group and is intentionally inert.
+Only named projection events with a durable message id enter the bounded,
+coalescing toast queue; raw token, reasoning, and tool deltas never produce a
+toast.
 
 Master-origin Task delegation copies the turn's captured Focus epoch and an
 explicit captured marker onto `task_delegations`. Task, Attention, and Satpam
@@ -122,7 +126,8 @@ cursor. Reconnect with the last received id delivers only later rows; replay fro
 an earlier cursor returns the same one event per projection and creates no new
 durable data. An idle stream emits an immediate SSE comment to flush a healthy
 connection before the 15-second keepalive; comments do not alter cursor or replay
-semantics.
+semantics. Projection events carry immutable Focus and subject attribution, so live
+history placement does not depend on the browser's current Focus.
 
 Events and projected chat messages report state only. They do not approve review,
 landing, restart, or Attention gates and are never accepted as control input.
@@ -132,9 +137,10 @@ landing, restart, or Attention gates and are never accepted as control input.
 `MasterStateProvider` mounts once around the authenticated `AppShell`. It owns the
 canonical desk and session, ordered messages, active Master turn, durable resume
 cursor, one typed `EventSource`, reconnect state, unread count, composer draft and
-selection, and stable scroll/work-panel state. `MasterConversation`,
-`MasterComposer`, and `MasterWorkPanel` are view-only shared consumers used by the
-full-page home and prepared for the later popup.
+selection, stable scroll/work-panel state, and the selected history projection.
+`MasterConversation` and `MasterComposer` are view-only consumers shared by the
+full-page home and floating popup. `MasterWorkPanel` is the full-page consumer of
+the same provider state.
 
 The provider deduplicates event and message ids, preserves server ordering, and
 applies only safe final messages and server-owned Master projection summaries. Raw
@@ -146,15 +152,25 @@ bounded number of attempts. Bootstrap reads the desk's constant-size durable
 event history. Successful submission returns the canonical persisted user
 message, replacing the pending row with its durable id before streamed replies are
 ordered. Lifecycle generations and abort controllers ignore late responses, close
-replaced streams, and clear all owner-scoped state on token/owner change,
-feature-off, logout, onboarding, or update application.
+replaced streams, and clear canonical runtime state on token/owner change,
+feature-off, logout, onboarding, or update application. Owner-keyed session storage
+restores only draft, selection, and scroll after refresh; target remains an
+owner-keyed local preference.
 
 Focus is server-owned state, not a browser preference. Bootstrap reads the
 current epoch, pending request, and optimistic version from the desk. The picker
 writes through `PUT /api/master/focus`, explicit message targets transition Focus
 inside the message transaction, and `master.focus.changed` updates every live
-consumer from the durable boundary event. Local storage is used only for
-presentation preferences and the independent per-message target picker.
+consumer from the durable boundary event. History folders project the existing
+ordered message ids: a Container includes its immutable Focus segments and
+Container-subject system updates, Fleet requires positive Fleet attribution and
+excludes Container-subject updates, and Roving stays exact. Message Focus, subject,
+target, and Area identifiers remain immutable after Container deletion, so the
+unavailable historical folder stays selectable. Available folder changes are
+explicit Focus mutations, unavailable folders are read-only, and the shell Container
+can only request Focus through the explicit `Focus Master here` bridge. Local
+storage is used only for presentation preferences and the independent per-message
+target picker; session storage owns refresh-only draft, selection, and scroll state.
 
 ## Compatibility
 

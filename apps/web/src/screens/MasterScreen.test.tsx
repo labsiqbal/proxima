@@ -27,6 +27,7 @@ const actions = {
   setSideCollapsed: vi.fn(),
   setScrollState: vi.fn(),
   setFocus: vi.fn().mockResolvedValue(undefined),
+  setHistory: vi.fn(),
   setTargetContainer: vi.fn(),
   setTargetArea: vi.fn(),
   loadTargetAreas: vi.fn().mockResolvedValue(undefined),
@@ -172,6 +173,30 @@ describe('MasterScreen', () => {
     expect(actions.setFocus).not.toHaveBeenCalled()
   })
 
+  it('only bridges the shell Container into Master after an explicit request', async () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      fleet: {
+        loading: false,
+        error: '',
+        containers: [{ id: 21, slug: 'shell-container', name: 'Shell', identity_label: 'Shell' }],
+        areasByContainer: {},
+      },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        activeProject={{ slug: 'shell-container' } as never}
+        onOpenJob={vi.fn()}
+      />,
+    )
+    expect(actions.setFocus).not.toHaveBeenCalled()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Focus Master here' }))
+    expect(actions.setFocus).toHaveBeenCalledWith(21)
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'container', containerId: 21 })
+  })
+
   it('shows explicit Container metadata, an advanced Area override, and the Focus warning', async () => {
     vi.mocked(useMasterState).mockReturnValue({
       ...state,
@@ -208,6 +233,45 @@ describe('MasterScreen', () => {
     expect(screen.getByRole('option', { name: 'Operations' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Code: repository root' }))
       .toBeInTheDocument()
+  })
+
+  it('keeps deleted Container history selectable by immutable attribution', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      messages: [{
+        id: 90,
+        role: 'assistant',
+        content: 'Historical result',
+        message_focus: {
+          focus_epoch_id: 9,
+          focus_container_id: 44,
+          subject_container_id: null,
+        },
+      }],
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    expect(screen.getByRole('option', { name: 'Unavailable Container #44' }))
+      .toBeInTheDocument()
+  })
+
+  it('labels focused tool-result rows with their shared history attribution', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      history: { kind: 'container', containerId: 21 },
+      historyMessages: [{
+        id: 91,
+        role: 'system',
+        content: 'Master tool results:\n```json\n[{"ok":true,"tool":"list_tasks","result":{"jobs":[]}}]\n```',
+        historyKind: 'focused-segment',
+      }],
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    const results = screen.getByRole('group', { name: 'Master tool results' })
+    expect(results.closest('article')).toHaveTextContent('Focused segment')
   })
 
   it('disables the only composer while Master is working', () => {

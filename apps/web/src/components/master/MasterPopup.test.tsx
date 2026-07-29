@@ -7,15 +7,29 @@ import { useMasterState } from '../../master/MasterStateProvider'
 import { MasterPopup } from './MasterPopup'
 import { MasterToastRegion } from './MasterToastRegion'
 
+const popupTestState = vi.hoisted(() => ({ composerDisabled: false }))
+
 vi.mock('../../master/MasterStateProvider', () => ({ useMasterState: vi.fn() }))
 vi.mock('./MasterConversation', () => ({
   MasterConversation: () => <button type="button">Thread action</button>,
 }))
 vi.mock('./MasterComposer', () => ({
-  MasterComposer: () => <textarea aria-label="Message Master" />,
+  MasterComposer: () => (
+    <textarea
+      aria-label="Message Master"
+      disabled={popupTestState.composerDisabled}
+    />
+  ),
 }))
 
-function PopupHarness() {
+function PopupHarness({
+  pending = false,
+  busy = false,
+}: {
+  pending?: boolean
+  busy?: boolean
+}) {
+  popupTestState.composerDisabled = busy
   const [popup, setPopup] = React.useState({
     open: false,
     preferredCorner: 'right' as const,
@@ -30,12 +44,22 @@ function PopupHarness() {
   }), [])
   vi.mocked(useMasterState).mockReturnValue({
     enabled: true,
-    desk: { session: { id: 9 } },
+    desk: {
+      session: { id: 9 },
+      focus: {
+        pending,
+        pending_container_id: pending ? 21 : null,
+      },
+    },
     connection: { state: 'connected' },
     unread: { count: 2 },
     popup,
     focus: { mode: 'fleet', containerId: null },
-    fleet: { containers: [] },
+    fleet: {
+      containers: pending
+        ? [{ id: 21, name: 'Acme', identity_label: 'Acme' }]
+        : [],
+    },
     actions,
   } as never)
   return (
@@ -49,7 +73,10 @@ function PopupHarness() {
 }
 
 describe('MasterPopup', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    popupTestState.composerDisabled = false
+  })
 
   it('opens by shortcut, traps focus, closes on Escape, and restores the trigger', async () => {
     const user = userEvent.setup()
@@ -84,6 +111,28 @@ describe('MasterPopup', () => {
     expect(screen.getByRole('button', { name: 'Move popup to bottom right' }))
       .toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: 'Master' })).toBe(dialog)
+  })
+
+  it('shows a pending Focus inside the shared popup', async () => {
+    const user = userEvent.setup()
+    render(<PopupHarness pending />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Master popup' }))
+
+    expect(screen.getByText('Pending Focus: Acme. Applies after this turn.'))
+      .toBeInTheDocument()
+  })
+
+  it('focuses a usable popup action while the composer is disabled', async () => {
+    const user = userEvent.setup()
+    render(<PopupHarness busy />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Master popup' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Move popup to bottom left' }))
+        .toHaveFocus()
+    })
   })
 })
 

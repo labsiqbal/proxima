@@ -58,8 +58,8 @@ alone never unlock egress.
   and legacy Ops roots that still overlap Code Areas.
 - Graph absence or staleness degrades context visibility without blocking Tasks
   or Live state.
-- Durable Focus epochs now build on this layering; history projection UI remains
-  a separate later delivery group.
+- Durable Focus epochs and history projections build on this layering;
+  ADR-0007 owns their execution-boundary and attribution contract.
 
 ## Related
 

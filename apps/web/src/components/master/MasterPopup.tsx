@@ -2,6 +2,7 @@ import React from 'react'
 import { useMasterState } from '../../master/MasterStateProvider'
 import { MasterComposer } from './MasterComposer'
 import { MasterConversation } from './MasterConversation'
+import { MasterPendingFocus } from './MasterTargetPicker'
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -85,7 +86,7 @@ export function MasterPopup({
     wasOpenRef.current = true
     const frame = window.requestAnimationFrame(() => {
       const textarea = dialogRef.current?.querySelector<HTMLElement>(
-        'textarea[aria-label="Message Master"]',
+        'textarea[aria-label="Message Master"]:not([disabled])',
       )
       ;(textarea || focusableIn(dialogRef.current)[0])?.focus()
     })
@@ -176,6 +177,7 @@ export function MasterPopup({
                     {' · '}
                     {connection.state === 'connected' ? 'Live' : 'Reconnecting'}
                   </small>
+                  <MasterPendingFocus />
                 </span>
               </div>
               <nav aria-label="Master popup actions">

@@ -24,6 +24,11 @@ import {
   projectMasterSnapshot,
   type MasterViewMessage,
 } from './masterProjection'
+import {
+  projectMasterHistory,
+  type MasterHistoryMessage,
+  type MasterHistoryScope,
+} from './masterHistory'
 
 export type { MasterViewMessage } from './masterProjection'
 
@@ -61,6 +66,8 @@ export type MasterPopupState = {
   preferredCorner: 'left' | 'right'
 }
 
+export type MasterHistoryState = MasterHistoryScope
+
 export type MasterFleetState = {
   loading: boolean
   error: string
@@ -73,6 +80,8 @@ export type MasterStateValue = {
   loading: boolean
   desk: MasterDesk | null
   messages: MasterViewMessage[]
+  history: MasterHistoryState
+  historyMessages: MasterHistoryMessage[]
   activeRun: { id: number; status: string } | null
   connection: {
     state: MasterConnectionState
@@ -116,6 +125,7 @@ export type MasterStateValue = {
       anchorMessageId: number | null
     }) => void
     setFocus: (containerId: number | null) => Promise<void>
+    setHistory: (history: MasterHistoryState) => void
     setTargetContainer: (containerId: number | null) => void
     setTargetArea: (areaId: number | null) => void
     loadTargetAreas: (containerId: number) => Promise<void>
@@ -135,6 +145,7 @@ const MasterStateContext = React.createContext<MasterStateValue | null>(null)
 const SIDE_COLLAPSED_KEY = 'proxima.master.sideCollapsed'
 const MASTER_TARGET_KEY = 'proxima.master.target'
 const MASTER_POPUP_CORNER_KEY = 'proxima.master.popupCorner'
+const MASTER_REFRESH_STATE_KEY = 'proxima.master.refreshState'
 const EVENT_DEDUPE_LIMIT = 2000
 const RECONCILE_RACE_LIMIT = 3
 const TOAST_QUEUE_LIMIT = 3
@@ -145,9 +156,87 @@ const DEFAULT_TARGET: MasterTargetState = {
   containerId: null,
   areaId: null,
 }
+const DEFAULT_HISTORY: MasterHistoryState = { kind: 'roving' }
+
+type MasterRefreshState = {
+  draft: string
+  selection: MasterComposerSelection
+  scroll: {
+    scrollTop: number
+    followTail: boolean
+    anchorMessageId: number | null
+  }
+}
+
+function defaultRefreshState(): MasterRefreshState {
+  return {
+    draft: '',
+    selection: { start: 0, end: 0 },
+    scroll: {
+      scrollTop: 0,
+      followTail: true,
+      anchorMessageId: null,
+    },
+  }
+}
 
 function ownerPreferenceKey(key: string, ownerId: number): string {
   return `${key}.${ownerId}`
+}
+
+function readRefreshState(ownerId: number): MasterRefreshState {
+  const fallback = defaultRefreshState()
+  if (typeof sessionStorage === 'undefined') return fallback
+  try {
+    const value = JSON.parse(
+      sessionStorage.getItem(
+        ownerPreferenceKey(MASTER_REFRESH_STATE_KEY, ownerId),
+      ) || 'null',
+    )
+    const draft = typeof value?.draft === 'string' ? value.draft : ''
+    const start = Number.isSafeInteger(value?.selection?.start)
+      && value.selection.start >= 0
+      ? Math.min(value.selection.start, draft.length)
+      : 0
+    const end = Number.isSafeInteger(value?.selection?.end)
+      && value.selection.end >= start
+      ? Math.min(value.selection.end, draft.length)
+      : start
+    const scrollTop = typeof value?.scroll?.scrollTop === 'number'
+      && Number.isFinite(value.scroll.scrollTop)
+      && value.scroll.scrollTop >= 0
+      ? value.scroll.scrollTop
+      : 0
+    const anchorMessageId = Number.isSafeInteger(
+      value?.scroll?.anchorMessageId,
+    ) && value.scroll.anchorMessageId > 0
+      ? value.scroll.anchorMessageId
+      : null
+    return {
+      draft,
+      selection: { start, end },
+      scroll: {
+        scrollTop,
+        followTail: typeof value?.scroll?.followTail === 'boolean'
+          ? value.scroll.followTail
+          : true,
+        anchorMessageId,
+      },
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function writeRefreshState(ownerId: number, state: MasterRefreshState) {
+  try {
+    sessionStorage.setItem(
+      ownerPreferenceKey(MASTER_REFRESH_STATE_KEY, ownerId),
+      JSON.stringify(state),
+    )
+  } catch {
+    return
+  }
 }
 
 function readTarget(ownerId: number): MasterTargetState {
@@ -329,6 +418,7 @@ function MasterStateHost({
   enabled: boolean
   children: React.ReactNode
 }) {
+  const [restoredState] = React.useState(() => readRefreshState(ownerId))
   const [loading, setLoading] = React.useState(enabled)
   const [desk, setDesk] = React.useState<MasterDesk | null>(null)
   const [messages, setMessages] = React.useState<MasterViewMessage[]>([])
@@ -339,19 +429,18 @@ function MasterStateHost({
   const [reconnectCount, setReconnectCount] = React.useState(0)
   const [connectionError, setConnectionError] = React.useState('')
   const [unreadCount, setUnreadCount] = React.useState(0)
-  const [draft, setDraftState] = React.useState('')
-  const [selection, setSelection] = React.useState<MasterComposerSelection>({ start: 0, end: 0 })
+  const [draft, setDraftState] = React.useState(restoredState.draft)
+  const [selection, setSelectionState] = React.useState<MasterComposerSelection>(
+    restoredState.selection,
+  )
   const [sending, setSending] = React.useState(false)
   const [sendError, setSendError] = React.useState('')
   const [focusRequest, setFocusRequest] = React.useState(0)
   const [homeActive, setHomeActiveState] = React.useState(false)
   const [sideCollapsed, setSideCollapsedState] = React.useState(readSideCollapsed)
-  const [scrollState, setScrollStateValue] = React.useState({
-    scrollTop: 0,
-    followTail: true,
-    anchorMessageId: null as number | null,
-  })
+  const [scrollState, setScrollStateValue] = React.useState(restoredState.scroll)
   const [focus, setFocusState] = React.useState<MasterFocusState>(DEFAULT_FOCUS)
+  const [history, setHistoryState] = React.useState<MasterHistoryState>(DEFAULT_HISTORY)
   const [target, setTargetState] = React.useState<MasterTargetState>(
     () => readTarget(ownerId),
   )
@@ -396,6 +485,7 @@ function MasterStateHost({
   const focusRef = React.useRef(focus)
   const targetRef = React.useRef(target)
   const fleetRef = React.useRef(fleet)
+  const refreshStateRef = React.useRef(restoredState)
   const areaRequestsRef = React.useRef(new Map<number, Promise<void>>())
   const handleEventRef = React.useRef<(event: RunEvent) => void>(() => {})
   const reconcileRef = React.useRef<(reason?: string, afterId?: number) => Promise<void>>(
@@ -415,6 +505,8 @@ function MasterStateHost({
   }, [])
 
   const clearOwnedState = React.useCallback((nextEnabled: boolean) => {
+    const nextRefreshState = readRefreshState(ownerId)
+    refreshStateRef.current = nextRefreshState
     deskRef.current = null
     messagesRef.current = []
     cursorRef.current = 0
@@ -431,13 +523,13 @@ function MasterStateHost({
     setReconnectCount(0)
     setConnectionError('')
     setUnreadCount(0)
-    setDraftState('')
-    setSelection({ start: 0, end: 0 })
+    setDraftState(nextRefreshState.draft)
+    setSelectionState(nextRefreshState.selection)
     setSending(false)
     setSendError('')
     setHomeActiveState(false)
     homeActiveRef.current = false
-    setScrollStateValue({ scrollTop: 0, followTail: true, anchorMessageId: null })
+    setScrollStateValue(nextRefreshState.scroll)
     const nextFocus = DEFAULT_FOCUS
     const nextTarget = readTarget(ownerId)
     const nextPopup = {
@@ -456,6 +548,7 @@ function MasterStateHost({
     areaRequestsRef.current.clear()
     toastTransitionsRef.current.clear()
     setFocusState(nextFocus)
+    setHistoryState(DEFAULT_HISTORY)
     setTargetState(nextTarget)
     setPopupState(nextPopup)
     setToasts([])
@@ -850,16 +943,47 @@ function MasterStateHost({
     }
   }, [bootstrapRequest, clearOwnedState, enabled, ownerId, token])
 
+  const persistRefreshState = React.useCallback((
+    patch: Partial<MasterRefreshState>,
+  ) => {
+    const next = { ...refreshStateRef.current, ...patch }
+    refreshStateRef.current = next
+    writeRefreshState(ownerId, next)
+  }, [ownerId])
+
   const setDraft = React.useCallback((nextDraft: string) => {
-    if (!sendLockRef.current) setDraftState(nextDraft)
-  }, [])
+    if (sendLockRef.current) return
+    const currentSelection = refreshStateRef.current.selection
+    const nextSelection = {
+      start: Math.min(currentSelection.start, nextDraft.length),
+      end: Math.min(currentSelection.end, nextDraft.length),
+    }
+    setDraftState(nextDraft)
+    setSelectionState(nextSelection)
+    persistRefreshState({
+      draft: nextDraft,
+      selection: nextSelection,
+    })
+  }, [persistRefreshState])
+
+  const setSelection = React.useCallback((
+    nextSelection: MasterComposerSelection,
+  ) => {
+    setSelectionState(nextSelection)
+    persistRefreshState({ selection: nextSelection })
+  }, [persistRefreshState])
 
   const seedDraft = React.useCallback((nextDraft: string) => {
     if (sendLockRef.current) return
+    const nextSelection = { start: nextDraft.length, end: nextDraft.length }
     setDraftState(nextDraft)
-    setSelection({ start: nextDraft.length, end: nextDraft.length })
+    setSelectionState(nextSelection)
+    persistRefreshState({
+      draft: nextDraft,
+      selection: nextSelection,
+    })
     setFocusRequest(request => request + 1)
-  }, [])
+  }, [persistRefreshState])
 
   const setFocus = React.useCallback((containerId: number | null) => {
     const requestedGeneration = generationRef.current
@@ -923,6 +1047,10 @@ function MasterStateHost({
     focusPromiseRef.current = request.catch(() => {})
     return request
   }, [enabled, token])
+
+  const setHistory = React.useCallback((nextHistory: MasterHistoryState) => {
+    setHistoryState(nextHistory)
+  }, [])
 
   const setTargetContainer = React.useCallback((containerId: number | null) => {
     const next: MasterTargetState = containerId == null
@@ -1089,6 +1217,11 @@ function MasterStateHost({
       clientId,
       pending: true,
       master_target: masterTarget,
+      message_focus: {
+        focus_epoch_id: deskRef.current.focus.current_epoch_id,
+        focus_container_id: effectiveFocus.containerId,
+        subject_container_id: null,
+      },
     }])
     setMessages(messagesRef.current)
     try {
@@ -1104,7 +1237,15 @@ function MasterStateHost({
       ) return
       mutationRevisionRef.current += 1
       messagesRef.current = messagesRef.current.map(message => message.clientId === clientId
-        ? { ...result.message, pending: false }
+        ? {
+            ...result.message,
+            pending: false,
+            message_focus: {
+              focus_epoch_id: result.focus.current_epoch_id,
+              focus_container_id: result.focus.current_container_id,
+              subject_container_id: null,
+            },
+          }
         : message)
       messagesRef.current = orderMasterMessages(messagesRef.current)
       setMessages(messagesRef.current)
@@ -1124,7 +1265,11 @@ function MasterStateHost({
       setDesk(deskRef.current)
       setFocusState(nextFocus)
       setDraftState('')
-      setSelection({ start: 0, end: 0 })
+      setSelectionState({ start: 0, end: 0 })
+      persistRefreshState({
+        draft: '',
+        selection: { start: 0, end: 0 },
+      })
     } catch (error) {
       if (
         !controller.signal.aborted
@@ -1144,7 +1289,7 @@ function MasterStateHost({
       }
       if (sendAbortRef.current === controller) sendAbortRef.current = null
     }
-  }, [activeRun?.status, draft, enabled, token])
+  }, [activeRun?.status, draft, enabled, persistRefreshState, token])
 
   const setHomeActive = React.useCallback((active: boolean) => {
     homeActiveRef.current = active
@@ -1173,7 +1318,8 @@ function MasterStateHost({
         ? current
         : next
     ))
-  }, [])
+    persistRefreshState({ scroll: next })
+  }, [persistRefreshState])
 
   const updateSettings = React.useCallback(async (settings: Partial<MasterSettings>) => {
     if (!enabled || !token || !deskRef.current) return
@@ -1223,11 +1369,18 @@ function MasterStateHost({
     }
   }, [enabled, token])
 
+  const historyMessages = React.useMemo(
+    () => projectMasterHistory(messages, history),
+    [history, messages],
+  )
+
   const value = React.useMemo<MasterStateValue>(() => ({
     enabled,
     loading,
     desk,
     messages,
+    history,
+    historyMessages,
     activeRun,
     connection: {
       state: connectionState,
@@ -1263,6 +1416,7 @@ function MasterStateHost({
       setSideCollapsed,
       setScrollState,
       setFocus,
+      setHistory,
       setTargetContainer,
       setTargetArea,
       loadTargetAreas,
@@ -1298,6 +1452,8 @@ function MasterStateHost({
     enabled,
     focusRequest,
     focus,
+    history,
+    historyMessages,
     fleet,
     homeActive,
     loading,
@@ -1315,9 +1471,11 @@ function MasterStateHost({
     sending,
     setDraft,
     setFocus,
+    setHistory,
     setHomeActive,
     setPopupCorner,
     setScrollState,
+    setSelection,
     setSideCollapsed,
     setTargetArea,
     setTargetContainer,

@@ -20,12 +20,15 @@ MAX_PROJECTION_PAYLOAD_BYTES = 16 * 1024
 _SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
 _BASE_PAYLOAD_FIELDS = {
     "event_id",
+    "focus_container_id",
+    "focus_epoch_id",
     "master_session_id",
     "message_id",
     "owner_user_id",
     "projection_id",
     "projection_key",
     "source",
+    "subject_container_id",
 }
 _TASK_PAYLOAD_FIELDS = {
     "area_id",
@@ -586,6 +589,17 @@ class MasterProjectionService:
                     focus_epoch_id=focus_epoch_id,
                     subject_container_id=subject_container_id,
                 )
+                focus_container_id = None
+                if focus_epoch_id is not None:
+                    epoch = conn.execute(
+                        "SELECT container_id FROM master_focus_epochs WHERE id = ?",
+                        (focus_epoch_id,),
+                    ).fetchone()
+                    if epoch is None:
+                        raise ValueError(
+                            "projection Focus origin is unavailable"
+                        )
+                    focus_container_id = _as_int(epoch["container_id"])
                 event_payload = {
                     "projection_id": projection_id,
                     "projection_key": projection_key,
@@ -593,6 +607,9 @@ class MasterProjectionService:
                     "owner_user_id": owner_user_id,
                     "master_session_id": master_session_id,
                     "source": {"table": source_table, "id": source_id},
+                    "focus_epoch_id": focus_epoch_id,
+                    "focus_container_id": focus_container_id,
+                    "subject_container_id": subject_container_id,
                     **payload,
                 }
                 event_cursor = conn.execute(

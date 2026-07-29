@@ -172,12 +172,34 @@ function messageKey(message: MasterViewMessage, index: number) {
   return message.id ?? message.clientId ?? `master-message-${index}`
 }
 
+function MasterHistoryKind({
+  kind,
+}: {
+  kind?: 'focused-segment' | 'system-event' | 'focus-boundary' | null
+}) {
+  if (!kind) return null
+  return (
+    <small className={`master-history-kind ${kind}`}>
+      {kind === 'system-event'
+        ? 'System update'
+        : kind === 'focus-boundary'
+          ? 'Focus boundary'
+          : 'Focused segment'}
+    </small>
+  )
+}
+
 export function MasterConversation({
   onOpenJob,
 }: {
   onOpenJob: (id: number, engine?: string) => void
 }) {
-  const { messages, activeRun, view, fleet, actions } = useMasterState()
+  const state = useMasterState()
+  // Compatibility fallback keeps older embedded hosts and test harnesses on the
+  // canonical roving thread until they adopt the shared history selection.
+  const history = state.history ?? { kind: 'roving' as const }
+  const historyMessages = state.historyMessages ?? state.messages
+  const { activeRun, view, fleet, actions } = state
   const threadRef = React.useRef<HTMLDivElement>(null)
   const restoredRef = React.useRef(false)
   const frameRef = React.useRef<number | null>(null)
@@ -191,7 +213,7 @@ export function MasterConversation({
       return
     }
     if (view.followTail) thread.scrollTop = thread.scrollHeight
-  }, [messages.length, view.followTail, view.scrollTop])
+  }, [historyMessages.length, view.followTail, view.scrollTop])
 
   React.useEffect(() => () => {
     if (frameRef.current != null) window.cancelAnimationFrame(frameRef.current)
@@ -215,7 +237,13 @@ export function MasterConversation({
     })
   }
 
-  if (!messages.length && !activeRun) return <MasterEmpty />
+  if (!historyMessages.length && !activeRun) {
+    return history.kind === 'roving' ? <MasterEmpty /> : (
+      <div className="master-history-empty" role="status">
+        No Master history is attributed to this view yet.
+      </div>
+    )
+  }
 
   return (
     <div
@@ -223,12 +251,12 @@ export function MasterConversation({
       ref={threadRef}
       onScroll={recordScroll}
       role="log"
-      aria-label="Master conversation"
+      aria-label="Master conversation history"
       aria-live="polite"
       aria-relevant="additions text"
       aria-atomic="false"
     >
-      {messages.map((message, index) => {
+      {historyMessages.map((message, index) => {
         const content = message.role === 'assistant'
           ? cleanMaster(message.content)
           : message.content
@@ -236,11 +264,17 @@ export function MasterConversation({
         const tools = message.role === 'system' ? parseToolResults(content) : null
         if (tools) {
           return (
-            <MasterToolResults
+            <article
+              className="master-tool-message"
               key={messageKey(message, index)}
-              tools={tools}
-              onOpenJob={onOpenJob}
-            />
+              data-message-id={message.id}
+            >
+              <MasterHistoryKind kind={message.historyKind} />
+              <MasterToolResults
+                tools={tools}
+                onOpenJob={onOpenJob}
+              />
+            </article>
           )
         }
         const metadata = message.master_target
@@ -291,6 +325,7 @@ export function MasterConversation({
                   : 'Proxima'}
               {message.pending && <span className="master-message-pending">Sending</span>}
             </strong>
+            <MasterHistoryKind kind={message.historyKind} />
             {targetLabel && (
               <small className="master-message-target">{targetLabel}</small>
             )}
