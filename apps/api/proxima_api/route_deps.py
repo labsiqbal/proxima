@@ -26,7 +26,6 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
-from .maintenance_status import writes_fenced
 from . import features, master_focus
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
@@ -60,6 +59,7 @@ def build_route_deps(
     cookie: FastApiCallable,
     http_exception: Any,
     status_module: Any,
+    maintenance: Any,
 ) -> dict[str, Any]:
     """Build the dependency dictionary consumed by routes/*.register()."""
 
@@ -71,10 +71,10 @@ def build_route_deps(
             row = db().execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
             if row:
                 user = dict(row)
-                if not writes_fenced(cfg):
+                if not maintenance.fenced():
                     ensure_default_profile(user)
                 return user
-            if writes_fenced(cfg):
+            if maintenance.fenced():
                 raise http_exception(
                     status_code=503,
                     detail="owner unavailable during maintenance",
@@ -256,11 +256,11 @@ def build_route_deps(
             (user["id"],),
         ).fetchone()
         if row:
-            if writes_fenced(cfg):
+            if maintenance.fenced():
                 return dict(row)
             db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],))
             return dict(row)
-        if writes_fenced(cfg):
+        if maintenance.fenced():
             raise http_exception(
                 status_code=503,
                 detail="profile unavailable during maintenance",
@@ -537,6 +537,7 @@ def build_route_deps(
     return {
         "db": db,
         "cfg": cfg,
+        "maintenance": maintenance,
         "current_user": current_user,
         "current_user_strict_token": current_user_strict_token,
         "admin_user": admin_user,

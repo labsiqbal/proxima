@@ -18,6 +18,7 @@ from ..schemas import FileWriteRequest, FsPathRequest, FsRenameRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
 
@@ -27,7 +28,7 @@ def register(app, deps):
         return {"notes": fsapi.walk_files(root, "wiki")}
 
     # ── Personal per-user wiki (workspace_root/users/<username>/wiki) ──
-    def _wiki_root(user: dict[str, Any], *, create: bool = False) -> Path:
+    def _wiki_root(user: dict[str, Any], *, create: bool) -> Path:
         root = Path(cfg["workspace_root"]) / "users" / validate_slug(user["username"]) / "wiki"
         if create and not root.exists():
             root.mkdir(parents=True, exist_ok=True)
@@ -42,19 +43,35 @@ def register(app, deps):
 
     @app.get("/api/wiki/all")
     def wiki_all(user: dict[str, Any] = Depends(current_user)):
-        return {"notes": fsapi.walk_files(_wiki_root(user))}
+        return {
+            "notes": fsapi.walk_files(
+                _wiki_root(user, create=not maintenance.fenced())
+            )
+        }
 
     @app.get("/api/wiki/tree")
     def wiki_tree(path: str = "", user: dict[str, Any] = Depends(current_user)):
         try:
-            return {"path": path, "entries": fsapi.list_tree(_wiki_root(user), path)}
+            return {
+                "path": path,
+                "entries": fsapi.list_tree(
+                    _wiki_root(user, create=not maintenance.fenced()),
+                    path,
+                ),
+            }
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/wiki/file")
     def wiki_read_file(path: str, user: dict[str, Any] = Depends(current_user)):
         try:
-            return {"path": path, "content": fsapi.read_file(_wiki_root(user), path)}
+            return {
+                "path": path,
+                "content": fsapi.read_file(
+                    _wiki_root(user, create=not maintenance.fenced()),
+                    path,
+                ),
+            }
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

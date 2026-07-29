@@ -39,7 +39,10 @@ def register(app, deps):
         # first-run "set a password" screen, the login screen, or (passwordless) the
         # auto-login path. Runner list lets the UI show what's installed.
         owner = ensure_single_user_owner()
-        readiness = runner_readiness()
+        readiness = runner_readiness(
+            path_env=str(cfg.get("_runtime_path") or ""),
+            create_shim=False,
+        )
         return {
             "bootstrap_required": False,
             "single_user": True,

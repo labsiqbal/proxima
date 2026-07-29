@@ -26,7 +26,6 @@ from fastapi.responses import StreamingResponse
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from .. import artifact_registry
 from ..db import connect
-from ..maintenance_status import writes_fenced
 from ..terminal import TerminalSession
 from .. import fsapi
 from .. import app_settings
@@ -130,6 +129,7 @@ async def _stream_session_events(
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     feature_cfg = cfg
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
@@ -853,7 +853,7 @@ def register(app, deps):
         worker = app.state.worker
         conn = connect(
             database_path,
-            writes_fenced=lambda: writes_fenced(cfg),
+            writes_fenced=maintenance.database_write_check(),
         )
         try:
             done = threading.Event()
@@ -1189,7 +1189,10 @@ def register(app, deps):
             "OR (status = 'queued' AND created_at >= datetime('now', ?)))",
             stale_params(stale_seconds),
         ).fetchone()["c"]
-        runners = detect_runners()
+        runners = detect_runners(
+            path_env=str(cfg.get("_runtime_path") or ""),
+            create_shim=False,
+        )
         system_health = {
             "activeRuns": active_runs_count,
             "failedRuns24h": failed_runs_24h,
@@ -1219,7 +1222,7 @@ def register(app, deps):
                     app_cfg.get("start_worker", True),
                 )
             )
-            and not writes_fenced(app_cfg)
+            and not maintenance.fenced()
         )
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
@@ -1268,7 +1271,7 @@ def register(app, deps):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
         proxima_session cookie — a valid session is always required. cwd = project path
         or workspace."""
-        if writes_fenced(cfg):
+        if maintenance.fenced():
             await websocket.close(code=4423)
             return
         # Require a valid session (cookie or ?token=) — same stance as ws_events + the
@@ -1294,19 +1297,18 @@ def register(app, deps):
                 await websocket.close(code=4404)
                 return
             cwd = str(_project_root(project, user))
-        if writes_fenced(cfg):
+        start_lease = maintenance.acquire()
+        if not start_lease.acquired or maintenance.fenced():
+            start_lease.release()
             await websocket.close(code=4423)
             return
-        Path(cwd).mkdir(parents=True, exist_ok=True)
-        if writes_fenced(cfg):
-            await websocket.close(code=4423)
-            return
-        await websocket.accept()
-        if writes_fenced(cfg):
-            await websocket.close(code=4423)
-            return
-        term = TerminalSession(cwd)
-        term.start()
+        try:
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+            await websocket.accept()
+            term = TerminalSession(cwd)
+            term.start()
+        finally:
+            start_lease.release()
         loop = asyncio.get_event_loop()
 
         async def pump_out():
@@ -1326,7 +1328,7 @@ def register(app, deps):
         out_task = asyncio.create_task(pump_out())
         try:
             while True:
-                if writes_fenced(cfg):
+                if maintenance.fenced():
                     await websocket.close(code=4423)
                     break
                 try:
@@ -1336,28 +1338,33 @@ def register(app, deps):
                     )
                 except asyncio.TimeoutError:
                     continue
-                if writes_fenced(cfg):
-                    await websocket.close(code=4423)
-                    break
                 if msg.get("type") == "websocket.disconnect":
                     break
-                if msg.get("bytes") is not None:
-                    term.write(msg["bytes"])
-                elif msg.get("text"):
-                    t = msg["text"]
-                    if t.startswith("{"):
-                        try:
-                            j = _decode_json(t)
-                            if j.get("type") == "resize":
-                                term.resize(_as_int(j.get("rows", 24)), _as_int(j.get("cols", 80)))
-                            elif j.get("type") == "input":
-                                term.write(str(j.get("data", "")).encode())
-                            else:
+                input_lease = maintenance.acquire()
+                if not input_lease.acquired or maintenance.fenced():
+                    input_lease.release()
+                    await websocket.close(code=4423)
+                    break
+                try:
+                    if msg.get("bytes") is not None:
+                        term.write(msg["bytes"])
+                    elif msg.get("text"):
+                        t = msg["text"]
+                        if t.startswith("{"):
+                            try:
+                                j = _decode_json(t)
+                                if j.get("type") == "resize":
+                                    term.resize(_as_int(j.get("rows", 24)), _as_int(j.get("cols", 80)))
+                                elif j.get("type") == "input":
+                                    term.write(str(j.get("data", "")).encode())
+                                else:
+                                    term.write(t.encode())
+                            except Exception:
                                 term.write(t.encode())
-                        except Exception:
+                        else:
                             term.write(t.encode())
-                    else:
-                        term.write(t.encode())
+                finally:
+                    input_lease.release()
         except WebSocketDisconnect:
             pass
         finally:

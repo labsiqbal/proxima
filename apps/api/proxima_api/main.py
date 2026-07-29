@@ -42,7 +42,7 @@ from .updates import (
     read_local_version,
 )
 from .safe_updates import SafeUpdateCoordinator
-from .maintenance_status import active_maintenance, writes_fenced
+from .maintenance_status import MaintenanceBoundary
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -97,7 +97,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hub.bind_loop(asyncio.get_running_loop())
     # The candidate may serve a fixture to trusted probes, but it must never run
     # production-style writers, migrations, schedulers, refreshers or update loops.
-    if cfg.get("candidate_mode", False) or writes_fenced(cfg):
+    if cfg.get("candidate_mode", False) or app.state.maintenance.fenced():
         yield
         return
     if cfg.get("auto_provision", True):
@@ -145,7 +145,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         def _refresh_registry() -> None:
             conn = connect(
                 cfg["database_path"],
-                writes_fenced=lambda: writes_fenced(cfg),
+                writes_fenced=app.state.maintenance.database_write_check(),
             )
             try:
                 refresh_registry_projections(conn)
@@ -275,21 +275,29 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     cfg = normalize_config(config)
-    # Align shim root with this app instance, then prime process PATH so Terminal
-    # PTYs and bare-env children see the same local bins + python→python3 shim
-    # as agent/app subprocesses built via subprocess_env.
     os.environ.setdefault("PROXIMA_WORKSPACE_ROOT", str(cfg["workspace_root"]))
-    os.environ["PATH"] = augmented_path(os.environ.get("PATH"))
-    app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
-    app.state.config = cfg
-    maintenance_mode = writes_fenced(cfg)
+    maintenance = MaintenanceBoundary(cfg)
+    maintenance.prepare()
+    startup_lease = maintenance.acquire()
+    maintenance_mode = not startup_lease.acquired or maintenance.fenced()
     if maintenance_mode:
         cfg["_safe_update_startup_read_only"] = True
+    try:
+        os.environ["PATH"] = augmented_path(
+            os.environ.get("PATH"),
+            create_shim=not maintenance_mode,
+        )
+    finally:
+        startup_lease.release()
+    cfg["_runtime_path"] = os.environ["PATH"]
+    app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
+    app.state.config = cfg
+    app.state.maintenance = maintenance
     app.state.db = connect(
         cfg["database_path"],
         read_only=maintenance_mode,
         deny_writes=maintenance_mode,
-        writes_fenced=lambda: writes_fenced(cfg),
+        writes_fenced=maintenance.database_write_check(),
     )
     app.state.db_lock = __import__("threading").RLock()
     if cfg.get("candidate_mode", False):
@@ -324,7 +332,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg["database_path"],
         read_only=maintenance_mode,
         deny_writes=maintenance_mode,
-        writes_fenced=lambda: writes_fenced(cfg),
+        writes_fenced=maintenance.database_write_check(),
     )  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager()
@@ -345,23 +353,40 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def maintenance_write_fence(request: Request, call_next):
+        lease = maintenance.acquire()
+        maintenance_state = maintenance.status()
         write_capable = (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
             or request.url.path.startswith("/api/appview/")
         )
-        if write_capable and request.url.path != "/auth/resume":
-            maintenance = active_maintenance(cfg)
-            if maintenance is not None:
-                return JSONResponse(
-                    status_code=423,
-                    content={
-                        "detail": {
-                            "code": "maintenance_write_fenced",
-                            **maintenance,
-                        }
+        if (
+            write_capable
+            and request.url.path != "/auth/resume"
+            and (not lease.acquired or maintenance_state is not None)
+        ):
+            lease.release()
+            return JSONResponse(
+                status_code=423,
+                content={
+                    "detail": {
+                        "code": "maintenance_write_fenced",
+                        **(
+                            maintenance_state
+                            or {
+                                "phase": "unknown",
+                                "reason": "maintenance_ingress_busy",
+                            }
+                        ),
                     },
-                )
-        return await call_next(request)
+                },
+            )
+        if not lease.acquired or maintenance_state is not None:
+            lease.release()
+            return await call_next(request)
+        try:
+            return await call_next(request)
+        finally:
+            lease.release()
 
     register_frontend(
         app,
@@ -385,7 +410,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
                 cfg["database_path"],
                 read_only=maintenance_mode,
                 deny_writes=maintenance_mode,
-                writes_fenced=lambda: writes_fenced(cfg),
+                writes_fenced=maintenance.database_write_check(),
             )
             _db_local.conn = conn
         return conn
@@ -424,6 +449,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cookie=Cookie,
         http_exception=HTTPException,
         status_module=status,
+        maintenance=maintenance,
     )
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
         if maintenance_mode:
@@ -527,7 +553,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg.get("preview_bind_host"),
         port_for=lambda slug: app.state.app_manager.port(slug),
         validate_token=_valid_preview_token,
-        maintenance_fenced=lambda: writes_fenced(cfg),
+        maintenance=maintenance,
     )
 
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
@@ -535,7 +561,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     # these subdomains, so they can be iframed). No-op when apps_domain is unset.
     app.add_middleware(PreviewProxyMiddleware, fastapi_app=app, apps_domain=cfg.get("apps_domain"),
                        validate_token=_valid_preview_token,
-                       maintenance_fenced=lambda: writes_fenced(cfg))
+                       maintenance=maintenance)
 
     return app
 

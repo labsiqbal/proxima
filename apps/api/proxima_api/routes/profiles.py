@@ -20,7 +20,6 @@ from ..commands import (
     skill_command_map,
 )
 from ..capabilities import clear_skill_scan_cache, detect_for_runner, parse_selection
-from ..maintenance_status import writes_fenced
 from ..recommended_tools import probe_recommended_tools
 from ..runners import detect_runners, hermes_status, runner_readiness
 from ..runner_specs import runner_is_selectable, runner_spec
@@ -32,6 +31,7 @@ from ..schemas import CommandRequest, ProfileCreateRequest, ProfileUpdateRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
+    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     profile_payload = deps["profile_payload"]
     profile_for_user = deps["profile_for_user"]
@@ -74,7 +74,7 @@ def register(app, deps):
                 profile = None
         if profile is None:
             try:
-                if not writes_fenced(cfg):
+                if not maintenance.fenced():
                     ensure_default_profile(user)
                 row = db().execute(
                     "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
@@ -93,7 +93,7 @@ def register(app, deps):
 
     @app.get("/api/profiles")
     def list_profiles(user: dict[str, Any] = Depends(current_user)):
-        if not writes_fenced(cfg):
+        if not maintenance.fenced():
             ensure_default_profile(user)
         rows = db().execute(
             "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' "
@@ -227,12 +227,23 @@ def register(app, deps):
     def runners_detect(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         # Runnability comes from the runner registry (RunnerDefinition.runnable),
         # not a hardcoded vendor — Proxima is bring-your-own-agent.
-        runners = detect_runners()
+        runtime_path = str(cfg.get("_runtime_path") or "")
+        runners = detect_runners(
+            path_env=runtime_path,
+            create_shim=False,
+        )
         return {
             "user": user["username"],
             "runners": runners,
-            "hermes": hermes_status(source_home=cfg.get("source_hermes_home"), binary=cfg.get("hermes_bin"), path_env=None),
-            "runnerReadiness": runner_readiness(),
+            "hermes": hermes_status(
+                source_home=cfg.get("source_hermes_home"),
+                binary=cfg.get("hermes_bin"),
+                path_env=runtime_path,
+            ),
+            "runnerReadiness": runner_readiness(
+                path_env=runtime_path,
+                create_shim=False,
+            ),
         }
 
     @app.get("/api/commands/catalog")

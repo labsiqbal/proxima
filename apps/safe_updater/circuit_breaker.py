@@ -21,9 +21,10 @@ class CircuitBreaker:
     def __init__(self, root: Path) -> None:
         self.path = root / "breaker.json"
         self.temporary = self.path.with_name(f".{self.path.name}.tmp")
+        self.pending = self.path.with_name(f".{self.path.name}.pending")
 
     def status(self) -> BreakerStatus:
-        if os.path.lexists(self.temporary):
+        if os.path.lexists(self.pending) or os.path.lexists(self.temporary):
             return BreakerStatus(True, 0, "breaker_update_interrupted")
         try:
             path_stat = self.path.lstat()
@@ -55,14 +56,43 @@ class CircuitBreaker:
         self._write({"failures": failures, "latched": latched, "reason": reason if latched else None})
         return self.status()
 
+    def _preserve_pending(self) -> None:
+        try:
+            descriptor = os.open(
+                self.pending,
+                os.O_CREAT
+                | os.O_WRONLY
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                os.ftruncate(descriptor, 0)
+                write_all(descriptor, b"pending\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            fsync_directory(self.path.parent)
+        except Exception:
+            pass
+
     def _write(self, value: dict[str, object]) -> None:
         ensure_durable_directory(self.path.parent, 0o700)
+        pending_descriptor = os.open(
+            self.pending,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+        try:
+            write_all(pending_descriptor, b"pending\n")
+            os.fsync(pending_descriptor)
+        finally:
+            os.close(pending_descriptor)
+        fsync_directory(self.path.parent)
         descriptor = os.open(
             self.temporary,
             os.O_CREAT | os.O_EXCL | os.O_WRONLY,
             0o600,
         )
-        replaced = False
         try:
             try:
                 write_all(
@@ -77,11 +107,13 @@ class CircuitBreaker:
             finally:
                 os.close(descriptor)
             os.replace(self.temporary, self.path)
-            replaced = True
             fsync_directory(self.path.parent)
-        finally:
-            if not replaced:
-                try:
-                    self.temporary.unlink()
-                except FileNotFoundError:
-                    pass
+            self.pending.unlink()
+            try:
+                fsync_directory(self.path.parent)
+            except Exception:
+                self._preserve_pending()
+                raise
+        except Exception:
+            self._preserve_pending()
+            raise

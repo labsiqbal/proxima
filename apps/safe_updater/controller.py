@@ -149,6 +149,14 @@ class SafeUpdateController:
                 None,
                 "invalid journal run id",
             )
+        breaker = CircuitBreaker(self.root).status()
+        if breaker.latched:
+            return RecoveryStatus(
+                False,
+                "do_not_start_any_release",
+                None,
+                breaker.reason or "safe_update_breaker_latched",
+            )
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         return inspect(
             Journal(self.root / "journal" / f"{run_id}.jsonl", digest),

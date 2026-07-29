@@ -22,7 +22,9 @@ import websockets
 
 from fastapi.testclient import TestClient
 
+from apps.safe_updater.write_fence import write as write_fence
 from proxima_api.main import create_app
+from proxima_api.maintenance_status import MaintenanceBoundary
 from proxima_api.preview_proxy import PreviewRelayManager
 
 
@@ -91,12 +93,19 @@ async def _start_upstream(asgi) -> tuple[uvicorn.Server, asyncio.Task, socket.so
 
 
 @contextlib.asynccontextmanager
-async def _relay_against_fake_devserver(validate_token=lambda t: t == "good-token"):
+async def _relay_against_fake_devserver(
+    validate_token=lambda t: t == "good-token",
+    maintenance=None,
+):
     fake = FakeDevServer()
     server, task, sock, upstream_port = await _start_upstream(fake)
     fake.port = upstream_port
-    relays = PreviewRelayManager("127.0.0.1", port_for=lambda slug: upstream_port if slug == "demo" else None,
-                                 validate_token=validate_token)
+    relays = PreviewRelayManager(
+        "127.0.0.1",
+        port_for=lambda slug: upstream_port if slug == "demo" else None,
+        validate_token=validate_token,
+        maintenance=maintenance,
+    )
     try:
         relay_port = await relays.start("demo")
         yield fake, relay_port
@@ -171,6 +180,29 @@ def test_relay_proxies_websocket_hmr_upgrade():
                 assert ws.subprotocol == "vite-hmr"
                 await ws.send('{"type":"ping"}')
                 assert await asyncio.wait_for(ws.recv(), timeout=10) == '{"type":"ping"}'
+
+    asyncio.run(run_case())
+
+
+def test_relay_denies_fenced_requests_before_upstream(tmp_path):
+    async def run_case():
+        fence = tmp_path / "status" / "fence.json"
+        maintenance = MaintenanceBoundary(
+            {"safe_update_fence_path": str(fence)}
+        )
+        maintenance.prepare()
+        async with _relay_against_fake_devserver(
+            maintenance=maintenance
+        ) as (fake, relay_port):
+            base = f"http://127.0.0.1:{relay_port}"
+            headers = {"Cookie": "proxima_preview=good-token"}
+            async with httpx.AsyncClient() as client:
+                assert (await client.get(base + "/", headers=headers)).status_code == 200
+                fake.seen.clear()
+                write_fence(fence, "d" * 32, "write_fenced")
+                denied = await client.get(base + "/", headers=headers)
+            assert denied.status_code == 423
+            assert fake.seen == {}
 
     asyncio.run(run_case())
 

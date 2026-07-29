@@ -98,14 +98,23 @@ and both prior pointers before the previous fixture service is resumed. A full o
 partial journal write whose append does not return is never treated as an
 acknowledged phase and latches the breaker after rollback. Once the last-good
 append is acknowledged, recovery can only resume the candidate or latch the
-breaker. An unreadable journal or interrupted breaker write latches fail closed.
+breaker. The persisted breaker verdict is checked before journal recovery, so an
+unacknowledged but complete journal tail cannot override a physical rollback.
+An unreadable journal or interrupted breaker write leaves a durable pending marker
+and latches fail closed.
 
-An external maintenance fence is re-read before every mutating HTTP request,
-project-app proxy request, preview proxy request, and terminal WebSocket start or
-input. Read endpoints do not initialize personal wiki or profile state, stop
-preview relays, or launch readiness probes while fenced. Existing application
-SQLite connections disable prepared-statement caching and deny writes dynamically
-while the fence exists. New fenced connections skip write-capable WAL setup.
+External maintenance activation first publishes a durable pending marker, then
+takes an exclusive ingress lock. HTTP requests, project-app and preview proxy
+requests, and terminal WebSocket start or input hold a shared ingress lease through
+their last possible side effect. New ingress fails closed as soon as activation is
+pending, while the controller waits for already admitted operations to drain before
+publishing the fence. Read endpoints do not initialize personal wiki or profile
+state, stop preview relays, create PATH compatibility shims, or launch readiness
+probes while fenced. Normal first-use personal wiki reads still seed `index.md`
+while holding the ingress lease. Application SQLite connections configured for an
+external fence disable prepared-statement caching and deny writes dynamically;
+ordinary unconfigured connections retain statement caching and do not run fence
+checks for read-only opcodes. New fenced connections skip write-capable WAL setup.
 `POST /auth/resume` remains available because it only projects an
 already-authenticated session; session creation, including `/auth/auto`, is fenced.
 A process started directly in maintenance mode opens SQLite read-only with

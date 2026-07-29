@@ -1030,10 +1030,11 @@ def connect(
             _database: str | None,
             _source: str | None,
         ) -> int:
-            fenced = deny_writes or (
+            if action not in denied:
+                return sqlite3.SQLITE_OK
+            if deny_writes or (
                 writes_fenced is not None and writes_fenced()
-            )
-            if fenced and action in denied:
+            ):
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
 

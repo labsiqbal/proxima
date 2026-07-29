@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,13 +16,17 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from apps.safe_updater.circuit_breaker import CircuitBreaker
+from apps.safe_updater import circuit_breaker as circuit_breaker_module
 from apps.safe_updater import controller as controller_module
 from apps.safe_updater.controller import SafeUpdateController
 from apps.safe_updater.journal import Journal, JournalIntegrityError
 from apps.safe_updater.layout import ReleaseLayout
 from apps.safe_updater.service_adapter import DisposableServiceAdapter
 from apps.safe_updater.state_machine import Phase
-from apps.safe_updater.write_fence import write as write_fence
+from apps.safe_updater.write_fence import (
+    ingress_pending_path,
+    write as write_fence,
+)
 from proxima_api.db import connect, init_db
 from proxima_api.main import create_app
 from proxima_api.migrations import run_migrations
@@ -78,6 +84,15 @@ def _digest(intent: dict[str, str]) -> str:
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
+
+
+def _wait_for_path(path: Path, timeout: float = 2) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _journal(root: Path, run_id: str, intent: dict[str, str]) -> Journal:
@@ -308,6 +323,10 @@ def test_unacknowledged_full_journal_write_latches_fail_closed(
     assert not fence.exists()
     assert CircuitBreaker(root).status().latched is True
     assert _journal(root, run_id, intent).records()[-1].phase is phase
+    recovery = controller.recovery_status(run_id, intent)
+    assert recovery.safe is False
+    assert recovery.action == "do_not_start_any_release"
+    assert recovery.reason is not None
 
 
 def test_acknowledged_last_good_recovers_candidate_after_finalize_failure(
@@ -558,8 +577,48 @@ def test_orphan_breaker_update_latches_before_promotion(tmp_path: Path):
     assert not fence.exists()
 
 
+def test_failed_breaker_payload_write_remains_latched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+    original_write_all = circuit_breaker_module.write_all
+
+    def fail_payload(descriptor: int, value: bytes) -> None:
+        if value.startswith(b"{"):
+            raise OSError("injected breaker payload failure")
+        original_write_all(descriptor, value)
+
+    monkeypatch.setattr(circuit_breaker_module, "write_all", fail_payload)
+
+    with pytest.raises(OSError, match="injected breaker payload failure"):
+        CircuitBreaker(root).record_failure("injected", rollback_failed=True)
+
+    breaker = CircuitBreaker(root).status()
+    assert breaker.latched is True
+    assert breaker.reason == "breaker_update_interrupted"
+    with pytest.raises(RuntimeError, match="safe_update_breaker_latched"):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            DisposableServiceAdapter(PREVIOUS),
+            fence,
+            live,
+            staged,
+        )
+    assert _database_value(live) == "previous"
+    assert not fence.exists()
+
+
 def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     database = tmp_path / "proxima.db"
     setup = connect(database)
@@ -595,9 +654,18 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         ).fetchone()[0]
         write_fence(fence, "a" * 32, "write_fenced")
 
+        def unexpected_shim(_path_env: str | None = None):
+            raise AssertionError("maintenance readiness attempted shim creation")
+
+        monkeypatch.setattr(
+            "proxima_api.runners.ensure_python_compat_shim",
+            unexpected_shim,
+        )
+
         assert client.post("/api/update/check").status_code == 423
         assert client.post("/auth/auto").status_code == 423
         assert client.post("/auth/resume").status_code == 200
+        assert client.get("/api/setup/status").status_code == 200
         assert client.get("/api/profiles").json() == {"profiles": []}
         assert client.get("/api/wiki/all").json() == {"notes": []}
         assert not wiki_root.exists()
@@ -639,7 +707,152 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         maintenance_app.state.db.execute("CREATE TABLE forbidden(value TEXT)")
 
 
-def test_established_terminal_rechecks_fence_before_processing_input(
+def test_normal_wiki_read_seeds_index_without_dynamic_database_fence(
+    tmp_path: Path,
+):
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+        }
+    )
+    assert app.state.maintenance.database_write_check() is None
+
+    with TestClient(app) as client:
+        assert client.post("/auth/auto").status_code == 200
+        response = client.get("/api/wiki/all")
+
+    wiki_index = tmp_path / "workspace" / "users" / "owner" / "wiki" / "index.md"
+    assert response.status_code == 200
+    assert response.json()["notes"] == [
+        {
+            "path": "index.md",
+            "content": "# owner's wiki\n\nYour personal notes.\n",
+        }
+    ]
+    assert wiki_index.is_file()
+
+
+def test_database_fence_callback_skips_read_operations(tmp_path: Path):
+    database = tmp_path / "proxima.db"
+    checks = 0
+
+    def fenced() -> bool:
+        nonlocal checks
+        checks += 1
+        return False
+
+    connection = connect(database, writes_fenced=fenced)
+    try:
+        checks = 0
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+        assert checks == 0
+        connection.execute("CREATE TABLE callback_probe(value TEXT)")
+        assert checks > 0
+    finally:
+        connection.close()
+
+
+def test_appview_request_drains_before_fence_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    database = tmp_path / "proxima.db"
+    fence = tmp_path / "status" / "fence.json"
+    app = create_app(
+        {
+            "database_path": str(database),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+    outbound_started = threading.Event()
+    finish_outbound = threading.Event()
+
+    class UpstreamResponse:
+        status_code = 200
+        content = b"ok"
+        headers: dict[str, str] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            outbound_started.set()
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                finish_outbound.wait,
+                5,
+            )
+            return UpstreamResponse()
+
+    monkeypatch.setattr(
+        "proxima_api.routes.files.httpx.AsyncClient",
+        FakeAsyncClient,
+    )
+
+    with TestClient(app) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post(
+            "/api/projects",
+            headers=auth,
+            json={"slug": "demo", "name": "Demo"},
+        ).status_code == 201
+        monkeypatch.setattr(app.state.app_manager, "port", lambda _slug: 4567)
+        responses: list[object] = []
+        request_errors: list[BaseException] = []
+
+        def request_appview() -> None:
+            try:
+                responses.append(
+                    client.get("/api/appview/demo/", headers=auth)
+                )
+            except BaseException as exc:
+                request_errors.append(exc)
+
+        request_thread = threading.Thread(target=request_appview)
+        request_thread.start()
+        assert outbound_started.wait(timeout=2)
+        fence_errors: list[BaseException] = []
+
+        def activate_fence() -> None:
+            try:
+                write_fence(fence, "c" * 32, "write_fenced")
+            except BaseException as exc:
+                fence_errors.append(exc)
+
+        fence_thread = threading.Thread(target=activate_fence)
+        fence_thread.start()
+        _wait_for_path(ingress_pending_path(fence))
+        assert fence_thread.is_alive()
+        assert not fence.exists()
+        finish_outbound.set()
+        request_thread.join(timeout=5)
+        fence_thread.join(timeout=5)
+
+        assert not request_thread.is_alive()
+        assert not fence_thread.is_alive()
+        assert request_errors == []
+        assert fence_errors == []
+        assert len(responses) == 1
+        assert responses[0].status_code == 200
+        assert responses[0].text == "ok"
+        assert fence.is_file()
+        assert client.get("/api/appview/demo/", headers=auth).status_code == 423
+
+
+def test_established_terminal_drains_input_before_fence_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -651,6 +864,8 @@ def test_established_terminal_rechecks_fence_before_processing_input(
     fence = tmp_path / "status" / "fence.json"
     started = threading.Event()
     closed = threading.Event()
+    input_started = threading.Event()
+    finish_input = threading.Event()
     writes: list[bytes] = []
 
     class FakeTerminal:
@@ -666,6 +881,8 @@ def test_established_terminal_rechecks_fence_before_processing_input(
 
         def write(self, value: bytes) -> None:
             writes.append(value)
+            input_started.set()
+            finish_input.wait(timeout=5)
 
         def resize(self, _rows: int, _cols: int) -> None:
             writes.append(b"resize")
@@ -689,10 +906,30 @@ def test_established_terminal_rechecks_fence_before_processing_input(
             f"/api/ws/terminal?token={token}"
         ) as websocket:
             assert started.wait(timeout=2)
-            write_fence(fence, "b" * 32, "write_fenced")
-            websocket.send_bytes(b"touch should-not-run")
+            websocket.send_bytes(b"admitted-input")
+            assert input_started.wait(timeout=2)
+            fence_errors: list[BaseException] = []
+
+            def activate_fence() -> None:
+                try:
+                    write_fence(fence, "b" * 32, "write_fenced")
+                except BaseException as exc:
+                    fence_errors.append(exc)
+
+            fence_thread = threading.Thread(target=activate_fence)
+            fence_thread.start()
+            try:
+                _wait_for_path(ingress_pending_path(fence))
+                assert fence_thread.is_alive()
+                assert not fence.exists()
+            finally:
+                finish_input.set()
+            fence_thread.join(timeout=5)
+            assert not fence_thread.is_alive()
+            assert fence_errors == []
+            assert fence.is_file()
             with pytest.raises(WebSocketDisconnect) as rejected:
                 websocket.receive_bytes()
             assert rejected.value.code == 4423
 
-    assert writes == []
+    assert writes == [b"admitted-input"]

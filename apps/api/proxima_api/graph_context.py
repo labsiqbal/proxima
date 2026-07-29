@@ -32,7 +32,7 @@ from typing import Any, Callable, Mapping, TypeAlias
 from . import container_registry
 from .auth import iso_now
 from .db import connect as connect_database
-from .maintenance_status import writes_fenced
+from .maintenance_status import MaintenanceBoundary
 
 GRAPHIFY_DISTRIBUTION = "graphifyy"
 GRAPHIFY_VERSION = "0.9.28"
@@ -2109,7 +2109,9 @@ class GraphContextService:
             )
         return connect_database(
             configured_path,
-            writes_fenced=lambda: writes_fenced(self.config),
+            writes_fenced=MaintenanceBoundary(
+                self.config
+            ).database_write_check(),
         )
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
