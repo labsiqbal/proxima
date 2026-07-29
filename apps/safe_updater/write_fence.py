@@ -41,3 +41,13 @@ def write(path: Path, run_id: str, phase: str) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def remove(path: Path) -> None:
+    """Durably remove a controller-owned fence after a committed outcome only."""
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("maintenance fence is not a regular file")
+    path.unlink()
+    fsync_directory(path.parent)

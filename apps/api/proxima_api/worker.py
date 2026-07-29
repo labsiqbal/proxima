@@ -30,6 +30,7 @@ from . import wiki_memory
 from . import app_settings
 from . import master_runtime
 from . import features
+from .maintenance_status import writes_fenced
 from . import state
 from . import turn_restore
 from .artifacts import scan_project_artifacts
@@ -180,6 +181,9 @@ class RunWorker:
         last_reap = 0.0
         while not self.stop_event.is_set():
             try:
+                if writes_fenced(getattr(self.app.state, "config", {})):
+                    await asyncio.sleep(poll)
+                    continue
                 self._collect_finished_run_tasks()
                 now = time.monotonic()
                 if now - last_reap >= reap_every:

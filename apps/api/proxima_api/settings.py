@@ -72,6 +72,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "candidate_release_id": None,
     "candidate_commit": None,
     "candidate_asset_manifest_digest": None,
+    # Maintenance mode is controller-only startup for a stopped-service switch.
+    # It opens a read-only DB and never starts application writers.
+    "safe_update_maintenance_mode": False,
     # Maximum queued/running Task-agent runs owned by Master. The supervisor
     # and worker claim guard share this value.
     "master_max_parallel": 3,
@@ -166,6 +169,7 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cfg["feature_safe_self_update"] = _bool_flag(cfg.get("feature_safe_self_update"))
     cfg["candidate_mode"] = _bool_flag(cfg.get("candidate_mode"))
+    cfg["safe_update_maintenance_mode"] = _bool_flag(cfg.get("safe_update_maintenance_mode"))
     if cfg["candidate_mode"]:
         # Candidate configuration is controller-owned. Do not honour a supplied
         # link root or source profile home because either could expose the owner
@@ -177,6 +181,8 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     if raw_fence and not Path(raw_fence).is_absolute():
         raise ValueError("safe update fence path must be absolute")
     cfg["safe_update_fence_path"] = raw_fence or None
+    if cfg["safe_update_maintenance_mode"] and not cfg["safe_update_fence_path"]:
+        raise ValueError("maintenance mode requires an external fence path")
     cfg["graph_semantic_egress_enabled"] = _bool_flag(
         cfg.get("graph_semantic_egress_enabled")
     )

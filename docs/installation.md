@@ -235,15 +235,13 @@ Foreground, ordinary user-service, Windows, and unqualified macOS installs fail
 closed. Local self-edit commits carry reverified provenance, not a release
 signature.
 
-The shipped candidate gate is still controller-only and not an installer feature.
+The shipped candidate gate and its disabled Group 16 switch model are controller-only and not installer features.
 It runs the fixed offline build and clone-only migration inside a mandatory
 Bubblewrap boundary, publishes and freezes only the verified post-build tree, and
 creates a fresh-schema fixture containing synthetic rows and separate workspace and
 runner-home paths. A separately installed, digest-pinned probe bundle must pass its
 API, version, authenticated maintenance, SSE, served-asset, asset-manifest, and
-headless-browser checks. Frozen evidence is revalidated during recovery. The gate
-cannot switch a release, start an enrolled service, touch the live database, or
-remove a fence. Do not set candidate-only environment variables manually.
+headless-browser checks. Frozen evidence is revalidated during recovery. The Group 16 model can run only with an in-memory disposable test-service adapter and controller-root fixture paths. It exercises write fencing, bounded drain, WAL checkpointing, single-file images, sidecar quarantine, pointer rollback, read-only soak, writable proof, and circuit breaking without touching an installed service or live runtime. Neither path can switch a release, start an enrolled service, touch the live database, or remove a production fence. Do not set candidate-only environment variables manually.
 
 Future enrollment must place the nonsecret maintenance fence in a dedicated
 controller-owned status directory whose ancestors are searchable by the application

@@ -1458,8 +1458,7 @@ identity, version, authenticated maintenance, SSE, served-static-asset, complete
 asset-manifest, and headless-browser scenario results. Evidence includes fixed
 build logs, migration proof, fixture metadata, assets, and probe results; its files
 and directories are frozen, and recovery rehashes the journal-pinned bundle before
-reporting a run safe. Any failure stops before a live pointer, database, fence,
-backup, or service action. Activation remains unavailable.
+reporting a run safe. Group 16 adds a disabled, disposable-fixture transaction harness that records fence, drain, stopped-service, WAL checkpoint, final backup, staged-image, sidecar, pointer, read-only soak, writable-proof, and last-good boundaries. It accepts only the in-memory disposable service adapter and controller-root fixture paths. It is exercised by rollback and crash-style fixtures only; it cannot enroll an updater, control a real service, switch a live release, replace live data, or remove a production fence. Activation remains unavailable.
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
 `POST /api/update/apply` (inert),
 `GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,

@@ -46,6 +46,44 @@ class ReleaseLayout:
         self.release_dir(release_id)
         return f"../releases/{release_id}"
 
+    def set_pointer(self, name: str, release_id: str) -> None:
+        """Atomically update a trusted relative release pointer and fsync it."""
+        if name not in {"active", "last-good"}:
+            raise LayoutError("invalid release pointer")
+        target = self.pointer_target(release_id)
+        pointers = self.root / "pointers"
+        try:
+            ensure_durable_directory(pointers, 0o755)
+        except DurabilityError as exc:
+            raise LayoutError(str(exc)) from exc
+        pointer = pointers / name
+        temporary = pointers / f".{name}.tmp"
+        if os.path.lexists(temporary):
+            raise LayoutError("temporary pointer already exists")
+        os.symlink(target, temporary)
+        try:
+            os.replace(temporary, pointer)
+            fsync_directory(pointers)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def pointer_release(self, name: str) -> str:
+        if name not in {"active", "last-good"}:
+            raise LayoutError("invalid release pointer")
+        pointer = self.root / "pointers" / name
+        if not pointer.is_symlink():
+            raise LayoutError("release pointer is missing")
+        target = os.readlink(pointer)
+        expected_prefix = "../releases/"
+        if not target.startswith(expected_prefix):
+            raise LayoutError("release pointer target is invalid")
+        release_id = target.removeprefix(expected_prefix)
+        self.release_dir(release_id)
+        return release_id
+
     def create_immutable_release(
         self,
         release_id: str,

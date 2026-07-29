@@ -33,7 +33,7 @@ export function UpdateModal(props: { status: UpdateStatus; onApply: () => Promis
       <p className="muted">You're on v{props.status.current_version}.</p>
       <div className="update-notes"><ReactMarkdown remarkPlugins={[remarkGfm]}>{latest.notes || '_No release notes._'}</ReactMarkdown></div>
       {latest.url && <a className="update-release-link" href={latest.url} target="_blank" rel="noreferrer">View release on GitHub ↗</a>}
-      {!props.status.apply_supported && <p className="update-manual"><span className="muted">{props.status.manual_command}</span></p>}
+      {!props.status.apply_supported && <p className="update-manual"><span className="muted">{props.status.manual_command || 'Automatic promotion is unavailable until a managed external updater has passed its safety and rollback checks.'}</span></p>}
       {error && <p className="update-error">{error}</p>}
       <div className="confirm-actions">
         <button type="button" className="ghost-button" onClick={props.onClose}>Later</button>
@@ -55,7 +55,7 @@ export function UpdateOverlay(props: { applying: ApplyState; onDismiss: () => vo
       </>}
       {timedOut && <>
         <h3>Still not back…</h3>
-        <p className="muted">The update is taking longer than expected. Check <code>proxima status</code> and <code>update.log</code> in the Proxima data folder, then reload.</p>
+        <p className="muted">The update is taking longer than expected. Check the updater recovery evidence before reloading. Do not assume a release changed or rolled back without that proof.</p>
         <div className="confirm-actions">
           <button type="button" className="ghost-button" onClick={props.onDismiss}>Dismiss</button>
           <button type="button" className="primary-button" onClick={() => window.location.reload()}>Reload</button>
@@ -63,7 +63,7 @@ export function UpdateOverlay(props: { applying: ApplyState; onDismiss: () => vo
       </>}
       {failed && !timedOut && <>
         <h3>Update failed</h3>
-        <p className="muted">Proxima is still running the old version — nothing broke. The update log:</p>
+        <p className="muted">The updater did not report a completed promotion. Check its recovery evidence before deciding which release is healthy.</p>
         <pre className="update-log">{props.applying.failedLog || 'No log output captured.'}</pre>
         <div className="confirm-actions">
           <button type="button" className="primary-button" onClick={props.onDismiss}>Close</button>

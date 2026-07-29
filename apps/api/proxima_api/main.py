@@ -42,6 +42,7 @@ from .updates import (
     read_local_version,
 )
 from .safe_updates import SafeUpdateCoordinator
+from .maintenance_status import read_external_fence
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -96,7 +97,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hub.bind_loop(asyncio.get_running_loop())
     # The candidate may serve a fixture to trusted probes, but it must never run
     # production-style writers, migrations, schedulers, refreshers or update loops.
-    if cfg.get("candidate_mode", False):
+    if cfg.get("candidate_mode", False) or cfg.get("safe_update_maintenance_mode", False):
         yield
         return
     if cfg.get("auto_provision", True):
@@ -278,7 +279,12 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     os.environ["PATH"] = augmented_path(os.environ.get("PATH"))
     app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
-    app.state.db = connect(cfg["database_path"])
+    maintenance_mode = bool(cfg.get("safe_update_maintenance_mode", False))
+    app.state.db = connect(
+        cfg["database_path"],
+        read_only=maintenance_mode,
+        deny_writes=maintenance_mode,
+    )
     app.state.db_lock = __import__("threading").RLock()
     if cfg.get("candidate_mode", False):
         # A controller-prepared fixture is already migrated.  Failing this check
@@ -292,13 +298,27 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             project_path = Path(row[0]).resolve()
             if project_path != workspace and workspace not in project_path.parents:
                 raise ValueError("candidate fixture contains a non-candidate project path")
+    elif maintenance_mode:
+        required = {"users", "schema_migrations"}
+        found = {
+            row[0]
+            for row in app.state.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if not required.issubset(found):
+            raise ValueError("maintenance database is not a migrated Proxima database")
     else:
         init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
         run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
         assert_master_persistence(app.state.db)
         assert_master_projection_ledger(app.state.db)
         migrate_legacy_ops_containers(app.state.db)
-    app.state.worker_db = connect(cfg["database_path"])  # dedicated connection for the async run worker
+    app.state.worker_db = connect(
+        cfg["database_path"],
+        read_only=maintenance_mode,
+        deny_writes=maintenance_mode,
+    )  # dedicated connection for the async run worker
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager()
     app.state.app_manager = AppManager()
@@ -315,6 +335,22 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     # This is a projection client, deliberately constructed without a controller
     # transport until root-owned updater enrollment supplies one.
     app.state.safe_updates = SafeUpdateCoordinator(app.state.db)
+
+    @app.middleware("http")
+    async def maintenance_write_fence(request: Request, call_next):
+        # Re-read the controller-owned fence before every mutating route. This
+        # closes ingress even in an already-running app; maintenance SQLite
+        # connections add a second, authorizer-enforced write denial.
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/api/maintenance", "/auth/auto"}:
+            raw_path = cfg.get("safe_update_fence_path")
+            if raw_path:
+                fence = read_external_fence(Path(str(raw_path)))
+                if fence is not None:
+                    return JSONResponse(
+                        status_code=423,
+                        content={"detail": {"code": "maintenance_write_fenced", **fence}},
+                    )
+        return await call_next(request)
 
     register_frontend(
         app,
@@ -334,7 +370,11 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def db():
         conn = getattr(_db_local, "conn", None)
         if conn is None:
-            conn = connect(cfg["database_path"])
+            conn = connect(
+                cfg["database_path"],
+                read_only=maintenance_mode,
+                deny_writes=maintenance_mode,
+            )
             _db_local.conn = conn
         return conn
 
@@ -357,7 +397,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     )
     # Durable start intent is committed before the retryable start step. Resume
     # any request that was interrupted in that gap before serving new traffic.
-    if not cfg.get("candidate_mode", False):
+    if not cfg.get("candidate_mode", False) and not maintenance_mode:
         try:
             app.state.task_delegation.resume_committed()
         except Exception:
@@ -408,6 +448,8 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "database": "ok",
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
+        if maintenance_mode:
+            payload["maintenance_mode"] = "readonly"
         if cfg.get("candidate_mode", False):
             # Supplementary only: the trusted updater independently resolves the
             # immutable release and hashes assets before accepting this response.

@@ -1176,9 +1176,7 @@ contains build logs, migration and fixture proof, identities, and probe results.
 Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
 commands cannot reach the journal, active or last-good pointers, fence, backups, or
 production paths. After independently revalidating the evidence, the controller
-appends its digest to the accepted-run journal as `candidate_staged`; it cannot call
-a service adapter or alter a live pointer, fence, backup, database, workspace,
-runner home, or service.
+appends its digest to the accepted-run journal as `candidate_staged`. Group 16 supplies a disabled transaction model for disposable fixture roots only: it fences writes, pauses and drains the fixture service, verifies a truncate WAL checkpoint, seals and validates backup images, quarantines WAL/SHM sidecars, changes fixture pointers, runs read-only and writable proofs, and commits last-good only after the latter. Every pre-commit exception restores the sealed backup and previous fixture pointer, proves the previous fixture service, and records a durable breaker failure. The only runnable adapter is `DisposableServiceAdapter`; systemd and launchd remain unmanaged/inert. No production pointer, fence, database, service, workspace, runner home, or release can be touched.
 
 ## Runner abstraction
 

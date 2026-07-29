@@ -946,14 +946,42 @@ CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
 """.replace("__DEFAULT_RUNNER__", FALLBACK_RUNNER)
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def connect(
+    path: str | Path,
+    *,
+    read_only: bool = False,
+    deny_writes: bool = False,
+) -> sqlite3.Connection:
     db_path = Path(path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
+    if read_only:
+        if not db_path.is_file():
+            raise FileNotFoundError("maintenance database is missing")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False, isolation_level=None)
+    else:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    if not read_only:
+        conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    if deny_writes:
+        denied = {
+            sqlite3.SQLITE_INSERT,
+            sqlite3.SQLITE_UPDATE,
+            sqlite3.SQLITE_DELETE,
+            sqlite3.SQLITE_ATTACH,
+            sqlite3.SQLITE_ALTER_TABLE,
+            sqlite3.SQLITE_DROP_TABLE,
+            sqlite3.SQLITE_CREATE_TABLE,
+            sqlite3.SQLITE_CREATE_INDEX,
+            sqlite3.SQLITE_DROP_INDEX,
+            sqlite3.SQLITE_TRANSACTION,
+        }
+        conn.set_authorizer(
+            lambda action, _arg1, _arg2, _database, _source: sqlite3.SQLITE_DENY
+            if action in denied else sqlite3.SQLITE_OK
+        )
     return conn
 
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import features
+from .maintenance_status import writes_fenced
 from .graph_context import (
     GraphBuildError,
     GraphContextError,
@@ -92,6 +93,8 @@ class KnowledgeGraphLifecycle:
             )
 
     def tick(self) -> None:
+        if writes_fenced(getattr(self.app.state, "config", {})):
+            return
         if not self.enabled():
             return
         try:
