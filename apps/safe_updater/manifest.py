@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
-from .layout import COMMIT, RELEASE_ID, LayoutError
-from .tree import TreeError, regular_file_digests
+from .layout import COMMIT, RELEASE_ID
+from .tree import TreeError, VerifiedTree, regular_file_digests
 
 HEX = re.compile(r"^[a-f0-9]{64}$")
 REQUIRED_LOCK_PATHS = frozenset({"apps/api/uv.lock", "apps/web/package-lock.json"})
@@ -103,11 +103,8 @@ class ReleaseManifest:
             raise
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ManifestError("malformed release manifest") from exc
-        try:
-            if not RELEASE_ID.fullmatch(manifest.release_id) or not COMMIT.fullmatch(manifest.commit):
-                raise ManifestError("invalid release identity")
-        except LayoutError as exc:
-            raise ManifestError(str(exc)) from exc
+        if not RELEASE_ID.fullmatch(manifest.release_id) or not COMMIT.fullmatch(manifest.commit):
+            raise ManifestError("invalid release identity")
         if not HEX.fullmatch(manifest.tree_digest):
             raise ManifestError("manifest tree digest invalid")
         if set(manifest.lock_digests) != REQUIRED_LOCK_PATHS:
@@ -133,7 +130,7 @@ class ReleaseManifest:
         if not verify_signature(self.signature["key_id"], self.signature["algorithm"], self.signed_payload(), self.signature["value"]):
             raise ManifestError("manifest signature rejected")
 
-    def verify_tree(self, release_root: Path) -> None:
+    def _verified_files(self, release_root: Path) -> dict[str, str]:
         try:
             actual = regular_file_digests(release_root)
         except TreeError as exc:
@@ -144,6 +141,23 @@ class ReleaseManifest:
             raise ManifestError("manifest lock substitution")
         if _digest_tree(actual) != self.tree_digest:
             raise ManifestError("manifest tree mix-and-match")
+        return actual
+
+    def verify_tree(self, release_root: Path) -> None:
+        self._verified_files(release_root)
+
+    def authenticate_tree(
+        self,
+        release_root: Path,
+        verify_signature: Callable[[str, str, bytes, str], bool],
+    ) -> VerifiedTree:
+        self.verify(verify_signature)
+        actual = self._verified_files(release_root)
+        return VerifiedTree(
+            release_id=self.release_id,
+            commit=self.commit,
+            file_digests=tuple(sorted(actual.items())),
+        )
 
 
 def _validate_local_metadata(
@@ -187,7 +201,10 @@ def local_provenance(
     }
 
 
-def verify_local_provenance(value: Mapping[str, Any], candidate_root: Path) -> dict[str, Any]:
+def verify_local_provenance(
+    value: Mapping[str, Any],
+    candidate_root: Path,
+) -> VerifiedTree:
     if set(value) != {
         "kind",
         "task_id",
@@ -219,4 +236,8 @@ def verify_local_provenance(value: Mapping[str, Any], candidate_root: Path) -> d
         raise ManifestError("local candidate tree substitution")
     if any(files.get(path) != digest for path, digest in lock_digests.items()):
         raise ManifestError("local candidate lock substitution")
-    return dict(value)
+    return VerifiedTree(
+        release_id=None,
+        commit=candidate_commit,
+        file_digests=tuple(sorted(files.items())),
+    )

@@ -12,10 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 import apps.safe_updater.durability as durability_module
-import apps.safe_updater.journal as journal_module
 import apps.safe_updater.layout as layout_module
 import apps.safe_updater.locks as lock_module
 import apps.safe_updater.privileges as privilege_module
+import apps.safe_updater.tree as tree_module
+from proxima_api.maintenance_status import read_external_fence
 from apps.safe_updater.adapters.launchd import LaunchdAdapter
 from apps.safe_updater.adapters.systemd import SystemdAdapter
 from apps.safe_updater.adapters.unmanaged import UnmanagedAdapter
@@ -36,7 +37,36 @@ from apps.safe_updater.privileges import (
 )
 from apps.safe_updater.recovery import inspect
 from apps.safe_updater.state_machine import Phase
-from apps.safe_updater.write_fence import status, write
+from apps.safe_updater.tree import VerifiedTree, regular_file_digests
+from apps.safe_updater.write_fence import write
+
+
+def _verified_tree(
+    source: Path,
+    *,
+    commit: str = "a" * 40,
+    release_id: str | None = None,
+) -> VerifiedTree:
+    return VerifiedTree(
+        release_id=release_id,
+        commit=commit,
+        file_digests=tuple(sorted(regular_file_digests(source).items())),
+    )
+
+
+def _candidate_identity(
+    uid: int,
+    gid: int,
+    *,
+    service_capabilities: frozenset[str] = frozenset(),
+    allows_privilege_escalation: bool = False,
+) -> CandidateIdentity:
+    return CandidateIdentity(
+        uid,
+        gid,
+        service_capabilities=service_capabilities,
+        allows_privilege_escalation=allows_privilege_escalation,
+    )
 
 
 def test_journal_replay_is_deterministic_at_every_foundation_phase(tmp_path: Path):
@@ -104,12 +134,24 @@ def test_journal_creation_fsyncs_each_new_directory_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     synced: list[Path] = []
-    monkeypatch.setattr(journal_module, "fsync_directory", synced.append)
+    monkeypatch.setattr(durability_module, "fsync_directory", synced.append)
     root = tmp_path / "new-root"
     Journal.create(root, "a" * 32, "b" * 64)
     assert tmp_path in synced
     assert root in synced
     assert root / "journal" in synced
+
+
+def test_shared_directory_creation_fsyncs_every_new_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    synced: list[Path] = []
+    monkeypatch.setattr(durability_module, "fsync_directory", synced.append)
+    destination = tmp_path / "trusted" / "releases"
+    durability_module.ensure_durable_directory(destination, 0o700)
+    assert tmp_path in synced
+    assert tmp_path / "trusted" in synced
+    assert destination in synced
 
 
 def test_platform_durability_selects_windows_directory_backend(
@@ -208,11 +250,12 @@ def test_layout_rejects_hostile_tree_before_publish(tmp_path: Path):
     source = tmp_path / "candidate"
     source.mkdir()
     (source / "safe.txt").write_text("safe", encoding="utf-8")
+    verified = _verified_tree(source)
     (source / "escape").symlink_to(tmp_path / "outside")
     release_id = f"sha256-{'a' * 40}-{'b' * 12}"
     layout = ReleaseLayout(tmp_path / "trusted")
     with pytest.raises(LayoutError, match="symlink"):
-        layout.create_immutable_release(release_id, source)
+        layout.create_immutable_release(release_id, source, verified)
     assert source.exists()
     assert not layout.release_dir(release_id).exists()
     assert list((tmp_path / "trusted" / "releases").glob(".incoming-*")) == []
@@ -225,9 +268,11 @@ def test_layout_publishes_fresh_controller_owned_inodes(tmp_path: Path):
     source.mkdir()
     os.link(outside, source / "app.py")
     release_id = f"sha256-{'a' * 40}-{'b' * 12}"
+    verified = _verified_tree(source)
     destination = ReleaseLayout(tmp_path / "trusted").create_immutable_release(
         release_id,
         source,
+        verified,
     )
 
     published = destination / "app.py"
@@ -251,6 +296,7 @@ def test_layout_rolls_back_failed_publication_flush(
     source.mkdir()
     (source / "app.py").write_bytes(b"verified bytes")
     release_id = f"sha256-{'a' * 40}-{'b' * 12}"
+    verified = _verified_tree(source)
     layout = ReleaseLayout(tmp_path / "trusted")
     real_fsync_directory = layout_module.fsync_directory
     calls = 0
@@ -264,16 +310,58 @@ def test_layout_rolls_back_failed_publication_flush(
 
     monkeypatch.setattr(layout_module, "fsync_directory", fail_publication_flush)
     with pytest.raises(LayoutError, match="publication durability failed"):
-        layout.create_immutable_release(release_id, source)
+        layout.create_immutable_release(release_id, source, verified)
     assert not layout.release_dir(release_id).exists()
     assert list((tmp_path / "trusted" / "releases").glob(".incoming-*")) == []
-    assert layout.create_immutable_release(release_id, source).exists()
+    assert layout.create_immutable_release(release_id, source, verified).exists()
+
+
+def test_layout_rejects_substituted_ancestor_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "candidate"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "app.py").write_bytes(b"verified bytes")
+    replacement = tmp_path / "host"
+    replacement.mkdir()
+    (replacement / "app.py").write_bytes(b"host-only bytes")
+    verified = _verified_tree(source)
+    real_open = os.open
+    supports_dir_fd = set(os.supports_dir_fd)
+    swapped = False
+
+    def substitute_before_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "nested" and dir_fd is not None and not swapped:
+            swapped = True
+            nested.rename(source / "original")
+            nested.symlink_to(replacement, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(tree_module.os, "open", substitute_before_open)
+    monkeypatch.setattr(
+        tree_module.os,
+        "supports_dir_fd",
+        supports_dir_fd | {substitute_before_open},
+    )
+    release_id = f"sha256-{'a' * 40}-{'b' * 12}"
+    layout = ReleaseLayout(tmp_path / "trusted")
+    with pytest.raises(LayoutError, match="substituted"):
+        layout.create_immutable_release(release_id, source, verified)
+    assert not layout.release_dir(release_id).exists()
 
 
 def test_fence_is_external_durable_contract(tmp_path: Path):
     fence = tmp_path / "outside-release" / "fence.json"
     write(fence, "a" * 32, "write_fenced")
-    assert status(fence) == {"run_id": "a" * 32, "phase": "write_fenced"}
+    assert read_external_fence(fence) == {
+        "run_id": "a" * 32,
+        "phase": "write_fenced",
+    }
+    if os.name == "posix":
+        assert fence.parent.stat().st_mode & 0o777 == 0o755
+        assert fence.stat().st_mode & 0o777 == 0o644
 
 
 def test_manifest_rejects_path_traversal_and_mix_and_match(tmp_path: Path):
@@ -304,8 +392,18 @@ def test_manifest_rejects_path_traversal_and_mix_and_match(tmp_path: Path):
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-    manifest.verify(lambda key, algorithm, signed, signature: key == "release-key" and algorithm == "ed25519")
-    manifest.verify_tree(root)
+    verify_signature = (
+        lambda key, algorithm, signed, signature: key == "release-key"
+        and algorithm == "ed25519"
+    )
+    verified = manifest.authenticate_tree(root, verify_signature)
+    assert verified.release_id == manifest.release_id
+    (root / "app/file.txt").write_bytes(b"changed after authentication")
+    layout = ReleaseLayout(tmp_path / "trusted")
+    with pytest.raises(LayoutError, match="changed after verification"):
+        layout.create_immutable_release(manifest.release_id, root, verified)
+    assert not layout.release_dir(manifest.release_id).exists()
+    (root / "app/file.txt").write_bytes(files["app/file.txt"])
     (root / "extra").write_text("not signed", encoding="utf-8")
     with pytest.raises(ManifestError, match="file set"):
         manifest.verify_tree(root)
@@ -335,7 +433,16 @@ def test_local_provenance_is_verified_against_candidate_tree(tmp_path: Path):
         "local-worktree",
         root,
     )
-    assert verify_local_provenance(provenance, root) == provenance
+    verified = verify_local_provenance(provenance, root)
+    assert verified.commit == "b" * 40
+    assert verified.files() == regular_file_digests(root)
+    (root / "app.py").write_text("changed", encoding="utf-8")
+    release_id = f"sha256-{'b' * 40}-{'c' * 12}"
+    layout = ReleaseLayout(tmp_path / "trusted")
+    with pytest.raises(LayoutError, match="changed after verification"):
+        layout.create_immutable_release(release_id, root, verified)
+    assert not layout.release_dir(release_id).exists()
+    (root / "app.py").write_text("print('ok')", encoding="utf-8")
     (root / "apps/api/uv.lock").write_text("substituted", encoding="utf-8")
     with pytest.raises(ManifestError, match="tree substitution"):
         verify_local_provenance(provenance, root)
@@ -385,7 +492,7 @@ def test_candidate_identity_cannot_own_or_write_trusted_state(
     paths[4].chmod(0o600)
     trusted_owner = paths[0].stat().st_uid
     trusted_group = paths[0].stat().st_gid
-    candidate = CandidateIdentity(trusted_owner + 1, trusted_group + 1)
+    candidate = _candidate_identity(trusted_owner + 1, trusted_group + 1)
     monkeypatch.setattr(
         privilege_module,
         "_effective_access",
@@ -394,7 +501,7 @@ def test_candidate_identity_cannot_own_or_write_trusted_state(
     assert_candidate_cannot_write(candidate, paths)
     with pytest.raises(PrivilegeBoundaryError, match="unprivileged"):
         assert_candidate_cannot_write(
-            CandidateIdentity(0, 0),
+            _candidate_identity(0, 0),
             paths,
         )
 
@@ -407,7 +514,7 @@ def test_privilege_boundary_rejects_effective_parent_or_acl_write(
     trusted_parent.mkdir(mode=0o700)
     journal = trusted_parent / "journal"
     journal.mkdir(mode=0o700)
-    identity = CandidateIdentity(os.geteuid() + 1, os.getegid() + 1)
+    identity = _candidate_identity(os.geteuid() + 1, os.getegid() + 1)
 
     def parent_write(_identity, requests):
         return tuple(request.path == trusted_parent for request in requests)
@@ -438,9 +545,58 @@ def test_privilege_boundary_probes_actual_candidate_identity(tmp_path: Path):
     trusted = tmp_path / "trusted"
     trusted.mkdir(mode=0o700)
     assert_candidate_cannot_write(
-        CandidateIdentity(candidate.pw_uid, candidate.pw_gid),
+        _candidate_identity(candidate.pw_uid, candidate.pw_gid),
         [trusted],
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX service identity contract")
+def test_privilege_boundary_rejects_untrusted_owner_and_service_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    trusted = tmp_path / "trusted"
+    trusted.mkdir(mode=0o700)
+    trusted_stat = trusted.stat()
+    identity = _candidate_identity(trusted_stat.st_uid + 1, trusted_stat.st_gid + 1)
+    third_party = SimpleNamespace(
+        st_uid=trusted_stat.st_uid + 2,
+        st_mode=trusted_stat.st_mode,
+    )
+    monkeypatch.setattr(
+        privilege_module,
+        "_ancestry",
+        lambda path: ((path, third_party),),
+    )
+    with pytest.raises(PrivilegeBoundaryError, match="controller-owned"):
+        assert_candidate_cannot_write(identity, [trusted])
+
+    candidate_owned = SimpleNamespace(
+        st_uid=identity.uid,
+        st_mode=trusted_stat.st_mode,
+    )
+    monkeypatch.setattr(
+        privilege_module,
+        "_ancestry",
+        lambda path: ((path, candidate_owned),),
+    )
+    with pytest.raises(PrivilegeBoundaryError, match="candidate owns"):
+        assert_candidate_cannot_write(identity, [trusted])
+
+    capability_identity = _candidate_identity(
+        trusted_stat.st_uid + 1,
+        trusted_stat.st_gid + 1,
+        service_capabilities=frozenset({"CAP_DAC_OVERRIDE"}),
+    )
+    with pytest.raises(PrivilegeBoundaryError, match="capability-free"):
+        assert_candidate_cannot_write(capability_identity, [trusted])
+
+    escalation_identity = _candidate_identity(
+        trusted_stat.st_uid + 1,
+        trusted_stat.st_gid + 1,
+        allows_privilege_escalation=True,
+    )
+    with pytest.raises(PrivilegeBoundaryError, match="capability-free"):
+        assert_candidate_cannot_write(escalation_identity, [trusted])
 
 
 def test_recovery_normalizes_journal_read_errors(
@@ -483,6 +639,17 @@ def test_installers_describe_disabled_update_state():
         assert "git pull + rebuild + restart" not in content
         assert "git pull; powershell" not in content
         assert "safe updater activation is disabled" in content
+
+
+def test_candidate_service_placeholder_grants_no_capabilities():
+    root = Path(__file__).resolve().parents[3]
+    content = (
+        root / "infra/systemd/proxima-candidate@.service"
+    ).read_text(encoding="utf-8")
+    assert "NoNewPrivileges=yes" in content
+    assert "CapabilityBoundingSet=\n" in content
+    assert "AmbientCapabilities=\n" in content
+    assert "ExecStart=/bin/false" in content
 
 
 @pytest.mark.parametrize("adapter", [UnmanagedAdapter(), SystemdAdapter("proxima.service"), LaunchdAdapter("com.proxima.service")])

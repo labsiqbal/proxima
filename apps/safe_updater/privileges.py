@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -19,12 +20,36 @@ class CandidateIdentity:
     uid: int
     gid: int
     supplementary_gids: frozenset[int] = frozenset()
+    service_capabilities: frozenset[str] = frozenset()
+    allows_privilege_escalation: bool = True
 
 
 @dataclass(frozen=True)
 class _AccessRequest:
     path: Path
     mode: int
+
+
+def _drop_privilege_escalation() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot set no_new_privileges")
+
+
+def _has_linux_capabilities() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    values: dict[str, int] = {}
+    with Path("/proc/self/status").open(encoding="utf-8") as stream:
+        for line in stream:
+            key, separator, raw = line.partition(":")
+            if separator and key in {"CapPrm", "CapEff", "CapAmb"}:
+                values[key] = int(raw.strip(), 16)
+    return set(values) != {"CapPrm", "CapEff", "CapAmb"} or any(values.values())
 
 
 def _effective_access(
@@ -48,6 +73,11 @@ def _effective_access(
             os.setgroups(sorted(identity.supplementary_gids))
             os.setgid(identity.gid)
             os.setuid(identity.uid)
+            _drop_privilege_escalation()
+            if _has_linux_capabilities():
+                raise PrivilegeBoundaryError(
+                    "candidate permission probe retained capabilities"
+                )
             result = [
                 os.access(request.path, request.mode)
                 for request in requests
@@ -116,6 +146,13 @@ def assert_candidate_cannot_write(
         or any(group < 0 for group in identity.supplementary_gids)
     ):
         raise PrivilegeBoundaryError("candidate identity must be unprivileged")
+    if (
+        identity.service_capabilities
+        or identity.allows_privilege_escalation is not False
+    ):
+        raise PrivilegeBoundaryError(
+            "candidate execution must be capability-free"
+        )
 
     path_ancestries: list[tuple[tuple[Path, os.stat_result], ...]] = []
     seen: dict[Path, os.stat_result] = {}
@@ -128,6 +165,9 @@ def assert_candidate_cannot_write(
         raise PrivilegeBoundaryError("trusted path set is empty")
     if any(value.st_uid == identity.uid for value in seen.values()):
         raise PrivilegeBoundaryError("candidate owns trusted ancestry")
+    controller_owners = {0, os.geteuid()}
+    if any(value.st_uid not in controller_owners for value in seen.values()):
+        raise PrivilegeBoundaryError("trusted ancestry is not controller-owned")
 
     requests: list[_AccessRequest] = []
     request_roles: list[tuple[str, os.stat_result | None]] = []

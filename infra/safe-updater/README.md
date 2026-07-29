@@ -8,6 +8,11 @@ The controller owns its journal, lock, pointers, fence, evidence, and backups
 outside candidate releases. The application can submit a narrowly typed request
 and render an authenticated projection, but cannot write those files.
 
+Enrollment must give the application read-only access to the dedicated, nonsecret
+maintenance status path while preserving controller ownership. It must also qualify
+pinned candidate-tree traversal, controller-owned ancestry, empty candidate
+capability sets, and no privilege escalation before any adapter can report managed.
+
 `install-safe-updater` is intentionally fail-closed until the later candidate
 sandbox, trusted probe, and service-manager qualification work lands.
 

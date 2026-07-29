@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .durability import fsync_directory, write_all
+from .durability import DurabilityError, ensure_durable_directory, fsync_directory, write_all
 from .layout import RUN_ID
 from .state_machine import Phase, StateTransitionError, recovery_action, validate_transition
 
@@ -21,23 +21,6 @@ class JournalIntegrityError(ValueError):
 
 def _canonical(value: dict[str, Any]) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-
-
-def _ensure_durable_directory(path: Path) -> None:
-    missing: list[Path] = []
-    current = path
-    while not os.path.lexists(current):
-        missing.append(current)
-        if current.parent == current:
-            break
-        current = current.parent
-    existing = current.lstat()
-    if stat.S_ISLNK(existing.st_mode) or not stat.S_ISDIR(existing.st_mode):
-        raise JournalIntegrityError("journal directory path is not a real directory")
-    for directory in reversed(missing):
-        directory.mkdir(mode=0o700)
-        fsync_directory(directory)
-        fsync_directory(directory.parent)
 
 
 @dataclass(frozen=True)
@@ -65,7 +48,10 @@ class Journal:
         if not RUN_ID.fullmatch(run_id):
             raise JournalIntegrityError("invalid journal run id")
         journal_dir = root / "journal"
-        _ensure_durable_directory(journal_dir)
+        try:
+            ensure_durable_directory(journal_dir, 0o700)
+        except DurabilityError as exc:
+            raise JournalIntegrityError(str(exc)) from exc
         fsync_directory(journal_dir.parent)
         fsync_directory(journal_dir)
         path = journal_dir / f"{run_id}.jsonl"

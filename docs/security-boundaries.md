@@ -45,12 +45,17 @@ Candidate code cannot use it to promote itself. Until the installer qualifies a
 manager and sandbox, `feature_safe_self_update` is off and all activation fails
 closed. Enrollment must prove that the candidate identity neither owns nor has
 mode, group, ACL, or inherited write access to each trusted journal, pointer,
-fence, backup, and service-configuration path or any replaceable ancestor. The
-foundation rejects privileged candidate identities and performs its POSIX access
-probe after dropping to the actual candidate UID, primary GID, and supplementary
-groups, so effective ACL and inherited access participate in the decision. Release
-publication creates fresh controller-owned inodes rather than renaming or hardlinking
-candidate-owned files. No installer enrolls this boundary yet. See
+fence, backup, and service-configuration path or any replaceable ancestor. Every
+trusted path and ancestor must be owned by root or the controller identity. The
+foundation rejects privileged candidate identities, declared service capabilities,
+and candidate configurations that allow privilege escalation. Its POSIX access probe
+drops to the actual candidate UID, primary GID, and supplementary groups, sets
+no-new-privileges on Linux, and rejects retained permitted, effective, or ambient
+capabilities, so effective ACL and inherited access participate in the decision.
+Release publication consumes an authenticated verified file set and uses pinned
+directory descriptors plus fresh controller-owned inodes rather than path-based
+reopens, renames, or hardlinks of candidate-owned files. No installer enrolls this
+boundary yet. See
 [ADR-0008](adr/0008-external-safe-update-authority.md) and the [adapter
 playbook](adding-safe-updater-adapter.md).
 

@@ -232,6 +232,13 @@ must remain off until candidate and fault/rollback gates are accepted. Foregroun
 ordinary user-service, Windows, and unqualified macOS installs fail closed. Local
 self-edit commits carry reverified provenance, not a release signature.
 
+Future enrollment must place the nonsecret maintenance fence in a dedicated
+controller-owned status directory whose ancestors are searchable by the application
+identity. The directory and fence are application-readable but not
+application-writable. Trusted release, journal, and fence directory creation is
+durably flushed at every new parent entry; a platform without qualified pinned
+candidate-tree traversal remains unenrolled.
+
 ### Code checkout vs data directory
 
 The foundation keeps the two locations separate and touches neither:

@@ -8,8 +8,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-from .durability import fsync_directory
-from .tree import TreeError, copy_regular_tree, regular_file_digests
+from .durability import DurabilityError, ensure_durable_directory, fsync_directory
+from .tree import TreeError, VerifiedTree, copy_regular_tree, regular_file_digests
 
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 RELEASE_ID = re.compile(r"^sha256-[a-f0-9]{40}-[a-f0-9]{12}$")
@@ -40,16 +40,29 @@ class ReleaseLayout:
         self.release_dir(release_id)
         return f"../releases/{release_id}"
 
-    def create_immutable_release(self, release_id: str, source: Path) -> Path:
-        """Install an already-verified tree without replacing an existing release."""
+    def create_immutable_release(
+        self,
+        release_id: str,
+        source: Path,
+        verified: VerifiedTree,
+    ) -> Path:
+        """Install a verified tree without replacing an existing release."""
         destination = self.release_dir(release_id)
         if os.path.lexists(destination):
             raise LayoutError("release id already exists")
+        if (
+            (
+                verified.release_id is not None
+                and verified.release_id != release_id
+            )
+            or release_id.split("-")[1] != verified.commit
+        ):
+            raise LayoutError("verified tree release identity mismatch")
+        expected = verified.files()
         try:
-            expected = regular_file_digests(source)
-        except TreeError as exc:
+            ensure_durable_directory(destination.parent, 0o755)
+        except DurabilityError as exc:
             raise LayoutError(str(exc)) from exc
-        destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         parent_stat = destination.parent.lstat()
         if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
             raise LayoutError("release directory must be a real directory")

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -24,14 +26,21 @@ class SafeUpdateInProgress(SafeUpdateError):
         self.run_id = run_id
 
 
+class SafeUpdateProtocolError(SafeUpdateError):
+    code = "safe_update_external_invalid"
+
+
 class ExternalUpdater(Protocol):
     def capability(self) -> dict[str, Any]: ...
-    def submit(self, request: dict[str, str]) -> dict[str, str]: ...
+    def submit(self, request: dict[str, str]) -> Mapping[str, Any]: ...
     def recovery_status(self, run_id: str) -> dict[str, Any]: ...
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 
 
 @dataclass
@@ -52,20 +61,34 @@ class SafeUpdateCoordinator:
     def submit(self, request: dict[str, str]) -> dict[str, Any]:
         if self.external is None:
             raise SafeUpdateUnmanaged()
-        # The external controller, not this SQLite projection, owns single-flight.
         with self._lock:
-            existing = self.conn.execute(
-                "SELECT id FROM self_update_runs WHERE status IN ('requested', 'in_progress') ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-            if existing:
-                raise SafeUpdateInProgress(str(existing[0]))
-            accepted = self.external.submit(request)
-            run_id = str(accepted["run_id"])
-            self.conn.execute(
-                "INSERT INTO self_update_runs(id, origin_job_id, base_commit, candidate_commit, phase, status, evidence_summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, request.get("origin_job_id"), request["base_commit"], request["candidate_commit"], "preflight", "requested", "{}", _now(), _now()),
-            )
-            self.conn.commit()
+            result = self.external.submit(request)
+            if not isinstance(result, Mapping):
+                raise SafeUpdateProtocolError()
+            run_id = result.get("run_id")
+            accepted = result.get("accepted")
+            reason = result.get("reason")
+            if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+                raise SafeUpdateProtocolError()
+            if accepted is False and reason == SafeUpdateInProgress.code:
+                raise SafeUpdateInProgress(run_id)
+            if accepted is not True:
+                raise SafeUpdateProtocolError()
+            now = _now()
+            try:
+                self.conn.execute(
+                    "UPDATE self_update_runs SET phase = ?, status = ?, updated_at = ? "
+                    "WHERE status IN ('requested', 'in_progress')",
+                    ("external_reconciled", "superseded", now),
+                )
+                self.conn.execute(
+                    "INSERT INTO self_update_runs(id, origin_job_id, base_commit, candidate_commit, phase, status, evidence_summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, request.get("origin_job_id"), request["base_commit"], request["candidate_commit"], "preflight", "requested", "{}", now, now),
+                )
+                self.conn.commit()
+            except sqlite3.Error:
+                self.conn.rollback()
+                raise
             return self.get(run_id)
 
     def get(self, run_id: str) -> dict[str, Any] | None:

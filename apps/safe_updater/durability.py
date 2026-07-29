@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 
@@ -70,3 +71,37 @@ def fsync_directory(path: Path) -> None:
         _flush_windows_directory(path)
         return
     raise DurabilityError("directory durability backend unavailable")
+
+
+def ensure_durable_directory(path: Path, mode: int) -> None:
+    absolute = Path(os.path.abspath(path))
+    if absolute.parent == absolute:
+        raise DurabilityError("filesystem root cannot be a managed directory")
+    missing: list[Path] = []
+    current = absolute
+    while True:
+        if os.path.lexists(current):
+            try:
+                value = current.lstat()
+            except OSError as exc:
+                raise DurabilityError("durable directory cannot be inspected") from exc
+            if stat.S_ISLNK(value.st_mode) or not stat.S_ISDIR(value.st_mode):
+                raise DurabilityError("durable path must contain only real directories")
+        else:
+            missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=mode)
+            directory.chmod(mode)
+            fsync_directory(directory)
+            fsync_directory(directory.parent)
+        except OSError as exc:
+            raise DurabilityError("durable directory cannot be created") from exc
+    try:
+        absolute.chmod(mode)
+        fsync_directory(absolute)
+    except OSError as exc:
+        raise DurabilityError("durable directory permissions cannot be enforced") from exc

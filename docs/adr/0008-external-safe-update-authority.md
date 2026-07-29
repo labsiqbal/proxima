@@ -45,14 +45,24 @@ recovery verdict.
 The application may expose authenticated request and status projections. Its SQLite
 rows do not authorize or prove promotion. Release manifests bind the exact regular
 file set and the canonical Python and web lockfiles. Local provenance is unsigned
-and must be reverified against the candidate tree. Publication copies verified
-content into fresh controller-owned staging inodes, revalidates that tree, and
-atomically renames it into the immutable namespace.
+and must be reverified against the candidate tree. Both paths return an immutable
+verified file set bound to the candidate commit; signed results are also bound to
+the release identifier. Publication accepts that result instead of recomputing trust
+from mutable source, traverses from pinned directory descriptors, copies content
+into fresh controller-owned staging inodes, revalidates that tree, and atomically
+renames it into the immutable namespace.
 
 Locking and directory durability select native backends for POSIX or Windows. A
 submitted nonterminal journal remains the durable single-flight owner after the
 kernel lock is released. Recovery fails closed for missing, malformed, truncated,
 unterminated, unreadable, substituted, or hostile-path journals.
+
+The application consults external submission authority before updating its
+projection. A stale requested or in-progress SQLite row cannot block a later
+externally accepted run. The maintenance fence contains nonsecret status and is
+controller-owned, application-readable, and application-nonwritable. Its read client
+lives in the API package so every documented application entrypoint has the same
+contract.
 
 Every service-manager adapter reports unmanaged until its complete qualification
 matrix passes. The foundation contains no live release switch, database mutation,

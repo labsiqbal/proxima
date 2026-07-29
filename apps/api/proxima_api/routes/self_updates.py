@@ -9,7 +9,8 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import features
-from ..safe_updates import SafeUpdateInProgress, SafeUpdateUnmanaged
+from ..maintenance_status import read_external_fence
+from ..safe_updates import SafeUpdateError, SafeUpdateInProgress, SafeUpdateUnmanaged
 
 COMMIT = re.compile(r"^[a-f0-9]{40}$")
 
@@ -37,11 +38,7 @@ def register(app, deps):
         raw_path = app.state.config.get("safe_update_fence_path")
         if not raw_path:
             return {"active": False, "phase": None}
-        try:
-            from apps.safe_updater.write_fence import status
-            value = status(Path(str(raw_path)))
-        except (ImportError, OSError):
-            value = {"phase": "unknown", "reason": "maintenance_state_unreadable"}
+        value = read_external_fence(Path(str(raw_path)))
         return {"active": value is not None, **(value or {"phase": None})}
 
     @app.get("/api/self-updates/capability")
@@ -57,6 +54,8 @@ def register(app, deps):
         except SafeUpdateInProgress as exc:
             raise HTTPException(status_code=409, detail={"code": exc.code, "run_id": exc.run_id})
         except SafeUpdateUnmanaged as exc:
+            raise HTTPException(status_code=409, detail={"code": exc.code})
+        except SafeUpdateError as exc:
             raise HTTPException(status_code=409, detail={"code": exc.code})
 
     @app.get("/api/self-updates/{run_id}")

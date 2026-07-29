@@ -39,8 +39,10 @@ An adapter needs evidence for all of these:
 - The controller identity owns trusted state and service control. The application
   and candidate identities own none of it and have no mode, group, ACL, inherited
   permission, writable ancestry, or service-manager path that can replace or write
-  it. Qualification runs under a privileged controller and probes access after
-  dropping to the exact candidate UID and groups.
+  it. Every trusted ancestor is root/controller-owned. Qualification rejects
+  candidate service capabilities and privilege escalation, then probes access after
+  dropping to the exact candidate UID and groups. Linux probes also require
+  no-new-privileges and empty permitted, effective, and ambient capability sets.
 - Journal creation and every append survive process kill and power-loss ordering.
   The selected platform backend must durably flush directory entries. Missing,
   partial, unterminated, malformed, reordered, and replayed records fail closed.
@@ -48,9 +50,17 @@ An adapter needs evidence for all of these:
   journal continues to block later submissions after the kernel lock is released.
 - Manifest signature verification binds the exact regular file set, tree digest,
   `apps/api/uv.lock`, and `apps/web/package-lock.json`. Symlinks, special files,
-  traversal, extras, and substitutions are rejected before publish. Publication
-  copies content into fresh controller-owned inodes, rechecks trusted staging, and
-  atomically renames it without preserving candidate hardlinks or ownership.
+  traversal, extras, and substitutions are rejected before publish. Verification
+  returns the immutable file set consumed by publication, so candidate changes
+  cannot redefine expected content. Every source component is opened relative to a
+  pinned directory descriptor. Hosts without a qualified pinned traversal backend
+  remain unenrolled. Publication copies content into fresh controller-owned inodes,
+  rechecks trusted staging, and atomically renames it without preserving candidate
+  hardlinks or ownership.
+- Trusted namespace creation durably flushes each new directory and its parent.
+  The maintenance status directory is searchable and the nonsecret fence file is
+  readable by the application identity, while neither grants that identity write
+  access.
 - Candidate execution has read-only source and no access to journals, pointers,
   fences, backups, service configuration, runtime data, or secrets.
 - Stop verification detects surviving writable processes and sidecars.
@@ -71,10 +81,15 @@ At minimum add target-platform integration tests for:
 - controller kill before and after each journal fsync boundary
 - short writes and a final record whose newline was never committed
 - hostile identifiers, symlink swaps, special files, and exact-tree enforcement
+- ancestor-directory replacement between verification and publication
 - candidate-owned source modes, hardlinks, and mutation after publication
+- mutation between authenticated verification and publication
 - signature, lockfile, provenance, and release-identity substitution
 - candidate attempts to write or replace each trusted state class through leaf,
-  parent, ACL, inherited, supplementary-group, and privileged-identity paths
+  parent, ownership, ACL, inherited, supplementary-group, capability, and
+  privileged-identity paths
+- plain application entrypoint maintenance reads without repository-root imports
+- stale projection rows followed by authoritative external accept/reject responses
 - incomplete enrollment, missing service manager, and invalid service configuration
 - stop verification with a surviving process and sidecar
 - read-only start, health failure, writable start, rollback, and repeated recovery
