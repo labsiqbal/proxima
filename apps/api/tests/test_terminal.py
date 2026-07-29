@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 import time
+
+import pytest
 
 from proxima_api import terminal as terminal_module
 from proxima_api.terminal import TerminalSession
@@ -58,6 +61,10 @@ def test_close_fails_closed_when_session_cannot_be_verified(
     assert terminal.close() is False
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="Bubblewrap is required for process containment",
+)
 def test_contained_terminal_terminates_detached_descendant(tmp_path):
     child_path = tmp_path / "detached.pid"
     escaped_path = tmp_path / "escaped.txt"

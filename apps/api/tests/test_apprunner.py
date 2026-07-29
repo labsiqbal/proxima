@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import socket
 import time
 
@@ -140,6 +142,10 @@ def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
     asyncio.run(run_case())
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="Bubblewrap is required for process containment",
+)
 def test_contained_app_runner_kills_detached_descendants(tmp_path):
     class Lease:
         released = False
