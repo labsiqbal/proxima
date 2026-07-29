@@ -1,8 +1,8 @@
-"""Version identity + release update checking / self-update orchestration.
+"""Version identity, release checking, and legacy marker reconciliation.
 
 The single source of truth for the app version is the VERSION file at repo
-root. Everything else (FastAPI app version, /api/health, the update check)
-reads it from here.
+root. Everything else (FastAPI app version, /api/health, and the update check)
+reads it from here. Promotion belongs only to the external safe updater.
 """
 from __future__ import annotations
 

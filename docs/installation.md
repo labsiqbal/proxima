@@ -12,8 +12,10 @@ rather than treating the product as finished SaaS polish.
 
 Sessions, chat history, projects, and other owner data live in the **data
 directory** (SQLite and workspace files), not in the git checkout. The current
-safe-update foundation changes neither code nor data: both HTTP apply and
-`proxima update` refuse activation. Details: [Updating](#updating).
+safe-update activation paths change neither code nor live data: both HTTP apply
+and `proxima update` refuse activation. Normal startup still applies migration 43,
+which adds the app-owned `self_update_runs` projection table. Details:
+[Updating](#updating).
 
 ## Requirements
 
@@ -241,12 +243,12 @@ candidate-tree traversal remains unenrolled.
 
 ### Code checkout vs data directory
 
-The foundation keeps the two locations separate and touches neither:
+The inert activation path keeps the two locations separate:
 
-| Location | Contents | Touched by the foundation? |
+| Location | Contents | Safe-update foundation effect |
 | --- | --- | --- |
-| **Git checkout** (install source) | App code | **No** |
-| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | **No** |
+| **Git checkout** (install source) | App code | No activation write |
+| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Migration 43 adds the app-owned projection table; no application-data migration, swap, or activation |
 
 Chat history lives in **SQLite under the data dir** (`PROXIMA_DB_PATH`, default
 `$DATA_DIR/proxima.db`), not in the git tree. Any future qualified updater must
@@ -284,9 +286,9 @@ PROXIMA_UPDATE_REPO=your-account/your-fork
 
 The external updater owns its lock, fsynced journal, release pointers, maintenance
 fence, backup location, and service configuration outside the candidate release.
-The application can only submit an authenticated, typed request and render status;
-it cannot promote code or modify those trusted files. Adapter qualification is
-defined in [Adding a Safe-Updater Service Adapter](adding-safe-updater-adapter.md).
+The application exposes only authenticated, typed request/status projections; it
+cannot promote code or modify those trusted files. Adapter qualification is defined
+in [Adding a Safe-Updater Service Adapter](adding-safe-updater-adapter.md).
 
 ## Development
 

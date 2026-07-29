@@ -220,7 +220,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 except Exception as _exc:
                     logging.getLogger("proxima.scheduler").exception("scheduler tick failed")
         scheduler_task = asyncio.create_task(_scheduler_loop())
-    app.state.updates.reconcile_marker()  # finalize a marker left by a self-update restart
+    # Reconcile markers left by the removed live-checkout updater.
+    app.state.updates.reconcile_marker()
     update_task: asyncio.Task | None = None
     if cfg.get("update_check", True):
         async def _update_check_loop() -> None:

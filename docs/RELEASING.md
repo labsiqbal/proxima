@@ -1,9 +1,10 @@
 # Releasing Proxima
 
-Releases are what update user-managed installs: with update checks enabled,
-Proxima checks GitHub Releases every 6 hours and shows the owner an "Update
-available" notification with the release notes. Pushing to `main` alone notifies
-nobody — only cutting a release does.
+GitHub Releases are what update checks advertise to user-managed installs. With
+update checks enabled, Proxima checks every 6 hours and shows the owner an "Update
+available" notification with the release notes. Current installs do not activate
+that release in-app. Pushing to `main` alone notifies nobody - only cutting a
+release does.
 
 ## The one command
 

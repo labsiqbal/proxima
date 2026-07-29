@@ -65,9 +65,10 @@ lives in the API package so every documented application entrypoint has the same
 contract.
 
 Every service-manager adapter reports unmanaged until its complete qualification
-matrix passes. The foundation contains no live release switch, database mutation,
-service enrollment, or activation method. The legacy application and CLI apply
-paths refuse the operation.
+matrix passes. The foundation contains no live release switch, application-data
+migration or swap, service enrollment, or activation method. Its database changes
+are limited to the app-owned request/status projection schema and rows. The legacy
+application and CLI apply paths refuse the operation.
 
 ## Consequences
 
