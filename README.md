@@ -11,9 +11,10 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
 ## Current highlights
 
 - **Master orchestration desk:** delegate an outcome to a built-in orchestrator,
-  choose its backing runner, and monitor three worker slots, queued work,
-  Attention decisions, and job-scoped checkpoints. Its durable migration is
-  shipped, while the runtime/UI gate defaults off during integration.
+  choose a server-qualified backing runner, and monitor three worker slots,
+  queued work, Attention decisions, and job-scoped checkpoints. Its durable
+  migration is shipped, while the runtime/UI gate defaults off pending the
+  [documented product and installation-specific runner gates](docs/master-integrated-acceptance.md#activation-decision).
 - **Native Grok runner:** use the official Grok Build CLI over its native ACP
   endpoint, with the same ready/not-ready status shown for every installed runner.
 - **First-class `/masterplan`:** start the bundled masterplan methodology from

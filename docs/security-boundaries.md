@@ -84,6 +84,13 @@ pointers, fence, and backups untouched. The accepted preflight journal remains
 nonterminal, and frozen failure evidence is retained for inspection. This is not
 enrollment or activation.
 
+For the Master selector scenario, the controller mounts the policy-pinned probe
+bundle's version-only Codex fixture through an explicit read-only auxiliary-tool
+boundary. Before candidate server startup, the trusted probe requires its exact
+namespace path and version, verifies that it refuses turn invocation, and proves
+that candidate code cannot write it. The fixture is candidate evidence only: it
+does not carry credentials, signing authority, or production update authority.
+
 Group 16 adds only a disabled transaction fixture. Its controller root must be an
 explicitly initialized empty directory beneath the system temporary directory,
 its fence uses the canonical `status/fence.json` path, and live-fixture and

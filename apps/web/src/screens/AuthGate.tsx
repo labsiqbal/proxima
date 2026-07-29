@@ -33,9 +33,9 @@ export function AuthGate({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed
         <ProximaMark className="proxima-mark-boot" label="Proxima" />
         <h1 className="auth-title">{isSetup ? 'Set a password' : 'Welcome back'}</h1>
         <p className="auth-sub">{isSetup ? 'Protect your cockpit — you’ll enter this to sign in.' : 'Enter your password to unlock the cockpit.'}</p>
-        <input className="auth-input" type="password" autoFocus placeholder="Password" value={pw}
+        <input className="auth-input" type="password" name="password" autoFocus placeholder="Password" value={pw}
           onChange={e => setPw(e.target.value)} autoComplete={isSetup ? 'new-password' : 'current-password'} />
-        {isSetup && <input className="auth-input" type="password" placeholder="Confirm password" value={confirm}
+        {isSetup && <input className="auth-input" type="password" name="password-confirmation" placeholder="Confirm password" value={confirm}
           onChange={e => setConfirm(e.target.value)} autoComplete="new-password" />}
         {error && <p className="auth-error">{error}</p>}
         <button className="primary-button auth-submit" type="submit" disabled={busy}>

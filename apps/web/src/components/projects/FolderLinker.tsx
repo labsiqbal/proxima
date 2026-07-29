@@ -107,6 +107,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         <label className="fl-field">
           <span className="muted">New folder name</span>
           <input
+            name="folder-name"
             value={folderName}
             onChange={e => setFolderName(e.target.value)}
             placeholder="my-project"
@@ -118,6 +119,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         <label className="fl-field">
           <span className="muted">Display name <span className="fl-optional">(optional)</span></span>
           <input
+            name="project-display-name"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder={folderName.trim() || 'My project'}
@@ -130,7 +132,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       </div>
     ) : (
       <div className="fl-link">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder={here} disabled={busy} aria-label="Project display name" />
+        <input name="project-display-name" value={name} onChange={e => setName(e.target.value)} placeholder={here} disabled={busy} aria-label="Project display name" />
         <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Linking…' : `Link “${here}”`}</button>
       </div>
     )}

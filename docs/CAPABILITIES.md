@@ -1471,10 +1471,9 @@ installed, hash-pinned probe suite starts the frozen release and requires API
 identity, version, authenticated maintenance, SSE, served-static-asset, complete
 asset-manifest, and headless-browser scenario results. The Master scenario asserts
 the modal popup and Home bridge, labeled controls, dynamic runner eligibility, and
-the absence of any enabled unqualified runner. The sandbox mounts a bundle-owned,
-version-only fake Codex through its explicit read-only auxiliary-tool boundary.
-The probe requires its exact namespace path and version, a refused turn invocation,
-and a denied write before the positive eligibility check. Evidence includes fixed
+the absence of any enabled unqualified runner against a trusted fixture. The
+[safe-update boundary](security-boundaries.md#safe-update-boundary) owns the
+fixture's isolation and refusal requirements. Evidence includes fixed
 build logs, migration proof, fixture metadata, assets, and probe results; its files
 and directories are frozen, and recovery rehashes the journal-pinned bundle before
 reporting a run safe.

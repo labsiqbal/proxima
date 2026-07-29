@@ -90,9 +90,11 @@ python3 scripts/gen_docs.py
 apps/api/.venv/bin/python scripts/gen_docs.py
 ```
 
-This rewrites `reference/api.md` (parsed from the route decorators) and
+This updates `reference/api.md` (parsed from the route decorators) and
 `reference/database.md` (introspected from a throwaway DB built with the app's own
-`init_db` + migrations). Both files are marked **GENERATED — do not edit by hand**.
+`init_db` + migrations) only when their semantic content changes. An unchanged run
+preserves the existing generation footer so the drift check stays clean. Both files
+are marked **GENERATED - do not edit by hand**.
 
 For the hand-maintained docs, the rule of thumb: **change the code and its doc in the
 same commit.** When you add a feature, update [CAPABILITIES.md](CAPABILITIES.md); when

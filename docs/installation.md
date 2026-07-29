@@ -177,8 +177,10 @@ Notes:
 - Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
   only as a recovery switch; the classic linear engine is unaffected either way.
 - Master persistence migration always runs. The Master runtime and UI default to
-  off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until integrated acceptance
-  enables them for production.
+  off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until the product and
+  installation-specific runner gates in
+  [integrated acceptance](master-integrated-acceptance.md#activation-decision)
+  have passed.
 - Safe self-update defaults off. Only a future administrator enrollment may set
   `PROXIMA_FEATURE_SAFE_SELF_UPDATE=1` and an absolute, root-owned
   `PROXIMA_SAFE_UPDATE_FENCE_PATH`; the application only reads that fence.
