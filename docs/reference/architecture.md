@@ -1190,9 +1190,11 @@ probe suite starts the candidate inside a loopback-only namespace and requires A
 identity, version, authenticated maintenance, SSE, served static assets, the complete
 asset digest, and every trusted headless-browser scenario. Its Master scenario
 asserts the accessible popup and Home bridge, labeled controls, server-derived
-runner eligibility, and the absence of enabled unqualified choices. A
-policy-pinned, read-only, version-only fake Codex makes the positive eligibility
-path deterministic but cannot start a runner turn. The frozen evidence tree
+runner eligibility, and the absence of enabled unqualified choices. The controller
+mounts a policy-pinned, version-only fake Codex through an explicit read-only
+auxiliary-tool boundary. Before server startup, the probe requires its exact
+namespace path and version, a refused turn invocation, and a denied write. The
+frozen evidence tree
 contains build logs, migration and fixture proof, identities, and probe results.
 Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
 commands cannot reach the journal, active or last-good pointers, fence, backups, or

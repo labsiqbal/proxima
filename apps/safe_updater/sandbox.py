@@ -171,6 +171,7 @@ class CandidateSandbox:
         writable_overlays: Mapping[Path, Path],
         inputs: Mapping[str, Path],
         tools: Mapping[str, Path],
+        auxiliary_tools: Mapping[str, Path],
         environment: Mapping[str, str],
         network_loopback: bool,
         namespace_root: bool,
@@ -224,11 +225,19 @@ class CandidateSandbox:
             _candidate_writable(path)
 
         command = list(argv)
-        tool_mounts: dict[str, Path] = {}
+        tool_mounts = {
+            name: _real(source)
+            for name, source in auxiliary_tools.items()
+        }
         first = command[0]
         if "/" not in first:
             if first in tools:
-                tool_mounts[first] = _real(tools[first])
+                entrypoint = _real(tools[first])
+                if first in tool_mounts and tool_mounts[first] != entrypoint:
+                    raise SandboxError("candidate tool mount conflicts")
+                tool_mounts[first] = entrypoint
+                command[0] = f"/opt/proxima-tools/{first}"
+            elif first in tool_mounts:
                 command[0] = f"/opt/proxima-tools/{first}"
             else:
                 executable = shutil.which(first, path=_SYSTEM_PATH)
@@ -329,7 +338,12 @@ class CandidateSandbox:
                 raise SandboxError("candidate input overlaps a writable mount")
             sandbox.extend(("--ro-bind", str(resolved), f"/opt/proxima-inputs/{name}"))
         for name, source in sorted(tool_mounts.items()):
-            if not _INPUT_NAME.fullmatch(name) or not source.is_file():
+            if (
+                not _INPUT_NAME.fullmatch(name)
+                or not source.is_file()
+                or not os.access(source, os.X_OK)
+                or any(_contains(path, source) for path in writable)
+            ):
                 raise SandboxError("candidate tool mount is invalid")
             sandbox.extend(("--ro-bind", str(source), f"/opt/proxima-tools/{name}"))
         for key, value in sorted(environment.items()):
@@ -369,6 +383,7 @@ class CandidateSandbox:
         read_only_paths: Sequence[Path] = (),
         inputs: Mapping[str, Path] | None = None,
         tools: Mapping[str, Path] | None = None,
+        auxiliary_tools: Mapping[str, Path] | None = None,
         environment: Mapping[str, str] | None = None,
         network_loopback: bool = False,
         namespace_root: bool = False,
@@ -437,6 +452,7 @@ class CandidateSandbox:
                 writable_overlays=writable_overlays or {},
                 inputs=inputs or {},
                 tools=tools or {},
+                auxiliary_tools=auxiliary_tools or {},
                 environment=self.environment(environment),
                 network_loopback=network_loopback,
                 namespace_root=namespace_root,

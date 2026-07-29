@@ -8,5 +8,8 @@ namespace and runs every scenario in `browser-scenarios.json` after the fixed AP
 authenticated maintenance, SSE, version, and served-asset checks pass.
 
 `codex-fixture` is the bundle-owned version-only runner used by Master selector
-scenarios. It cannot start a runner turn and is mounted read-only from the pinned
-probe tree.
+scenarios. The controller mounts it read-only through the sandbox's explicit
+auxiliary-tool boundary. Before starting the candidate, the trusted probe requires
+the exact `/opt/proxima-tools/codex` path and version, a refused turn invocation,
+and a denied write. The local replay copies this same tracked fixture into its
+temporary executable directory.

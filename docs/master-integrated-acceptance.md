@@ -46,7 +46,7 @@ an earlier boundary.
 | Master supervision does not duplicate Satpam authority | `MasterSupervisor` claims eligible queued Tasks only. Satpam remains the sole detector and recovery owner. Projection tests cover restart reconciliation, capacity, attribution, and idempotency. |
 | UI and accessibility use one state owner | `MasterStateProvider` owns the canonical session, cursor, EventSource, draft, target, Focus, toast queue, and scroll state. Home and popup share consumers; modal focus, Escape, focus return, keyboard controls, and live-region priority have focused tests. |
 | Graph and Live state remain isolated | Code and Knowledge graph state are per Area or Container, atomic, provenance-tagged, local-only by default, and last-good preserving. Live status reads SQLite independently. |
-| Candidate proof cannot touch production | Candidate build, migrated clone, fixture database, workspace, runner home, and browser profile live under disposable roots. A policy-pinned, read-only, version-only fake Codex proves selector eligibility but cannot start a turn. Bubblewrap and path validation exclude live releases, data, services, pointers, fences, backups, journals, and signing authority. |
+| Candidate proof cannot touch production | Candidate build, migrated clone, fixture database, workspace, runner home, and browser profile live under disposable roots. A policy-pinned, version-only fake Codex is mounted through an explicit read-only auxiliary-tool boundary; the probe asserts its exact namespace path, version, refusal, and write denial before proving selector eligibility. Bubblewrap and path validation exclude live releases, data, services, pointers, fences, backups, journals, and signing authority. |
 | Fault recovery is fixture-proven | Controller tests cover journal replay, phase interruption, WAL and SHM quarantine, writable proofs, process drain, both-pointer rollback, breaker behavior, asset identity, and adapter refusal. |
 | API and schema references remain synchronized | `scripts/gen_docs.py` preserves an existing generated footer when the semantic body is unchanged. `test_gen_docs.py` covers repeatability, and the mandatory end-of-work generation detects drift. |
 
@@ -72,9 +72,10 @@ apps/api/.venv/bin/python scripts/verify_master_browser.py \
 ```
 
 The replay builds the current web bundle, creates a temporary database, workspace,
-runner home, browser profile, loopback server, authenticated owner, Container, and
-fake Codex 0.145.0 binary, runs the tracked real-browser assertions, prints the
-reviewable transcript, and removes the fixture. It explicitly keeps
+runner home, browser profile, loopback server, authenticated owner, and Container,
+copies the tracked Codex fixture into its temporary executable directory, runs the
+real-browser assertions, prints the reviewable transcript, and removes the fixture.
+It explicitly keeps
 `feature_safe_self_update` off. It does not enroll an updater, activate
 production, switch a live release, replace live data, control a real service, or
 use signing authority.

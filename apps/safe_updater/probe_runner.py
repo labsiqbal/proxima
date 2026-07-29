@@ -170,7 +170,7 @@ class TrustedProbeRunner:
                 ),
                 read_only_paths=(sandbox.release,),
                 inputs=inputs,
-                tools={"codex": fixture_codex},
+                auxiliary_tools={"codex": fixture_codex},
                 environment={
                     "PROXIMA_CANDIDATE_RELEASE_ID": identity.release_id,
                     "PROXIMA_CANDIDATE_COMMIT": identity.commit,

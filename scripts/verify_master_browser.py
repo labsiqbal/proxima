@@ -94,17 +94,16 @@ def main() -> None:
         fake_bin = fixture / "bin"
         for path in (home, workspace, container, runner_home, fake_bin):
             path.mkdir(parents=True)
+        fixture_codex = PROBE_ROOT / "codex-fixture"
+        if (
+            not fixture_codex.is_file()
+            or fixture_codex.is_symlink()
+            or not os.access(fixture_codex, os.X_OK)
+        ):
+            raise RuntimeError("tracked Codex fixture is unavailable")
         codex = fake_bin / "codex"
-        codex.write_text(
-            "#!/bin/sh\n"
-            "if [ \"${1:-}\" = \"--version\" ]; then\n"
-            "  echo 'codex-cli 0.145.0'\n"
-            "  exit 0\n"
-            "fi\n"
-            "exit 1\n",
-            encoding="utf-8",
-        )
-        codex.chmod(0o755)
+        shutil.copyfile(fixture_codex, codex, follow_symlinks=False)
+        codex.chmod(0o555)
         port = _port()
         base_url = f"http://127.0.0.1:{port}"
         environment = {
