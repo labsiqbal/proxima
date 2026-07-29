@@ -188,8 +188,9 @@ with TestClient(serve.app) as client:
         "workflow_graph": True,
         "repo_worktrees": True,
         "master_orchestrator": False,
+        "safe_self_update": False,
     }
-    print("config: shipped features on, master_orchestrator=false")
+    print("config: shipped features on, inert features off")
 
     auth_response = client.post("/auth/auto", json={})
     auth_response.raise_for_status()
@@ -314,8 +315,9 @@ async function main() {
     workflow_graph: true,
     repo_worktrees: true,
     master_orchestrator: false,
+    safe_self_update: false,
   })
-  console.log('config: shipped features on, master_orchestrator=false')
+  console.log('config: shipped features on, inert features off')
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')
