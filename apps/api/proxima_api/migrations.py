@@ -1596,12 +1596,43 @@ def _add_master_focus_persistence_boundaries(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
     }
-    if {
+    run_focus_tables = {
         "runs",
         "sessions",
         "master_focus_epochs",
         "master_focus_state",
-    }.issubset(tables):
+    }
+    if run_focus_tables.issubset(tables):
+        run_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        session_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        epoch_columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(master_focus_epochs)"
+            ).fetchall()
+        }
+        state_columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(master_focus_state)"
+            ).fetchall()
+        }
+        has_run_focus_shape = (
+            {"session_id", "kind", "project_id", "focus_epoch_id"}
+            <= run_columns
+            and {"id", "mode"} <= session_columns
+            and {"id", "master_session_id"} <= epoch_columns
+            and {"master_session_id", "current_epoch_id"} <= state_columns
+        )
+    else:
+        has_run_focus_shape = False
+    if has_run_focus_shape:
         conn.execute(
             """
             CREATE TRIGGER IF NOT EXISTS runs_master_focus_insert

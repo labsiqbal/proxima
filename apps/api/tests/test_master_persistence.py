@@ -255,7 +255,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 40
+    assert current_version(app.state.db) == 41
     profile = app.state.db.execute(
         "SELECT id, slug, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()
