@@ -97,6 +97,12 @@ def _trusted(tmp_path: Path) -> TrustedProbeBundle:
         '{"version":1,"scenarios":["shell"]}',
         encoding="utf-8",
     )
+    fixture_codex = probes / "codex-fixture"
+    fixture_codex.write_text(
+        "#!/bin/sh\necho 'codex-cli 0.145.0'\n",
+        encoding="utf-8",
+    )
+    fixture_codex.chmod(0o500)
     return TrustedProbeBundle.load(probes, _tree_digest(probes))
 
 
@@ -108,10 +114,14 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
             str(root / name),
             "exec",
         )
+    fixture_codex = root / "codex-fixture"
+    assert fixture_codex.is_file()
+    assert os.access(fixture_codex, os.X_OK)
+    assert "codex-cli 0.145.0" in fixture_codex.read_text(encoding="utf-8")
     scenarios = json.loads(
         (root / "browser-scenarios.json").read_text(encoding="utf-8")
     )
-    assert scenarios["version"] == 2
+    assert scenarios["version"] == 3
     definitions = scenarios["scenarios"]
     assert {scenario["name"] for scenario in definitions} == {
         "focus",
@@ -124,6 +134,19 @@ def test_shipped_trusted_probe_bundle_is_executable_and_has_browser_scenarios():
         "update-status",
     }
     assert all(scenario["steps"] for scenario in definitions)
+    master_steps = next(
+        scenario["steps"]
+        for scenario in definitions
+        if scenario["name"] == "master-popup-home"
+    )
+    assert {
+        step["action"]
+        for step in master_steps
+    } >= {"assert", "assert_absent", "click"}
+    assert any(
+        "data-master-eligible" in step["selector"]
+        for step in master_steps
+    )
     assert len(
         {
             json.dumps(scenario["steps"], sort_keys=True)
@@ -143,7 +166,7 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
     for path in (release, workspace, runner_home, database.parent):
         path.mkdir(parents=True, exist_ok=True)
     database.touch()
-    observed: dict[str, int] = {}
+    observed: dict[str, object] = {}
 
     class Sandbox:
         root = tmp_path
@@ -158,6 +181,7 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
         def run(self, argv, **kwargs):
             observed["memory_bytes"] = kwargs["memory_bytes"]
             observed["process_limit"] = kwargs["process_limit"]
+            observed["tools"] = kwargs["tools"]
             return subprocess.CompletedProcess(
                 argv,
                 0,
@@ -169,9 +193,10 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
         "_browser",
         staticmethod(lambda: ("/usr/bin/true", {})),
     )
+    trusted_bundle = _trusted(tmp_path)
     result = TrustedProbeRunner().run(
         sandbox=Sandbox(),
-        trusted_bundle=_trusted(tmp_path),
+        trusted_bundle=trusted_bundle,
         identity=CandidateIdentity(
             f"sha256-{'a' * 40}-{'b' * 12}",
             "a" * 40,
@@ -186,6 +211,12 @@ def test_trusted_probe_runner_pins_browser_resource_ceilings(
     assert observed["memory_bytes"] == 128 * 1024 * 1024 * 1024
     assert observed["process_limit"] == TRUSTED_BROWSER_PROCESS_LIMIT
     assert observed["process_limit"] == 256
+    tools = observed["tools"]
+    assert isinstance(tools, dict)
+    codex = tools["codex"]
+    assert isinstance(codex, Path)
+    assert codex == trusted_bundle.root / "codex-fixture"
+    assert "codex-cli 0.145.0" in codex.read_text(encoding="utf-8")
 
 
 def test_offline_manifest_uses_only_the_candidate_sandbox(

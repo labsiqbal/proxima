@@ -174,7 +174,8 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
     bin_dir.mkdir()
     for name in ["hermes", "codex", "grok", "aider"]:
         file = bin_dir / name
-        file.write_text("#!/bin/sh\nexit 0\n")
+        version = "echo 'codex-cli 0.145.0'\n" if name == "codex" else ""
+        file.write_text(f"#!/bin/sh\n{version}exit 0\n")
         file.chmod(0o755)
 
     registry = (
@@ -193,10 +194,16 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
     assert result["codex"]["installed"] is True
     assert result["codex"]["runnable"] is True
     assert result["codex"]["masterChatOnly"] is True
+    assert result["codex"]["masterEligible"] is True
+    assert result["codex"]["masterUnavailableReason"] is None
 
     assert result["grok"]["installed"] is True
     assert result["grok"]["runnable"] is True
     assert result["grok"]["masterChatOnly"] is False
+    assert result["grok"]["masterEligible"] is False
+    assert result["grok"]["masterUnavailableReason"] == (
+        "adapter does not prove the chat-only boundary"
+    )
     assert result["grok"]["path"] == str(bin_dir / "grok")
 
     assert result["claude-code"]["installed"] is False
@@ -206,6 +213,27 @@ def test_detect_runners_uses_proxima_registry_and_controlled_path(tmp_path: Path
     assert result["aider"]["hasAdapter"] is False
     assert result["aider"]["detectionOnly"] is True
     assert result["aider"]["runnable"] is False
+
+
+def test_detect_runners_rejects_installed_old_codex_for_master(tmp_path: Path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    binary = bin_dir / "codex"
+    binary.write_text("#!/bin/sh\necho 'codex-cli 0.144.9'\n")
+    binary.chmod(0o755)
+
+    result = detect_runners(
+        path_env=str(bin_dir),
+        registry=(RunnerDefinition("codex", "Codex", ("codex",), True),),
+    )[0]
+
+    assert result["installed"] is True
+    assert result["runnable"] is True
+    assert result["masterChatOnly"] is True
+    assert result["masterEligible"] is False
+    assert result["masterUnavailableReason"] == (
+        "Codex 0.144.9 is below required 0.145.0"
+    )
 
 
 def test_detect_endpoint_includes_hermes_status(tmp_path):

@@ -66,3 +66,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0006](0006-master-context-is-layered-and-scoped.md) | Master context is layered and scoped | Accepted |
 | [0007](0007-master-focus-is-a-durable-execution-boundary.md) | Master Focus is a durable execution boundary | Accepted |
 | [0008](0008-external-safe-update-authority.md) | Safe update authority stays outside candidate releases | Accepted |
+| [0009](0009-one-durable-master-interface-state.md) | One durable Master interface state | Accepted |

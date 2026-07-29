@@ -6,3 +6,7 @@ not choose or write the installed bundle, its browser selectors, or its evidence
 The installed `probe.py` starts the frozen candidate in its isolated loopback
 namespace and runs every scenario in `browser-scenarios.json` after the fixed API,
 authenticated maintenance, SSE, version, and served-asset checks pass.
+
+`codex-fixture` is the bundle-owned version-only runner used by Master selector
+scenarios. It cannot start a runner turn and is mounted read-only from the pinned
+probe tree.

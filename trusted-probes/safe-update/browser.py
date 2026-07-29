@@ -21,7 +21,12 @@ class BrowserProbeError(RuntimeError):
 def _recv_exact(connection: socket.socket, size: int) -> bytes:
     result = bytearray()
     while len(result) < size:
-        chunk = connection.recv(size - len(result))
+        try:
+            chunk = connection.recv(size - len(result))
+        except TimeoutError as exc:
+            raise BrowserProbeError(
+                "browser debugging response timed out"
+            ) from exc
         if not chunk:
             raise BrowserProbeError("browser debugging connection closed")
         result.extend(chunk)
@@ -35,9 +40,9 @@ class _WebSocket:
             raise BrowserProbeError("browser debugging endpoint is invalid")
         self.connection = socket.create_connection(
             (parsed.hostname, parsed.port),
-            timeout=10,
+            timeout=30,
         )
-        self.connection.settimeout(10)
+        self.connection.settimeout(30)
         key = base64.b64encode(os.urandom(16)).decode()
         path = parsed.path or "/"
         if parsed.query:
@@ -53,7 +58,10 @@ class _WebSocket:
         self.connection.sendall(request)
         response = bytearray()
         while b"\r\n\r\n" not in response:
-            response.extend(self.connection.recv(4096))
+            chunk = self.connection.recv(1)
+            if not chunk:
+                raise BrowserProbeError("browser debugging handshake closed")
+            response.extend(chunk)
             if len(response) > 65536:
                 raise BrowserProbeError("browser debugging handshake is oversized")
         expected = base64.b64encode(
@@ -98,6 +106,7 @@ class _WebSocket:
             first, second = _recv_exact(self.connection, 2)
             final = bool(first & 0x80)
             opcode = first & 0x0F
+            reserved = first & 0x70
             masked = bool(second & 0x80)
             length = second & 0x7F
             if length == 126:
@@ -113,6 +122,8 @@ class _WebSocket:
                     byte ^ mask[index % 4]
                     for index, byte in enumerate(frame)
                 )
+            if opcode >= 8 and (not final or reserved or length > 125):
+                raise BrowserProbeError("browser debugging control frame is invalid")
             if opcode == 8:
                 raise BrowserProbeError("browser debugging connection closed")
             if opcode == 9:
@@ -121,15 +132,19 @@ class _WebSocket:
             if opcode == 10:
                 continue
             if opcode == 1:
+                if reserved:
+                    raise BrowserProbeError("browser debugging frame is invalid")
                 payload.clear()
                 started = True
             elif opcode != 0 or not started:
+                raise BrowserProbeError("browser debugging frame is invalid")
+            elif reserved:
                 raise BrowserProbeError("browser debugging frame is invalid")
             payload.extend(frame)
             if final:
                 return bytes(payload)
 
-    def call(self, method: str, params: dict | None = None) -> dict:
+    def send(self, method: str, params: dict | None = None) -> int:
         self.sequence += 1
         sequence = self.sequence
         self._send(
@@ -138,6 +153,10 @@ class _WebSocket:
                 separators=(",", ":"),
             ).encode()
         )
+        return sequence
+
+    def call(self, method: str, params: dict | None = None) -> dict:
+        sequence = self.send(method, params)
         while True:
             try:
                 value = json.loads(self._receive())
@@ -178,6 +197,9 @@ def _element_expression(step: dict, action: str) -> str:
   const nodes = Array.from(document.querySelectorAll({selector}));
   const wanted = {text};
   const element = nodes.find(node => wanted === null || (node.textContent || "").trim().includes(wanted));
+  if ({json.dumps(action)} === "assert_absent") {{
+    return {{ok:element === undefined,count:nodes.length}};
+  }}
   if (!element) return {{ok:false}};
   if ({json.dumps(action)} === "click") {{
     element.click();
@@ -213,7 +235,9 @@ def _step(connection: _WebSocket, step: dict) -> dict:
                 time.sleep(0.15)
             return result
         if time.monotonic() >= deadline:
-            raise BrowserProbeError(f"browser scenario step failed: {action}")
+            raise BrowserProbeError(
+                f"browser scenario step failed: {action} {step['selector']}"
+            )
         time.sleep(0.05)
 
 
@@ -240,7 +264,9 @@ def run_scenario(
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--disable-background-networking",
+        "--disable-component-extensions-with-background-pages",
         "--disable-default-apps",
+        "--disable-extensions",
         "--disable-sync",
         "--metrics-recording-only",
         "--no-first-run",
@@ -275,6 +301,7 @@ def run_scenario(
                     item
                     for item in pages
                     if item.get("type") == "page"
+                    and item.get("url") == "about:blank"
                     and isinstance(item.get("webSocketDebuggerUrl"), str)
                 )
                 break
@@ -287,20 +314,16 @@ def run_scenario(
         connection.call("Runtime.enable")
         connection.call("Network.enable")
         if scenario["authenticated"]:
-            cookie = connection.call(
-                "Network.setCookie",
+            connection.call(
+                "Network.setExtraHTTPHeaders",
                 {
-                    "httpOnly": True,
-                    "name": "proxima_session",
-                    "sameSite": "Lax",
-                    "url": base_url,
-                    "value": auth_token,
+                    "headers": {
+                        "Authorization": f"Bearer {auth_token}",
+                    },
                 },
             )
-            if cookie.get("success") is not True:
-                raise BrowserProbeError("browser authentication cookie was rejected")
         connection.call("Page.navigate", {"url": f"{base_url}/"})
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 20
         while _evaluation(connection, "document.readyState") != "complete":
             if time.monotonic() >= deadline:
                 raise BrowserProbeError("browser page load timed out")

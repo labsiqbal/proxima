@@ -173,7 +173,7 @@ def _main(config_path: Path) -> dict:
             "update-status",
         }
         if (
-            scenarios.get("version") != 2
+            scenarios.get("version") != 3
             or not isinstance(definitions, list)
             or not definitions
         ):
@@ -197,7 +197,13 @@ def _main(config_path: Path) -> dict:
                         {"action", "selector", "text", "timeout", "value"}
                     )
                     or set(step) < {"action", "selector"}
-                    or step["action"] not in {"assert", "click", "fill", "select"}
+                    or step["action"] not in {
+                        "assert",
+                        "assert_absent",
+                        "click",
+                        "fill",
+                        "select",
+                    }
                     or not isinstance(step["selector"], str)
                     or not step["selector"]
                     or len(step["selector"]) > 256

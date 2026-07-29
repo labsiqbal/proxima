@@ -109,7 +109,11 @@ export function MasterScreen({
   }
 
   const selectedRunner = runners.find(runner => runner.id === desk.backing_runner)
-  const qualifiedRunners = runners.filter(runner => runner.masterChatOnly)
+  const eligibleRunners = runners.filter(runner => runner.masterEligible)
+  const selectedRunnerEligible = selectedRunner?.masterEligible === true
+  const unavailableRunnerLabel = selectedRunner
+    ? `${selectedRunner.displayName} (${selectedRunner.masterUnavailableReason || 'not qualified for Master'})`
+    : `${desk.backing_runner} (runner is not available)`
   const projectSlug = resolveMasterProjectSlug(activeProject, desk.jobs)
   const connectionProblem = connection.state === 'retrying'
     || connection.state === 'disconnected'
@@ -171,13 +175,19 @@ export function MasterScreen({
               aria-label="Backing runner"
               onChange={event => void updateSettings({ runner_id: event.target.value })}
             >
-              {selectedRunner && !selectedRunner.masterChatOnly && (
-                <option value={selectedRunner.id} disabled>
-                  {selectedRunner.displayName} (not qualified for Master)
+              {!selectedRunnerEligible && (
+                <option value={desk.backing_runner} disabled>
+                  {unavailableRunnerLabel}
                 </option>
               )}
-              {qualifiedRunners.map(runner => (
-                <option value={runner.id} key={runner.id}>{runner.displayName}</option>
+              {eligibleRunners.map(runner => (
+                <option
+                  value={runner.id}
+                  key={runner.id}
+                  data-master-eligible="true"
+                >
+                  {runner.displayName}
+                </option>
               ))}
             </select>
           </label>

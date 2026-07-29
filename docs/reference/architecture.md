@@ -534,6 +534,13 @@ turns and Master-owned Task runs remain queued, and Master operational failures
 cannot break unrelated routes. Migration ambiguity still fails closed.
 
 ```text
+GET /api/runners/detect
+      -> resolve binaries on the server-controlled runtime PATH
+      -> apply master_runner_conformance, including strict minimum version
+      -> publish masterChatOnly + masterEligible + masterUnavailableReason
+      -> Master selector enables only masterEligible=true
+      -> settings and runtime repeat conformance before mutation or spawn
+
 Master nav -> GET /api/master/desk -> ensure hidden Master profile + mode='master' session
       -> reject selected runner unless its spec proves master_chat_only
 owner message -> queued Master chat-only run
@@ -578,6 +585,13 @@ reject an unsupported runner before creating a message or run, and the worker ch
 again before process spawn. Codex app-server 0.145.0 or newer is the one conforming
 production adapter; all other production adapters fail closed. See
 [runner-conformance.md](../runner-conformance.md).
+
+`GET /api/runners/detect` also evaluates that conformance against the server's
+controlled runtime path and publishes `masterEligible` with an exact
+`masterUnavailableReason`. The Master selector enables only dynamically eligible
+entries. An unavailable stored selection remains visible only as a disabled
+explanation. The browser result is advisory presentation data: settings, message
+creation, and worker spawn each repeat the server check.
 
 Codex conformance has two pre-turn gates: strict version parsing and a behavioral
 app-server handshake that registers the exact server-owned dynamic schemas on an
@@ -1174,7 +1188,11 @@ separate candidate workspace and runner-home paths. Candidate-mode startup skips
 schema mutation and every background writer. The separately installed, hash-pinned
 probe suite starts the candidate inside a loopback-only namespace and requires API
 identity, version, authenticated maintenance, SSE, served static assets, the complete
-asset digest, and every trusted headless-browser scenario. The frozen evidence tree
+asset digest, and every trusted headless-browser scenario. Its Master scenario
+asserts the accessible popup and Home bridge, labeled controls, server-derived
+runner eligibility, and the absence of enabled unqualified choices. A
+policy-pinned, read-only, version-only fake Codex makes the positive eligibility
+path deterministic but cannot start a runner turn. The frozen evidence tree
 contains build logs, migration and fixture proof, identities, and probe results.
 Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
 commands cannot reach the journal, active or last-good pointers, fence, backups, or

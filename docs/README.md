@@ -24,6 +24,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | --- | --- | --- |
 | [reference/tech-stack.md](reference/tech-stack.md) | What is it built with? (backend, frontend, runtime, ops) | by hand |
 | [reference/architecture.md](reference/architecture.md) | How is it structured, and how do the main flows work? | by hand |
+| [adr/README.md](adr/README.md) | Why significant architecture and policy decisions are in force | append-only records |
 | [reference/api.md](reference/api.md) | Every HTTP/WebSocket endpoint | **generated** |
 | [reference/database.md](reference/database.md) | Every table, column, index | **generated** |
 | [CAPABILITIES.md](CAPABILITIES.md) | What every feature does + why (code-derived feature map) | by hand |

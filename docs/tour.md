@@ -31,7 +31,7 @@ what an owner sees and how the surfaces connect.
 | Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
 | Chat send / approvals / restore | skip - no live agent turn in this pass | - |
 | Master empty | pass - production-bundle browser smoke, feature enabled | - |
-| Master runner picker (Grok listed) | pass | `grok-runner-picker.png` |
+| Master runner eligibility | pass - replayable candidate browser assertion enables only server-qualified choices | - |
 | Master populated / checkpoint restore | skip - no worker jobs in this pass | - |
 | Attention inbox (empty) | pass | `attention-inbox.png` |
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |

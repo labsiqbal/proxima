@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "scenarios": [
     {
       "name": "login",
@@ -15,8 +15,18 @@
       "name": "master-popup-home",
       "authenticated": true,
       "steps": [
-        {"action": "click", "selector": "nav button", "text": "Master"},
-        {"action": "assert", "selector": "h1", "text": "Master"},
+        {"action": "assert", "selector": "button[aria-label='Open Master popup'][aria-haspopup='dialog']"},
+        {"action": "click", "selector": "button[aria-label='Open Master popup']"},
+        {"action": "assert", "selector": "[role='dialog'][aria-modal='true'][aria-labelledby='master-popup-title']", "text": "Master"},
+        {"action": "assert", "selector": "[role='dialog'] textarea[aria-label='Message Master']"},
+        {"action": "assert", "selector": "[role='dialog'] [aria-label='Master message target']"},
+        {"action": "assert", "selector": "[role='dialog'] button[aria-label='Close Master popup']"},
+        {"action": "click", "selector": "[role='dialog'] button[aria-label='Open full Master home']"},
+        {"action": "assert", "selector": "section[aria-labelledby='master-title'] h1", "text": "Master"},
+        {"action": "assert", "selector": "select[aria-label='Master Focus']"},
+        {"action": "assert", "selector": "select[aria-label='Master history folder']"},
+        {"action": "assert", "selector": "select[aria-label='Backing runner'] option[data-master-eligible='true']:not(:disabled)", "text": "Codex"},
+        {"action": "assert_absent", "selector": "select[aria-label='Backing runner'] option:not(:disabled):not([data-master-eligible='true'])"},
         {"action": "click", "selector": "button[aria-label='Hide work panel']"},
         {"action": "assert", "selector": "button[aria-label='Show work panel']"},
         {"action": "click", "selector": "button[aria-label='Show work panel']"}

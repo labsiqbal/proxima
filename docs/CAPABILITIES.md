@@ -272,8 +272,9 @@ built-in orchestrator without manually composing every worker task.
 > startup and unrelated routes do not provision a Master runner home. Codex
 > app-server 0.145.0 or newer is the one supported production Master adapter.
 > Every other adapter still fails closed before a turn starts. Runner discovery
-> marks the chat-only declaration, and the Master selector only offers declared
-> adapters; a legacy backing runner remains a disabled explanatory state.
+> publishes the static chat-only declaration plus dynamic host eligibility and
+> its reason. The Master selector enables only dynamically eligible adapters; a
+> legacy or unavailable backing runner remains a disabled explanatory state.
 
 **Master identity and desk:** when the feature is enabled, the authenticated Master
 entry point creates or reuses exactly one hidden
@@ -1464,7 +1465,11 @@ session, and project rows only, plus separate workspace and runner-home paths.
 Candidate-mode startup refuses migrations and background writers. The separately
 installed, hash-pinned probe suite starts the frozen release and requires API
 identity, version, authenticated maintenance, SSE, served-static-asset, complete
-asset-manifest, and headless-browser scenario results. Evidence includes fixed
+asset-manifest, and headless-browser scenario results. The Master scenario asserts
+the modal popup and Home bridge, labeled controls, dynamic runner eligibility, and
+the absence of any enabled unqualified runner. A bundle-owned, read-only,
+version-only fake Codex makes the positive eligibility path deterministic without
+permitting a runner turn. Evidence includes fixed
 build logs, migration proof, fixture metadata, assets, and probe results; its files
 and directories are frozen, and recovery rehashes the journal-pinned bundle before
 reporting a run safe.
@@ -1501,7 +1506,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 + **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
-+ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off and every current production adapter fails closed for Master.
++ **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.

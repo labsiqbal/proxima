@@ -9,6 +9,7 @@ from typing import Iterable
 
 from .runner_specs import (
     RUNNER_SPECS,
+    master_runner_conformance,
     runner_binary_names,
     selectable_runner_specs,
 )
@@ -197,6 +198,19 @@ def detect_runners(
     detected: list[dict] = []
 
     for runner in registry:
+        spec = RUNNER_SPECS.get(runner.id)
+        master_chat_only = bool(spec and spec.master_chat_only)
+        master_eligible, master_unavailable_reason = master_runner_conformance(
+            runner.id,
+            path_env=resolved_path,
+        )
+        master_fields = {
+            "masterChatOnly": master_chat_only,
+            "masterEligible": master_eligible,
+            "masterUnavailableReason": (
+                None if master_eligible else master_unavailable_reason
+            ),
+        }
         if not runner.binary_names:
             detected.append(
                 {
@@ -207,10 +221,7 @@ def detect_runners(
                     "hasAdapter": runner.has_adapter,
                     "detectionOnly": runner.detection_only,
                     "runnable": runner.has_adapter,
-                    "masterChatOnly": bool(
-                        RUNNER_SPECS.get(runner.id)
-                        and RUNNER_SPECS[runner.id].master_chat_only
-                    ),
+                    **master_fields,
                     "notes": runner.notes,
                 }
             )
@@ -236,10 +247,7 @@ def detect_runners(
                 "hasAdapter": runner.has_adapter,
                 "detectionOnly": runner.detection_only,
                 "runnable": installed and runner.has_adapter,
-                "masterChatOnly": bool(
-                    RUNNER_SPECS.get(runner.id)
-                    and RUNNER_SPECS[runner.id].master_chat_only
-                ),
+                **master_fields,
                 "notes": runner.notes,
             }
         )

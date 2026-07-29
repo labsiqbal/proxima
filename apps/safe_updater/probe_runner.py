@@ -109,6 +109,7 @@ class TrustedProbeRunner:
         probe = trusted_bundle.root / "probe.py"
         browser_driver = trusted_bundle.root / "browser.py"
         scenarios = trusted_bundle.root / "browser-scenarios.json"
+        fixture_codex = trusted_bundle.root / "codex-fixture"
         if (
             not probe.is_file()
             or probe.is_symlink()
@@ -116,6 +117,9 @@ class TrustedProbeRunner:
             or browser_driver.is_symlink()
             or not scenarios.is_file()
             or scenarios.is_symlink()
+            or not fixture_codex.is_file()
+            or fixture_codex.is_symlink()
+            or not os.access(fixture_codex, os.X_OK)
         ):
             raise ProbeError("trusted probe bundle is incomplete")
         browser, inputs = self._browser()
@@ -166,6 +170,7 @@ class TrustedProbeRunner:
                 ),
                 read_only_paths=(sandbox.release,),
                 inputs=inputs,
+                tools={"codex": fixture_codex},
                 environment={
                     "PROXIMA_CANDIDATE_RELEASE_ID": identity.release_id,
                     "PROXIMA_CANDIDATE_COMMIT": identity.commit,

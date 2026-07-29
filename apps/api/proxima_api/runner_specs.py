@@ -167,14 +167,22 @@ def runner_is_selectable(runner_id: str | None) -> bool:
     return bool(spec and spec.has_adapter and not spec.detection_only and spec.spawn_argv)
 
 
-def master_runner_conformance(runner_id: str | None) -> tuple[bool, str]:
+def master_runner_conformance(
+    runner_id: str | None,
+    *,
+    path_env: str | None = None,
+) -> tuple[bool, str]:
     spec = RUNNER_SPECS.get(runner_id or "")
     if not spec or not runner_is_selectable(runner_id):
         return False, "runner is not available"
     if not spec.master_chat_only:
         return False, spec.master_unavailable_reason
     if spec.master_min_version is not None:
-        binary = shutil.which(spec.binary)
+        binary = (
+            shutil.which(spec.binary, path=path_env)
+            if path_env is not None
+            else shutil.which(spec.binary)
+        )
         if not binary:
             return False, f"{spec.display_name} binary is not installed"
         try:
