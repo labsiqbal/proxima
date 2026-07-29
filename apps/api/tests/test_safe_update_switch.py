@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import threading
 import time
 from collections.abc import Callable
@@ -25,10 +26,13 @@ from apps.safe_updater.service_adapter import DisposableServiceAdapter
 from apps.safe_updater.state_machine import Phase
 from apps.safe_updater.write_fence import (
     ingress_pending_path,
+    prepare_ingress_lock,
     write as write_fence,
 )
 from proxima_api.db import connect, init_db
+from proxima_api import main as main_module
 from proxima_api.main import create_app
+from proxima_api.maintenance_status import MaintenanceBoundary
 from proxima_api.migrations import run_migrations
 
 
@@ -93,6 +97,10 @@ def _wait_for_path(path: Path, timeout: float = 2) -> None:
             return
         time.sleep(0.01)
     raise AssertionError(f"timed out waiting for {path}")
+
+
+def _provision_ingress(fence: Path) -> None:
+    prepare_ingress_lock(fence)
 
 
 def _journal(root: Path, run_id: str, intent: dict[str, str]) -> Journal:
@@ -327,6 +335,64 @@ def test_unacknowledged_full_journal_write_latches_fail_closed(
     assert recovery.safe is False
     assert recovery.action == "do_not_start_any_release"
     assert recovery.reason is not None
+
+
+def test_rollback_verdict_precedes_physical_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class SimulatedCrash(BaseException):
+        pass
+
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+    adapter = DisposableServiceAdapter(PREVIOUS)
+    _interrupt_append_once(
+        monkeypatch,
+        Phase.LAST_GOOD_COMMITTED,
+        after_durable_append=True,
+    )
+    original_begin = CircuitBreaker.begin_rollback
+
+    def crash_after_verdict(
+        breaker: CircuitBreaker,
+        reason: str,
+    ):
+        original_begin(breaker, reason)
+        raise SimulatedCrash
+
+    monkeypatch.setattr(
+        CircuitBreaker,
+        "begin_rollback",
+        crash_after_verdict,
+    )
+
+    with pytest.raises(SimulatedCrash):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            adapter,
+            fence,
+            live,
+            staged,
+        )
+
+    assert _database_value(live) == "candidate"
+    assert ReleaseLayout(root).pointer_release("active") == CANDIDATE
+    assert ReleaseLayout(root).pointer_release("last-good") == CANDIDATE
+    assert fence.is_file()
+    breaker = CircuitBreaker(root).status()
+    assert breaker.latched is True
+    assert breaker.reason is not None
+    assert breaker.reason.startswith("rollback_required:")
+    recovery = controller.recovery_status(run_id, intent)
+    assert recovery.safe is False
+    assert recovery.action == "do_not_start_any_release"
 
 
 def test_acknowledged_last_good_recovers_candidate_after_finalize_failure(
@@ -632,6 +698,7 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         "start_worker": False,
         "safe_update_fence_path": str(fence),
     }
+    _provision_ingress(fence)
     app = create_app(config)
 
     with TestClient(app) as client:
@@ -755,12 +822,299 @@ def test_database_fence_callback_skips_read_operations(tmp_path: Path):
         connection.close()
 
 
+def test_application_uses_controller_owned_read_only_ingress_lock(
+    tmp_path: Path,
+):
+    fence = tmp_path / "status" / "fence.json"
+    lock = prepare_ingress_lock(fence)
+    lock.chmod(0o444)
+    lock.parent.chmod(0o555)
+    try:
+        app = create_app(
+            {
+                "database_path": str(tmp_path / "proxima.db"),
+                "workspace_root": str(tmp_path / "workspace"),
+                "start_worker": False,
+                "safe_update_fence_path": str(fence),
+            }
+        )
+        with TestClient(app) as client:
+            assert client.post("/auth/auto").status_code == 200
+            assert client.get("/api/maintenance").json() == {
+                "active": False,
+                "phase": None,
+            }
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o444
+    finally:
+        lock.parent.chmod(0o755)
+        lock.chmod(0o644)
+
+
+def test_admission_is_shared_across_boundary_instances(tmp_path: Path):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    config = {"safe_update_fence_path": str(fence)}
+    admission = MaintenanceBoundary(config).acquire()
+    assert admission.acquired
+    fence_errors: list[BaseException] = []
+
+    def activate_fence() -> None:
+        try:
+            write_fence(fence, "d" * 32, "write_fenced")
+        except BaseException as exc:
+            fence_errors.append(exc)
+
+    fence_thread = threading.Thread(target=activate_fence)
+    fence_thread.start()
+    try:
+        _wait_for_path(ingress_pending_path(fence))
+        other_boundary = MaintenanceBoundary(config)
+        write_check = other_boundary.database_write_check()
+        assert write_check is not None
+        assert write_check() is False
+        assert fence_thread.is_alive()
+    finally:
+        admission.release()
+
+    fence_thread.join(timeout=5)
+    assert not fence_thread.is_alive()
+    assert fence_errors == []
+    assert write_check() is True
+
+
+def test_startup_admission_drains_before_fence_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    init_started = threading.Event()
+    finish_init = threading.Event()
+    original_init_db = main_module.init_db
+
+    def blocking_init(*args, **kwargs):
+        init_started.set()
+        finish_init.wait(timeout=5)
+        return original_init_db(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "init_db", blocking_init)
+    apps: list[object] = []
+    startup_errors: list[BaseException] = []
+
+    def start_app() -> None:
+        try:
+            apps.append(
+                create_app(
+                    {
+                        "database_path": str(tmp_path / "proxima.db"),
+                        "workspace_root": str(tmp_path / "workspace"),
+                        "start_worker": False,
+                        "safe_update_fence_path": str(fence),
+                    }
+                )
+            )
+        except BaseException as exc:
+            startup_errors.append(exc)
+
+    startup_thread = threading.Thread(target=start_app)
+    startup_thread.start()
+    assert init_started.wait(timeout=2)
+    fence_errors: list[BaseException] = []
+
+    def activate_fence() -> None:
+        try:
+            write_fence(fence, "e" * 32, "write_fenced")
+        except BaseException as exc:
+            fence_errors.append(exc)
+
+    fence_thread = threading.Thread(target=activate_fence)
+    fence_thread.start()
+    _wait_for_path(ingress_pending_path(fence))
+    assert fence_thread.is_alive()
+    assert not fence.exists()
+    finish_init.set()
+    startup_thread.join(timeout=5)
+    assert not startup_thread.is_alive()
+    assert startup_errors == []
+    assert len(apps) == 1
+    assert fence_thread.is_alive()
+
+    with TestClient(apps[0]):
+        _wait_for_path(fence)
+
+    fence_thread.join(timeout=5)
+    assert not fence_thread.is_alive()
+    assert fence_errors == []
+
+
+def test_admitted_wiki_write_finishes_audit_before_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+    file_written = threading.Event()
+    finish_write = threading.Event()
+    from proxima_api.routes import wiki as wiki_routes
+
+    original_write_file = wiki_routes.fsapi.write_file
+
+    def blocking_write_file(
+        root: Path,
+        path: str,
+        content: str,
+    ) -> None:
+        original_write_file(root, path, content)
+        file_written.set()
+        finish_write.wait(timeout=5)
+
+    monkeypatch.setattr(
+        wiki_routes.fsapi,
+        "write_file",
+        blocking_write_file,
+    )
+
+    with TestClient(app) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        responses: list[object] = []
+        request_errors: list[BaseException] = []
+
+        def write_wiki() -> None:
+            try:
+                responses.append(
+                    client.put(
+                        "/api/wiki/file",
+                        params={"path": "atomic.md"},
+                        json={"content": "complete"},
+                        headers=auth,
+                    )
+                )
+            except BaseException as exc:
+                request_errors.append(exc)
+
+        request_thread = threading.Thread(target=write_wiki)
+        request_thread.start()
+        assert file_written.wait(timeout=2)
+        fence_errors: list[BaseException] = []
+
+        def activate_fence() -> None:
+            try:
+                write_fence(fence, "f" * 32, "write_fenced")
+            except BaseException as exc:
+                fence_errors.append(exc)
+
+        fence_thread = threading.Thread(target=activate_fence)
+        fence_thread.start()
+        _wait_for_path(ingress_pending_path(fence))
+        assert fence_thread.is_alive()
+        finish_write.set()
+        request_thread.join(timeout=5)
+        fence_thread.join(timeout=5)
+
+        assert not request_thread.is_alive()
+        assert not fence_thread.is_alive()
+        assert request_errors == []
+        assert fence_errors == []
+        assert responses[0].status_code == 200
+        assert (
+            tmp_path
+            / "workspace"
+            / "users"
+            / "owner"
+            / "wiki"
+            / "atomic.md"
+        ).read_text(encoding="utf-8") == "complete"
+        audit = app.state.db.execute(
+            "SELECT action FROM audit_log "
+            "WHERE action = 'wiki.write' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert audit is not None
+        assert audit["action"] == "wiki.write"
+
+
+def test_fenced_provider_reads_return_inert_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+
+    with TestClient(app) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post(
+            "/api/projects",
+            headers=auth,
+            json={"slug": "demo", "name": "Demo"},
+        ).status_code == 201
+        assert client.put(
+            "/api/settings/image-gen",
+            headers=auth,
+            json={"provider": "higgsfield"},
+        ).status_code == 200
+        write_fence(fence, "1" * 32, "write_fenced")
+
+        def unexpected_readiness(*_args, **_kwargs):
+            raise AssertionError("fenced read launched provider readiness")
+
+        monkeypatch.setattr(
+            "proxima_api.image_providers.codex_ready",
+            unexpected_readiness,
+        )
+        monkeypatch.setattr(
+            "proxima_api.image_providers.xai_oauth_ready",
+            unexpected_readiness,
+        )
+        monkeypatch.setattr(
+            "proxima_api.higgsfield.status",
+            unexpected_readiness,
+        )
+
+        image_settings = client.get(
+            "/api/settings/image-gen",
+            headers=auth,
+        )
+        higgsfield_settings = client.get(
+            "/api/settings/higgsfield",
+            headers=auth,
+        )
+        image_models = client.get(
+            "/api/projects/demo/design/image-models",
+            headers=auth,
+        )
+
+    assert image_settings.status_code == 200
+    assert image_settings.json()["higgsfieldReady"]["ready"] is False
+    assert higgsfield_settings.status_code == 200
+    assert higgsfield_settings.json()["status"]["ready"] is False
+    assert image_models.status_code == 200
+    assert image_models.json()["configured"] is False
+
+
 def test_appview_request_drains_before_fence_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     database = tmp_path / "proxima.db"
     fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
     app = create_app(
         {
             "database_path": str(database),
@@ -852,7 +1206,7 @@ def test_appview_request_drains_before_fence_activation(
         assert client.get("/api/appview/demo/", headers=auth).status_code == 423
 
 
-def test_established_terminal_drains_input_before_fence_activation(
+def test_established_terminal_drains_session_before_fence_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -862,10 +1216,12 @@ def test_established_terminal_drains_input_before_fence_activation(
     run_migrations(setup, database)
     setup.close()
     fence = tmp_path / "status" / "fence.json"
+    _provision_ingress(fence)
     started = threading.Event()
     closed = threading.Event()
     input_started = threading.Event()
-    finish_input = threading.Event()
+    close_started = threading.Event()
+    finish_close = threading.Event()
     writes: list[bytes] = []
 
     class FakeTerminal:
@@ -882,13 +1238,15 @@ def test_established_terminal_drains_input_before_fence_activation(
         def write(self, value: bytes) -> None:
             writes.append(value)
             input_started.set()
-            finish_input.wait(timeout=5)
 
         def resize(self, _rows: int, _cols: int) -> None:
             writes.append(b"resize")
 
-        def close(self) -> None:
+        def close(self) -> bool:
+            close_started.set()
+            finish_close.wait(timeout=5)
             closed.set()
+            return True
 
     monkeypatch.setattr("proxima_api.routes.chat.TerminalSession", FakeTerminal)
     app = create_app(
@@ -920,16 +1278,17 @@ def test_established_terminal_drains_input_before_fence_activation(
             fence_thread.start()
             try:
                 _wait_for_path(ingress_pending_path(fence))
+                assert close_started.wait(timeout=2)
                 assert fence_thread.is_alive()
                 assert not fence.exists()
             finally:
-                finish_input.set()
+                finish_close.set()
+            with pytest.raises(WebSocketDisconnect) as rejected:
+                websocket.receive_bytes()
+            assert rejected.value.code == 4423
             fence_thread.join(timeout=5)
             assert not fence_thread.is_alive()
             assert fence_errors == []
             assert fence.is_file()
-            with pytest.raises(WebSocketDisconnect) as rejected:
-                websocket.receive_bytes()
-            assert rejected.value.code == 4423
 
     assert writes == [b"admitted-input"]

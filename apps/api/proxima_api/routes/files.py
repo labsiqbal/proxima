@@ -274,9 +274,12 @@ def register(app, deps):
         cfg = _resolve_image_gen()
         key = cfg.get("apiKey")
         spec = image_providers.get_provider(cfg["provider"])
-        # Codex readiness is surfaced here so the UI can show ready/not-logged-in.
-        codex = image_providers.codex_ready() if spec.kind in ("auto", "codex") else None
-        hstatus = higgsfield.status() if spec.kind in ("auto", "higgsfield") else None
+        readiness = image_providers.readiness_snapshot(
+            enabled=not maintenance.fenced(),
+            codex=spec.kind in ("auto", "codex"),
+            higgsfield_cli=spec.kind in ("auto", "higgsfield"),
+            xai_oauth=True,
+        )
         return {
             "provider": cfg["provider"],
             "model": cfg.get("model"),
@@ -284,11 +287,11 @@ def register(app, deps):
             "hasApiKey": bool(key),
             "providers": image_providers.provider_list(),
             "defaultProvider": image_providers.DEFAULT_PROVIDER,
-            "codexReady": codex,
-            "higgsfieldReady": hstatus,
+            "codexReady": readiness["codex"],
+            "higgsfieldReady": readiness["higgsfield"],
             # Edit/reference requests can fall back to xAI OAuth when the selected
             # provider is text-to-image only — the UI keeps "Edit with AI" enabled.
-            "xaiOauthReady": image_providers.xai_oauth_ready(),
+            "xaiOauthReady": readiness["xaiOauth"],
         }
 
     @app.put("/api/settings/image-gen")
@@ -354,7 +357,14 @@ def register(app, deps):
 
     @app.get("/api/settings/higgsfield")
     def get_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
-        return {"settings": _resolve_higgsfield_settings(), "status": higgsfield.status()}
+        readiness = image_providers.readiness_snapshot(
+            enabled=not maintenance.fenced(),
+            higgsfield_cli=True,
+        )
+        return {
+            "settings": _resolve_higgsfield_settings(),
+            "status": readiness["higgsfield"],
+        }
 
     @app.put("/api/settings/higgsfield")
     def put_higgsfield_settings(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):

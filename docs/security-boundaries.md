@@ -100,21 +100,29 @@ acknowledged phase and latches the breaker after rollback. Once the last-good
 append is acknowledged, recovery can only resume the candidate or latch the
 breaker. The persisted breaker verdict is checked before journal recovery, so an
 unacknowledged but complete journal tail cannot override a physical rollback.
-An unreadable journal or interrupted breaker write leaves a durable pending marker
-and latches fail closed.
+Before the first physical rollback mutation, the controller persists a
+`rollback_required` verdict and finalizes that verdict only after database,
+pointer, service, writer, and fence restoration finishes. An unreadable journal
+or interrupted breaker write leaves a durable pending marker and latches fail
+closed.
 
 External maintenance activation first publishes a durable pending marker, then
-takes an exclusive ingress lock. HTTP requests, project-app and preview proxy
-requests, and terminal WebSocket start or input hold a shared ingress lease through
-their last possible side effect. New ingress fails closed as soon as activation is
-pending, while the controller waits for already admitted operations to drain before
-publishing the fence. Read endpoints do not initialize personal wiki or profile
-state, stop preview relays, create PATH compatibility shims, or launch readiness
-probes while fenced. Normal first-use personal wiki reads still seed `index.md`
-while holding the ingress lease. Application SQLite connections configured for an
-external fence disable prepared-statement caching and deny writes dynamically;
-ordinary unconfigured connections retain statement caching and do not run fence
-checks for read-only opcodes. New fenced connections skip write-capable WAL setup.
+takes an exclusive ingress lock that only the controller provisions. The
+application opens that existing lock read-only and never creates or modifies the
+controller status directory. Startup initialization, HTTP requests, project-app
+and preview proxy requests, and terminal WebSocket sessions hold a shared ingress
+lease through their last possible side effect. A terminal lease remains held
+until its shell session descendants are stopped and verified. New ingress fails
+closed as soon as activation is pending, while the controller waits for already
+admitted operations to drain before publishing the fence. Read endpoints do not
+initialize personal wiki or profile state, stop preview relays, create PATH
+compatibility shims, or launch provider readiness probes while fenced. Normal
+first-use personal wiki reads still seed `index.md` while holding the ingress
+lease. Application SQLite connections configured for an external fence disable
+prepared-statement caching, allow an admitted operation to finish its database
+effects, and deny writes outside an admission dynamically. Ordinary unconfigured
+connections retain statement caching and do not run fence checks for read-only
+opcodes. New fenced connections skip write-capable WAL setup.
 `POST /auth/resume` remains available because it only projects an
 already-authenticated session; session creation, including `/auth/auto`, is fenced.
 A process started directly in maintenance mode opens SQLite read-only with

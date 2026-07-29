@@ -56,6 +56,37 @@ class CircuitBreaker:
         self._write({"failures": failures, "latched": latched, "reason": reason if latched else None})
         return self.status()
 
+    def begin_rollback(self, reason: str) -> BreakerStatus:
+        current = self.status()
+        if current.latched:
+            return current
+        self._write(
+            {
+                "failures": current.failures + 1,
+                "latched": True,
+                "reason": f"rollback_required:{reason}",
+            }
+        )
+        return self.status()
+
+    def finish_rollback(self, reason: str, *, latch: bool) -> BreakerStatus:
+        current = self.status()
+        if (
+            not current.latched
+            or current.reason is None
+            or not current.reason.startswith("rollback_required:")
+        ):
+            raise RuntimeError("rollback verdict is unavailable")
+        latched = latch or current.failures >= 2
+        self._write(
+            {
+                "failures": current.failures,
+                "latched": latched,
+                "reason": reason if latched else None,
+            }
+        )
+        return self.status()
+
     def _preserve_pending(self) -> None:
         try:
             descriptor = os.open(

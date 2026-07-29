@@ -3,8 +3,18 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Callable
+
+
+_admission_depths: ContextVar[dict[str, int]] = ContextVar(
+    "maintenance_admission_depths",
+    default={},
+)
+_process_admissions: dict[str, int] = {}
+_process_lock = threading.Lock()
 
 
 def ingress_lock_path(path: Path) -> Path:
@@ -20,26 +30,24 @@ def _configured_fence(config: dict[str, object]) -> Path | None:
     return Path(str(raw_path)) if raw_path else None
 
 
-def _fsync_directory(path: Path) -> None:
-    if os.name != "posix":
-        return
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 class IngressLease:
-    def __init__(self, path: Path | None) -> None:
-        self.path = path
+    def __init__(
+        self,
+        boundary: "MaintenanceBoundary",
+        *,
+        process_wide: bool = False,
+    ) -> None:
+        self.boundary = boundary
+        self.path = boundary.lock_path
+        self.process_wide = process_wide
         self.descriptor: int | None = None
-        self.acquired = path is None
+        self.acquired = self.path is None
+        self.admission_active = False
 
     def acquire(self) -> "IngressLease":
         if self.path is None:
             return self
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
             descriptor = os.open(self.path, flags)
         except OSError:
@@ -68,23 +76,36 @@ class IngressLease:
             return self
         self.descriptor = descriptor
         self.acquired = True
+        self.boundary._admit(process_wide=self.process_wide)
+        self.admission_active = True
         return self
+
+    def suspend_admission(self) -> None:
+        if not self.admission_active:
+            return
+        self.boundary._withdraw(process_wide=self.process_wide)
+        self.admission_active = False
 
     def release(self) -> None:
         if self.descriptor is None:
             return
-        if os.name == "posix":
-            import fcntl
+        try:
+            if os.name == "posix":
+                import fcntl
 
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-        elif os.name == "nt":
-            import msvcrt
+                fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+            elif os.name == "nt":
+                import msvcrt
 
-            os.lseek(self.descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(self.descriptor, msvcrt.LK_UNLCK, 1)
-        os.close(self.descriptor)
-        self.descriptor = None
-        self.acquired = False
+                os.lseek(self.descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(self.descriptor, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(self.descriptor)
+            self.descriptor = None
+            self.acquired = False
+            if self.admission_active:
+                self.boundary._withdraw(process_wide=self.process_wide)
+                self.admission_active = False
 
 
 class MaintenanceBoundary:
@@ -96,30 +117,66 @@ class MaintenanceBoundary:
             if self.fence_path is not None
             else None
         )
+        self._admission_key = (
+            os.path.abspath(os.fspath(self.lock_path))
+            if self.lock_path is not None
+            else None
+        )
+        self._retained_leases: list[IngressLease] = []
 
-    def prepare(self) -> None:
-        if self.lock_path is None or active_maintenance(self.config) is not None:
+    def _admit(self, *, process_wide: bool) -> None:
+        if self._admission_key is None:
             return
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            descriptor = os.open(
-                self.lock_path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o644,
-            )
-        except FileExistsError:
-            if self.lock_path.is_symlink() or not self.lock_path.is_file():
-                raise RuntimeError("maintenance ingress lock is invalid")
+        if process_wide:
+            with _process_lock:
+                _process_admissions[self._admission_key] = (
+                    _process_admissions.get(self._admission_key, 0) + 1
+                )
             return
-        try:
-            os.write(descriptor, b"\0")
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        _fsync_directory(self.lock_path.parent)
+        depths = dict(_admission_depths.get())
+        depths[self._admission_key] = (
+            depths.get(self._admission_key, 0) + 1
+        )
+        _admission_depths.set(depths)
 
-    def acquire(self) -> IngressLease:
-        return IngressLease(self.lock_path).acquire()
+    def _withdraw(self, *, process_wide: bool) -> None:
+        if self._admission_key is None:
+            return
+        if process_wide:
+            with _process_lock:
+                remaining = max(
+                    0,
+                    _process_admissions.get(self._admission_key, 0) - 1,
+                )
+                if remaining:
+                    _process_admissions[self._admission_key] = remaining
+                else:
+                    _process_admissions.pop(self._admission_key, None)
+            return
+        depths = dict(_admission_depths.get())
+        remaining = max(0, depths.get(self._admission_key, 0) - 1)
+        if remaining:
+            depths[self._admission_key] = remaining
+        else:
+            depths.pop(self._admission_key, None)
+        _admission_depths.set(depths)
+
+    def acquire(self, *, process_wide: bool = False) -> IngressLease:
+        return IngressLease(
+            self,
+            process_wide=process_wide,
+        ).acquire()
+
+    def admitted(self) -> bool:
+        if self._admission_key is None:
+            return False
+        if _admission_depths.get().get(self._admission_key, 0) > 0:
+            return True
+        with _process_lock:
+            return _process_admissions.get(self._admission_key, 0) > 0
+
+    def retain(self, lease: IngressLease) -> None:
+        self._retained_leases.append(lease)
 
     def status(self) -> dict[str, str] | None:
         status = active_maintenance(self.config)
@@ -140,10 +197,13 @@ class MaintenanceBoundary:
     def fenced(self) -> bool:
         return self.status() is not None
 
+    def write_fenced(self) -> bool:
+        return not self.admitted() and self.fenced()
+
     def database_write_check(self) -> Callable[[], bool] | None:
         if self.fence_path is None:
             return None
-        return self.fenced
+        return self.write_fenced
 
 
 def read_external_fence(path: Path) -> dict[str, str] | None:

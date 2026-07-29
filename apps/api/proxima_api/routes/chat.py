@@ -1297,9 +1297,9 @@ def register(app, deps):
                 await websocket.close(code=4404)
                 return
             cwd = str(_project_root(project, user))
-        start_lease = maintenance.acquire()
-        if not start_lease.acquired or maintenance.fenced():
-            start_lease.release()
+        session_lease = maintenance.acquire()
+        if not session_lease.acquired or maintenance.fenced():
+            session_lease.release()
             await websocket.close(code=4423)
             return
         try:
@@ -1307,8 +1307,9 @@ def register(app, deps):
             await websocket.accept()
             term = TerminalSession(cwd)
             term.start()
-        finally:
-            start_lease.release()
+        except Exception:
+            session_lease.release()
+            raise
         loop = asyncio.get_event_loop()
 
         async def pump_out():
@@ -1340,38 +1341,43 @@ def register(app, deps):
                     continue
                 if msg.get("type") == "websocket.disconnect":
                     break
-                input_lease = maintenance.acquire()
-                if not input_lease.acquired or maintenance.fenced():
-                    input_lease.release()
+                if maintenance.fenced():
                     await websocket.close(code=4423)
                     break
-                try:
-                    if msg.get("bytes") is not None:
-                        term.write(msg["bytes"])
-                    elif msg.get("text"):
-                        t = msg["text"]
-                        if t.startswith("{"):
-                            try:
-                                j = _decode_json(t)
-                                if j.get("type") == "resize":
-                                    term.resize(_as_int(j.get("rows", 24)), _as_int(j.get("cols", 80)))
-                                elif j.get("type") == "input":
-                                    term.write(str(j.get("data", "")).encode())
-                                else:
-                                    term.write(t.encode())
-                            except Exception:
+                if msg.get("bytes") is not None:
+                    term.write(msg["bytes"])
+                elif msg.get("text"):
+                    t = msg["text"]
+                    if t.startswith("{"):
+                        try:
+                            j = _decode_json(t)
+                            if j.get("type") == "resize":
+                                term.resize(_as_int(j.get("rows", 24)), _as_int(j.get("cols", 80)))
+                            elif j.get("type") == "input":
+                                term.write(str(j.get("data", "")).encode())
+                            else:
                                 term.write(t.encode())
-                        else:
+                        except Exception:
                             term.write(t.encode())
-                finally:
-                    input_lease.release()
+                    else:
+                        term.write(t.encode())
         except WebSocketDisconnect:
             pass
         finally:
-            term.close()
+            terminated = False
+            try:
+                terminated = term.close()
+            except Exception:
+                logging.getLogger("proxima.api").exception(
+                    "terminal process group shutdown failed"
+                )
             out_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await out_task
+            if terminated:
+                session_lease.release()
+            else:
+                maintenance.retain(session_lease)
 
     @app.websocket("/api/ws/sessions/{session_id}")
     async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):

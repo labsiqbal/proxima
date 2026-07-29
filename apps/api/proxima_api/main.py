@@ -94,10 +94,13 @@ def _as_int(value: Any) -> int:
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     cfg = app.state.config
+    startup_lease = app.state.startup_lease
     app.state.hub.bind_loop(asyncio.get_running_loop())
     # The candidate may serve a fixture to trusted probes, but it must never run
     # production-style writers, migrations, schedulers, refreshers or update loops.
     if cfg.get("candidate_mode", False) or app.state.maintenance.fenced():
+        startup_lease.suspend_admission()
+        startup_lease.release()
         yield
         return
     if cfg.get("auto_provision", True):
@@ -132,6 +135,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.master_projection.safe_reconcile()
     except Exception as _exc:
         logging.getLogger("proxima.worker").exception("orphaned run cleanup failed")
+    startup_lease.suspend_admission()
+    if app.state.maintenance.fenced():
+        startup_lease.release()
+        yield
+        return
     if cfg.get("start_worker", True):
         worker.start()
     scheduler_task: asyncio.Task | None = None
@@ -242,6 +250,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logging.getLogger("proxima.updates").exception("update check loop tick failed")
                 await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
         update_task = asyncio.create_task(_update_check_loop())
+    startup_lease.release()
     yield
     if registry_task:
         registry_task.cancel()
@@ -277,22 +286,19 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     cfg = normalize_config(config)
     os.environ.setdefault("PROXIMA_WORKSPACE_ROOT", str(cfg["workspace_root"]))
     maintenance = MaintenanceBoundary(cfg)
-    maintenance.prepare()
-    startup_lease = maintenance.acquire()
+    startup_lease = maintenance.acquire(process_wide=True)
     maintenance_mode = not startup_lease.acquired or maintenance.fenced()
     if maintenance_mode:
         cfg["_safe_update_startup_read_only"] = True
-    try:
-        os.environ["PATH"] = augmented_path(
-            os.environ.get("PATH"),
-            create_shim=not maintenance_mode,
-        )
-    finally:
-        startup_lease.release()
+    os.environ["PATH"] = augmented_path(
+        os.environ.get("PATH"),
+        create_shim=not maintenance_mode,
+    )
     cfg["_runtime_path"] = os.environ["PATH"]
     app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
     app.state.maintenance = maintenance
+    app.state.startup_lease = startup_lease
     app.state.db = connect(
         cfg["database_path"],
         read_only=maintenance_mode,

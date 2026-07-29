@@ -360,6 +360,10 @@ class SafeUpdateController:
 
                 rollback_failed = False
                 try:
+                    breaker.begin_rollback(type(exc).__name__)
+                except Exception as breaker_error:
+                    raise RuntimeError("safe_update_breaker_latched") from breaker_error
+                try:
                     if candidate_start_attempted:
                         adapter.stop_candidate()
                     if database_swap_attempted:
@@ -386,11 +390,9 @@ class SafeUpdateController:
                 except Exception:
                     rollback_failed = True
                 try:
-                    breaker_status = breaker.record_failure(
+                    breaker_status = breaker.finish_rollback(
                         type(exc).__name__,
-                        rollback_failed=(
-                            rollback_failed or journal_append_failed
-                        ),
+                        latch=rollback_failed or journal_append_failed,
                     )
                 except Exception as breaker_error:
                     raise RuntimeError("safe_update_breaker_latched") from breaker_error

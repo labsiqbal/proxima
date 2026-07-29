@@ -246,9 +246,12 @@ headless-browser checks. Frozen evidence is revalidated during recovery. The Gro
 Future enrollment must place the nonsecret maintenance fence in a dedicated
 controller-owned status directory whose ancestors are searchable by the application
 identity. The directory and fence are application-readable but not
-application-writable. Trusted release, journal, and fence directory creation is
-durably flushed at every new parent entry; a platform without qualified pinned
-candidate-tree traversal remains unenrolled.
+application-writable. The controller must provision the ingress lock before the
+application starts; the application opens that existing lock read-only and holds
+startup admission through every side-effecting initialization step. Trusted
+release, journal, and fence directory creation is durably flushed at every new
+parent entry; a platform without qualified pinned candidate-tree traversal remains
+unenrolled.
 
 ### Code checkout vs data directory
 

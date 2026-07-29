@@ -22,7 +22,10 @@ import websockets
 
 from fastapi.testclient import TestClient
 
-from apps.safe_updater.write_fence import write as write_fence
+from apps.safe_updater.write_fence import (
+    prepare_ingress_lock,
+    write as write_fence,
+)
 from proxima_api.main import create_app
 from proxima_api.maintenance_status import MaintenanceBoundary
 from proxima_api.preview_proxy import PreviewRelayManager
@@ -190,7 +193,7 @@ def test_relay_denies_fenced_requests_before_upstream(tmp_path):
         maintenance = MaintenanceBoundary(
             {"safe_update_fence_path": str(fence)}
         )
-        maintenance.prepare()
+        prepare_ingress_lock(fence)
         async with _relay_against_fake_devserver(
             maintenance=maintenance
         ) as (fake, relay_port):
