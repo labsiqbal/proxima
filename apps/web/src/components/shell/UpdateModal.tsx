@@ -33,7 +33,7 @@ export function UpdateModal(props: { status: UpdateStatus; onApply: () => Promis
       <p className="muted">You're on v{props.status.current_version}.</p>
       <div className="update-notes"><ReactMarkdown remarkPlugins={[remarkGfm]}>{latest.notes || '_No release notes._'}</ReactMarkdown></div>
       {latest.url && <a className="update-release-link" href={latest.url} target="_blank" rel="noreferrer">View release on GitHub ↗</a>}
-      {!props.status.apply_supported && <p className="update-manual"><span className="muted">One-click update isn't available on this OS. Update manually:</span> <code>{props.status.manual_command}</code></p>}
+      {!props.status.apply_supported && <p className="update-manual"><span className="muted">{props.status.manual_command}</span></p>}
       {error && <p className="update-error">{error}</p>}
       <div className="confirm-actions">
         <button type="button" className="ghost-button" onClick={props.onClose}>Later</button>
