@@ -298,6 +298,32 @@ CREATE TABLE IF NOT EXISTS runs (
   focus_epoch_id INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TRIGGER IF NOT EXISTS runs_master_focus_insert
+BEFORE INSERT ON runs
+WHEN EXISTS (
+  SELECT 1 FROM sessions
+  WHERE id = NEW.session_id AND mode = 'master'
+)
+AND (
+  (NEW.kind != 'master' AND NEW.kind NOT LIKE 'master_tool_%')
+  OR NEW.project_id IS NOT NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM master_focus_state
+    WHERE master_session_id = NEW.session_id
+      AND current_epoch_id IS NEW.focus_epoch_id
+  )
+  OR (
+    NEW.focus_epoch_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM master_focus_epochs
+      WHERE id = NEW.focus_epoch_id
+        AND master_session_id = NEW.session_id
+    )
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Master runs require captured Focus attribution');
+END;
 CREATE TRIGGER IF NOT EXISTS messages_master_focus_insert
 AFTER INSERT ON messages
 WHEN NEW.run_id IS NOT NULL
@@ -468,6 +494,10 @@ CREATE TABLE IF NOT EXISTS task_delegations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   origin_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  origin_focus_epoch_id INTEGER
+    REFERENCES master_focus_epochs(id) ON DELETE RESTRICT,
+  origin_focus_captured INTEGER NOT NULL DEFAULT 0
+    CHECK (origin_focus_captured IN (0, 1)),
   container_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
   target_area_id INTEGER NOT NULL REFERENCES project_areas(id) ON DELETE RESTRICT,
   job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
@@ -489,6 +519,47 @@ CREATE TABLE IF NOT EXISTS task_delegations (
   started_at TEXT,
   UNIQUE(created_by, idempotency_key)
 );
+CREATE TRIGGER IF NOT EXISTS task_delegations_master_focus_insert
+BEFORE INSERT ON task_delegations
+WHEN (
+  EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = NEW.origin_session_id AND mode = 'master'
+  )
+  AND (
+    NEW.origin_focus_captured != 1
+    OR (
+      NEW.origin_focus_epoch_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM master_focus_epochs
+        WHERE id = NEW.origin_focus_epoch_id
+          AND master_session_id = NEW.origin_session_id
+      )
+    )
+  )
+)
+OR (
+  NEW.origin_focus_captured = 1
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = NEW.origin_session_id AND mode = 'master'
+  )
+)
+OR (
+  NEW.origin_focus_captured = 0
+  AND NEW.origin_focus_epoch_id IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Task delegation Focus attribution is invalid');
+END;
+CREATE TRIGGER IF NOT EXISTS task_delegations_focus_immutable
+BEFORE UPDATE OF origin_focus_epoch_id, origin_focus_captured
+ON task_delegations
+WHEN NEW.origin_focus_epoch_id IS NOT OLD.origin_focus_epoch_id
+  OR NEW.origin_focus_captured != OLD.origin_focus_captured
+BEGIN
+  SELECT RAISE(ABORT, 'Task delegation Focus attribution is immutable');
+END;
 CREATE INDEX IF NOT EXISTS idx_task_delegations_origin
   ON task_delegations(origin_session_id, origin_message_id);
 CREATE INDEX IF NOT EXISTS idx_task_delegations_container

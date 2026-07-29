@@ -79,6 +79,13 @@ stable `toast_key`. The authenticated shared frontend provider now updates the
 durable thread and work panel from these events without another polling endpoint.
 Transient toast presentation remains a later UI group and is intentionally inert.
 
+Master-origin Task delegation copies the turn's captured Focus epoch and an
+explicit captured marker onto `task_delegations`. Task, Attention, and Satpam
+projections use that durable copy whenever they have a Task subject. The nullable
+origin-message link remains provenance only, so deleting the completed origin run
+cannot move a later projection into Fleet history. A legacy Task without provable
+capture fails closed instead of producing an unattributed projection.
+
 ## Session event contract
 
 Task events:

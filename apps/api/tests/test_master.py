@@ -145,6 +145,73 @@ def test_master_message_acceptance_returns_canonical_durable_message(
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
 
 
+def test_generic_run_producers_refuse_the_master_session(tmp_path: Path):
+    app, client = _client(tmp_path)
+    session_id = client.get("/api/master/desk").json()["session"]["id"]
+    assistant = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'assistant', 'Master answer', 'Master')",
+        (session_id,),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=assistant.lastrowid,
+        focus_epoch_id=None,
+    )
+    before = {
+        "messages": app.state.db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0],
+        "runs": app.state.db.execute(
+            "SELECT COUNT(*) FROM runs WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0],
+    }
+
+    responses = [
+        client.post(
+            f"/api/sessions/{session_id}/messages",
+            json={"role": "user", "content": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/runs",
+            json={"message": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/goal",
+            json={"objective": "Bypass the Master boundary"},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/wiki-note/draft",
+            json={},
+        ),
+        client.post(
+            f"/api/sessions/{session_id}/promote-workflow",
+            json={},
+        ),
+        client.post(
+            f"/api/messages/{assistant.lastrowid}/reviews",
+            json={},
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [409] * 6
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0] == before["messages"]
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0] == before["runs"]
+    goal = app.state.db.execute(
+        "SELECT goal_text, goal_status FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    assert dict(goal) == {"goal_text": None, "goal_status": None}
+
+
 def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
     tmp_path: Path, monkeypatch
 ):

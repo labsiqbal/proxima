@@ -1587,6 +1587,162 @@ def _harden_master_focus_contracts(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _add_master_focus_persistence_boundaries(
+    conn: sqlite3.Connection,
+) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if {
+        "runs",
+        "sessions",
+        "master_focus_epochs",
+        "master_focus_state",
+    }.issubset(tables):
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS runs_master_focus_insert
+            BEFORE INSERT ON runs
+            WHEN EXISTS (
+              SELECT 1 FROM sessions
+              WHERE id = NEW.session_id AND mode = 'master'
+            )
+            AND (
+              (NEW.kind != 'master' AND NEW.kind NOT LIKE 'master_tool_%')
+              OR NEW.project_id IS NOT NULL
+              OR NOT EXISTS (
+                SELECT 1 FROM master_focus_state
+                WHERE master_session_id = NEW.session_id
+                  AND current_epoch_id IS NEW.focus_epoch_id
+              )
+              OR (
+                NEW.focus_epoch_id IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM master_focus_epochs
+                  WHERE id = NEW.focus_epoch_id
+                    AND master_session_id = NEW.session_id
+                )
+              )
+            )
+            BEGIN
+              SELECT RAISE(
+                ABORT,
+                'Master runs require captured Focus attribution'
+              );
+            END
+            """
+        )
+    if not {
+        "task_delegations",
+        "sessions",
+        "messages",
+        "message_focus",
+        "master_focus_epochs",
+    }.issubset(tables):
+        return
+    columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_delegations)"
+        ).fetchall()
+    }
+    if "origin_focus_epoch_id" not in columns:
+        conn.execute(
+            "ALTER TABLE task_delegations ADD COLUMN "
+            "origin_focus_epoch_id INTEGER "
+            "REFERENCES master_focus_epochs(id) ON DELETE RESTRICT"
+        )
+    if "origin_focus_captured" not in columns:
+        conn.execute(
+            "ALTER TABLE task_delegations ADD COLUMN "
+            "origin_focus_captured INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(origin_focus_captured IN (0, 1))"
+        )
+    conn.execute(
+        "DROP TRIGGER IF EXISTS task_delegations_focus_immutable"
+    )
+    conn.execute(
+        "UPDATE task_delegations SET "
+        "origin_focus_epoch_id = ("
+        "  SELECT focus.focus_epoch_id "
+        "  FROM message_focus AS focus "
+        "  JOIN messages AS message ON message.id = focus.message_id "
+        "  WHERE focus.message_id = task_delegations.origin_message_id "
+        "    AND message.session_id = task_delegations.origin_session_id"
+        "), origin_focus_captured = 1 "
+        "WHERE origin_focus_captured = 0 "
+        "AND EXISTS ("
+        "  SELECT 1 FROM sessions "
+        "  WHERE id = task_delegations.origin_session_id "
+        "    AND mode = 'master'"
+        ") "
+        "AND EXISTS ("
+        "  SELECT 1 FROM message_focus AS focus "
+        "  JOIN messages AS message ON message.id = focus.message_id "
+        "  WHERE focus.message_id = task_delegations.origin_message_id "
+        "    AND message.session_id = task_delegations.origin_session_id"
+        ")"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_delegations_master_focus_insert
+        BEFORE INSERT ON task_delegations
+        WHEN (
+          EXISTS (
+            SELECT 1 FROM sessions
+            WHERE id = NEW.origin_session_id AND mode = 'master'
+          )
+          AND (
+            NEW.origin_focus_captured != 1
+            OR (
+              NEW.origin_focus_epoch_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM master_focus_epochs
+                WHERE id = NEW.origin_focus_epoch_id
+                  AND master_session_id = NEW.origin_session_id
+              )
+            )
+          )
+        )
+        OR (
+          NEW.origin_focus_captured = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM sessions
+            WHERE id = NEW.origin_session_id AND mode = 'master'
+          )
+        )
+        OR (
+          NEW.origin_focus_captured = 0
+          AND NEW.origin_focus_epoch_id IS NOT NULL
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'Task delegation Focus attribution is invalid'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_delegations_focus_immutable
+        BEFORE UPDATE OF origin_focus_epoch_id, origin_focus_captured
+        ON task_delegations
+        WHEN NEW.origin_focus_epoch_id IS NOT OLD.origin_focus_epoch_id
+          OR NEW.origin_focus_captured != OLD.origin_focus_captured
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'Task delegation Focus attribution is immutable'
+          );
+        END
+        """
+    )
+
+
 def _add_graph_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1817,6 +1973,11 @@ MIGRATIONS: list[Migration] = [
         "preserve Master Focus epoch identity and enforce message attribution",
         _harden_master_focus_contracts,
         {"no_auto_tx": True},
+    ),
+    (
+        40,
+        "enforce Master run isolation and preserve Task projection Focus",
+        _add_master_focus_persistence_boundaries,
     ),
 ]
 

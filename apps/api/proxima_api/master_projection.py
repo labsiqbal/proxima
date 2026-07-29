@@ -526,7 +526,32 @@ class MasterProjectionService:
                 message_id = _as_int(message_cursor.lastrowid)
                 focus_epoch_id = None
                 subject_container_id = payload.get("container_id")
-                if origin_message_id is not None:
+                if task_id is not None:
+                    source = conn.execute(
+                        "SELECT delegation.origin_focus_epoch_id, "
+                        "delegation.origin_focus_captured, "
+                        "delegation.container_id, "
+                        "epoch.master_session_id AS epoch_session_id "
+                        "FROM task_delegations AS delegation "
+                        "LEFT JOIN master_focus_epochs AS epoch "
+                        "ON epoch.id = delegation.origin_focus_epoch_id "
+                        "WHERE delegation.job_id = ?",
+                        (task_id,),
+                    ).fetchone()
+                    if (
+                        source is None
+                        or not source["origin_focus_captured"]
+                        or (
+                            source["origin_focus_epoch_id"] is not None
+                            and source["epoch_session_id"] != master_session_id
+                        )
+                    ):
+                        raise ValueError(
+                            "projection Focus origin is unavailable"
+                        )
+                    subject_container_id = source["container_id"]
+                    focus_epoch_id = source["origin_focus_epoch_id"]
+                elif origin_message_id is not None:
                     captured = conn.execute(
                         "SELECT focus.focus_epoch_id "
                         "FROM message_focus AS focus "
@@ -541,20 +566,6 @@ class MasterProjectionService:
                             "projection Focus origin is unavailable"
                         )
                     focus_epoch_id = captured["focus_epoch_id"]
-                elif task_id is not None:
-                    source = conn.execute(
-                        "SELECT origin_message_id, container_id FROM task_delegations "
-                        "WHERE job_id = ?",
-                        (task_id,),
-                    ).fetchone()
-                    if source is not None:
-                        subject_container_id = source["container_id"]
-                        captured = conn.execute(
-                            "SELECT focus_epoch_id FROM message_focus WHERE message_id = ?",
-                            (source["origin_message_id"],),
-                        ).fetchone()
-                        if captured is not None:
-                            focus_epoch_id = captured["focus_epoch_id"]
                 # Notifications retain originating Focus while their subject
                 # Container remains separate. They never swap current Focus.
                 master_focus.stamp_message(

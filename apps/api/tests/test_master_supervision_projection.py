@@ -1198,6 +1198,105 @@ def test_projection_links_survive_task_delete_and_restrict_delivery_delete(
     create_app(dict(app.state.config))
 
 
+def test_task_projection_focus_survives_origin_run_deletion(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app, client, project = _app_and_client(tmp_path)
+    monkeypatch.setattr(
+        "proxima_api.routes.master.master_runner_conformance",
+        lambda _runner_id: (True, ""),
+    )
+    desk = client.get("/api/master/desk").json()
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?",
+        (project["slug"],),
+    ).fetchone()["id"]
+    area_id = app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops'",
+        (project_id,),
+    ).fetchone()["id"]
+    profile_id = app.state.db.execute(
+        "SELECT id FROM profiles WHERE is_default = 1"
+    ).fetchone()["id"]
+    focus = client.put(
+        "/api/master/focus",
+        json={"container_id": project_id, "version": 0},
+    ).json()["focus"]
+    turn = client.post(
+        "/api/master/messages",
+        json={"content": "Delegate a durable focused Task"},
+    ).json()
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        origin_message_id=turn["message"]["id"],
+    )
+    delegated = broker.execute(
+        "delegate_tasks",
+        {
+            "idempotency_key": "durable-focus-origin",
+            "start": False,
+            "tasks": [
+                {
+                    "title": "Keep Focus",
+                    "brief": "Finish after the origin run is deleted",
+                    "container_id": project_id,
+                    "area_id": area_id,
+                    "profile_id": profile_id,
+                }
+            ],
+        },
+    )
+    job_id = delegated["result"]["tasks"][0]["id"]
+    captured = app.state.db.execute(
+        "SELECT origin_message_id, origin_focus_epoch_id, "
+        "origin_focus_captured FROM task_delegations WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(captured) == {
+        "origin_message_id": turn["message"]["id"],
+        "origin_focus_epoch_id": focus["current_epoch_id"],
+        "origin_focus_captured": 1,
+    }
+
+    app.state.db.execute(
+        "UPDATE runs SET status = 'completed', "
+        "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (turn["run_id"],),
+    )
+    deleted = client.delete(f"/api/runs/{turn['run_id']}")
+    assert deleted.status_code == 200
+    durable = app.state.db.execute(
+        "SELECT origin_message_id, origin_focus_epoch_id, "
+        "origin_focus_captured FROM task_delegations WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(durable) == {
+        "origin_message_id": None,
+        "origin_focus_epoch_id": focus["current_epoch_id"],
+        "origin_focus_captured": 1,
+    }
+
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done' WHERE id = ?",
+        (job_id,),
+    )
+    projection = app.state.master_projection.project_task(job_id)
+    attribution = app.state.db.execute(
+        "SELECT focus_epoch_id, focus_container_id "
+        "FROM message_focus WHERE message_id = ?",
+        (projection["message_id"],),
+    ).fetchone()
+    assert dict(attribution) == {
+        "focus_epoch_id": focus["current_epoch_id"],
+        "focus_container_id": project_id,
+    }
+
+
 def test_feature_off_does_not_instantiate_or_project_master_services(
     tmp_path: Path,
 ):

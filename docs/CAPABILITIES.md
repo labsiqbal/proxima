@@ -465,10 +465,15 @@ An idle Focus change uses an optimistic version check, closes and opens epochs,
 adds a boundary message, and emits `master.focus.changed`. A running turn can
 only record one pending Focus; sends return 409 until it closes, then the pending
 Focus applies exactly once. Explicit cross-Container sends change Focus and
-enqueue in the same transaction. The restricted Master runner process is rebuilt
-for every Master turn and its durable history is limited to the captured epoch,
-so prior Container ACP/model context cannot cross a boundary. History projection
-UI and safe-self-update remain later delivery groups.
+enqueue in the same transaction. Generic session run producers reject the Master
+session, and the database refuses any non-Master run kind or mismatched epoch there.
+Task delegations copy the captured epoch before the tool result returns, so delayed
+Task and supervision projections retain their original Focus after an origin
+message or run is deleted. The restricted Master runner process is rebuilt for
+every Master turn and its durable history is limited to the captured epoch, so
+prior Container ACP/model context cannot cross a boundary. History projection UI
+and safe-self-update remain later delivery groups. See
+[ADR-0007](adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 The shared provider bootstraps Focus and its optimistic version from the Master
 desk, writes picker changes through the durable Focus endpoint, and consumes

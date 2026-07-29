@@ -282,6 +282,13 @@ def build_route_deps(
             raise http_exception(status_code=404, detail="session not found")
         return dict(row)
 
+    def require_generic_run_mode(mode: str | None) -> None:
+        if mode in {"master", "alpha"}:
+            raise http_exception(
+                status_code=409,
+                detail="Master turns must use /api/master/messages",
+            )
+
     def run_projectctl(*args: str) -> None:
         # Single-user $HOME deployments don't manage OS ownership/ACLs: the dir is
         # scaffolded by scaffold_project_dir and access is enforced by the single-owner
@@ -521,6 +528,7 @@ def build_route_deps(
         "admin_user": admin_user,
         "visible_project": visible_project,
         "session_for_user": session_for_user,
+        "require_generic_run_mode": require_generic_run_mode,
         "profile_for_user": profile_for_user,
         "project_payload": project_payload,
         "profile_payload": profile_payload,

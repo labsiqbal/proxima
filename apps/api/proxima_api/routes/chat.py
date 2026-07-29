@@ -133,6 +133,7 @@ def register(app, deps):
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
+    require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
     session_payload = deps["session_payload"]
     _project_root = deps["_project_root"]
@@ -448,8 +449,7 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.message)
         session = session_for_user(session_id, user)
         _require_session_features(session)
-        if session["mode"] == "master":
-            raise HTTPException(status_code=409, detail="Master runs must use /api/master/messages")
+        require_generic_run_mode(session.get("mode"))
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
         profile = profile_for_user(payload.profile_id, user)
@@ -556,6 +556,7 @@ def register(app, deps):
         features.require_command(feature_cfg, payload.objective)
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         db().execute(
             "UPDATE sessions SET goal_text = ?, goal_status = 'running', goal_iteration = 0, goal_max = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -617,6 +618,7 @@ def register(app, deps):
     def wiki_note_draft(session_id: int, payload: WikiDraftRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         wiki_root = _session_wiki_root(session, user)
         if wiki_root is None:
             raise HTTPException(status_code=400, detail="This chat has no project, so there is no wiki to save to.")
@@ -638,6 +640,7 @@ def register(app, deps):
     def promote_workflow(session_id: int, payload: PromoteWorkflowRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
         _require_session_features(session)
+        require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         rows = db().execute(
             "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 50", (session_id,)

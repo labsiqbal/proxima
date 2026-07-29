@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import app_settings
+from proxima_api import app_settings, master_focus
 from proxima_api.main import create_app
 from proxima_api.master_runtime import (
     MASTER_INSTRUCTIONS,
@@ -505,11 +505,22 @@ def test_broker_enforces_durable_owner_target_over_model_arguments(
         "SELECT id FROM profiles WHERE is_default = 1"
     ).fetchone()["id"]
     session_id = client.get("/api/master/desk").json()["session"]["id"]
+    focused = master_focus.change_focus(
+        app.state.db,
+        master_session_id=session_id,
+        container_id=ids["owner-target"],
+        expected_version=0,
+    )
     message_id = app.state.db.execute(
         "INSERT INTO messages(session_id, role, content) "
         "VALUES (?, 'user', 'Use the owner target')",
         (session_id,),
     ).lastrowid
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=message_id,
+        focus_epoch_id=focused["current_epoch_id"],
+    )
     app.state.db.execute(
         "INSERT INTO master_message_context("
         "message_id, focus_mode, focus_container_id, target_mode, "

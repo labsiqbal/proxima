@@ -22,6 +22,7 @@ def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
     current_user = deps["current_user"]
+    require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
 
     def _require_mode_feature(mode: str | None) -> None:
@@ -105,6 +106,7 @@ def register(app, deps):
     def create_message_review(message_id: int, payload: MessageReviewCreateRequest, user: dict[str, Any] = Depends(current_user)):
         source = _source_message_for_user(message_id, user)
         _require_mode_feature(source.get("session_mode"))
+        require_generic_run_mode(source.get("session_mode"))
         reviewer = _pick_reviewer_profile(source.get("source_runner"), payload.reviewer_profile_id, user)
         reviewer_profiles = [{"id": reviewer["id"], "name": reviewer["name"], "runner_id": reviewer["runner_id"]}]
         prompt = build_validate_prompt(
@@ -198,6 +200,7 @@ def register(app, deps):
     def ask_original_to_revise(review_id: int, payload: MessageReviewAskOriginalRequest, user: dict[str, Any] = Depends(current_user)):
         review = _review_for_user(review_id, user)
         _require_mode_feature(review.get("session_mode"))
+        require_generic_run_mode(review.get("session_mode"))
         profile = profile_for_user(review.get("source_profile_id"), user)
         prompt = build_source_merge_prompt(
             source_content=review.get("source_original_content") or review.get("source_content") or "",

@@ -37,6 +37,11 @@ request from the version gap left by schema 38, removes the Container foreign ke
 from historical epochs, and installs the shared Master run-message attribution
 triggers. Container deletion can therefore close the live Focus while preserving
 the original epoch identity.
+Migration 40 rejects generic or mismatched Master runs at persistence, copies a
+Master Task's captured epoch onto `task_delegations`, and makes that copy
+immutable. Existing delegation rows are backfilled only when their linked origin
+message still proves its Focus; incomplete legacy origins remain unprojectable
+rather than being guessed.
 
 Checkpoint and job-input payloads are rewritten only for known ownership keys:
 `alpha_session_id` becomes `origin_master_session_id` and
@@ -108,6 +113,8 @@ the Alpha-era messages already there.
 | Schema 38 pending Container request | preserve it with the explicit pending marker |
 | Schema 38 pending Fleet request | recover it from the state/epoch version gap |
 | Container deletion after migration 39 | preserve the epoch's immutable numeric Container identity |
+| Task delegation with a surviving attributed origin message | copy its epoch during migration 40 |
+| Task delegation whose legacy origin attribution is missing | preserve the Task but fail closed on a new projection |
 
 Feature-off startup still migrates and validates persistence, but does not
 instantiate the Master supervisor or projection service, resume committed Master

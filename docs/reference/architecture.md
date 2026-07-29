@@ -240,7 +240,8 @@ makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktre
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
 Scoped Work, Home, Master, and future orchestration creation share
 `TaskDelegationService`. `task_delegations` is the one-to-one origin, routing,
-idempotency, and durable-start audit for a job. `task_dependencies` stores explicit
+idempotency, durable-start, and captured Master Focus audit for a job.
+`task_dependencies` stores explicit
 Task-to-prerequisite edges with a required `review` or `done` status. A unique pair,
 self-edge check, and recursive insert/update triggers make the stored graph
 cycle-safe. The prerequisite foreign key is restrictive, so deleting a Task or
@@ -471,10 +472,14 @@ message and `master.focus.changed` event, and stamp the captured epoch on the
 user message, run, response, tool result, and Master projection. While a turn is
 active the only allowed Focus mutation is one durable pending Focus, applied
 once after the last turn closes. An explicit Container send performs transition
-and enqueue atomically. Every restricted Master turn recycles its ACP process and
-rebuilds history solely from its captured epoch, preventing old Container context
-from surviving in runner or model caches. History projection UI and safe-self-
-update remain later groups.
+and enqueue atomically. Generic session run producers reject the Master session,
+with a database trigger as the persistence backstop. Task delegation copies the
+captured epoch onto its durable audit row, so later Task and supervision
+projections retain attribution after the origin message or run is deleted. Every
+restricted Master turn recycles its ACP process and rebuilds history solely from
+its captured epoch, preventing old Container context from surviving in runner or
+model caches. History projection UI and safe-self-update remain later groups. See
+[ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
 ### Native artifact review flow
 
