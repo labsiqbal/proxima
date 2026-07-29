@@ -1743,6 +1743,56 @@ def _add_master_focus_persistence_boundaries(
     )
 
 
+def _freeze_master_focus_attribution(conn: sqlite3.Connection) -> None:
+    """Make captured message and run epoch identity append-only."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "message_focus" in tables:
+        message_columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(message_focus)"
+            ).fetchall()
+        }
+        if "focus_epoch_id" in message_columns:
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS message_focus_epoch_immutable
+                BEFORE UPDATE OF focus_epoch_id ON message_focus
+                WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+                BEGIN
+                  SELECT RAISE(
+                    ABORT,
+                    'Message Focus epoch attribution is immutable'
+                  );
+                END
+                """
+            )
+    if "runs" in tables:
+        run_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "focus_epoch_id" in run_columns:
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS runs_focus_epoch_immutable
+                BEFORE UPDATE OF focus_epoch_id ON runs
+                WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+                BEGIN
+                  SELECT RAISE(
+                    ABORT,
+                    'Run Focus epoch attribution is immutable'
+                  );
+                END
+                """
+            )
+
+
 def _add_graph_states(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1978,6 +2028,11 @@ MIGRATIONS: list[Migration] = [
         40,
         "enforce Master run isolation and preserve Task projection Focus",
         _add_master_focus_persistence_boundaries,
+    ),
+    (
+        41,
+        "make captured Master message and run Focus epochs immutable",
+        _freeze_master_focus_attribution,
     ),
 ]
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
@@ -475,6 +477,23 @@ def test_master_run_messages_are_attributed_at_persistence_boundary(
         "focus_epoch_id": focused["current_epoch_id"],
         "focus_container_id": container_id,
     }
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Message Focus epoch attribution is immutable",
+    ):
+        app.state.db.execute(
+            "UPDATE message_focus SET focus_epoch_id = NULL "
+            "WHERE message_id = ?",
+            (message.lastrowid,),
+        )
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Run Focus epoch attribution is immutable",
+    ):
+        app.state.db.execute(
+            "UPDATE runs SET focus_epoch_id = NULL WHERE id = ?",
+            (turn["run_id"],),
+        )
 
 
 def test_master_desk_cursor_never_leads_the_snapshot(tmp_path: Path):

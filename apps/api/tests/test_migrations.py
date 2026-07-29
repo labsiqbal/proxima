@@ -57,9 +57,9 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TRIGGER jobs_ops_done_knowledge_rebuild")
     conn.execute("DROP TABLE knowledge_rebuild_intents")
 
-    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38, 39, 40]
+    assert run_migrations(conn, str(db_path)) == [32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 40
+    assert current_version(conn) == 41
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -552,8 +552,8 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         "VALUES ('alpha', 'Existing attention', 'alpha-existing')"
     )
 
-    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
-    assert current_version(conn) == 40
+    assert run_migrations(conn, str(db_path)) == [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+    assert current_version(conn) == 41
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -594,8 +594,8 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         [(version, f"schema {version}") for version in range(1, 29)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
-    assert current_version(conn) == 40
+    assert run_migrations(conn, str(db_path)) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+    assert current_version(conn) == 41
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -808,9 +808,9 @@ def _prepare_schema_35_graph_fixture(tmp_path: Path):
 def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
-    assert run_migrations(conn, str(db_path)) == [36, 37, 38, 39, 40]
+    assert run_migrations(conn, str(db_path)) == [36, 37, 38, 39, 40, 41]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 40
+    assert current_version(conn) == 41
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -908,8 +908,8 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
         [(version, f"schema {version}") for version in range(1, 39)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [39, 40]
-    assert current_version(conn) == 40
+    assert run_migrations(conn, str(db_path)) == [39, 40, 41]
+    assert current_version(conn) == 41
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -932,6 +932,21 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
         "focus_epoch_id": 11,
         "focus_container_id": 7,
     }
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Message Focus epoch attribution is immutable",
+    ):
+        conn.execute(
+            "UPDATE message_focus SET focus_epoch_id = NULL "
+            "WHERE message_id = 17"
+        )
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="Run Focus epoch attribution is immutable",
+    ):
+        conn.execute(
+            "UPDATE runs SET focus_epoch_id = NULL WHERE id = 13"
+        )
     conn.execute("DELETE FROM projects WHERE id = 7")
     assert conn.execute(
         "SELECT container_id FROM master_focus_epochs WHERE id = 11"
@@ -991,7 +1006,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
         [(version, f"schema {version}") for version in range(1, 40)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [40]
+    assert run_migrations(conn, str(db_path)) == [40, 41]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
         "FROM task_delegations WHERE id = 19"

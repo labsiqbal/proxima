@@ -244,6 +244,12 @@ CREATE INDEX IF NOT EXISTS idx_message_focus_epoch
   ON message_focus(focus_epoch_id, message_id);
 CREATE INDEX IF NOT EXISTS idx_message_focus_subject
   ON message_focus(subject_container_id, message_id);
+CREATE TRIGGER IF NOT EXISTS message_focus_epoch_immutable
+BEFORE UPDATE OF focus_epoch_id ON message_focus
+WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+BEGIN
+  SELECT RAISE(ABORT, 'Message Focus epoch attribution is immutable');
+END;
 CREATE TABLE IF NOT EXISTS message_reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -323,6 +329,12 @@ AND (
 )
 BEGIN
   SELECT RAISE(ABORT, 'Master runs require captured Focus attribution');
+END;
+CREATE TRIGGER IF NOT EXISTS runs_focus_epoch_immutable
+BEFORE UPDATE OF focus_epoch_id ON runs
+WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
+BEGIN
+  SELECT RAISE(ABORT, 'Run Focus epoch attribution is immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS messages_master_focus_insert
 AFTER INSERT ON messages
