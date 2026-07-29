@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import sqlite3
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,8 +14,9 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from apps.safe_updater.circuit_breaker import CircuitBreaker
+from apps.safe_updater import controller as controller_module
 from apps.safe_updater.controller import SafeUpdateController
-from apps.safe_updater.journal import Journal
+from apps.safe_updater.journal import Journal, JournalIntegrityError
 from apps.safe_updater.layout import ReleaseLayout
 from apps.safe_updater.service_adapter import DisposableServiceAdapter
 from apps.safe_updater.state_machine import Phase
@@ -220,7 +223,7 @@ def test_disposable_switch_quarantines_real_wal_and_shm_before_commit(
         Phase.LAST_GOOD_COMMITTED,
     ],
 )
-def test_precommit_interruption_restores_database_and_both_pointers(
+def test_unacknowledged_precommit_append_restores_state_and_latches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     phase: Phase,
@@ -238,7 +241,7 @@ def test_precommit_interruption_restores_database_and_both_pointers(
         after_durable_append=False,
     )
 
-    with pytest.raises(RuntimeError, match=f"injected {phase.value}"):
+    with pytest.raises(RuntimeError, match="safe_update_breaker_latched"):
         _promote(
             controller,
             run_id,
@@ -255,17 +258,24 @@ def test_precommit_interruption_restores_database_and_both_pointers(
     assert adapter.running_release == PREVIOUS
     assert adapter.autonomous_writers_paused is False
     assert not fence.exists()
-    assert CircuitBreaker(root).status().failures == 1
+    breaker = CircuitBreaker(root).status()
+    assert breaker.failures == 1
+    assert breaker.latched is True
 
 
 @pytest.mark.parametrize(
-    "phase",
-    [Phase.LAST_GOOD_COMMITTED, Phase.COMPLETED],
+    ("phase", "database_value", "release"),
+    [
+        (Phase.LAST_GOOD_COMMITTED, "previous", PREVIOUS),
+        (Phase.COMPLETED, "candidate", CANDIDATE),
+    ],
 )
-def test_durable_commit_interruption_resumes_candidate(
+def test_unacknowledged_full_journal_write_latches_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     phase: Phase,
+    database_value: str,
+    release: str,
 ):
     root = tmp_path / "controller"
     root.mkdir()
@@ -280,6 +290,49 @@ def test_durable_commit_interruption_resumes_candidate(
         after_durable_append=True,
     )
 
+    with pytest.raises(RuntimeError, match="safe_update_breaker_latched"):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            adapter,
+            fence,
+            live,
+            staged,
+        )
+
+    assert _database_value(live) == database_value
+    assert ReleaseLayout(root).pointer_release("active") == release
+    assert ReleaseLayout(root).pointer_release("last-good") == release
+    assert adapter.running_release == release
+    assert not fence.exists()
+    assert CircuitBreaker(root).status().latched is True
+    assert _journal(root, run_id, intent).records()[-1].phase is phase
+
+
+def test_acknowledged_last_good_recovers_candidate_after_finalize_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+    adapter = DisposableServiceAdapter(PREVIOUS)
+    original_remove = controller_module.remove_fence
+    attempts = 0
+
+    def remove_once(path: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("injected finalize interruption")
+        original_remove(path)
+
+    monkeypatch.setattr(controller_module, "remove_fence", remove_once)
+
     assert (
         _promote(
             controller,
@@ -292,13 +345,68 @@ def test_durable_commit_interruption_resumes_candidate(
         )
         == "candidate_good"
     )
-
+    assert attempts == 2
     assert _database_value(live) == "candidate"
     assert ReleaseLayout(root).pointer_release("active") == CANDIDATE
     assert ReleaseLayout(root).pointer_release("last-good") == CANDIDATE
     assert adapter.running_release == CANDIDATE
     assert not fence.exists()
+    assert CircuitBreaker(root).status().failures == 0
     assert _journal(root, run_id, intent).records()[-1].phase is Phase.COMPLETED
+
+
+def test_partial_journal_tail_cannot_skip_database_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "controller"
+    root.mkdir()
+    controller, run_id, intent = _staged_run(root)
+    fence, live, staged = _fixture_paths(root)
+    _database(live, "previous")
+    _database(staged, "candidate")
+    adapter = DisposableServiceAdapter(PREVIOUS)
+    original = Journal.append
+    interrupted = False
+
+    def append(
+        journal: Journal,
+        phase: Phase,
+        evidence: dict[str, str] | None = None,
+    ):
+        nonlocal interrupted
+        if phase is Phase.DB_SWAPPED and not interrupted:
+            interrupted = True
+            descriptor = os.open(journal.path, os.O_WRONLY | os.O_APPEND)
+            try:
+                os.write(descriptor, b'{"phase":"db_swapped"')
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            raise RuntimeError("injected partial journal append")
+        return original(journal, phase, evidence)
+
+    monkeypatch.setattr(Journal, "append", append)
+
+    with pytest.raises(RuntimeError, match="safe_update_breaker_latched"):
+        _promote(
+            controller,
+            run_id,
+            intent,
+            adapter,
+            fence,
+            live,
+            staged,
+        )
+
+    assert _database_value(live) == "previous"
+    assert ReleaseLayout(root).pointer_release("active") == PREVIOUS
+    assert ReleaseLayout(root).pointer_release("last-good") == PREVIOUS
+    assert adapter.running_release == PREVIOUS
+    assert not fence.exists()
+    assert CircuitBreaker(root).status().latched is True
+    with pytest.raises(JournalIntegrityError, match="unterminated"):
+        _journal(root, run_id, intent).records()
 
 
 def test_disposable_probe_failure_restores_previous_state(tmp_path: Path):
@@ -471,6 +579,17 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         login = client.post("/auth/auto")
         assert login.status_code == 200
         token = login.json()["token"]
+        cached_insert = "INSERT INTO fence_cache(value) VALUES (?)"
+        app.state.db.execute("CREATE TABLE fence_cache(value TEXT NOT NULL)")
+        app.state.db.execute(cached_insert, ("before",))
+        app.state.db.execute("DELETE FROM profiles")
+        wiki_root = (
+            Path(config["workspace_root"])
+            / "users"
+            / "owner"
+            / "wiki"
+        )
+        assert not wiki_root.exists()
         sessions_before = app.state.db.execute(
             "SELECT COUNT(*) FROM auth_sessions"
         ).fetchone()[0]
@@ -479,6 +598,10 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         assert client.post("/api/update/check").status_code == 423
         assert client.post("/auth/auto").status_code == 423
         assert client.post("/auth/resume").status_code == 200
+        assert client.get("/api/profiles").json() == {"profiles": []}
+        assert client.get("/api/wiki/all").json() == {"notes": []}
+        assert not wiki_root.exists()
+        assert client.get("/api/appview/missing/").status_code == 423
         assert (
             app.state.db.execute(
                 "SELECT COUNT(*) FROM auth_sessions"
@@ -493,6 +616,11 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         assert rejected.value.code == 4423
         with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
             app.state.db.execute("CREATE TABLE forbidden(value TEXT)")
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            app.state.db.execute(cached_insert, ("after",))
+        assert app.state.db.execute(
+            "SELECT COUNT(*) FROM fence_cache"
+        ).fetchone()[0] == 1
 
     maintenance_app = create_app(
         {
@@ -509,3 +637,62 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         assert client.get("/api/health").json()["maintenance_mode"] == "readonly"
     with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
         maintenance_app.state.db.execute("CREATE TABLE forbidden(value TEXT)")
+
+
+def test_established_terminal_rechecks_fence_before_processing_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    database = tmp_path / "proxima.db"
+    setup = connect(database)
+    init_db(setup)
+    run_migrations(setup, database)
+    setup.close()
+    fence = tmp_path / "status" / "fence.json"
+    started = threading.Event()
+    closed = threading.Event()
+    writes: list[bytes] = []
+
+    class FakeTerminal:
+        def __init__(self, _cwd: str) -> None:
+            pass
+
+        def start(self) -> None:
+            started.set()
+
+        def read(self, _size: int) -> bytes:
+            closed.wait(timeout=5)
+            return b""
+
+        def write(self, value: bytes) -> None:
+            writes.append(value)
+
+        def resize(self, _rows: int, _cols: int) -> None:
+            writes.append(b"resize")
+
+        def close(self) -> None:
+            closed.set()
+
+    monkeypatch.setattr("proxima_api.routes.chat.TerminalSession", FakeTerminal)
+    app = create_app(
+        {
+            "database_path": str(database),
+            "workspace_root": str(tmp_path / "workspace"),
+            "start_worker": False,
+            "safe_update_fence_path": str(fence),
+        }
+    )
+
+    with TestClient(app) as client:
+        token = client.post("/auth/auto").json()["token"]
+        with client.websocket_connect(
+            f"/api/ws/terminal?token={token}"
+        ) as websocket:
+            assert started.wait(timeout=2)
+            write_fence(fence, "b" * 32, "write_fenced")
+            websocket.send_bytes(b"touch should-not-run")
+            with pytest.raises(WebSocketDisconnect) as rejected:
+                websocket.receive_bytes()
+            assert rejected.value.code == 4423
+
+    assert writes == []

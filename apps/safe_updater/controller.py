@@ -236,81 +236,87 @@ class SafeUpdateController:
             if breaker.status().latched:
                 raise RuntimeError("safe_update_breaker_latched")
             backup: SealedImage | None = None
+            acknowledged_phase = records[-1].phase
+            journal_append_failed = False
             fence_attempted = False
             writers_pause_attempted = False
             service_stop_attempted = False
             database_swap_attempted = False
             pointer_change_attempted = False
             candidate_start_attempted = False
+
+            def append_phase(
+                phase: Phase,
+                evidence: dict[str, str] | None = None,
+            ) -> None:
+                nonlocal acknowledged_phase, journal_append_failed
+                try:
+                    record = journal.append(phase, evidence)
+                except Exception:
+                    journal_append_failed = True
+                    raise
+                acknowledged_phase = record.phase
+
             try:
                 fence_attempted = True
                 write_fence(fence_path, run_id, Phase.WRITE_FENCED.value)
-                journal.append(Phase.WRITE_FENCED)
+                append_phase(Phase.WRITE_FENCED)
                 writers_pause_attempted = True
                 adapter.pause_autonomous_writers()
                 adapter.drain()
-                journal.append(Phase.DRAINED)
+                append_phase(Phase.DRAINED)
                 service_stop_attempted = True
                 adapter.stop_and_verify()
-                journal.append(Phase.OLD_SERVICE_STOPPED)
+                append_phase(Phase.OLD_SERVICE_STOPPED)
                 checkpoint_truncate(live_database)
-                journal.append(Phase.WAL_CHECKPOINTED)
+                append_phase(Phase.WAL_CHECKPOINTED)
                 backup = seal_backup(
                     live_database,
                     self.root / "backups" / run_id / "final.db",
                 )
-                journal.append(Phase.FINAL_BACKUP, {"final_backup": backup.digest})
-                journal.append(Phase.STAGED_MIGRATED)
+                append_phase(Phase.FINAL_BACKUP, {"final_backup": backup.digest})
+                append_phase(Phase.STAGED_MIGRATED)
                 staged = seal_backup(
                     staged_database,
                     self.root / "backups" / run_id / "staged.db",
                 )
-                journal.append(
+                append_phase(
                     Phase.STAGED_VALIDATED,
                     {"staged_database": staged.digest},
                 )
-                journal.append(Phase.IMAGE_SEALED, {"sealed_database": staged.digest})
+                append_phase(Phase.IMAGE_SEALED, {"sealed_database": staged.digest})
                 quarantine_sidecars(
                     live_database,
                     self.root / "backups" / run_id / "sidecars",
                 )
-                journal.append(Phase.SIDECARS_QUARANTINED)
+                append_phase(Phase.SIDECARS_QUARANTINED)
                 database_swap_attempted = True
                 replace_from_sealed(staged, live_database)
-                journal.append(Phase.DB_SWAPPED, {"live_database": staged.digest})
+                append_phase(Phase.DB_SWAPPED, {"live_database": staged.digest})
                 pointer_change_attempted = True
                 layout.set_pointer("active", candidate_release_id)
-                journal.append(Phase.RELEASE_SWITCHED)
+                append_phase(Phase.RELEASE_SWITCHED)
                 candidate_start_attempted = True
                 adapter.start_readonly_candidate(candidate_release_id)
-                journal.append(Phase.READONLY_STARTED)
+                append_phase(Phase.READONLY_STARTED)
                 probe("readonly", candidate_release_id)
-                journal.append(Phase.READONLY_SOAKED)
+                append_phase(Phase.READONLY_SOAKED)
                 adapter.stop_candidate()
                 adapter.start_writable_candidate(candidate_release_id)
-                journal.append(Phase.WRITABLE_STARTED)
+                append_phase(Phase.WRITABLE_STARTED)
                 probe("writable", candidate_release_id)
-                journal.append(Phase.WRITABLE_PROBED)
+                append_phase(Phase.WRITABLE_PROBED)
                 layout.set_pointer("last-good", candidate_release_id)
-                journal.append(Phase.LAST_GOOD_COMMITTED)
+                append_phase(Phase.LAST_GOOD_COMMITTED)
                 adapter.resume_autonomous_writers()
                 remove_fence(fence_path)
-                journal.append(Phase.COMPLETED)
+                append_phase(Phase.COMPLETED)
                 return "candidate_good"
             except Exception as exc:
-                try:
-                    durable_phase = journal.records()[-1].phase
-                except Exception as recovery_state_error:
-                    try:
-                        breaker.record_failure(
-                            type(exc).__name__,
-                            rollback_failed=True,
-                        )
-                    except Exception:
-                        pass
-                    raise RuntimeError("safe_update_breaker_latched") from recovery_state_error
-
-                if ORDER[durable_phase] >= ORDER[Phase.LAST_GOOD_COMMITTED]:
+                if (
+                    ORDER[acknowledged_phase]
+                    >= ORDER[Phase.LAST_GOOD_COMMITTED]
+                ):
                     try:
                         if (
                             layout.pointer_release("active") != candidate_release_id
@@ -322,11 +328,17 @@ class SafeUpdateController:
                         adapter.start_writable_candidate(candidate_release_id)
                         adapter.resume_autonomous_writers()
                         remove_fence(fence_path)
-                        latest_phase = journal.records()[-1].phase
-                        if latest_phase is Phase.LAST_GOOD_COMMITTED:
-                            journal.append(Phase.COMPLETED)
-                        elif latest_phase is not Phase.COMPLETED:
+                        if (
+                            acknowledged_phase is Phase.LAST_GOOD_COMMITTED
+                            and not journal_append_failed
+                        ):
+                            append_phase(Phase.COMPLETED)
+                        elif acknowledged_phase is not Phase.COMPLETED:
                             raise RuntimeError("committed fixture journal diverged")
+                        if journal_append_failed:
+                            raise RuntimeError(
+                                "fixture journal append was not acknowledged"
+                            )
                         return "candidate_good"
                     except Exception as committed_recovery_error:
                         try:
@@ -368,7 +380,9 @@ class SafeUpdateController:
                 try:
                     breaker_status = breaker.record_failure(
                         type(exc).__name__,
-                        rollback_failed=rollback_failed,
+                        rollback_failed=(
+                            rollback_failed or journal_append_failed
+                        ),
                     )
                 except Exception as breaker_error:
                     raise RuntimeError("safe_update_breaker_latched") from breaker_error

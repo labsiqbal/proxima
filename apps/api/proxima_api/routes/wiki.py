@@ -27,9 +27,9 @@ def register(app, deps):
         return {"notes": fsapi.walk_files(root, "wiki")}
 
     # ── Personal per-user wiki (workspace_root/users/<username>/wiki) ──
-    def _wiki_root(user: dict[str, Any]) -> Path:
+    def _wiki_root(user: dict[str, Any], *, create: bool = False) -> Path:
         root = Path(cfg["workspace_root"]) / "users" / validate_slug(user["username"]) / "wiki"
-        if not root.exists():
+        if create and not root.exists():
             root.mkdir(parents=True, exist_ok=True)
             (root / "index.md").write_text(f"# {user['username']}'s wiki\n\nYour personal notes.\n", encoding="utf-8")
         return root
@@ -61,7 +61,7 @@ def register(app, deps):
     @app.put("/api/wiki/file")
     def wiki_write_file(path: str, payload: FileWriteRequest, user: dict[str, Any] = Depends(current_user)):
         try:
-            fsapi.write_file(_wiki_root(user), path, payload.content)
+            fsapi.write_file(_wiki_root(user, create=True), path, payload.content)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit_wiki(user, "wiki.write", path)
@@ -69,7 +69,7 @@ def register(app, deps):
     @app.post("/api/wiki/fs/mkdir")
     def wiki_mkdir(payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)):
         try:
-            fsapi.mkdir(_wiki_root(user), payload.path)
+            fsapi.mkdir(_wiki_root(user, create=True), payload.path)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit_wiki(user, "wiki.mkdir", payload.path)
@@ -78,7 +78,7 @@ def register(app, deps):
     @app.post("/api/wiki/fs/rename")
     def wiki_rename(payload: FsRenameRequest, user: dict[str, Any] = Depends(current_user)):
         try:
-            fsapi.rename(_wiki_root(user), payload.from_, payload.to)
+            fsapi.rename(_wiki_root(user, create=True), payload.from_, payload.to)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit_wiki(user, "wiki.rename", f"{payload.from_} -> {payload.to}")
@@ -87,7 +87,7 @@ def register(app, deps):
     @app.delete("/api/wiki/fs")
     def wiki_delete(path: str, user: dict[str, Any] = Depends(current_user)):
         try:
-            fsapi.delete(_wiki_root(user), path)
+            fsapi.delete(_wiki_root(user, create=True), path)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit_wiki(user, "wiki.delete", path)

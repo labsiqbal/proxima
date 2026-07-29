@@ -20,6 +20,7 @@ from ..commands import (
     skill_command_map,
 )
 from ..capabilities import clear_skill_scan_cache, detect_for_runner, parse_selection
+from ..maintenance_status import writes_fenced
 from ..recommended_tools import probe_recommended_tools
 from ..runners import detect_runners, hermes_status, runner_readiness
 from ..runner_specs import runner_is_selectable, runner_spec
@@ -73,7 +74,8 @@ def register(app, deps):
                 profile = None
         if profile is None:
             try:
-                ensure_default_profile(user)
+                if not writes_fenced(cfg):
+                    ensure_default_profile(user)
                 row = db().execute(
                     "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
                     "AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
@@ -91,7 +93,8 @@ def register(app, deps):
 
     @app.get("/api/profiles")
     def list_profiles(user: dict[str, Any] = Depends(current_user)):
-        ensure_default_profile(user)
+        if not writes_fenced(cfg):
+            ensure_default_profile(user)
         rows = db().execute(
             "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' "
             "ORDER BY is_default DESC, name", (user["id"],)

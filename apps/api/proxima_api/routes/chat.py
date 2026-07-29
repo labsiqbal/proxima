@@ -1212,7 +1212,15 @@ def register(app, deps):
         # refreshed off the request path (checks shell out to CLIs). Gated off in unit
         # tests via start_worker so no check threads spawn there.
         app_cfg = getattr(app.state, "config", {}) or {}
-        auth_checks_enabled = bool(app_cfg.get("auth_health_checks", app_cfg.get("start_worker", True)))
+        auth_checks_enabled = (
+            bool(
+                app_cfg.get(
+                    "auth_health_checks",
+                    app_cfg.get("start_worker", True),
+                )
+            )
+            and not writes_fenced(app_cfg)
+        )
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
             enabled=auth_checks_enabled,
@@ -1286,8 +1294,17 @@ def register(app, deps):
                 await websocket.close(code=4404)
                 return
             cwd = str(_project_root(project, user))
+        if writes_fenced(cfg):
+            await websocket.close(code=4423)
+            return
         Path(cwd).mkdir(parents=True, exist_ok=True)
+        if writes_fenced(cfg):
+            await websocket.close(code=4423)
+            return
         await websocket.accept()
+        if writes_fenced(cfg):
+            await websocket.close(code=4423)
+            return
         term = TerminalSession(cwd)
         term.start()
         loop = asyncio.get_event_loop()
@@ -1319,6 +1336,9 @@ def register(app, deps):
                     )
                 except asyncio.TimeoutError:
                     continue
+                if writes_fenced(cfg):
+                    await websocket.close(code=4423)
+                    break
                 if msg.get("type") == "websocket.disconnect":
                     break
                 if msg.get("bytes") is not None:

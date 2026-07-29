@@ -42,7 +42,7 @@ from .updates import (
     read_local_version,
 )
 from .safe_updates import SafeUpdateCoordinator
-from .maintenance_status import active_external_fence, writes_fenced
+from .maintenance_status import active_maintenance, writes_fenced
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -97,7 +97,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hub.bind_loop(asyncio.get_running_loop())
     # The candidate may serve a fixture to trusted probes, but it must never run
     # production-style writers, migrations, schedulers, refreshers or update loops.
-    if cfg.get("candidate_mode", False) or cfg.get("safe_update_maintenance_mode", False):
+    if cfg.get("candidate_mode", False) or writes_fenced(cfg):
         yield
         return
     if cfg.get("auto_provision", True):
@@ -282,7 +282,9 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     os.environ["PATH"] = augmented_path(os.environ.get("PATH"))
     app = FastAPI(title="Proxima API", version=read_local_version(), lifespan=_lifespan)
     app.state.config = cfg
-    maintenance_mode = bool(cfg.get("safe_update_maintenance_mode", False))
+    maintenance_mode = writes_fenced(cfg)
+    if maintenance_mode:
+        cfg["_safe_update_startup_read_only"] = True
     app.state.db = connect(
         cfg["database_path"],
         read_only=maintenance_mode,
@@ -343,21 +345,19 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def maintenance_write_fence(request: Request, call_next):
-        # Re-read the controller-owned fence before every mutating route. This
-        # closes ingress even in an already-running app; maintenance SQLite
-        # connections add a second, authorizer-enforced write denial.
-        if (
+        write_capable = (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
-            and request.url.path != "/auth/resume"
-        ):
-            fence = active_external_fence(cfg)
-            if fence is not None:
+            or request.url.path.startswith("/api/appview/")
+        )
+        if write_capable and request.url.path != "/auth/resume":
+            maintenance = active_maintenance(cfg)
+            if maintenance is not None:
                 return JSONResponse(
                     status_code=423,
                     content={
                         "detail": {
                             "code": "maintenance_write_fenced",
-                            **fence,
+                            **maintenance,
                         }
                     },
                 )
@@ -426,6 +426,8 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         status_module=status,
     )
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
+        if maintenance_mode:
+            continue
         owner = dict(owner_row)
         _route_deps["ensure_default_profile"](owner)
         # Persistence migration remains unconditional, but operational Master
@@ -525,13 +527,15 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         cfg.get("preview_bind_host"),
         port_for=lambda slug: app.state.app_manager.port(slug),
         validate_token=_valid_preview_token,
+        maintenance_fenced=lambda: writes_fenced(cfg),
     )
 
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
     # app's dev port, HTTP + WebSocket). Gated by the proxima_preview cookie (no CF Access on
     # these subdomains, so they can be iframed). No-op when apps_domain is unset.
     app.add_middleware(PreviewProxyMiddleware, fastapi_app=app, apps_domain=cfg.get("apps_domain"),
-                       validate_token=_valid_preview_token)
+                       validate_token=_valid_preview_token,
+                       maintenance_fenced=lambda: writes_fenced(cfg))
 
     return app
 

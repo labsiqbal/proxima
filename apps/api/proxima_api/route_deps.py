@@ -26,6 +26,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
+from .maintenance_status import writes_fenced
 from . import features, master_focus
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
@@ -70,8 +71,14 @@ def build_route_deps(
             row = db().execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
             if row:
                 user = dict(row)
-                ensure_default_profile(user)
+                if not writes_fenced(cfg):
+                    ensure_default_profile(user)
                 return user
+            if writes_fenced(cfg):
+                raise http_exception(
+                    status_code=503,
+                    detail="owner unavailable during maintenance",
+                )
             cur = db().execute(
                 "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
                 (name, name, iso_now()),
@@ -249,8 +256,15 @@ def build_route_deps(
             (user["id"],),
         ).fetchone()
         if row:
+            if writes_fenced(cfg):
+                return dict(row)
             db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],))
             return dict(row)
+        if writes_fenced(cfg):
+            raise http_exception(
+                status_code=503,
+                detail="profile unavailable during maintenance",
+            )
         return create_profile_for(user, "default", "Default", is_default=True)
 
     def profile_for_user(profile_id: int | None, user: dict[str, Any]) -> dict[str, Any]:

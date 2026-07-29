@@ -955,19 +955,38 @@ def connect(
     writes_fenced: Callable[[], bool] | None = None,
 ) -> sqlite3.Connection:
     db_path = Path(path)
+    dynamically_fenced = deny_writes or writes_fenced is not None
+    initially_fenced = deny_writes or (
+        writes_fenced is not None and writes_fenced()
+    )
+    connect_kwargs: dict[str, Any] = {
+        "check_same_thread": False,
+        "isolation_level": None,
+        "cached_statements": 0 if dynamically_fenced else 128,
+    }
     if read_only:
         if not db_path.is_file():
             raise FileNotFoundError("maintenance database is missing")
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False, isolation_level=None)
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            **connect_kwargs,
+        )
+    elif initially_fenced:
+        if not db_path.is_file():
+            raise FileNotFoundError("fenced database is missing")
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=rw",
+            uri=True,
+            **connect_kwargs,
+        )
     else:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
+        conn = sqlite3.connect(db_path, **connect_kwargs)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    if not read_only:
-        conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
-    if deny_writes or writes_fenced is not None:
+    if dynamically_fenced:
         denied = frozenset(
             getattr(sqlite3, name)
             for name in (
@@ -1021,6 +1040,12 @@ def connect(
         conn.set_authorizer(
             authorize
         )
+    if not read_only and not initially_fenced:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+        except Exception:
+            conn.close()
+            raise
     return conn
 
 

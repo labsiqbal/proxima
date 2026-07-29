@@ -92,22 +92,27 @@ separate role directories. The only accepted service adapter is the in-memory
 authority.
 
 The fixture controller holds the native single-flight lock across switching and
-recovery. Before the durable last-good boundary, any possibly committed database
-or pointer replacement restores the sealed database and both prior pointers before
-the previous fixture service is resumed. Once `last_good_committed` is durable,
-recovery can only resume the candidate or latch the breaker. An unreadable journal
-or interrupted breaker write latches fail closed.
+recovery. Before the `last_good_committed` append returns successfully, any
+possibly committed database or pointer replacement restores the sealed database
+and both prior pointers before the previous fixture service is resumed. A full or
+partial journal write whose append does not return is never treated as an
+acknowledged phase and latches the breaker after rollback. Once the last-good
+append is acknowledged, recovery can only resume the candidate or latch the
+breaker. An unreadable journal or interrupted breaker write latches fail closed.
 
-An external maintenance fence is re-read before every mutating HTTP request and
-terminal WebSocket start or input. Existing application SQLite connections also
-deny writes dynamically while the fence exists. `POST /auth/resume` remains
-available because it only projects an already-authenticated session; session
-creation, including `/auth/auto`, is fenced. A process started directly in
-maintenance mode opens SQLite read-only with authorizer denial and starts no
-workers, schedulers, graph lifecycle tasks, registry refreshers, or Master
-supervisor. These controls validate fixture behavior only. They do not activate a
-production service, replace live data, switch a live release, grant signing
-authority, or add remote push.
+An external maintenance fence is re-read before every mutating HTTP request,
+project-app proxy request, preview proxy request, and terminal WebSocket start or
+input. Read endpoints do not initialize personal wiki or profile state, stop
+preview relays, or launch readiness probes while fenced. Existing application
+SQLite connections disable prepared-statement caching and deny writes dynamically
+while the fence exists. New fenced connections skip write-capable WAL setup.
+`POST /auth/resume` remains available because it only projects an
+already-authenticated session; session creation, including `/auth/auto`, is fenced.
+A process started directly in maintenance mode opens SQLite read-only with
+authorizer denial and starts no workers, schedulers, graph lifecycle tasks,
+registry refreshers, or Master supervisor. These controls validate fixture
+behavior only. They do not activate a production service, replace live data,
+switch a live release, grant signing authority, or add remote push.
 
 ## App Owner
 

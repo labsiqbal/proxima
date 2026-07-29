@@ -100,7 +100,7 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
 def _refresh(database_path: str) -> None:
     global _snapshot, _refreshed_at, _refreshing
     try:
-        conn = connect(database_path)
+        conn = connect(database_path, read_only=True, deny_writes=True)
         try:
             checks = _media_checks(conn) + _runner_checks(conn)
         finally:

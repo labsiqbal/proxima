@@ -22,6 +22,7 @@ from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
 from .. import cf_hostnames
+from ..maintenance_status import writes_fenced
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
     AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest,
@@ -523,7 +524,7 @@ def register(app, deps):
             relay_port = app.state.preview_relays.port(slug)
             if relay_port:
                 status["preview_port"] = relay_port
-        else:
+        elif not writes_fenced(cfg):
             # The app exited on its own — reap its relay so the port is released.
             await app.state.preview_relays.stop(slug)
         return status
@@ -539,6 +540,11 @@ def register(app, deps):
 
     @app.api_route("/api/appview/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def app_view(slug: str, path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
+        if writes_fenced(cfg):
+            raise HTTPException(
+                status_code=423,
+                detail={"code": "maintenance_write_fenced"},
+            )
         # Proxy to the project's running app. Proxima authenticates the inbound request,
         # then strips its session/auth headers before forwarding to project code.
         _project_root(slug, user)  # access check
@@ -548,8 +554,14 @@ def register(app, deps):
         url = f"http://127.0.0.1:{port}/{path}"
         fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
         try:
+            body = await request.body()
+            if writes_fenced(cfg):
+                raise HTTPException(
+                    status_code=423,
+                    detail={"code": "maintenance_write_fenced"},
+                )
             async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-                up = await client.request(request.method, url, params=request.query_params, content=await request.body(), headers=fwd)
+                up = await client.request(request.method, url, params=request.query_params, content=body, headers=fwd)
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="app not reachable yet") from None
         out = {k: v for k, v in up.headers.items() if k.lower() not in _RESPONSE_HOP}
