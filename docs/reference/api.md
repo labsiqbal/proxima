@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-191 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+192 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,7 +14,7 @@
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
-- [`routes/files.py`](#routes-files-py) - 32 endpoints
+- [`routes/files.py`](#routes-files-py) - 33 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
@@ -120,6 +120,7 @@
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
 | API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
+| GET | `/api/preview/{slug}/area/{area_kind}/{area_id}/{file_path:path}` | `project_area_preview` |  |
 | GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
 | GET | `/api/projects/{slug}/app/status` | `app_status` |  |
@@ -328,4 +329,4 @@
 
 
 ---
-_Generated 2026-07-30 23:02 UTC._
+_Generated 2026-07-31 11:06 UTC._

@@ -16,7 +16,9 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from .. import brand_extract
+from .. import container_registry
 from .. import design_scenes
+from .. import file_targets
 from .. import features
 from .. import fsapi
 from .. import image_providers
@@ -226,14 +228,31 @@ def register(app, deps):
         full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
         features.require(cfg, features.DESIGN_STUDIO)
         payload = payload or {}
-        root = _ops_root(slug, user)
         rel = str(payload.get("path") or "").strip()
-        if not rel:
+        target = payload.get("target") or ""
+        if not rel and not target:
             raise HTTPException(status_code=400, detail="path is required")
         try:
-            source = fsapi.resolve_in_project(root, rel)
-        except fsapi.FsError as exc:
+            project = visible_project(slug, user)
+            resolved = file_targets.resolve_request(
+                db(),
+                project,
+                path=rel,
+                target=target,
+            )
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if resolved.locator.area.kind != "ops":
+            raise HTTPException(
+                status_code=400,
+                detail="Design Studio image sources must belong to the Ops Area",
+            )
+        source = resolved.path
+        rel = resolved.locator.path
+        root = resolved.root
         if not source.is_file():
             raise HTTPException(status_code=404, detail=f"file not found: {rel}")
         design_id, scene = design_scenes.scene_for_image(rel, design_scenes.image_dims(source), payload.get("title"))

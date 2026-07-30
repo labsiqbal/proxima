@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Query
 
-from .. import artifact_registry, container_registry, file_targets
+from .. import artifact_registry
 from ..schemas import ArchiveStatusRequest
 
 _TYPES = ("design", "app", "page", "image", "doc", "video-file", "file", "script-output")
@@ -30,22 +30,8 @@ def register(app, deps):
         parent = str(Path(path).parent)
         d["area"] = "" if parent in (".", "") else parent + "/"
         d["file_missing"] = bool(d.get("file_missing"))
-        project = {
-            "id": d["project_id"],
-            "slug": d["project_slug"],
-            "path": d.pop("project_path"),
-        }
-        try:
-            d["target"] = file_targets.ops_locator(
-                db(),
-                project,
-                path,
-            ).payload()
-        except (
-            container_registry.ContainerBoundaryError,
-            file_targets.FileTargetError,
-        ):
-            d["target"] = None
+        d.pop("project_path")
+        d["target"] = None
         return d
 
     _SELECT = (
@@ -203,4 +189,9 @@ def register(app, deps):
         visible_project(row["project_slug"], user)
         artifact_registry.set_status(conn, record_id, payload.status)
         updated = conn.execute(f"{_SELECT} WHERE ar.id = ?", (record_id,)).fetchone()
-        return _record_payload(updated)
+        record = _record_payload(updated)
+        try:
+            artifact_registry.refresh_file_presence(conn, [record])
+        except Exception:
+            logging.getLogger("proxima.archive").exception("file presence refresh failed (non-fatal)")
+        return record

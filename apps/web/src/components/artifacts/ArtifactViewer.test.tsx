@@ -15,7 +15,15 @@ vi.mock('../../api/fsAdapter', () => ({
   projectFs: vi.fn(() => ({ read: (...args: unknown[]) => fsRead(...args) })),
 }))
 vi.mock('../chat/MessageContent', () => ({
-  MessageContent: ({ content }: { content: string }) => <div>{content}</div>,
+  MessageContent: ({ content, sourcePath, fileTarget }: {
+    content: string
+    sourcePath?: string
+    fileTarget?: unknown
+  }) => <div
+    data-testid="message-content"
+    data-source-path={sourcePath}
+    data-file-target={JSON.stringify(fileTarget)}
+  >{content}</div>,
 }))
 vi.mock('./MermaidDiagram', () => ({
   MermaidDiagram: ({ source, onEdit }: { source: string; onEdit: () => void }) => <button type="button" onClick={onEdit}>Edit diagram {source}</button>,
@@ -196,6 +204,27 @@ describe('ArtifactViewer v2 review flow', () => {
     />)
 
     expect(previewUrl).toHaveBeenCalledWith('master', 'visual.png', image.target)
+  })
+
+  it('passes the originating Area and document path to Markdown resources', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'reports/brief.md',
+    }
+    fsRead.mockResolvedValue({ content: '![Chart](images/chart.png)' })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'doc', title: 'Brief', path: 'brief.md', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const markdown = await screen.findByTestId('message-content')
+    expect(markdown).toHaveAttribute('data-source-path', 'reports/brief.md')
+    expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {

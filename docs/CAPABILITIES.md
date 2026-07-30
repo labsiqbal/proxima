@@ -1331,16 +1331,22 @@ project artifact scan are merged into the same picker on the client.
 Merged tree entries and produced/Archive artifacts carry a server-owned file target:
 the project slug, authoritative Container Area kind/id, and Area-relative path. Tree,
 read/write, raw/preview, file mutation, Archive presence checks, and ArtifactViewer all
-resolve that target through the same jailed resolver. This keeps direct files at the
-physical Ops root distinct from same-name Container files, including Markdown, images,
-and PDFs. Merely finding an Ops file does not create an Archive record; only established
-producer/registry flows do.
+resolve that target through the same jailed resolver. The resolver rejects a Container
+or Code target when the path belongs to a more specific active Area, and merged tree
+traversal switches to the authoritative Ops or Code target when it enters that Area.
+This keeps direct files at the physical Ops root distinct from same-name Container
+files, including Markdown, images, and PDFs. Session artifact reads, inline chat media,
+Iterate deletion, and the Design Studio image bridge retain that target. Merely finding
+an Ops file does not create an Archive record; only established producer/registry flows
+do.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
-layouts. For a legacy Ops Area at `.`, `ops/...` remains a real Container child and is
-not stripped or reinterpreted.
+layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
+and is not stripped or reinterpreted. Targeted previews use an Area-stable URL path,
+so relative HTML assets keep the same Area identity; Markdown siblings resolve from
+the source document's Area and directory.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
@@ -1350,7 +1356,8 @@ name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
 box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
-`/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`.
+`/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`,
+`/api/preview/{slug}/area/{kind}/{id}/{path}`.
 
 ## 12. Run & Preview app
 

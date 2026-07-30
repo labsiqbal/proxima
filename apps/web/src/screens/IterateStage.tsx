@@ -1,6 +1,6 @@
 import React from 'react'
 import { projectFs } from '../api/fsAdapter'
-import { deleteSessionArtifact, fileUrl, listSessionArtifacts, type Artifact } from '../api/files'
+import { deleteSessionArtifact, fileUrl, listSessionArtifacts, retargetFile, type Artifact } from '../api/files'
 import { listMessages } from '../api/sessions'
 import { cancelRun, deleteRun } from '../api/runs'
 import { getWorkflow, updateWorkflow, type StepInput } from '../api/workflows'
@@ -96,7 +96,16 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     // Enrich designs with their artboard for the live thumbnail.
     const dCards = (await Promise.all(designArts.map(async a => {
       if (!activeFs) return null
-      try { const f = await activeFs.read(`${a.path}/scene.json`); const s = JSON.parse(f.content); const ab = s.artboards?.[0] || {}; return { id: a.id || s.id, title: a.title, type: s.type || 'graphic', path: a.path, w: ab.width || 1080, h: ab.height || 1080, art: ab } as DesignCard } catch { return null }
+      try {
+        const scenePath = `${a.path}/scene.json`
+        const sceneRef = a.target
+          ? retargetFile(a.target, `${a.target.path.replace(/\/$/, '')}/scene.json`)
+          : scenePath
+        const f = await activeFs.read(sceneRef)
+        const s = JSON.parse(f.content)
+        const ab = s.artboards?.[0] || {}
+        return { id: a.id || s.id, title: a.title, type: s.type || 'graphic', path: a.path, w: ab.width || 1080, h: ab.height || 1080, art: ab } as DesignCard
+      } catch { return null }
     }))).filter(Boolean) as DesignCard[]
     if (!mountedRef.current || seq !== resultSeq.current) return
     setDesigns(dCards); setArts(others)
@@ -191,11 +200,25 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     if (!activeFs) return
     const seq = ++docSeq.current
     try {
-      const f = await activeFs.read(a.path)
+      const f = await activeFs.read(a.target || a.path)
       if (mountedRef.current && seq === docSeq.current) setDoc({ title: a.title, content: f.content })
     } catch { /* ignore */ }
   }
-  const openFile = (a: Artifact) => { if (projectSlug) window.open(fileUrl(projectSlug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path), '_blank') }
+  const openFile = (a: Artifact) => {
+    if (!projectSlug) return
+    const path = a.type === 'design'
+      ? `${a.path.replace(/\/$/, '')}/scene.json`
+      : a.path
+    const target = a.target
+      ? retargetFile(
+          a.target,
+          a.type === 'design'
+            ? `${a.target.path.replace(/\/$/, '')}/scene.json`
+            : a.target.path,
+        )
+      : undefined
+    window.open(fileUrl(projectSlug, path, target), '_blank')
+  }
   const openArtifact = (a: Artifact) => {
     if (a.type === 'doc') void openDoc(a)
     else if (a.type === 'design' && a.id && designStudioEnabled) onOpenDesign?.(a.id)
@@ -216,7 +239,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     setError('')
     setDeletingArtifact(a.path)
     try {
-      await deleteSessionArtifact(token, sessionId, a.path)
+      await deleteSessionArtifact(token, sessionId, a.target || a.path)
       dropArtifactRefs(a.path)
       await loadResult()
       window.dispatchEvent(new CustomEvent('proxima:files-changed'))
@@ -252,7 +275,16 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     const addArtifacts = (label: string, links?: Artifact[]) => {
       if (!links?.length) return
       const bucket = artifactsByLabel.get(label) || new Map<string, Artifact>()
-      for (const a of links) bucket.set(`${a.type}:${a.path}`, a)
+      for (const a of links) {
+        const key = `${a.type}:${a.path}`
+        const existing = bucket.get(key)
+        bucket.set(
+          key,
+          !a.target && existing?.target
+            ? { ...a, target: existing.target }
+            : a,
+        )
+      }
       artifactsByLabel.set(label, bucket)
     }
     for (let i = 0; i < messages.length; i++) {
