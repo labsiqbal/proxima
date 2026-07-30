@@ -8,11 +8,11 @@ import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogo
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
-import { ProjectSwitcher } from './ProjectSwitcher'
 import { CoreTour } from './CoreTour'
 import type { AttentionItem } from '../../api/master'
 import { MasterPopup } from '../master/MasterPopup'
 import { MasterToastRegion } from '../master/MasterToastRegion'
+import { ShellModeSwitch, type ShellMode } from './ShellModeSwitch'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -76,6 +76,8 @@ export function AppShell(props: {
   /** Deep surfaces lock the header/mobile project switcher. */
   projectLocked?: boolean
   projectLockedReason?: string
+  mode?: ShellMode
+  onModeChange?: (mode: ShellMode) => void
 }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -87,11 +89,13 @@ export function AppShell(props: {
   const menuBtnRef = React.useRef<HTMLButtonElement>(null)
   const drawerWasOpen = React.useRef(false)
 
+  const delegateMode = props.mode === 'delegate' && props.features.masterOrchestrator
   const openSearch = React.useCallback(() => {
+    if (delegateMode) return
     setDrawerOpen(false)
     setMenuOpen(false)
     setSearchOpen(true)
-  }, [])
+  }, [delegateMode])
 
   React.useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
@@ -196,12 +200,14 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''}`} style={shellStyle}>
+    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
+        <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled={props.features.masterOrchestrator} onChange={mode => props.onModeChange?.(mode)} />
+        {!delegateMode && <>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
         <button
@@ -215,18 +221,9 @@ export function AppShell(props: {
           <IconChevronLeft size={17} />
         </button>
         <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
-        {/* Global active project sits immediately right of Search (desktop). */}
-        <ProjectSwitcher
-          projects={props.projects}
-          activeProject={props.activeProject}
-          onSelectProject={props.onSelectProject}
-          token={props.token}
-          onProjectRenamed={props.onProjectRenamed}
-          locked={!!props.projectLocked}
-          lockedReason={props.projectLockedReason}
-        />
+        </>}
         <span className="top-bar-spacer" />
-        <div className="user-menu-wrap">
+        {!delegateMode && <div className="user-menu-wrap">
           <button className={`tool-btn user-avatar-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(open => !open)} aria-label="Account actions" aria-expanded={menuOpen} aria-controls="account-actions" title={props.user.username}><span className="avatar xs">{props.user.username[0]?.toUpperCase()}</span></button>
           {menuOpen && <>
             <button className="menu-scrim" aria-label="Close account actions" onClick={() => setMenuOpen(false)} />
@@ -240,9 +237,9 @@ export function AppShell(props: {
               <button className="user-menu-item" onClick={() => { setMenuOpen(false); props.onLogout() }}><IconLogout size={15} /> Log out</button>
             </div>
           </>}
-        </div>
+        </div>}
       </header>
-      <div className="header-status-cluster">
+      {!delegateMode && <div className="header-status-cluster">
         <RunningTasks
           token={props.token}
           sessions={props.sessions}
@@ -251,8 +248,8 @@ export function AppShell(props: {
           onOpenTasks={() => props.onSelectView('activity')}
         />
         <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
-      </div>
-      <MobileTopbar
+      </div>}
+      {!delegateMode ? <MobileTopbar
         activeProject={props.activeProject}
         projects={props.projects}
         onSelectProject={props.onSelectProject}
@@ -268,14 +265,17 @@ export function AppShell(props: {
         onSearch={openSearch}
         onNewChat={props.onNewChat}
         menuButtonRef={menuBtnRef}
-      />
-      <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
+        mode="work"
+        delegateEnabled={props.features.masterOrchestrator}
+        onModeChange={props.onModeChange}
+      /> : <header className="mobile-topbar delegate-mobile-topbar"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></header>}
+      {!delegateMode && <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
         <Sidebar {...props} onClose={() => setDrawerOpen(false)} />
-      </aside>
-      <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
-      {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
+      </aside>}
+      {!delegateMode && <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />}
+      {!delegateMode && drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
-      {props.features.masterOrchestrator && (
+      {props.features.masterOrchestrator && !delegateMode && (
         <>
           <MasterPopup
             token={props.token}
@@ -295,14 +295,14 @@ export function AppShell(props: {
           />
         </>
       )}
-      <ToolDock
+      {!delegateMode && <ToolDock
         token={props.token}
         project={props.activeProject}
         onOpenSettings={() => props.onSelectView('settings')}
         onOpenChange={setToolOpen}
-      />
-      {searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
-      <CoreTour token={props.token} masterEnabled={props.features.masterOrchestrator} />
+      />}
+      {!delegateMode && searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
+      {!delegateMode && <CoreTour token={props.token} masterEnabled={props.features.masterOrchestrator} />}
     </div>
   )
 }

@@ -23,6 +23,7 @@ import { usePolling } from './hooks/usePolling'
 import { UpdateModal, UpdateOverlay } from './components/shell/UpdateModal'
 import { ProximaMark } from './components/brand/ProximaMark'
 import { MasterStateProvider } from './master/MasterStateProvider'
+import type { ShellMode } from './components/shell/ShellModeSwitch'
 import {
   canGoBack,
   chromeBackLabel,
@@ -119,6 +120,10 @@ export function projectSelectNavigatesToChat(mode: ProjectSelectMode): boolean {
   return mode === 'open-chat'
 }
 
+export function shellModeFromSearch(search: string): ShellMode {
+  return new URLSearchParams(search).get('mode') === 'delegate' ? 'delegate' : 'work'
+}
+
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
 }
@@ -136,6 +141,8 @@ export function App() {
   const [onboarding, setOnboarding] = React.useState(false)
   // One workspace: Chat is the front door, so it is also the landing view.
   const [view, setView] = React.useState<View>('chat')
+  const [shellMode, setShellMode] = React.useState<ShellMode>(() => shellModeFromSearch(window.location.search))
+  const lastWorkView = React.useRef<View>('chat')
   // Multitask keep-alive: once a primary surface is visited, stay mounted (hidden when inactive).
   const [aliveViews, setAliveViews] = React.useState<Set<View>>(() => new Set(['chat']))
   React.useEffect(() => {
@@ -319,7 +326,29 @@ export function App() {
       setNavStack(stack => stack.filter(e => e.kind !== 'design-canvas'))
     }
   }, [])
+  const changeShellMode = React.useCallback((next: ShellMode, options?: { fromUrl?: boolean }) => {
+    const mode = next === 'delegate' && features.masterOrchestrator ? 'delegate' : 'work'
+    if (mode === 'delegate') {
+      if (view !== 'master') lastWorkView.current = view
+      clearPendingNavigation()
+      clearDeepStack()
+      setView('master')
+    } else {
+      setView(lastWorkView.current === 'master' ? 'chat' : lastWorkView.current)
+    }
+    setShellMode(mode)
+    if (!options?.fromUrl) {
+      const url = new URL(window.location.href)
+      url.searchParams.set('mode', mode)
+      window.history.pushState({ ...window.history.state, proximaMode: mode }, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+  }, [clearDeepStack, clearPendingNavigation, features.masterOrchestrator, view])
   const goView = (v: View) => {
+    if (v === 'master') {
+      changeShellMode('delegate')
+      return
+    }
+    if (shellMode === 'delegate') changeShellMode('work')
     clearTaskHash()
     clearArchiveHash()
     setArchiveRecord(null)
@@ -450,6 +479,11 @@ export function App() {
     window.addEventListener('popstate', syncHashRoute)
     return () => { window.removeEventListener('hashchange', syncHashRoute); window.removeEventListener('popstate', syncHashRoute) }
   }, [booting, user?.id])
+  React.useEffect(() => {
+    const syncMode = () => changeShellMode(shellModeFromSearch(window.location.search), { fromUrl: true })
+    window.addEventListener('popstate', syncMode)
+    return () => window.removeEventListener('popstate', syncMode)
+  }, [changeShellMode])
   const sessionEnabled = React.useCallback((session: ChatSession) => isFeatureSessionEnabled(session, features), [features])
   const refreshSeq = React.useRef(0)
   const sessionsSeq = React.useRef(0)
@@ -631,6 +665,12 @@ export function App() {
   React.useEffect(() => {
     if (!viewEnabled(view)) setView('chat')
   }, [view, viewEnabled])
+  React.useEffect(() => {
+    if (!booting && !features.masterOrchestrator && shellMode === 'delegate') changeShellMode('work', { fromUrl: true })
+  }, [booting, changeShellMode, features.masterOrchestrator, shellMode])
+  React.useEffect(() => {
+    if (shellMode === 'work' && view !== 'master') lastWorkView.current = view
+  }, [shellMode, view])
 
   // A new chat is just a blank composer — no DB session yet. The session is created
   // lazily on the first message (ChatScreen.ensureSession), so empty chats never
@@ -795,8 +835,9 @@ export function App() {
   )
   const keep = (id: View) => aliveViews.has(id) || view === id
   const chatActive = view === 'chat'
-  const masterActive = view === 'master'
-  const masterHomeActive = masterActive || view === 'home'
+  const delegateActive = shellMode === 'delegate' && features.masterOrchestrator
+  const masterActive = delegateActive
+  const masterHomeActive = delegateActive
   const activityActive = view === 'activity'
   const workflowsActive = view === 'workflows'
   const artifactsActive = view === 'artifacts'
@@ -813,6 +854,8 @@ export function App() {
       activeProject={activeProject}
       activeSession={activeSession}
       currentView={view}
+      mode={shellMode}
+      onModeChange={changeShellMode}
       onLogout={() => void handleLogout()}
       features={features}
       onNewChat={() => void startNewSession()}
@@ -854,11 +897,11 @@ export function App() {
       projectLockedReason="Project is locked while this view is open"
     >
       {error && <div className="error-bar">{error}</div>}
-      <HermesBanner token={token} runnerId={activeProfile?.runner_id} />
-      {view === 'home' && !features.masterOrchestrator && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
+      {!delegateActive && <HermesBanner token={token} runnerId={activeProfile?.runner_id} />}
+      {!delegateActive && view === 'home' && !features.masterOrchestrator && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
       {features.masterOrchestrator && pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={activeProject} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} /></React.Suspense>)}
-      {(() => {
+      {!delegateActive && (() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
         const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />

@@ -1,18 +1,18 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconSparkle, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
+import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
+import { ProjectSwitcher } from './ProjectSwitcher'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
 // (Tasks), keep what worked (Workflows), then Archive. Project *switch* lives
-// in the shell top bar; project *manage* lives under Settings. Terminal/Files/
+// in the Work sidebar; project *manage* lives under Settings. Terminal/Files/
 // Preview are tools on the right rail, not destinations; Agents/Settings stay
 // in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
-  { id: 'master', label: 'Master', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
@@ -30,6 +30,7 @@ export function Sidebar(props: {
   onSelectProject: (project: Project) => void; onSelectSession: (session: ChatSession) => void
   onOpenDesign: (session: ChatSession) => void; onSelectView: (view: View) => void
   profiles: Profile[]; projects: Project[]; sessions: ChatSession[]; seen: Record<number, string>; busySessions?: number[]; user: User
+  token: string; onProjectRenamed?: (project: Project) => void; projectLocked?: boolean; projectLockedReason?: string
   updateVersion?: string | null; onUpdateClick?: () => void
 }) {
   const [acctOpen, setAcctOpen] = useState(false)
@@ -53,6 +54,10 @@ export function Sidebar(props: {
 
   return <div className="sidebar-inner">
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
+    <div className="sidebar-work-context">
+      <span>Work project</span>
+      <ProjectSwitcher projects={props.projects} activeProject={props.activeProject} onSelectProject={props.onSelectProject} token={props.token} onProjectRenamed={props.onProjectRenamed} locked={props.projectLocked} lockedReason={props.projectLockedReason} />
+    </div>
 
     <nav className="shell-navigation" aria-label="Navigation">
       <section className="nav-group primary-nav">

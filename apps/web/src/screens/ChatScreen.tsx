@@ -54,21 +54,6 @@ export function isAgentTurnSlashCommand(
 	return skillSlashNames.some((n) => n.toLowerCase() === name);
 }
 
-/** Header label prefers the open session's project so a desynced shell pick cannot mislabel the chat. */
-export function chatHeaderProjectLabel(
-	activeSession: ChatSession | null | undefined,
-	activeProject: Project | null | undefined,
-	projects: Project[],
-): string {
-	const fromSession = activeSession?.project_slug
-		? projects.find((p) => p.slug === activeSession.project_slug)
-		: null;
-	if (fromSession) return cleanName(fromSession.name);
-	if (activeSession?.project_name) return cleanName(activeSession.project_name);
-	if (activeProject) return cleanName(activeProject.name);
-	return "No project";
-}
-
 /** Tooltip / aria when the Agents picker is locked mid-run. */
 export const AGENT_PICKER_LOCKED_REASON =
 	"Agent locked while a run is in progress";
@@ -790,16 +775,11 @@ export function ChatScreen(props: {
 	);
 	const projSlug =
 		activeSession?.project_slug || props.activeProject?.slug || undefined;
-	const headerProject = chatHeaderProjectLabel(
-		activeSession,
-		props.activeProject,
-		props.projects,
-	);
 	return (
 		<section className="chat-stage code-view">
 			<header className="code-header">
 				<div><p className="eyebrow">Chat</p><strong>{activeSession?.title || "New chat"}</strong></div>
-				<div className="code-context"><span>{headerProject}</span><span>{props.activeProfile?.name || "No agent"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New chat" title="Start a new chat"><IconNewChat size={15} /><span>New chat</span></button></div>
+				<div className="code-context"><span>{props.activeProfile?.name || "No agent"}</span><button className="ghost-button icon-text code-new-session" onClick={() => void props.onNewSession()} aria-label="New chat" title="Start a new chat"><IconNewChat size={15} /><span>New chat</span></button></div>
 			</header>
 			{wikiNotice && (
 				<div className="chat-notice" role="status">

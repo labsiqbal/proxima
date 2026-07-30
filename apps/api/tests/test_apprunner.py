@@ -4,11 +4,12 @@ import asyncio
 import os
 import shutil
 import socket
+import subprocess
 import time
 
 import pytest
 
-from proxima_api.apprunner import AppManager
+from proxima_api.apprunner import AppManager, PortInUseError
 
 
 class _FakeStdout:
@@ -115,6 +116,47 @@ def test_app_runner_reports_ready_when_port_accepts_connections():
             await manager.shutdown()
 
     asyncio.run(run_case())
+
+
+def test_app_runner_refuses_a_port_owned_by_an_unrelated_preview():
+    """A foreign Astro/dev server must never be embedded as this app's preview."""
+    port = _free_port()
+    foreign = subprocess.Popen(
+        ["python3", "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    async def run_case():
+        manager = AppManager()
+        try:
+            for _ in range(40):
+                if manager_port_open(port):
+                    break
+                await asyncio.sleep(0.025)
+            else:
+                pytest.fail("foreign preview did not start")
+            with pytest.raises(PortInUseError, match=f"Port {port} is already in use"):
+                await manager.start("demo", ".", f"python3 -m http.server {port}", port)
+            assert foreign.poll() is None
+            assert manager.status("demo") == {"running": False}
+        finally:
+            await manager.shutdown()
+
+    try:
+        asyncio.run(run_case())
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=5)
+
+
+def manager_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+            return True
+    except OSError:
+        return False
 
 
 def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):

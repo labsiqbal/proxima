@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
+import subprocess
 from http.cookies import SimpleCookie
 
 import httpx
@@ -290,6 +291,45 @@ def test_app_start_reports_preview_port_and_relay_serves_the_app(tmp_path):
         # Relay is reaped with the app: its port must stop accepting connections.
         with pytest.raises(httpx.TransportError):
             httpx.get(f"http://127.0.0.1:{status['preview_port']}/", timeout=2)
+
+
+def test_app_start_refuses_an_existing_preview_port_without_stopping_it(tmp_path):
+    """The browser-facing start API must not briefly proxy a foreign preview."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        app_port = int(probe.getsockname()[1])
+    foreign = subprocess.Popen(
+        ["python3", "-m", "http.server", str(app_port), "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        for _ in range(80):
+            try:
+                socket.create_connection(("127.0.0.1", app_port), timeout=0.05).close()
+                break
+            except OSError:
+                import time
+                time.sleep(0.025)
+        else:
+            pytest.fail("foreign preview did not start")
+        with TestClient(_app(tmp_path)) as client:
+            token = client.post("/auth/auto").json()["token"]
+            auth = {"Authorization": f"Bearer {token}"}
+            assert client.post("/api/projects", json={"slug": "demo", "name": "Demo"}, headers=auth).status_code == 201
+            response = client.post("/api/projects/demo/app/start", headers=auth, json={
+                "command": "python3 -m http.server $PORT --bind 127.0.0.1",
+                "port": app_port,
+                "dir": "",
+            })
+            assert response.status_code == 409
+            assert "already in use" in response.json()["detail"]
+            assert foreign.poll() is None
+            assert client.get("/api/projects/demo/app/status", headers=auth).json() == {"running": False}
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=5)
 
 
 def test_detect_apps_suggested_commands_bind_loopback(tmp_path):

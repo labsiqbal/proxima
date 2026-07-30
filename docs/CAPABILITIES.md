@@ -1056,8 +1056,8 @@ than silently no-op'ing.
 (`POST /api/projects`), (2) **link an existing folder** on disk, or (3) **create a new
 empty folder** under a browsable parent and register it - both (2) and (3) go through
 `POST /api/projects/link` (jailed to configured link roots; (3) sets `mkdir: true`).
-Chat/terminal/files all operate on the project path. The global active project is set from
-the shell header switcher. Management UI is a card grid under **Settings → Projects**
+Chat/terminal/files all operate on the project path. The active Work project is set from
+the Work-sidebar switcher. Management UI is a card grid under **Settings → Projects**
 (one card per project: select, Rename, remove), with add flows behind one **Add project**
 modal - a project holds a name and a slug, which does not earn a detail panel. The shared
 `FolderLinker` component covers link + create-on-disk (mode toggle). Removal
@@ -1171,7 +1171,10 @@ as the Proxima service user. The relay only guards its own port: detected-app
 suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
 and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
-When a command self-exits (short script, crash, or non-server entry point), status keeps
+If another process already owns the selected port, start returns a clear conflict without
+stopping or signaling that process. Linux readiness also verifies that a listening port is
+owned by the managed process group, so an unrelated preview cannot win a bind race and be
+shown in Proxima. When a command self-exits (short script, crash, or non-server entry point), status keeps
 a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
 vs Failed with the log and a next-step hint instead of a silent bare dump.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
@@ -1508,8 +1511,8 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The left nav is flow-ordered destinations only: Chat, Master, Tasks, Workflows, Archive, gated Design, with project-scoped recent chats beneath. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. The shell top bar holds a text **active project** switcher (right of Search) that filters the current surface without forcing Chat; the switcher menu offers Rename, and project manage remains Settings → Projects. **Chrome Back** is always visible (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Chat is the default landing view. Agents and Settings live in the profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative.
-+ **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. The chat header carries the real context (session, project, agent) and its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
++ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Archive, gated Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate is the gated Master-only desk: no Work sidebar, project context, ordinary destinations, tools, search, popup, or account surfaces. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach in-session. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative; a disabled Master flag removes Delegate and makes a stale Delegate URL fall back to Work.
++ **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.

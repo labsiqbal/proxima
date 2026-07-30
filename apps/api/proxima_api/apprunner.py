@@ -27,6 +27,76 @@ def _port_open(port: int) -> bool:
         return False
 
 
+class PortInUseError(RuntimeError):
+    """The requested preview port belongs to a process Proxima does not manage."""
+
+    def __init__(self, port: int) -> None:
+        self.port = int(port)
+        super().__init__(f"Port {self.port} is already in use by another process. Choose a different port; Proxima did not stop it.")
+
+
+def _listening_socket_inodes(port: int) -> set[str] | None:
+    """Return Linux LISTEN socket inodes for ``port`` or None when unavailable."""
+    hex_port = f"{int(port):04X}"
+    checked = False
+    inodes: set[str] = set()
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path, encoding="ascii") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        checked = True
+        for row in rows:
+            cols = row.split()
+            # inode is field 10 in proc_net_tcp; do not infer ownership from
+            # connectivity alone because another process can answer the probe.
+            if len(cols) > 9 and cols[3] == "0A" and cols[1].endswith(":" + hex_port):
+                inodes.add(cols[9])
+    return inodes if checked else None
+
+
+def _process_group_owns_port(leader_pid: int, port: int) -> bool | None:
+    """Whether a POSIX process group owns a listener for ``port``.
+
+    App commands run in a fresh session, so the shell and all ordinary dev-server
+    descendants share a process group.  Mapping LISTEN socket inodes back through
+    /proc lets readiness reject a foreign listener that happens to use the same
+    port.  Platforms without procfs return None and retain the conservative
+    preflight protection in ``start``.
+    """
+    inodes = _listening_socket_inodes(port)
+    if inodes is None:
+        return None
+    try:
+        group_id = os.getpgid(leader_pid)
+    except OSError:
+        return False
+    proc_root = "/proc"
+    try:
+        pids = [name for name in os.listdir(proc_root) if name.isdigit()]
+    except OSError:
+        return None
+    for raw_pid in pids:
+        try:
+            stat = open(f"{proc_root}/{raw_pid}/stat", encoding="utf-8").read()
+            # comm may contain spaces/parens; fields after the final ') ' start
+            # with state, ppid, pgrp.
+            fields = stat.rsplit(") ", 1)[1].split()
+            if len(fields) < 3 or int(fields[2]) != group_id:
+                continue
+            for fd in os.listdir(f"{proc_root}/{raw_pid}/fd"):
+                try:
+                    target = os.readlink(f"{proc_root}/{raw_pid}/fd/{fd}")
+                except OSError:
+                    continue
+                if target.startswith("socket:[") and target[8:-1] in inodes:
+                    return True
+        except (OSError, ValueError, IndexError):
+            continue
+    return False
+
+
 def _hex_addr_is_loopback(hex_addr: str) -> bool:
     """/proc/net/tcp{,6} local address (hex, per-word little-endian) → loopback?"""
     if len(hex_addr) == 8:  # IPv4: 127.0.0.0/8 → first octet is the last byte
@@ -104,6 +174,10 @@ class AppManager:
         effect_lease: EffectLease | None = None,
     ) -> None:
         await self.stop(slug)
+        # Fail before spawning when a user-owned preview has this port.  In
+        # particular, never "fix" a collision by killing a process we do not own.
+        if _port_open(port):
+            raise PortInUseError(port)
         self._last_exit.pop(slug, None)
         env = subprocess_env(
             allowlist_env="PROXIMA_APP_ENV_ALLOWLIST",
@@ -236,8 +310,13 @@ class AppManager:
         # long-running but non-listening process as ready; that opens a blank preview
         # and hides the real startup failure from the user.
         eff_port = app.get("detected_port") or app["port"]
-        ready = _port_open(eff_port)
+        port_owner = _process_group_owns_port(app["proc"].pid, eff_port)
+        # A listener is only a preview when it belongs to this app's process
+        # group.  This closes the check-to-bind race left by start's preflight.
+        ready = _port_open(eff_port) and port_owner is not False
         out = {"running": True, "ready": ready, "port": eff_port, "command": app["command"], "log": app["log"][-40:]}
+        if port_owner is False and _port_open(eff_port):
+            out["port_conflict"] = True
         # A dev server listening beyond loopback is directly reachable by other
         # LAN/tailnet devices with no auth - the gated relay does not protect a
         # broadly-bound origin. Surface it so the UI can warn the owner.

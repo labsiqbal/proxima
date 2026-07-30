@@ -13,8 +13,8 @@ describe('Sidebar single-workspace IA', () => {
   it('orders one flow-first nav and keeps tools and workspaces out of it', () => {
     const { rerender } = render(<Sidebar {...base} />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
-    // Destinations only — blank session lives on Chat header / mobile topbar / `/new`.
-    // Project switch is the shell top bar; project manage is Settings → Projects.
+    // Destinations only - blank session lives on Chat header / mobile topbar / `/new`.
+    // Project switch is the Work sidebar; project manage is Settings → Projects.
     expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Archive'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
@@ -24,7 +24,8 @@ describe('Sidebar single-workspace IA', () => {
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Workflows' })).toBeInTheDocument()
     rerender(<Sidebar {...base} features={{ ...base.features, designStudio: true, masterOrchestrator: true }} />)
-    expect(labels()).toEqual(['Chat', 'Master', 'Tasks', 'Workflows', 'Archive', 'Design'])
+    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Archive', 'Design'])
+    expect(screen.queryByRole('button', { name: 'Master' })).not.toBeInTheDocument()
   })
 
   it('navigates the flow destinations', async () => {
@@ -32,8 +33,6 @@ describe('Sidebar single-workspace IA', () => {
     render(<Sidebar {...base} features={{ ...base.features, masterOrchestrator: true }} />)
     await user.click(screen.getByRole('button', { name: 'Chat' }))
     expect(base.onSelectView).toHaveBeenCalledWith('chat')
-    await user.click(screen.getByRole('button', { name: 'Master' }))
-    expect(base.onSelectView).toHaveBeenCalledWith('master')
     await user.click(screen.getByRole('button', { name: 'Tasks' }))
     expect(base.onSelectView).toHaveBeenCalledWith('activity')
     await user.click(screen.getByRole('button', { name: 'Workflows' }))
