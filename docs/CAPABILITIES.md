@@ -1077,7 +1077,9 @@ or skip (starter project under the data dir). The two folder choices are mutuall
 exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
 Validation exposes one assertive alert, marks and describes the corrective field, and
 returns focus there before the alert is published. Display names are checked against
-the API's 120-character limit before submission so failures identify the right field.
+the API's 120-character limit before submission. The project-link error contract also
+identifies `path`, `name`, or `slug`; the client maps path failures to the folder field
+and name/slug failures to the display-name field instead of guessing from the mode.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

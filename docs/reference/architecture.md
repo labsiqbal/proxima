@@ -1388,3 +1388,11 @@ password-manager compatibility without adding accounts. Validation exposes one
 assertive alert after focus moves to the marked and described corrective password field.
 Gate text, validation errors, and visible focus indicators use theme tokens that meet
 WCAG AA across the supported presets.
+
+Project link/create failures use structured API details carrying the owning request
+field. The fetch client preserves FastAPI validation locations and explicit
+`path`/`name`/`slug` ownership; `FolderLinker` maps them to its folder or display-name
+input before focusing and publishing the single alert. The retained browser audit runs
+the production bundle with allowlisted child environments, disposable runtime/profile
+roots, and background/live-service features disabled. Its real Tailscale entry check
+forwards GET requests only and persists a redacted pass label, never the private origin.

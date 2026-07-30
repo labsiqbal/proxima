@@ -96,6 +96,7 @@ def test_link_project_invalid_slug_returns_422_not_500(tmp_path):
     h = {"Authorization": f"Bearer {tok}"}
     r = c.post("/api/projects/link", headers=h, json={"path": str(folder), "slug": "Bad_Slug"})
     assert r.status_code == 422
+    assert r.json()["detail"]["field"] == "slug"
 
 
 def _link_client(tmp_path: Path, roots: list[Path] | None = None) -> tuple[TestClient, dict[str, str]]:
@@ -145,7 +146,8 @@ def test_link_mkdir_rejects_existing_name(tmp_path: Path):
         json={"path": str(existing), "mkdir": True},
     )
     assert r.status_code == 409
-    assert "already exists" in r.json()["detail"].lower()
+    assert "already exists" in r.json()["detail"]["message"].lower()
+    assert r.json()["detail"]["field"] == "path"
     # Must not delete or alter the existing folder.
     assert (existing / "keep-me.txt").read_text(encoding="utf-8") == "stay"
 
@@ -164,7 +166,8 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
         json={"path": str(outside_target), "mkdir": True},
     )
     assert r.status_code == 403
-    assert "outside" in r.json()["detail"].lower()
+    assert "outside" in r.json()["detail"]["message"].lower()
+    assert r.json()["detail"]["field"] == "path"
     assert not outside_target.exists()
 
     r = c.post(
@@ -173,7 +176,8 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
         json={"path": str(root / ".."), "mkdir": True},
     )
     assert r.status_code == 400
-    assert "invalid folder name" in r.json()["detail"].lower()
+    assert "invalid folder name" in r.json()["detail"]["message"].lower()
+    assert r.json()["detail"]["field"] == "path"
 
     r = c.post(
         "/api/projects/link",
@@ -181,8 +185,36 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
         json={"path": str(root / "missing-parent" / "child"), "mkdir": True},
     )
     assert r.status_code == 400
-    assert "parent" in r.json()["detail"].lower()
+    assert "parent" in r.json()["detail"]["message"].lower()
+    assert r.json()["detail"]["field"] == "path"
     assert not (root / "missing-parent").exists()
+
+
+def test_link_mkdir_routes_derived_slug_collisions_to_name(tmp_path: Path):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    existing = parent / "existing"
+    existing.mkdir()
+    c, h = _link_client(tmp_path)
+    first = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(existing), "name": "Shared Name"},
+    )
+    assert first.status_code == 201, first.text
+
+    target = parent / "different-folder"
+    collision = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "name": "Shared Name", "mkdir": True},
+    )
+    assert collision.status_code == 409
+    assert collision.json()["detail"] == {
+        "message": "A project with that display name already exists - choose another display name",
+        "field": "name",
+    }
+    assert not target.exists()
 
 
 def test_link_mkdir_removes_dir_on_unexpected_error(tmp_path: Path, monkeypatch):

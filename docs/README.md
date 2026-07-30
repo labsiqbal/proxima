@@ -43,7 +43,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [DESIGN-STUDIO.md](DESIGN-STUDIO.md) | Design Studio: agent contract, scene schema, flag | by hand |
 | [../bundled-skills/README.md](../bundled-skills/README.md) | The shipped capability bundle: bundled skills, opt-out, recommended-tools list | by hand |
 | [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
-| [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding accessibility pass, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
+| [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding pass, redacted GET-only Tailscale entry check, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·

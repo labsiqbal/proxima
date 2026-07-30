@@ -77,6 +77,7 @@ app = create_app(
         "run_worker_concurrency": env_int(
             "PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])
         ),
+        "start_worker": env_bool("PROXIMA_START_WORKER", True),
         "graph_node_concurrency": env_int(
             "PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])
         ),

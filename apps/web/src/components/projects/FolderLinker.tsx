@@ -1,5 +1,6 @@
 import React from 'react'
-import { browseDirs, linkProject } from '../../api/projects'
+import { ApiError } from '../../api/client'
+import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
@@ -98,7 +99,14 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       await onLinked(p)
     } catch (e) {
       if (mountedRef.current && seq === actionSeq.current) {
-        reportError(e instanceof Error ? e.message : String(e), mode === 'create' ? 'folder' : 'display')
+        const apiField = linkProjectErrorField(e)
+        const field = apiField === 'name'
+          ? 'display'
+          : mode === 'create' ? 'folder' : 'display'
+        const message = e instanceof ApiError && e.detail
+          ? e.detail
+          : e instanceof Error ? e.message : String(e)
+        reportError(message, field)
       }
     } finally {
       if (mountedRef.current && seq === actionSeq.current) setBusy(false)

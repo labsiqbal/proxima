@@ -3,13 +3,18 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FolderLinker } from './FolderLinker'
-import { browseDirs, linkProject } from '../../api/projects'
+import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
+import { ApiError } from '../../api/client'
 import type { Project } from '../../types'
 
-vi.mock('../../api/projects', () => ({
-  browseDirs: vi.fn(),
-  linkProject: vi.fn(),
-}))
+vi.mock('../../api/projects', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../api/projects')>()
+  return {
+    ...actual,
+    browseDirs: vi.fn(),
+    linkProject: vi.fn(),
+  }
+})
 
 const project: Project = {
   slug: 'fresh-app',
@@ -127,6 +132,37 @@ describe('FolderLinker', () => {
     expect(displayName).toHaveAttribute('aria-describedby', alert.id)
     expect(screen.getByPlaceholderText('my-project')).not.toHaveAttribute('aria-invalid')
     expect(linkProject).not.toHaveBeenCalled()
+  })
+
+  it('returns a structured slug collision to the display-name field', async () => {
+    const user = userEvent.setup()
+    const error = new ApiError(
+      409,
+      "POST /api/projects/link failed (409): slug 'shared-name' already exists - pick another",
+      '/api/projects/link',
+      'POST',
+      'name',
+      "A project with that display name already exists - choose another display name",
+    )
+    vi.mocked(linkProject).mockRejectedValue(error)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
+    const folderName = screen.getByPlaceholderText('my-project')
+    await user.type(folderName, 'different-folder')
+    const displayName = screen.getByPlaceholderText('different-folder')
+    await user.type(displayName, 'Shared Name')
+    await user.click(screen.getByRole('button', { name: /Create “different-folder” here/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('A project with that display name already exists - choose another display name')
+    expect(alert).not.toHaveTextContent('/api/projects/link')
+    expect(displayName).toHaveFocus()
+    expect(displayName).toHaveAttribute('aria-invalid', 'true')
+    expect(displayName).toHaveAttribute('aria-describedby', alert.id)
+    expect(folderName).not.toHaveAttribute('aria-invalid')
+    expect(linkProjectErrorField(error)).toBe('name')
   })
 
   it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {

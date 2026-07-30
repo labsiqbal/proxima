@@ -129,12 +129,15 @@ def register(app, deps):
         """Single path component only - no separators, traversal, or empty names."""
         cleaned = name.strip()
         if not cleaned or cleaned in (".", ".."):
-            raise HTTPException(status_code=400, detail="invalid folder name")
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "path"})
         if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
-            raise HTTPException(status_code=400, detail="invalid folder name")
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "path"})
         if len(cleaned) > 255:
-            raise HTTPException(status_code=400, detail="folder name is too long")
+            raise HTTPException(status_code=400, detail={"message": "folder name is too long", "field": "path"})
         return cleaned
+
+    def _link_error(status_code: int, message: str, field: str) -> HTTPException:
+        return HTTPException(status_code=status_code, detail={"message": message, "field": field})
 
     def _rmdir_if_empty(path: Path) -> None:
         try:
@@ -159,34 +162,34 @@ def register(app, deps):
                 try:
                     parent = raw.parent.resolve()
                 except OSError as exc:
-                    raise HTTPException(status_code=400, detail="parent directory is not reachable") from exc
+                    raise _link_error(400, "parent directory is not reachable", "path") from exc
                 if not _within_link_roots(parent):
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+                    raise _link_error(403, "path is outside the allowed roots", "path")
                 if not parent.is_dir():
-                    raise HTTPException(status_code=400, detail="parent directory does not exist")
+                    raise _link_error(400, "parent directory does not exist", "path")
                 target = parent / folder_name
                 # Refuse anything that would resolve outside the chosen parent (symlink games).
                 if target.exists():
-                    raise HTTPException(status_code=409, detail="a folder with that name already exists")
+                    raise _link_error(409, "a folder with that name already exists", "path")
                 try:
                     target.mkdir(mode=0o755)  # single level only; never parents=True
                 except PermissionError as exc:
-                    raise HTTPException(status_code=403, detail="permission denied - cannot create folder here") from exc
+                    raise _link_error(403, "permission denied - cannot create folder here", "path") from exc
                 except FileExistsError as exc:
-                    raise HTTPException(status_code=409, detail="a folder with that name already exists") from exc
+                    raise _link_error(409, "a folder with that name already exists", "path") from exc
                 except OSError as exc:
-                    raise HTTPException(status_code=400, detail=f"could not create folder: {exc.strerror or exc}") from exc
+                    raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "path") from exc
                 created_dir = target
                 target = target.resolve()
                 if not _within_link_roots(target):
                     # Extremely defensive: if resolve() jumped (unexpected), finally removes the empty dir.
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+                    raise _link_error(403, "path is outside the allowed roots", "path")
             else:
                 target = Path(payload.path).expanduser().resolve()
                 if not _within_link_roots(target):
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+                    raise _link_error(403, "path is outside the allowed roots", "path")
                 if not target.is_dir():
-                    raise HTTPException(status_code=400, detail="not a directory")
+                    raise _link_error(400, "not a directory", "path")
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
             # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
@@ -194,9 +197,14 @@ def register(app, deps):
             try:
                 slug = validate_slug(base_slug)
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail=f"invalid project slug: {exc}") from exc
+                raise _link_error(422, f"invalid project slug: {exc}", "slug" if payload.slug else "name") from exc
             if db().execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone():
-                raise HTTPException(status_code=409, detail=f"slug '{slug}' already exists - pick another")
+                message = (
+                    f"slug '{slug}' already exists - pick another"
+                    if payload.slug
+                    else "A project with that display name already exists - choose another display name"
+                )
+                raise _link_error(409, message, "slug" if payload.slug else "name")
             cur = db().execute(
                 "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
                 (slug, name, str(target), user["id"]),

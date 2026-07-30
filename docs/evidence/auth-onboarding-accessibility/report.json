@@ -3,7 +3,16 @@
     "width": 1440,
     "height": 1000
   },
+  "runtime": {
+    "node": "v20.20.2"
+  },
   "fixture": "disposable production bundle and owner database",
+  "isolation": {
+    "environment": "allowlisted",
+    "writableRoots": "disposable fixture only",
+    "backgroundWorker": "disabled",
+    "liveServiceWrites": "disabled"
+  },
   "announcements": {
     "setupMismatch": [
       {
@@ -33,6 +42,12 @@
       {
         "type": "alert",
         "name": "Display name must be 120 characters or fewer"
+      }
+    ],
+    "derivedSlugCollision": [
+      {
+        "type": "alert",
+        "name": "A project with that display name already exists - choose another display name"
       }
     ],
     "returningLogin": [
@@ -277,35 +292,16 @@
     }
   ],
   "tailnetFixture": {
-    "url": "http://proxima.tailnet.test:37473/",
-    "mainCount": 1,
-    "ownerMetadata": "owner",
-    "requests": [
-      "GET /",
-      "GET /css2",
-      "GET /assets/index-CAHawFda.js",
-      "GET /assets/rolldown-runtime-aKtaBQYM.js",
-      "GET /assets/jsx-runtime-2Zwg-L3c.js",
-      "GET /assets/lib-iMw8T7-H.js",
-      "GET /assets/client-D9AL9z8n.js",
-      "GET /assets/files-o9lOlMe4.js",
-      "GET /assets/runs-gmLclOUd.js",
-      "GET /assets/eventTypes-D8Afem4o.js",
-      "GET /assets/icons-Dgww-zVO.js",
-      "GET /assets/useEventStream-DqZrElp3.js",
-      "GET /assets/index-BBzm6cFf.css",
-      "GET /manifest.webmanifest",
-      "GET /s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2",
-      "GET /api/config",
-      "GET /api/setup/status",
-      "GET /icons/icon-512.svg",
-      "POST /auth/resume"
-    ]
+    "origin": "isolated Tailnet-host fixture",
+    "status": "pass"
   },
-  "tailscaleEntry": null,
+  "tailscaleEntry": {
+    "origin": "private Tailscale origin (redacted)",
+    "status": "pass"
+  },
   "lighthouse": {
     "score": 100,
-    "version": "13.4.1",
-    "url": "http://127.0.0.1:37473/"
+    "version": "12.8.2",
+    "url": "http://127.0.0.1:39083/"
   }
 }

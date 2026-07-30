@@ -244,8 +244,9 @@ The link/create choice is an ordinary labeled button group. Each button exposes
 Folder and display-name validation publishes one assertive alert only after focus has
 moved to the marked corrective field. The focused field references that alert as its
 description. Display names are checked against the API's 120-character limit before a
-link or create request, so a valid folder field is never blamed for a display-name
-failure.
+link or create request. Structured project-link errors retain their `path`, `name`, or
+`slug` ownership through the API client, so a valid folder field is never blamed for a
+display-name or derived-slug failure.
 
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima
@@ -274,7 +275,7 @@ Password fields have stable accessible names and password-manager autocomplete v
 with a hidden, read-only `owner` username field that does not create an account model.
 Validation focuses the marked password field before publishing its single assertive
 alert. Auth and onboarding text, errors, primary controls, and focus indicators use
-central theme tokens that maintain WCAG AA text contrast in all six themes.
+central theme tokens that maintain WCAG AA text contrast in every supported theme.
 
 ## Extension points
 
@@ -282,4 +283,4 @@ Add destinations through the existing `View`, feature policy, App routing, Sideb
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. `npm --prefix apps/web run test:accessibility` runs the password and folder flows in a disposable real-browser fixture, records accessibility-tree, keyboard, six-theme contrast, Lighthouse, and [screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without touching live data. Set `PROXIMA_A11Y_REMOTE_BASE` to the private Tailscale URL to add the read-only unauthenticated entry check. Browser QA should also check authenticated desktop and narrow layouts, zoom, and reduced motion; if remote authentication prevents inspection, record that rather than using credentials.
+For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. `npm --prefix apps/web run test:accessibility` runs the password and folder flows in a disposable real-browser fixture, records accessibility-tree, keyboard, every supported theme, Lighthouse, and [screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without touching live data. The harness uses an allowlisted child environment, redirects every writable Proxima path into the fixture, and disables workers, credential refresh, update checks, preview relays, and external graph egress. It discovers the current root Tailscale Serve entry that proxies to loopback port 8765; `PROXIMA_A11Y_REMOTE_BASE` overrides discovery, with `PROXIMA_A11Y_REMOTE_ADDRESS` available when that host needs an explicit IP, and neither value is retained. The remote browser pass forwards GET requests only, answers session resume locally, never logs in, and records only a redacted origin label plus pass state. Browser QA should also check authenticated desktop and narrow layouts, zoom, and reduced motion; if remote authentication prevents inspection, record that rather than using credentials.

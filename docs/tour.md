@@ -25,8 +25,8 @@ what an owner sees and how the surfaces connect.
 | Surface | Result | Screenshot |
 | --- | --- | --- |
 | First-run password | pass | `first-run-password.png` |
-| Onboarding Link tab | pass (folder names redacted where personal) | `onboarding-link-folder.png` |
-| Onboarding Create tab | pass | `onboarding-create-folder.png` |
+| Onboarding Link legacy state | retained before-state evidence (folder names redacted where personal) | `onboarding-link-folder.png` |
+| Onboarding Create legacy state | retained before-state evidence | `onboarding-create-folder.png` |
 | Core tour (4 steps) | pass | `core-tour-*.png` |
 | Chat empty default | pass - no primary-nav New chat; header New chat kept | `deck-chat.png` |
 | Chat send / approvals / restore | skip - no live agent turn in this pass | - |
@@ -82,12 +82,13 @@ network boundary, not a multi-tenant account system.
 ![Set the owner password](screenshots/first-run-password.png)
 
 The optional folder step can **Link** an existing workspace, **Create new folder**,
-or **Skip for now** to use the starter project. This pass captured both Link and
-Create tabs, then used Skip for the rest of the tour.
+or **Skip for now** to use the starter project. Link and Create are ordinary
+pressed buttons in the current UI. The following legacy tab captures are retained
+only as before-state evidence; the pass then used Skip for the rest of the tour.
 
-![Choose a working folder (Link existing)](screenshots/onboarding-link-folder.png)
+![Before: legacy Link tab for choosing a working folder](screenshots/onboarding-link-folder.png)
 
-![Create a new empty folder](screenshots/onboarding-create-folder.png)
+![Before: legacy Create tab for a new empty folder](screenshots/onboarding-create-folder.png)
 
 The retained [auth and onboarding accessibility pass](evidence/auth-onboarding-accessibility/README.md)
 adds before/after validation states, real accessibility trees, keyboard traversal,
@@ -232,7 +233,7 @@ Diagnostics keeps update checks, debug logs, and the owner audit trail.
 - **Chrome standard:** 1440×1000, Light theme, expanded sidebar, destinations-only
   left nav, post-#37 Deck shell on every primary shot. No mix of old solid Master
   marketing empty state with current Master desk.
-- **Passed:** first-run password, onboarding Link + Create tabs, core tour (4
+- **Passed:** first-run password, onboarding Link + Create pressed buttons, core tour (4
   steps), empty Chat, Master desk plus replayable qualified-runner picker evidence, Attention,
   Tasks list/board/launcher, Recipes home/editor/schedules, Projects, Archive
   empty registry, Design home, tool rails, Search, Settings sections, Agents
