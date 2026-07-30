@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
+from proxima_api.routes import work as work_routes
 
 
 def _app(tmp_path):
@@ -107,6 +109,33 @@ def test_jobs_list_filter_and_approve(tmp_path):
     app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
     approved = c.post(f"/api/jobs/{job['id']}/approve").json()
     assert approved["status"] == "done"
+
+
+def test_final_approval_rolls_back_when_task_invalidation_cannot_commit(
+    tmp_path, monkeypatch
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    job = client.post("/api/jobs", json={"input": {"brief": "x"}}).json()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', "
+        "steps_state = json_set(steps_state, '$[0].status', 'done') "
+        "WHERE id = ?",
+        (job["id"],),
+    )
+
+    def fail_invalidation(*_args, **_kwargs):
+        raise RuntimeError("invalidation unavailable")
+
+    monkeypatch.setattr(work_routes, "append_task_update", fail_invalidation)
+
+    with pytest.raises(RuntimeError, match="invalidation unavailable"):
+        client.post(f"/api/jobs/{job['id']}/approve")
+
+    row = app.state.db.execute(
+        "SELECT status, finished_at FROM jobs WHERE id = ?", (job["id"],)
+    ).fetchone()
+    assert dict(row) == {"status": "review", "finished_at": None}
 
 
 def test_new_job_defaults_to_linear_engine(tmp_path):

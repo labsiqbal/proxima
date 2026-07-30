@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { ChatMessage, ChatSession, Job } from '../types'
+import type { ChatMessage, ChatSession, Job, RunProjection } from '../types'
 
 export type MasterMessageContext = {
   focus: {
@@ -51,6 +51,7 @@ export type AttentionItem = {
   actions: string[]
   status: string
   created_at?: string
+  run_projection?: RunProjection
 }
 export type MasterDesk = {
   session: ChatSession

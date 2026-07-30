@@ -992,6 +992,8 @@ def test_script_trust_attention_shows_hash_and_uses_in_process_approval(tmp_path
     item = next(item for item in attention if item["kind"] == "script_trust")
     assert digest in item["title"]
     assert item["inline_ok"] is True
+    assert item["run_projection"]["status"] == "failed"
+    assert item["created_at"].endswith("Z")
     approved = client.post(f"/api/attention/{item['id']}/act", json={"action": "approve"})
     assert approved.status_code == 200
     assert app.state.db.execute(

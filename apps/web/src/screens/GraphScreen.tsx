@@ -58,6 +58,7 @@ import type {
   WorkflowInput,
 } from '../types'
 import { planStatusLabel, planStatusTone } from '../components/tasks/planProjection'
+import { formatRunAge, formatRunDuration, projectRun } from '../lib/runProjection'
 import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
@@ -106,34 +107,6 @@ function readWorkflowHomeTab(): WorkflowHomeTab {
     if (value === 'drafts' || value === 'workflows' || value === 'runs') return value
   } catch { /* storage disabled */ }
   return 'workflows'
-}
-
-function relativeTime(value?: string | null): string {
-  if (!value) return 'Unknown'
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'Unknown'
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
-  if (seconds < 60) return 'Just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return days === 1 ? 'Yesterday' : `${days}d ago`
-}
-
-function jobDuration(item: GraphJob): string {
-  if (!item.started_at) return 'Not started'
-  const start = Date.parse(item.started_at)
-  const end = item.finished_at ? Date.parse(item.finished_at) : Date.now()
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 'Unknown'
-  const seconds = Math.max(0, Math.round((end - start) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  if (minutes < 1) return `${remainder}s`
-  if (minutes < 60) return `${minutes}m ${remainder}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
 }
 
 function outputText(state?: GraphNodeState): string {
@@ -1377,15 +1350,18 @@ export function GraphScreen({
                     <div role="columnheader">Duration</div>
                     <div className="workflow-home-actions-head" role="columnheader">Actions</div>
                   </div>
-                  {visibleRuns.map(item => <div className="workflow-home-row workflow-home-run-row" role="row" key={item.id}>
-                    <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{item.title}</strong></div>
-                    <div className="workflow-home-secondary" role="cell" data-label="When">{relativeTime(item.started_at || item.created_at || item.updated_at)}</div>
-                    <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
-                    <div className="workflow-home-secondary" role="cell" data-label="Duration">{jobDuration(item)}</div>
-                    <div className="workflow-home-actions" role="cell" data-label="Actions">
-                      <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                  {visibleRuns.map(item => {
+                    const projection = projectRun(item)
+                    return <div className="workflow-home-row workflow-home-run-row" role="row" key={item.id}>
+                      <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{item.title}</strong></div>
+                      <div className="workflow-home-secondary" role="cell" data-label="When">{formatRunAge(projection, item.created_at || item.updated_at)}</div>
+                      <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
+                      <div className="workflow-home-secondary" role="cell" data-label="Duration">{formatRunDuration(projection)}</div>
+                      <div className="workflow-home-actions" role="cell" data-label="Actions">
+                        <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                      </div>
                     </div>
-                  </div>)}
+                  })}
                 </div>
           )}
         </div>

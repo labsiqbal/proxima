@@ -1,4 +1,5 @@
 import type { GraphJob, GraphNodeDefinition, GraphNodeState, WorkflowGraph } from '../../types'
+import { projectRun } from '../../lib/runProjection'
 
 // The Tasks screen's view of a plan (T2): list view and graph view are two
 // projections of the SAME object. This module is the pure half — which jobs a
@@ -115,7 +116,8 @@ export function planProgress(job: GraphJob): string {
  * node_states and say the real next step.
  */
 export function planStatusLabel(job: Pick<GraphJob, 'status' | 'node_states'>): string {
-  switch (job.status) {
+  const projectedStatus = projectRun(job).status
+  switch (projectedStatus) {
     case 'queued': return 'Draft — editable'
     case 'running': return 'Running…'
     case 'review': {
@@ -138,10 +140,7 @@ export function planStatusLabel(job: Pick<GraphJob, 'status' | 'node_states'>): 
  * "please approve" yellow.
  */
 export function planStatusTone(job: Pick<GraphJob, 'status' | 'node_states'>): string {
-  if (job.status === 'review' && (job.node_states ?? []).some(state => state.status === 'failed')) {
-    return 'failed'
-  }
-  return job.status
+  return projectRun(job).status
 }
 
 /**

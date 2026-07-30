@@ -11,6 +11,8 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
+from .run_projection import canonicalize_api_timestamps, project_job_run
+
 MASTER_PROFILE_KIND = "master"
 MASTER_SESSION_MODE = "master"
 LEGACY_PROFILE_KIND = "alpha"
@@ -662,7 +664,7 @@ def master_identity_rows(
 
 
 def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize only the durable ownership surface of one job payload.
+    """Normalize the ownership, timestamp, and run projection of one job payload.
 
     Job input is user-extensible domain data. Its legacy ownership keys are
     canonicalized only when the job is known to be Master-owned.
@@ -683,4 +685,6 @@ def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         master_origin = legacy_origin
     if master_origin is not None and isinstance(normalized.get("input"), dict):
         normalized["input"] = canonicalize_master_payload(normalized["input"])
+    normalized = canonicalize_api_timestamps(normalized)
+    normalized["run_projection"] = project_job_run(normalized)
     return normalized

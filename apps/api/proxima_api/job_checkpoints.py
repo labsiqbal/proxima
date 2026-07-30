@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -264,7 +265,14 @@ def _reset_git(ref: dict[str, Any]) -> str | None:
         raise CheckpointError(f"could not restore git ref for {path}: {exc}") from exc
 
 
-def restore_checkpoint(conn, checkpoint_id: int, *, confirmed: bool) -> dict[str, Any]:
+def restore_checkpoint(
+    conn,
+    checkpoint_id: int,
+    *,
+    confirmed: bool,
+    actor: dict[str, Any] | None = None,
+    on_restore: Callable[[Any, dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     impact = restore_impact(conn, checkpoint_id)
     if not confirmed:
         raise CheckpointError("restore confirmation is required")
@@ -275,6 +283,22 @@ def restore_checkpoint(conn, checkpoint_id: int, *, confirmed: bool) -> dict[str
     ).fetchone()
     checkpoint = checkpoint_payload(row)
     snapshot = checkpoint["payload"]
+    current_job = dict(
+        conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (checkpoint["job_id"],)
+        ).fetchone()
+    )
+    current_nodes = {
+        str(item["node_id"]): dict(item)
+        for item in conn.execute(
+            "SELECT * FROM node_states WHERE job_id = ? ORDER BY id",
+            (checkpoint["job_id"],),
+        ).fetchall()
+    }
+    checkpoint_nodes = {
+        str(item.get("node_id")): item
+        for item in snapshot.get("node_states") or []
+    }
     for ref in checkpoint["git_refs"]:
         _preflight_git(ref)
     job = snapshot.get("job") or {}
@@ -287,11 +311,27 @@ def restore_checkpoint(conn, checkpoint_id: int, *, confirmed: bool) -> dict[str
             (*values, checkpoint["job_id"]),
         )
         checkpoint_run_ids = {int(value) for value in snapshot.get("run_ids") or []}
-        current_run_ids = [item["id"] for item in conn.execute(
-            "SELECT r.id FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.job_id = ?",
+        current_runs = [dict(item) for item in conn.execute(
+            "SELECT r.id, r.status FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.job_id = ?",
             (checkpoint["job_id"],),
         ).fetchall()]
+        current_run_ids = [item["id"] for item in current_runs]
         remove_ids = [run_id for run_id in current_run_ids if run_id not in checkpoint_run_ids]
+        discarded_progress = [
+            f"Run #{item['id']} ({item['status']}) created after the checkpoint"
+            for item in current_runs
+            if item["id"] in remove_ids
+        ]
+        if current_job.get("steps_state") != job.get("steps_state"):
+            discarded_progress.append("Task step progress changed after the checkpoint")
+        for node_id in sorted(set(current_nodes) | set(checkpoint_nodes)):
+            current_status = (current_nodes.get(node_id) or {}).get("status")
+            checkpoint_status = (checkpoint_nodes.get(node_id) or {}).get("status")
+            if current_status != checkpoint_status:
+                discarded_progress.append(
+                    f"Node {node_id} progress {current_status or 'absent'} "
+                    f"replaced by {checkpoint_status or 'absent'}"
+                )
         if remove_ids:
             conn.executemany("DELETE FROM runs WHERE id = ?", ((run_id,) for run_id in remove_ids))
         conn.execute("DELETE FROM node_states WHERE job_id = ?", (checkpoint["job_id"],))
@@ -306,9 +346,32 @@ def restore_checkpoint(conn, checkpoint_id: int, *, confirmed: bool) -> dict[str
                 tuple(node.get(field) for field in node_fields),
             )
         git_restored = [path for ref in checkpoint["git_refs"] if (path := _reset_git(ref))]
+        discarded_progress.extend(
+            "Task worktree progress was reset to the checkpoint"
+            for _path in git_restored
+        )
+        recovery = {
+            "job_id": checkpoint["job_id"],
+            "checkpoint_id": checkpoint_id,
+            "actor": actor or {"id": None, "username": "local owner"},
+            "prior_status": impact["current_status"],
+            "restored_status": impact["restored_status"],
+            "discarded_progress": discarded_progress,
+            "conflicting_progress": [
+                f"Task #{item['id']} ({item['status']})"
+                for item in impact["conflicts"]
+            ],
+        }
+        if on_restore is not None:
+            on_restore(conn, recovery)
         conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
-    return {"restored": impact["database_scope"], "git_restored": git_restored, **impact}
+    return {
+        "restored": impact["database_scope"],
+        "git_restored": git_restored,
+        "recovery": recovery,
+        **impact,
+    }

@@ -458,6 +458,42 @@ describe('MasterStateProvider', () => {
     expect(listEvents).not.toHaveBeenCalled()
   })
 
+  it('projects checkpoint recovery into Fleet and human-readable history', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => source.emit('master.task.recovered', {
+      id: 13,
+      seq: 2,
+      type: 'master.task.recovered',
+      run_id: null,
+      session_id: 9,
+      payload: {
+        ...fleetProjectionPayload(55, 7),
+        task_status: 'queued',
+        container_id: 21,
+        container_slug: 'acme',
+        area_id: 210,
+        checkpoint_id: 3,
+        actor: { id: 1, username: 'owner' },
+        prior_status: 'failed',
+        restored_status: 'queued',
+        discarded_progress: ['Run #8 (failed) created after the checkpoint'],
+        conflicting_progress: [],
+      },
+      created_at: '2026-07-27T10:01:00Z',
+    }))
+
+    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:queued')
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
+      'owner restored Task #7 from checkpoint #3: Failed to Queued.',
+    )
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
+      'Discarded progress: Run #8 (failed) created after the checkpoint.',
+    )
+  })
+
   it('projects a production master projection event whose run_id is absent', async () => {
     vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
     renderProvider()

@@ -133,6 +133,33 @@ def test_create_edit_plan_start_and_inspect_graph_job(tmp_path):
     assert job_id not in linear_ids
 
 
+def test_graph_job_api_returns_one_timezone_aware_failed_run_projection(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    job = _create(client)
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', started_at = ?, finished_at = ? "
+        "WHERE id = ?",
+        ("2026-07-31 05:00:00", "2026-07-31 05:00:12", job["id"]),
+    )
+    app.state.db.execute(
+        "UPDATE node_states SET status = 'failed', started_at = ?, finished_at = ? "
+        "WHERE job_id = ? AND node_id = 'a'",
+        ("2026-07-31 05:00:00", "2026-07-31 05:00:12", job["id"]),
+    )
+
+    payload = client.get(f"/api/graph/jobs/{job['id']}").json()
+
+    assert payload["started_at"] == "2026-07-31T05:00:00Z"
+    assert payload["node_states"][0]["finished_at"] == "2026-07-31T05:00:12Z"
+    assert payload["run_projection"] == {
+        "status": "failed",
+        "started_at": "2026-07-31T05:00:00Z",
+        "finished_at": "2026-07-31T05:00:12Z",
+        "duration_seconds": 12,
+    }
+
+
 def test_plan_patch_autosaves_graph_and_title_then_keeps_title_renameable(tmp_path):
     app = _app(tmp_path, enabled=True)
     client = _client(app)

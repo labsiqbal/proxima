@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from proxima_api import app_settings, master_focus, satpam, worktrees
 from proxima_api.db import connect
 from proxima_api.graph import normalize_graph
+from proxima_api.job_checkpoints import create_checkpoint
 from proxima_api.main import create_app
 from proxima_api.master_runtime import execute_tool
 from proxima_api.master_tool_broker import MasterToolBroker
@@ -330,6 +331,24 @@ def test_task_lifecycle_review_checkpoint_and_sse_replay_are_exactly_once(
     approved = client.post(f"/api/jobs/{job_id}/approve")
     assert approved.status_code == 200
     assert approved.json()["status"] == "done"
+    task_session_id = app.state.db.execute(
+        "SELECT session_id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["session_id"]
+    task_events = client.get(
+        f"/api/sessions/{task_session_id}/events"
+    ).json()["events"]
+    assert [
+        (event["type"], event["payload"])
+        for event in task_events
+        if event["type"] == "job.update"
+    ][-1] == (
+        "job.update",
+        {
+            "job_id": job_id,
+            "status": "done",
+            "mutation": "review_approved",
+        },
+    )
     for _ in range(3):
         app.state.master_projection.reconcile()
         app.state.master_projection.project_task(job_id)
@@ -379,6 +398,123 @@ def test_task_lifecycle_review_checkpoint_and_sse_replay_are_exactly_once(
         ).json()["events"]
         == []
     )
+
+
+def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="checkpoint-reconciliation",
+        tasks=[
+            {
+                "key": "recover",
+                "title": "Recover durable Task",
+                "brief": "Restore this Task coherently",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    checkpoint = create_checkpoint(app.state.db, job_id)
+    job = app.state.db.execute(
+        "SELECT session_id, project_id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    profile = app.state.db.execute(
+        "SELECT id, runner_id FROM profiles WHERE is_default = 1"
+    ).fetchone()
+    discarded_run_id = app.state.db.execute(
+        "INSERT INTO runs("
+        "session_id, project_id, user_id, profile_id, runner_id, status, prompt, kind"
+        ") VALUES (?, ?, 1, ?, ?, 'failed', 'discarded recovery progress', 'job')",
+        (
+            job["session_id"],
+            job["project_id"],
+            profile["id"],
+            profile["runner_id"],
+        ),
+    ).lastrowid
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed', rejected_reason = 'Bad continuation', "
+        "finished_at = CURRENT_TIMESTAMP, "
+        "steps_state = json_set(steps_state, '$[0].status', 'failed') "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+
+    response = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+
+    assert response.status_code == 200
+    recovery = response.json()["recovery"]
+    assert recovery["actor"] == {"id": 1, "username": "owner"}
+    assert recovery["checkpoint_id"] == checkpoint["id"]
+    assert recovery["prior_status"] == "failed"
+    assert recovery["restored_status"] == "queued"
+    assert any(str(discarded_run_id) in item for item in recovery["discarded_progress"])
+    assert recovery["conflicting_progress"] == []
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "queued"
+    fleet_job = next(
+        item
+        for item in client.get("/api/master/desk").json()["jobs"]
+        if item["id"] == job_id
+    )
+    assert fleet_job["status"] == "queued"
+
+    task_events = client.get(
+        f"/api/sessions/{job['session_id']}/events"
+    ).json()["events"]
+    task_event = next(
+        event
+        for event in reversed(task_events)
+        if event["type"] == "job.update"
+    )
+    assert task_event["payload"] == {
+        "job_id": job_id,
+        "status": "queued",
+        "mutation": "checkpoint_restored",
+        "checkpoint_id": checkpoint["id"],
+    }
+
+    master_events = _projection_events(client, desk["session"]["id"])
+    recovery_event = next(
+        event
+        for event in master_events
+        if event["type"] == "master.task.recovered"
+    )
+    assert recovery_event["payload"]["actor"] == {
+        "id": 1,
+        "username": "owner",
+    }
+    assert recovery_event["payload"]["discarded_progress"] == recovery[
+        "discarded_progress"
+    ]
+    messages = client.get(
+        f"/api/sessions/{desk['session']['id']}/messages"
+    ).json()["messages"]
+    recovery_message = next(
+        message
+        for message in messages
+        if message["id"] == recovery_event["payload"]["message_id"]
+    )
+    assert "owner restored Task" in recovery_message["content"]
+    assert f"checkpoint #{checkpoint['id']}" in recovery_message["content"]
+    assert "Failed to Queued" in recovery_message["content"]
+    assert "discarded" in recovery_message["content"].lower()
+    audit = app.state.db.execute(
+        "SELECT metadata FROM audit_log "
+        "WHERE action = 'master.checkpoint.restore' AND target_id = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (str(job_id),),
+    ).fetchone()
+    assert json.loads(audit["metadata"])["discarded_progress"] == recovery[
+        "discarded_progress"
+    ]
 
 
 def test_sse_reconnect_honors_last_event_id_header(tmp_path: Path):

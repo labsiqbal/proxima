@@ -31,7 +31,9 @@ from ..runner_specs import (
     master_runner_conformance,
     runner_is_selectable,
 )
+from ..run_projection import canonicalize_api_timestamps
 from ..schemas import GraphScriptApproveRequest, JobRejectRequest
+from ..task_state_events import append_master_recovery, append_task_update
 
 
 def _as_int(value: Any) -> int:
@@ -224,7 +226,7 @@ def register(app, deps):
             "SELECT id, status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
             (session["id"],),
         ).fetchone()
-        return {
+        return canonicalize_api_timestamps({
             "session": session_payload(session),
             "master_run": dict(master_run) if master_run else None,
             "event_cursor": event_cursor,
@@ -240,7 +242,7 @@ def register(app, deps):
             "attention": attention,
             "checkpoints": list_checkpoints(db(), origin_master_session_id=session["id"]),
             "focus": master_focus.state_payload(db(), session["id"]),
-        }
+        })
 
     @app.get("/api/alpha/desk", deprecated=True)
     def get_alpha_desk(user: dict[str, Any] = Depends(current_user)):
@@ -544,16 +546,58 @@ def register(app, deps):
         row = _checkpoint_owned(checkpoint_id, user)
         if row["job_id"] != job_id:
             raise HTTPException(status_code=404, detail="checkpoint not found for job")
+        notify_sessions: set[int] = set()
+
+        def append_recovery(conn, recovery: dict[str, Any]) -> None:
+            task_event = append_task_update(
+                conn,
+                job_id=job_id,
+                mutation="checkpoint_restored",
+                checkpoint_id=checkpoint_id,
+            )
+            notify_sessions.add(task_event["session_id"])
+            master_event = append_master_recovery(conn, recovery=recovery)
+            if master_event is not None:
+                notify_sessions.add(master_event["session_id"])
+            conn.execute(
+                "INSERT INTO audit_log("
+                "actor_user_id, action, target_type, target_id, metadata"
+                ") VALUES (?, 'master.checkpoint.restore', 'job', ?, ?)",
+                (
+                    user["id"],
+                    str(job_id),
+                    json.dumps(
+                        {
+                            "checkpoint_id": checkpoint_id,
+                            "actor": recovery["actor"],
+                            "prior_status": recovery["prior_status"],
+                            "restored_status": recovery["restored_status"],
+                            "discarded_progress": recovery[
+                                "discarded_progress"
+                            ],
+                            "conflicting_progress": recovery[
+                                "conflicting_progress"
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
         try:
-            result = restore_checkpoint(db(), checkpoint_id, confirmed=payload.get("confirm") is True)
+            with app.state.db_lock:
+                result = restore_checkpoint(
+                    db(),
+                    checkpoint_id,
+                    confirmed=payload.get("confirm") is True,
+                    actor={"id": user["id"], "username": user["username"]},
+                    on_restore=append_recovery,
+                )
         except CheckpointError as exc:
             detail = str(exc)
             raise HTTPException(status_code=409 if "running" in detail else 422, detail=detail) from exc
-        db().execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-            "VALUES (?, 'master.checkpoint.restore', 'job', ?, ?)",
-            (user["id"], str(job_id), json.dumps({"checkpoint_id": checkpoint_id})),
-        )
+        for session_id in notify_sessions:
+            app.state.hub.notify(session_id)
         return result
 
     @app.put("/api/jobs/{job_id}/checkpoint/{checkpoint_id}/pin")
@@ -610,6 +654,31 @@ def register(app, deps):
         return result
 
     def _attention_items(user: dict[str, Any]) -> list[dict[str, Any]]:
+        def run_projection_for(job_id: Any) -> dict[str, Any] | None:
+            try:
+                normalized_job_id = _as_int(job_id)
+            except (TypeError, ValueError):
+                return None
+            job = db().execute(
+                "SELECT status, created_at, started_at, finished_at, steps_state, "
+                "engine FROM jobs WHERE id = ?",
+                (normalized_job_id,),
+            ).fetchone()
+            if not job:
+                return None
+            payload = dict(job)
+            payload["steps_state"] = _json(payload.get("steps_state"), [])
+            if job["engine"] == "graph":
+                payload["node_states"] = [
+                    dict(state)
+                    for state in db().execute(
+                        "SELECT status, started_at, finished_at FROM node_states "
+                        "WHERE job_id = ? ORDER BY id",
+                        (normalized_job_id,),
+                    ).fetchall()
+                ]
+            return canonical_job_payload(payload)["run_projection"]
+
         items: list[dict[str, Any]] = []
         for row in db().execute(
             "SELECT * FROM attention_items WHERE status = 'open' ORDER BY created_at DESC, id DESC"
@@ -663,8 +732,25 @@ def register(app, deps):
                 "target": {"view": "task", "job_id": row["job_id"], "engine": row["engine"], "origin_master_session_id": row["origin_master_session_id"]},
                 "inline_ok": True, "actions": ["approve", "dismiss"], "status": "open", "created_at": row["created_at"],
             })
-        items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-        return items
+        for item in items:
+            target = item.get("target")
+            if not isinstance(target, dict) or target.get("job_id") is None:
+                continue
+            projection = run_projection_for(target["job_id"])
+            if projection is None:
+                continue
+            item["run_projection"] = projection
+            if projection["status"] == "failed" and str(item.get("title", "")).endswith(
+                " needs review"
+            ):
+                item["title"] = (
+                    f"{str(item['title']).removesuffix(' needs review')} failed"
+                )
+        normalized_items = canonicalize_api_timestamps(items)
+        normalized_items.sort(
+            key=lambda item: str(item.get("created_at") or ""), reverse=True
+        )
+        return normalized_items
 
     @app.get("/api/attention")
     def get_attention(user: dict[str, Any] = Depends(current_user)):

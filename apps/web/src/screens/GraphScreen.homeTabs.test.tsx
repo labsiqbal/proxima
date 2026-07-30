@@ -2,31 +2,11 @@ import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { GraphScreen } from './GraphScreen'
+import { listGraphJobs } from '../api/graph'
+import { FRESH_FAILED_REVIEW_RUN } from '../testFixtures/failedReviewRun'
 
 vi.mock('../api/graph', () => ({
-  listGraphJobs: vi.fn().mockResolvedValue({
-    items: [
-      {
-        id: 1,
-        title: 'Draft report',
-        status: 'queued',
-        engine: 'graph',
-        graph: { nodes: [], edges: [] },
-        node_states: [],
-        created_at: '2026-07-26T00:00:00Z',
-      },
-      {
-        id: 2,
-        title: 'Daily report',
-        status: 'done',
-        engine: 'graph',
-        graph: { nodes: [], edges: [] },
-        node_states: [],
-        started_at: '2026-07-26T00:00:00Z',
-        finished_at: '2026-07-26T00:01:12Z',
-      },
-    ],
-  }),
+  listGraphJobs: vi.fn(),
   listGraphTemplates: vi.fn().mockResolvedValue({
     items: [
       { id: 10, name: 'Manual report', category: 'research', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
@@ -91,6 +71,21 @@ describe('GraphScreen workflow home tabs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    vi.mocked(listGraphJobs).mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          session_id: 1,
+          title: 'Draft report',
+          status: 'queued',
+          engine: 'graph',
+          graph: { nodes: [], edges: [] },
+          node_states: [],
+          created_at: '2026-07-26T00:00:00Z',
+        },
+        FRESH_FAILED_REVIEW_RUN,
+      ],
+    })
   })
 
   it('shows counted table tabs and the required row actions', async () => {
@@ -111,8 +106,10 @@ describe('GraphScreen workflow home tabs', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Runs 1' }))
     const runs = screen.getByRole('table', { name: 'Workflow runs' })
-    expect(within(runs).getByText('Daily report')).toBeInTheDocument()
-    expect(within(runs).getByText('1m 12s')).toBeInTheDocument()
+    expect(within(runs).getByText('Launch readiness review')).toBeInTheDocument()
+    expect(within(runs).getByText('Failed')).toBeInTheDocument()
+    expect(within(runs).getByText('12s')).toBeInTheDocument()
+    expect(within(runs).queryByText(/7h/)).not.toBeInTheDocument()
     expect(within(runs).getByRole('button', { name: 'View' })).toBeInTheDocument()
   })
 

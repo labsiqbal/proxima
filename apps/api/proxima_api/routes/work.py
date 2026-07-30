@@ -28,6 +28,7 @@ from ..task_delegation import (
     new_idempotency_key,
 )
 from ..master_persistence import canonical_job_payload
+from ..task_state_events import append_task_update
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -573,10 +574,16 @@ def register(app, deps):
                     steps[nxt]["run_id"] = run_id
                     steps[nxt]["started_at"] = iso_now()
                     conn.execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
+                    task_event = append_task_update(
+                        conn,
+                        job_id=job_id,
+                        mutation="review_approved",
+                    )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
+            app.state.hub.notify(task_event["session_id"])
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
             # Repo job (slice 2, flag-gated): the final approve is the merge
@@ -608,20 +615,47 @@ def register(app, deps):
                         repo_remote.push_after_merge(db(), merged)
                     except Exception:
                         logging.getLogger("proxima.work").exception("push after merge failed unexpectedly (job stays merged)")
-            # Final review -> done (atomic claim).
-            claimed = db().execute("UPDATE jobs SET status='done', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'", (job_id,))
-            if claimed.rowcount == 0:
-                return _job_payload(_job_or_404(job_id, user))
-            db().execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
-            # One status, two doors (T4): approving the job auto-approves the
-            # deliverable records it produced. Best-effort - the verdict stands
-            # even if the registry write fails.
-            try:
-                artifact_registry.approve_records_for_job(db(), job_id)
-            except Exception:
-                logging.getLogger("proxima.work").exception("registry approve sync failed (non-fatal)")
+            # Final review, Task invalidation, and deliverable verdict commit
+            # together so every reader observes one lifecycle state.
+            conn = db()
+            with app.state.db_lock:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    claimed = conn.execute(
+                        "UPDATE jobs SET status='done', "
+                        "finished_at=CURRENT_TIMESTAMP, "
+                        "updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='review'",
+                        (job_id,),
+                    )
+                    if claimed.rowcount == 0:
+                        conn.execute("ROLLBACK")
+                        return _job_payload(_job_or_404(job_id, user))
+                    conn.execute(
+                        "UPDATE jobs SET steps_state=?, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (json.dumps(steps), job_id),
+                    )
+                    # One status, two doors (T4): approving the job
+                    # auto-approves its deliverable records.
+                    try:
+                        artifact_registry.approve_records_for_job(conn, job_id)
+                    except Exception:
+                        logging.getLogger("proxima.work").exception(
+                            "registry approve sync failed (non-fatal)"
+                        )
+                    task_event = append_task_update(
+                        conn,
+                        job_id=job_id,
+                        mutation="review_approved",
+                    )
+                    conn.execute("COMMIT")
+                except Exception:
+                    _rollback(conn)
+                    raise
+            app.state.hub.notify(task_event["session_id"])
             app.state.task_delegation.prerequisite_changed(
-                job_id, connection=db()
+                job_id, connection=conn
             )
         return _job_payload(_job_or_404(job_id, user))
 
@@ -637,13 +671,33 @@ def register(app, deps):
             raise HTTPException(status_code=409, detail="only a job waiting for review can be rejected")
         # Claim first (this is the review verdict mutex - a concurrent approve
         # and reject cannot both win), tear down after.
-        claimed = db().execute(
-            "UPDATE jobs SET status='failed', rejected_reason=?, finished_at=CURRENT_TIMESTAMP, "
-            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'",
-            (payload.reason, job_id),
-        )
-        if claimed.rowcount == 0:
-            raise HTTPException(status_code=409, detail="job is no longer waiting for review")
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                claimed = conn.execute(
+                    "UPDATE jobs SET status='failed', rejected_reason=?, "
+                    "finished_at=CURRENT_TIMESTAMP, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='review'",
+                    (payload.reason, job_id),
+                )
+                if claimed.rowcount == 0:
+                    conn.execute("ROLLBACK")
+                    raise HTTPException(
+                        status_code=409,
+                        detail="job is no longer waiting for review",
+                    )
+                task_event = append_task_update(
+                    conn,
+                    job_id=job_id,
+                    mutation="review_rejected",
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback(conn)
+                raise
+        app.state.hub.notify(task_event["session_id"])
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.
@@ -654,7 +708,7 @@ def register(app, deps):
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
         app.state.task_delegation.prerequisite_changed(
-            job_id, connection=db()
+            job_id, connection=conn
         )
         return _job_payload(_job_or_404(job_id, user))
 

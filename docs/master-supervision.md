@@ -44,7 +44,10 @@ dependency readiness before accepting a queued legacy run.
 ## Projection boundary
 
 `MasterProjectionService` is the only writer for asynchronous Task and supervision
-messages in the durable Master thread. It reads existing authoritative rows:
+messages in the durable Master thread. A confirmed checkpoint restore is the one
+mutation-coupled exception: `task_state_events.py` appends its recovery message and
+event inside the restore transaction so history cannot lag the restored Task. Both
+boundaries read existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
 - `attention_items`
@@ -103,6 +106,7 @@ Task events:
 - `master.task.failed`
 - `master.task.cancelled`
 - `master.task.blocked`
+- `master.task.recovered`
 
 Supervision events:
 
@@ -131,6 +135,9 @@ history placement does not depend on the browser's current Focus.
 
 Events and projected chat messages report state only. They do not approve review,
 landing, restart, or Attention gates and are never accepted as control input.
+Task-session `job.update` is the separate mounted-detail invalidation event for
+owner mutations outside a worker run. It carries Task id, committed status, mutation
+kind, and checkpoint id when applicable.
 
 ## Frontend ownership
 

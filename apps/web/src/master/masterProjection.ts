@@ -24,6 +24,7 @@ const MASTER_TASK_STATUS: Record<string, MasterJob['status']> = {
   'master.task.failed': 'failed',
   'master.task.cancelled': 'cancelled',
   'master.task.blocked': 'queued',
+  'master.task.recovered': 'queued',
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,6 +62,45 @@ function safeProjectionContent(
   }
   if (type === 'master.task.blocked' && taskId != null) {
     return `Task #${taskId} is blocked by a prerequisite.`
+  }
+  if (type === 'master.task.recovered' && taskId != null) {
+    const checkpointId = positiveInteger(payload.checkpoint_id)
+    const actor = isRecord(payload.actor)
+      && typeof payload.actor.username === 'string'
+      ? payload.actor.username
+      : null
+    const prior = typeof payload.prior_status === 'string'
+      ? payload.prior_status
+      : null
+    const restored = typeof payload.restored_status === 'string'
+      ? payload.restored_status
+      : null
+    const discarded = Array.isArray(payload.discarded_progress)
+      && payload.discarded_progress.every(item => typeof item === 'string')
+      ? payload.discarded_progress
+      : null
+    const conflicting = Array.isArray(payload.conflicting_progress)
+      && payload.conflicting_progress.every(item => typeof item === 'string')
+      ? payload.conflicting_progress
+      : null
+    if (
+      checkpointId == null
+      || actor == null
+      || prior == null
+      || restored == null
+      || discarded == null
+      || conflicting == null
+    ) return null
+    const title = (value: string) => (
+      value ? `${value[0].toUpperCase()}${value.slice(1)}` : value
+    )
+    const discardedText = discarded.length
+      ? `Discarded progress: ${discarded.join('; ')}.`
+      : 'No later progress was discarded.'
+    const conflictText = conflicting.length
+      ? `Conflicting progress: ${conflicting.join('; ')}.`
+      : 'No conflicting progress was present.'
+    return `${actor} restored Task #${taskId} from checkpoint #${checkpointId}: ${title(prior)} to ${title(restored)}. ${discardedText} ${conflictText}`
   }
   const satpamLabels: Record<string, string> = {
     'master.satpam.steered': 'steered',
@@ -242,14 +282,14 @@ function updateProjectedJob(
     ...jobs[index],
     status,
     desk_status: status,
-    run_status: status === 'running' ? 'running' : jobs[index].run_status,
+    run_status: status === 'running' ? 'running' : null,
     blocked_reason: event.type === 'master.task.blocked'
       ? jobs[index].blocked_reason || 'Waiting for a prerequisite'
       : null,
     updated_at: event.created_at,
     finished_at: ['done', 'failed', 'cancelled'].includes(status)
       ? event.created_at
-      : jobs[index].finished_at,
+      : null,
   }
   return { ...desk, jobs }
 }

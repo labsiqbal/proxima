@@ -103,6 +103,21 @@ same committed Tasks and dependency edges. A preserved legacy queued worker run 
 claimed only after its full Master scope and dependency readiness are revalidated,
 and its Task is promoted to running in the same transaction as the run claim.
 
+## External mutation reconciliation
+
+`jobs` remains lifecycle truth, but owner actions can change it while no worker run
+is active. Review approval/rejection and checkpoint restore append a durable
+`job.update` to the Task session inside the same database transaction as the state
+change. Mounted Task detail subscribes to that shared invalidation event; running
+polling is not the authority for externally mutable states.
+
+Checkpoint restore also appends its audit record and, for a Master-origin Task, one
+human-readable `master.task.recovered` history message/event in the restore
+transaction. It records actor, checkpoint, prior/new status, discarded progress,
+and conflicts. A failure to append the invalidation or recovery history rolls back
+the database state transition, so Task, Fleet, and history cannot commit
+contradictory states.
+
 ## Adding another caller
 
 1. Resolve user-facing slugs or selections to database ids without accepting paths.

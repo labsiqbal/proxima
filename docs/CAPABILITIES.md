@@ -554,6 +554,10 @@ state plus git SHA/worktree refs - no full SQLite backup and no project zip. Unp
 retention is FIFO 30, restore previews its impact, requires confirmation, and refuses
 running/later same-project conflicts or a dirty job-owned worktree. A main-checkout SHA
 is evidence only and is never reset; only an existing job worktree is restorable.
+Restore commits the job, node/run rollback, Task-session `job.update`, audit metadata,
+and a durable human-readable Master recovery entry together. The entry identifies the
+owner, checkpoint, prior/restored state, discarded progress, and conflicting progress
+without copying worktree paths or Task titles.
 Normal project Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
@@ -565,7 +569,8 @@ and Master decision/budget items. Every row deep-links to its owning Task/plan/M
 Settings surface. Only rows marked `inline_ok` render actions: simple non-repo final
 review, hash-visible script trust, pending satpam restart, and live permission choices.
 Diff and open-text Master items navigate only. Errors persist inside the inbox until
-retried/dismissed.
+retried/dismissed. Job-linked rows include the same canonical run projection used by
+Workflows and Tasks, so a review-parked failed graph node reads Failed everywhere.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
 and running jobs, badges a count when work is in flight, and deep-links each row to
@@ -607,6 +612,10 @@ second message or event and isolates failures per authoritative source row. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
+Owner mutations that happen outside a worker run append a transaction-coupled
+`job.update` to the Task session. A mounted Task workspace consumes this one shared
+invalidation path for review verdicts and checkpoint restore instead of waiting for
+running-only polling.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
 with five chapters when Master is enabled and four when it is disabled. Completion
@@ -711,6 +720,10 @@ fallback. Manual rows expose Run and ask for the trigger's intake fields. Schedu
 show cadence and pause/resume controls, with Run now and schedule maintenance available
 in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
 plan is promoted; it never carries manual intake values.
+The Runs table consumes the API's canonical `run_projection` for effective status,
+start, finish, and duration. API timestamp fields are timezone-aware UTC ISO strings,
+so a new run cannot inherit the browser's local offset or disagree with Tasks and
+Attention about a failed node parked in durable review.
 The library has separate active and archived views. Archiving stops schedules and
 removes the workflow from the active library without changing its owned project or
 past runs, and records the pre-archive status in `workflows.pre_archive_status`.
@@ -735,8 +748,11 @@ pipeline.
 **How:** classic `engine='linear'` jobs use a frozen step snapshot and run
 sequentially in one ACP session (context carries free). Graph jobs (**plans**) share
 the job lifecycle but keep per-node state in `node_states` and are listed via the
-graph API. Live-polls while running; auto-archive after 30 days. Old kanban tasks
-were migrated to 1-step jobs.
+graph API. The API adds one effective run projection and normalizes timestamp fields
+before responses. Tasks, Workflows, Attention, mounted Task detail, and expanded plan
+nodes consume that contract. Mounted Task detail also listens to durable `job.update`
+events for owner mutations; running polling remains only a progress fallback.
+Auto-archive happens after 30 days. Old kanban tasks were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
 
 ### Durable Task delegation and dependency readiness

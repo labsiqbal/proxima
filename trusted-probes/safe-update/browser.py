@@ -221,6 +221,47 @@ def _element_expression(step: dict, action: str) -> str:
 
 def _step(connection: _WebSocket, step: dict) -> dict:
     action = step["action"]
+    if action == "screenshot":
+        result = connection.call(
+            "Page.captureScreenshot",
+            {"format": "png", "fromSurface": True},
+        )
+        encoded = result.get("data")
+        if not isinstance(encoded, str):
+            raise BrowserProbeError("browser screenshot did not return image data")
+        path = Path(step["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(encoded))
+        return {"ok": True, "path": str(path)}
+    if action == "request":
+        result = _evaluation(
+            connection,
+            f"""
+(async () => {{
+  const response = await fetch({json.dumps(step["path"])}, {{
+    method: {json.dumps(step.get("method", "POST"))},
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({json.dumps(step.get("body"))}),
+  }});
+  const text = await response.text();
+  return {{ok:response.ok,status:response.status,text:text.slice(0,2048)}};
+}})()
+""",
+        )
+        if isinstance(result, dict) and result.get("ok") is True:
+            return result
+        raise BrowserProbeError(
+            f"browser scenario request failed: {json.dumps(result, sort_keys=True)}"
+        )
+    if action == "click_if_present":
+        result = _evaluation(
+            connection,
+            _element_expression(step, "click"),
+        )
+        if isinstance(result, dict) and result.get("ok") is True:
+            time.sleep(0.15)
+            return result
+        return {"ok": True, "skipped": True}
     deadline = time.monotonic() + float(step.get("timeout", 10))
     while True:
         result = _evaluation(
@@ -235,8 +276,13 @@ def _step(connection: _WebSocket, step: dict) -> dict:
                 time.sleep(0.15)
             return result
         if time.monotonic() >= deadline:
+            page = _evaluation(
+                connection,
+                "({url:location.href,text:(document.body?.innerText || '').slice(0,2048)})",
+            )
             raise BrowserProbeError(
-                f"browser scenario step failed: {action} {step['selector']}"
+                f"browser scenario step failed: {action} {step['selector']}; "
+                f"page={json.dumps(page, sort_keys=True)}"
             )
         time.sleep(0.05)
 
@@ -249,6 +295,7 @@ def run_scenario(
     profile: Path,
     auth_token: str,
     drop_prefix: list[str],
+    path: str = "/",
 ) -> bytes:
     profile.mkdir(mode=0o777)
     profile.chmod(0o777)
@@ -322,7 +369,17 @@ def run_scenario(
                     },
                 },
             )
-        connection.call("Page.navigate", {"url": f"{base_url}/"})
+            connection.call(
+                "Network.setCookie",
+                {
+                    "name": "proxima_session",
+                    "value": auth_token,
+                    "url": base_url,
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                },
+            )
+        connection.call("Page.navigate", {"url": f"{base_url}{path}"})
         deadline = time.monotonic() + 20
         while _evaluation(connection, "document.readyState") != "complete":
             if time.monotonic() >= deadline:

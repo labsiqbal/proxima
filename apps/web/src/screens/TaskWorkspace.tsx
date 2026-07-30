@@ -10,6 +10,8 @@ import { IconTrash } from '../components/shell/icons'
 import type { Artifact } from '../api/files'
 import { stripQuestionForms } from '../components/chat/questionForm'
 import { usePolling } from '../hooks/usePolling'
+import { useEventStream } from '../hooks/useEventStream'
+import { projectRun } from '../lib/runProjection'
 
 const ART_ICON: Record<string, string> = { design: '🎨', image: '🖼', app: '▶', page: '🌐', doc: '📄', file: '📎' }
 const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] }) => <span className={`job-pill ${status}`}>{status}</span>
@@ -55,7 +57,17 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
   }, [jobId])
   React.useEffect(() => { void load() }, [load])
 
-  // Live-update while the job is running.
+  // Every external Task mutation publishes one durable job.update event to
+  // this Task's session. Running polling remains a liveness fallback for
+  // progress produced by older runners.
+  useEventStream(token, job?.session_id ?? null, event => {
+    if (
+      event.type === 'job.update'
+      && Number(event.payload?.job_id ?? jobId) === jobId
+    ) {
+      void load()
+    }
+  })
   usePolling(load, 1500, { enabled: job?.status === 'running', immediate: false })
 
   // On first load of a job, focus the node that matters (the active / review step).
@@ -107,14 +119,15 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
   if (!job) return <div className="job-detail"><div className="task-detail-head"><span className="muted">Task</span></div>{error ? <div className="error-bar">{error}</div> : <p className="muted task-workspace-state">Loading…</p>}</div>
 
   const steps = job.steps_state
-  if (!steps.length) return <div className="job-detail"><div className="task-detail-head"><strong className="task-title">{job.title}</strong><StatusPill status={job.status} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
+  const projectedStatus = projectRun(job).status
+  if (!steps.length) return <div className="job-detail"><div className="task-detail-head"><strong className="task-title">{job.title}</strong><StatusPill status={projectedStatus} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
   const cur = steps[Math.min(sel, steps.length - 1)]
   const onReviewStep = isMidGate && sel === job.current_step_idx
 
   return <div className="job-detail">
     <div className="task-detail-head">
       <strong className="task-title" title={job.title}>{job.title}</strong>
-      <StatusPill status={job.status} />
+      <StatusPill status={projectedStatus} />
       <button className="row-action danger jfd-delete" title="Delete task" aria-label="Delete task" onClick={() => void remove()} disabled={!!busyAction}><IconTrash size={15} /></button>
     </div>
     {isReview && (isMidGate

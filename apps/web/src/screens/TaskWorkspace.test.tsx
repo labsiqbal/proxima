@@ -1,9 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { approveJob, getJob, getJobDiff } from "../api/jobs";
+import type { RunEvent } from "../types";
+
+let taskEventHandler: ((event: RunEvent) => void) | null = null;
 
 vi.mock("../api/jobs", () => ({
 	getJob: vi.fn(),
@@ -13,6 +16,16 @@ vi.mock("../api/jobs", () => ({
 	rejectJob: vi.fn(),
 }));
 vi.mock("../components/ui/Dialog", () => ({ confirmDialog: vi.fn() }));
+vi.mock("../hooks/useEventStream", () => ({
+	useEventStream: (
+		_token: string,
+		_sessionId: number | null,
+		onEvent: (event: RunEvent) => void,
+	) => {
+		taskEventHandler = onEvent;
+		return { connected: true };
+	},
+}));
 
 const job = {
 	id: 42,
@@ -57,6 +70,7 @@ const job = {
 describe("TaskWorkspace", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		taskEventHandler = null;
 		vi.mocked(getJob).mockResolvedValue(job as never);
 		vi.mocked(approveJob).mockResolvedValue({
 			...job,
@@ -93,6 +107,65 @@ describe("TaskWorkspace", () => {
 			expect(approveJob).toHaveBeenCalledWith("token", 42, undefined),
 		);
 	});
+
+	it.each([
+		{
+			name: "inline Attention approval",
+			initialStatus: "review",
+			nextStatus: "done",
+			eventStatus: "done",
+		},
+		{
+			name: "checkpoint restore",
+			initialStatus: "failed",
+			nextStatus: "queued",
+			eventStatus: "queued",
+		},
+	])(
+		"reconciles a mounted Task after $name",
+		async ({ initialStatus, nextStatus, eventStatus }) => {
+			vi.mocked(getJob)
+				.mockResolvedValueOnce({
+					...job,
+					status: initialStatus,
+					steps_state: [
+						{ ...job.steps_state[0], status: initialStatus },
+					],
+				} as never)
+				.mockResolvedValue({
+					...job,
+					status: nextStatus,
+					steps_state: [
+						{
+							...job.steps_state[0],
+							status: nextStatus === "queued" ? "pending" : nextStatus,
+						},
+					],
+				} as never);
+
+			render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+
+			expect(
+				(await screen.findAllByText(initialStatus)).length,
+			).toBeGreaterThan(0);
+			await act(async () => {
+				taskEventHandler?.({
+					id: 91,
+					run_id: 0,
+					session_id: 9,
+					project_id: 1,
+					seq: 1,
+					type: "job.update",
+					payload: { job_id: 42, status: eventStatus },
+					created_at: "2026-01-02",
+				});
+			});
+
+			await waitFor(() => expect(getJob).toHaveBeenCalledTimes(2));
+			expect(screen.queryByText(initialStatus)).not.toBeInTheDocument();
+			expect(screen.getAllByText(nextStatus).length).toBeGreaterThan(0);
+		},
+	);
 
 	it("shows the durable prerequisite reason for a blocked queued task", async () => {
 		vi.mocked(getJob).mockResolvedValue({

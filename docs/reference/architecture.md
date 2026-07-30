@@ -80,6 +80,8 @@ provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `graph_context.py` (scoped Graphify adapter),
 `code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
 `graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
+`task_state_events.py` (transaction-coupled Task invalidation and recovery history),
+`run_projection.py` (timezone-aware API timestamps and effective run lifecycle),
 `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py` + `preview_output.py` (project generations,
@@ -340,6 +342,11 @@ delegations, and Task ownership. Deprecated Alpha routes and legacy payload read
 project the same rows for one compatibility release. Stored payload normalization
 is ownership-scoped: unrelated Alpha-named business fields in ordinary jobs,
 attention, events, and audit records are never rewritten.
+Job API payloads also normalize stored `*_at` values to UTC-aware ISO and attach one
+`run_projection` containing effective status, start, finish, and duration. A failed
+child overrides a nonterminal review parent for presentation without rewriting the
+durable recovery state. Workflows, Tasks, Attention, Task detail, and expanded nodes
+therefore read one lifecycle contract.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the

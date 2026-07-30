@@ -55,6 +55,11 @@ function MasterPanel({
   )
 }
 
+export function formatCheckpointTime(value: string): string {
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? 'Unknown time' : timestamp.toLocaleString()
+}
+
 function CheckpointTimeline({
   token,
   checkpoints,
@@ -148,7 +153,7 @@ function CheckpointTimeline({
               <div>
                 <strong>Task #{checkpoint.job_id}</strong>
                 <small>
-                  {new Date(`${checkpoint.created_at.replace(' ', 'T')}Z`).toLocaleString()}
+                  {formatCheckpointTime(checkpoint.created_at)}
                 </small>
               </div>
               <div className="checkpoint-actions">
