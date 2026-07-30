@@ -1,7 +1,7 @@
 import React from 'react'
 import { Stage, Layer as KLayer, Group, Rect, Text, Image as KImage, Ellipse, Line, Star, Path, Circle, Transformer, Arrow } from 'react-konva'
 import type Konva from 'konva'
-import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, stripDesignScene, buildDesignPrompt, gradientStopList, canBeImageFrame, isImageFrame, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type ShapeLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
+import { uid, blobPath, getBox, getBounds, dedupeSceneIds, autoGroupSceneLayers, parseDesignScene, reconcileSceneMediaTargets, stripDesignScene, buildDesignPrompt, gradientStopList, canBeImageFrame, isImageFrame, type Scene, type Artboard, type DesignSystem, type Layer, type TextLayer, type RectLayer, type EllipseLayer, type TriangleLayer, type StarLayer, type LineLayer, type PathLayer, type ImageLayer, type ShapeLayer, type FillStyle, type LayerEffect } from '../components/design/scene'
 import { createSession, listMessages, deleteSession } from '../api/sessions'
 import { createRun } from '../api/runs'
 import { useDragWidth } from '../hooks/useDragWidth'
@@ -894,6 +894,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       ns.sessionId = cur?.sessionId ?? sessionRef.current ?? undefined
       ns.appliedRunId = runId
       ns.runPendingId = undefined
+      reconcileSceneMediaTargets(cur, ns)
       // Models routinely copy layer ids across artboards — repair them here like
       // every disk-load path does, or editing one layer moves its twin.
       dedupeSceneIds(ns)

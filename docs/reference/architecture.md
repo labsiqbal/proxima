@@ -256,24 +256,34 @@ API boundary: `(project slug, authoritative Area kind/id, Area-relative path)`. 
 server constructs these targets for merged tree entries, artifact scan results, task
 and chat run outputs, and Archive records. Scanned paths are resolved from the
 validated Ops scan root back through physical ownership, so a nested Code Area under
-an Ops-at-dot layout remains Code-owned. File tree traversal, read/write, mutation, raw/preview,
+an Ops-at-dot layout remains Code-owned; enrichment is per entry, so an unsafe
+symlink is omitted without discarding other scan results. File tree traversal,
+read/write, mutation, raw/preview,
 Archive presence refresh, and ArtifactViewer use the same resolver, which revalidates
 the project/Area relationship before applying `fsapi` realpath jailing. The resolver
 then requires the target Area to be the authoritative owner of the resolved path:
 the most specific active Area wins, Ops wins a legacy same-root tie with Code, and a
-Container target is valid only outside active Areas. Merged tree entries switch to an
-Ops or Code target as traversal enters that Area, so cross-Area aliases are rejected.
+Container target is valid only outside active Areas. Each merged tree child crosses
+the active-root realpath jail before ownership is assigned. Safe in-Container
+symlinks receive the target of their resolved authoritative Area, while broken or
+escaping symlinks are omitted. Merged tree entries switch to an Ops or Code target
+as traversal enters that Area, so cross-Area aliases are rejected.
 Display names never select a physical root. Path-only callers remain a compatibility
 input, with historical virtual Ops names and physical `ops/...` support; legacy
 Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
 Targeted previews use the disjoint
-`/api/target-preview/{slug}/{kind}/{id}/{path}` namespace, which keeps
-browser-relative HTML resources inside the originating Area and cannot normalize
-into the legacy path-only preview route. Markdown resources resolve relative to both
-the source document directory and its target. A validated target context is reused
-throughout each tree or Archive request while each path still crosses the realpath
-jail. See [ADR-0010](../adr/0010-canonical-file-targets.md) and
-[ADR-0011](../adr/0011-area-scoped-artifact-media.md).
+`/api/target-preview/{slug}/{kind}/{id}/{path}` namespace. Targeted HTML responses
+also apply an opaque-origin script sandbox and a Content Security Policy that permits
+local resources only below that exact Area prefix. Arbitrary parent normalization
+therefore cannot load the legacy path-only preview route. Markdown resources resolve
+relative to both the source document directory and its target. A validated target
+context is reused throughout each tree or Archive request while each path still
+crosses the realpath jail. Design reply locator fields are treated as untrusted:
+an existing image or frame target survives only when both the layer id and source
+remain unchanged, and model-supplied targets are otherwise removed. See
+[ADR-0010](../adr/0010-canonical-file-targets.md),
+[ADR-0011](../adr/0011-area-scoped-artifact-media.md), and
+[ADR-0012](../adr/0012-sandboxed-target-preview-resources.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

@@ -11,7 +11,7 @@ import { AppRunner } from '../components/files/AppRunner'
 import { MessageContent } from '../components/chat/MessageContent'
 import { formatRunError } from '../components/chat/runError'
 import { confirmDialog } from '../components/ui/Dialog'
-import type { ChatMessage, RunEvent, WorkflowStep } from '../types'
+import type { ChatMessage, FileTarget, RunEvent, WorkflowStep } from '../types'
 
 type DesignCard = { id: string; title: string; type: string; path: string; w: number; h: number; art?: any }
 const blankStep = (): WorkflowStep => ({ id: Math.random().toString(36).slice(2, 10), name: '', instruction: '', expected_output: '', type: 'other', rules: null, skill_ids: null, review_required: false, depends_on: null })
@@ -62,7 +62,7 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [deletingArtifact, setDeletingArtifact] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const projFs = React.useMemo(() => projectSlug ? projectFs(token, projectSlug, '') : null, [token, projectSlug])
-  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s) : s), [projectSlug])
+  const resolveSrc = React.useCallback((s: string, target?: FileTarget) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s, target) : s), [projectSlug])
 
   React.useEffect(() => {
     mountedRef.current = true

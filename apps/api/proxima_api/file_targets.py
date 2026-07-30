@@ -435,20 +435,46 @@ def add_targets(
     entries: list[dict[str, Any]],
     directory: Path,
     *,
+    root: Path,
     context: FileTargetContext | None = None,
 ) -> list[dict[str, Any]]:
     data = container_registry.get_container(conn, container)
     resolved_context = _context_for(conn, data, context)
-    return [
-        {
-            **entry,
-            "target": _locator_for_absolute(
+    try:
+        relative_directory = (
+            ""
+            if directory == root
+            else directory.relative_to(root).as_posix()
+        )
+    except ValueError as exc:
+        raise FileTargetError("tree directory is outside its active root") from exc
+    enriched: list[dict[str, Any]] = []
+    for entry in entries:
+        try:
+            relative_path = normalize_relative_path(
+                "/".join(
+                    part
+                    for part in (relative_directory, str(entry["name"]))
+                    if part
+                ),
+                allow_empty=False,
+            )
+            resolved = resolve_from_root(
                 resolved_context,
-                directory / str(entry["name"]),
-            ).payload(),
-        }
-        for entry in entries
-    ]
+                root,
+                relative_path,
+            )
+        except FileTargetError:
+            continue
+        if not resolved.path.exists():
+            continue
+        enriched.append(
+            {
+                **entry,
+                "target": resolved.locator.payload(),
+            }
+        )
+    return enriched
 
 
 def add_artifact_targets(
@@ -461,14 +487,20 @@ def add_artifact_targets(
     data = container_registry.get_container(conn, container)
     resolved_context = _context_for(conn, data, context)
     ops_root = resolved_context.ops_root()
-    return [
-        {
-            **item,
-            "target": resolve_from_root(
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            resolved = resolve_from_root(
                 resolved_context,
                 ops_root,
                 str(item.get("path") or ""),
-            ).locator.payload(),
-        }
-        for item in items
-    ]
+            )
+        except FileTargetError:
+            continue
+        enriched.append(
+            {
+                **item,
+                "target": resolved.locator.payload(),
+            }
+        )
+    return enriched

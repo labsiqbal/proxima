@@ -195,6 +195,15 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     )
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
+    preview_scope = (
+        f"http://testserver/api/target-preview/identity/ops/{ops_area_id}/"
+    )
+    preview_policy = page.headers["content-security-policy"]
+    assert "sandbox allow-scripts" in preview_policy
+    assert "default-src 'none'" in preview_policy
+    assert f"img-src data: blob: {preview_scope}" in preview_policy
+    assert f"style-src 'unsafe-inline' {preview_scope}" in preview_policy
+    assert "/api/preview/" not in preview_policy
     nested_asset = api.get(
         f"/api/target-preview/identity/ops/{ops_area_id}/site/theme.css",
         headers=headers,
@@ -214,12 +223,6 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     )
     assert legacy_preview.status_code == 200, legacy_preview.text
     assert legacy_preview.text == "body { color: legacy-container; }"
-    escaped_namespace = api.get(
-        f"/api/target-preview/identity/ops/{ops_area_id}/site/"
-        "../../../../brief.md",
-        headers=headers,
-    )
-    assert escaped_namespace.status_code == 404
 
     # Documented path-only callers remain compatible, including an explicit
     # physical ops/ path. Their response is upgraded to the canonical target.
@@ -525,7 +528,7 @@ def test_session_artifact_reads_and_deletion_keep_ops_target(
     assert json.loads(stored["output_links"]) == []
 
 
-def test_locator_validation_rejects_cross_container_area_and_symlink_escape(
+def test_tree_symlinks_use_resolved_ownership_and_omit_unsafe_entries(
     tmp_path: Path,
 ):
     api, headers, root = _api(tmp_path)
@@ -546,16 +549,54 @@ def test_locator_validation_rejects_cross_container_area_and_symlink_escape(
         params=_target_params(foreign),
     ).status_code == 400
 
+    (root / "ops" / "brief.md").write_text("# Ops through alias", encoding="utf-8")
+    (root / "alias.md").symlink_to("ops/brief.md")
     outside = tmp_path / "outside.md"
     outside.write_text("secret", encoding="utf-8")
     (root / "ops" / "escape.md").symlink_to(outside)
-    ops_target = _by_name(api, headers)["escape.md"]["target"]
-    escaped = api.get(
+
+    entries = _by_name(api, headers)
+    ops_area_id = api.app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = (SELECT id FROM projects WHERE slug = 'identity') "
+        "AND kind = 'ops'"
+    ).fetchone()["id"]
+    assert entries["alias.md"]["target"] == {
+        "project": "identity",
+        "area": {"kind": "ops", "id": ops_area_id},
+        "path": "brief.md",
+    }
+    assert "escape.md" not in entries
+    aliased = api.get(
         "/api/projects/identity/file",
         headers=headers,
-        params=_target_params(ops_target),
+        params=_target_params(entries["alias.md"]["target"]),
     )
-    assert escaped.status_code == 400
+    assert aliased.status_code == 200
+    assert aliased.json()["content"] == "# Ops through alias"
+
+
+def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
+    api, headers, root = _api(tmp_path)
+    reports = root / "ops" / "reports"
+    reports.mkdir()
+    (reports / "safe.md").write_text("# Safe", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside", encoding="utf-8")
+    (reports / "escape.md").symlink_to(outside)
+
+    response = api.get(
+        "/api/projects/identity/artifacts?since_minutes=525600",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    artifacts = {
+        item["path"]: item
+        for item in response.json()["artifacts"]
+    }
+    assert artifacts["reports/safe.md"]["target"]["path"] == "reports/safe.md"
+    assert "reports/escape.md" not in artifacts
 
 
 def test_legacy_ops_at_dot_keeps_area_identity_and_does_not_rewrite_ops_prefix(
