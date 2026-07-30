@@ -264,8 +264,12 @@ Menu, Back, Work / Delegate, Running, Attention, Search, and New chat live in no
 header layout slots rather than fixed overlays. Compact Work widths use a second
 action row; the empty Attention slot remains reserved, so an item appearing cannot
 move Search or New chat under the pointer. Each control keeps the shared minimum hit
-target and tokenized focus ring. Shared shell labels use the higher-contrast label
-and accent-text tokens, including Work, Work project, and Recent chats.
+target and tokenized focus ring. The mobile safe-area height matches the rendered
+header rows, its layer paints above ordinary content and the tool rail, and narrow
+Running and Attention sheets stop before the rail so their complete bounds and
+controls remain visible, pointer-clickable, and keyboard reachable. Shared shell
+labels use the higher-contrast label and accent-text tokens, including Work, Work
+project, and Recent chats.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 

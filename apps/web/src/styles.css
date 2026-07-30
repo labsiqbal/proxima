@@ -35,8 +35,12 @@
 	--space-5: 20px;
 	--space-6: 24px;
 	--space-8: 32px;
+	--ui-border-width: 1px;
 	--topbar-h: 52px;
-	--mobile-topbar-single-row-h: 58px;
+	--mobile-topbar-single-row-h: calc(
+		var(--shell-control-height) + (2 * var(--space-1)) +
+		(2 * var(--space-2)) + (3 * var(--ui-border-width))
+	);
 	--mobile-topbar-h: var(--mobile-topbar-single-row-h);
 	--toolrail-w: 46px;
 	--toolpanel-w: 480px;
@@ -100,6 +104,7 @@
 	--shell-floating-bottom-lane: calc(var(--master-popup-trigger-size) + var(--space-6) + env(safe-area-inset-bottom));
 	--master-toast-width: 24rem;
 	--master-toast-top: calc(var(--topbar-h) + var(--space-4) + env(safe-area-inset-top));
+	--z-mobile-topbar: 16;
 	--z-master-popup-scrim: 58;
 	--z-master-popup: 59;
 	--z-master-toast: 60;
@@ -1806,12 +1811,14 @@ button:disabled {
 		height: 100dvh;
 	}
 	.mobile-topbar {
+		position: relative;
+		z-index: var(--z-mobile-topbar);
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-2);
-		min-height: var(--mobile-topbar-h);
-		border-bottom: 1px solid var(--ui-stroke-secondary);
+		height: var(--mobile-topbar-h);
+		border-bottom: var(--ui-border-width) solid var(--ui-stroke-secondary);
 		background: var(--ui-surface-translucent, var(--ui-surface));
 		backdrop-filter: blur(8px);
 		color: var(--ui-text-primary);
@@ -3541,7 +3548,10 @@ button:disabled {
 }
 @media (max-width: 480px) {
 	.app-shell.work-mode {
-		--mobile-topbar-h: calc((2 * var(--shell-control-height)) + (3 * var(--space-2)));
+		--mobile-topbar-h: calc(
+			(2 * var(--shell-control-height)) + (2 * var(--space-1)) +
+			(3 * var(--space-2)) + (3 * var(--ui-border-width))
+		);
 	}
 	.app-shell.work-mode .mobile-topbar {
 		display: grid;
@@ -14857,7 +14867,11 @@ button.moodboard-add-method:hover {
 	position: fixed;
 	bottom: var(--master-popup-bottom);
 	z-index: var(--z-master-popup);
+	pointer-events: none;
 }
+.master-popup-trigger,
+.master-popup-scrim,
+.master-popup { pointer-events: auto; }
 .master-popup-root.corner-right { right: var(--master-popup-tool-clearance); }
 .master-popup-root.corner-left { left: calc(var(--left-w) + var(--master-popup-edge)); }
 .master-popup-trigger {
@@ -15282,7 +15296,14 @@ button.moodboard-add-method:hover {
 	.master-example-chip { max-width: min(14rem, 100%); }
 	.master-empty { padding: var(--space-5) var(--space-3); }
 	.master-error { align-items: flex-start; flex-wrap: wrap; }
-	.attention-popover { position: fixed; top: var(--mobile-topbar-h); right: var(--space-2); left: var(--space-2); width: auto; max-height: calc(100vh - var(--mobile-topbar-h) - var(--space-4)); }
+	.attention-popover {
+		position: fixed;
+		top: var(--mobile-topbar-h);
+		right: calc(var(--toolrail-w) + var(--space-2));
+		left: var(--space-2);
+		width: auto;
+		max-height: calc(100vh - var(--mobile-topbar-h) - var(--space-4));
+	}
 	.tour-actions { align-items: stretch; flex-direction: column-reverse; }
 	.tour-actions > div { width: 100%; }
 	.tour-actions > div button { flex: 1; }

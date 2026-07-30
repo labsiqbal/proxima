@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "apps" / "web"
 API_DIR = ROOT / "apps" / "api"
 PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+VISUAL_ORACLE_PATH = ROOT / "scripts" / "shell_safe_area_visual_oracle.json"
 MIN_TARGET_SIZE = 34
 SCREENSHOT_SIZES = (
     (320, 844),
@@ -28,6 +29,10 @@ SCREENSHOT_SIZES = (
     (1024, 768),
     (1280, 800),
     (1440, 1000),
+)
+STATUS_SCREENSHOTS = (
+    "shell-safe-390x844-attention.png",
+    "shell-safe-390x844-running.png",
 )
 
 
@@ -175,6 +180,10 @@ def _geometry(connection: object) -> dict:
           };
           const rect = element => {
             const value = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              value.x + value.width / 2,
+              value.y + value.height / 2
+            );
             return {
               x: value.x,
               y: value.y,
@@ -182,6 +191,7 @@ def _geometry(connection: object) -> dict:
               height: value.height,
               right: value.right,
               bottom: value.bottom,
+              hittable: hit === element || element.contains(hit),
             };
           };
           const one = selector => {
@@ -191,6 +201,7 @@ def _geometry(connection: object) -> dict:
           const mobileControls = [
             [".mobile-topbar [aria-label='Menu']", "Menu"],
             [".mobile-topbar [aria-label='Back']", "Back"],
+            [".mobile-topbar .running-pill", "Running"],
             [".mobile-topbar [aria-label='Search']", "Search"],
             [".mobile-topbar [aria-label='New chat']", "New chat"],
             [".mobile-topbar .attention-trigger", "Attention"],
@@ -206,6 +217,7 @@ def _geometry(connection: object) -> dict:
               document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
               body: document.body.scrollWidth - document.body.clientWidth,
             },
+            topbar: one(".mobile-topbar") || one(".top-bar"),
             master: one(".master-popup-trigger"),
             composer: one("form.composer"),
             send: one("form.composer button[type='submit']"),
@@ -222,6 +234,48 @@ def _geometry(connection: object) -> dict:
     if not isinstance(value, dict):
         raise RuntimeError("browser geometry was unavailable")
     return value
+
+
+def _load_visual_oracle() -> dict:
+    try:
+        value = json.loads(VISUAL_ORACLE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"shell visual oracle is unavailable: {exc}") from exc
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise RuntimeError("shell visual oracle schema is unsupported")
+    tolerance = value.get("tolerance_px")
+    viewports = value.get("viewports")
+    if not isinstance(tolerance, (int, float)) or tolerance < 0:
+        raise RuntimeError("shell visual oracle tolerance is invalid")
+    if not isinstance(viewports, dict):
+        raise RuntimeError("shell visual oracle viewports are invalid")
+    expected = {f"{width}x{height}" for width, height in SCREENSHOT_SIZES}
+    if set(viewports) != expected:
+        raise RuntimeError(
+            "shell visual oracle viewports differ from screenshot viewports"
+        )
+    return value
+
+
+def _assert_visual_oracle(value: dict, oracle: dict) -> None:
+    width = value["viewport"]["width"]
+    height = value["viewport"]["height"]
+    key = f"{width}x{height}"
+    expected = oracle["viewports"][key]
+    tolerance = float(oracle["tolerance_px"])
+    for name in ("topbar", "toolRail", "master"):
+        actual_rect = value.get(name)
+        expected_rect = expected.get(name)
+        if not isinstance(actual_rect, dict) or not isinstance(expected_rect, dict):
+            raise AssertionError(f"{key}: visual oracle target {name} is missing")
+        for dimension in ("x", "y", "width", "height"):
+            actual = float(actual_rect[dimension])
+            wanted = float(expected_rect[dimension])
+            if abs(actual - wanted) > tolerance:
+                raise AssertionError(
+                    f"{key}: {name}.{dimension} is {actual:.2f}px, "
+                    f"visual oracle requires {wanted:.2f}px"
+                )
 
 
 def _intersection(a: dict, b: dict) -> float:
@@ -249,9 +303,15 @@ def _assert_geometry(value: dict, *, mobile: bool) -> None:
     master = value["master"]
     composer = value["composer"]
     tool_rail = value["toolRail"]
-    if not master or not composer or not tool_rail:
+    topbar = value["topbar"]
+    if not master or not composer or not tool_rail or not topbar:
         raise AssertionError(f"{width}x{height}: shell controls are missing")
+    if abs(float(topbar["bottom"]) - float(tool_rail["y"])) > 0.5:
+        raise AssertionError(
+            f"{width}x{height}: tool rail does not start below the visible top bar"
+        )
     for name, target in (
+        ("Master", master),
         ("composer", composer),
         ("Send", value["send"]),
         ("Attach", value["attach"]),
@@ -259,8 +319,10 @@ def _assert_geometry(value: dict, *, mobile: bool) -> None:
     ):
         if not target:
             raise AssertionError(f"{width}x{height}: {name} is missing")
+        if not target["hittable"]:
+            raise AssertionError(f"{width}x{height}: {name} is pointer-occluded")
         overlap = _intersection(master, target)
-        if overlap:
+        if name != "Master" and overlap:
             raise AssertionError(
                 f"{width}x{height}: Master overlaps {name} by {overlap:.0f}px2"
             )
@@ -269,6 +331,10 @@ def _assert_geometry(value: dict, *, mobile: bool) -> None:
                 f"{width}x{height}: {name} escapes the visible composer"
             )
     for index, mode in enumerate(value["modes"]):
+        if not mode["hittable"]:
+            raise AssertionError(
+                f"{width}x{height}: mode {index} is pointer-occluded"
+            )
         overlap = _intersection(master, mode)
         if overlap:
             raise AssertionError(
@@ -281,7 +347,16 @@ def _assert_geometry(value: dict, *, mobile: bool) -> None:
     if not mobile:
         return
     controls = value["mobileControls"]
-    expected = {"Menu", "Back", "Search", "New chat", "Attention", "Work", "Delegate"}
+    expected = {
+        "Menu",
+        "Back",
+        "Running",
+        "Search",
+        "New chat",
+        "Attention",
+        "Work",
+        "Delegate",
+    }
     names = {control["name"] for control in controls}
     if names != expected:
         raise AssertionError(
@@ -290,6 +365,10 @@ def _assert_geometry(value: dict, *, mobile: bool) -> None:
         )
     for control in controls:
         rect = control["rect"]
+        if not rect["hittable"]:
+            raise AssertionError(
+                f"{width}x{height}: {control['name']} is pointer-occluded"
+            )
         if rect["width"] < MIN_TARGET_SIZE or rect["height"] < MIN_TARGET_SIZE:
             raise AssertionError(
                 f"{width}x{height}: {control['name']} target is "
@@ -472,7 +551,206 @@ def _keyboard_activate(connection: object, selector: str) -> None:
     time.sleep(0.15)
 
 
-def _assert_activation_and_state(connection: object) -> None:
+def _assert_status_popover(
+    connection: object,
+    *,
+    trigger_selector: str,
+    dialog_label: str,
+    screenshot: Path,
+) -> None:
+    from browser import _evaluation
+
+    _keyboard_activate(connection, trigger_selector)
+    dialog_selector = f"[role='dialog'][aria-label={json.dumps(dialog_label)}]"
+    _wait_for(
+        connection,
+        f"!!document.querySelector({json.dumps(dialog_selector)})",
+        message=f"{dialog_label} did not open by keyboard",
+    )
+    value = _evaluation(
+        connection,
+        f"""
+        (() => {{
+          const visible = element => {{
+            if (!(element instanceof HTMLElement)) return false;
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== "none"
+              && style.visibility !== "hidden"
+              && rect.width > 0
+              && rect.height > 0;
+          }};
+          const rect = element => {{
+            const value = element.getBoundingClientRect();
+            return {{
+              x: value.x,
+              y: value.y,
+              width: value.width,
+              height: value.height,
+              right: value.right,
+              bottom: value.bottom,
+            }};
+          }};
+          const dialog = document.querySelector({json.dumps(dialog_selector)});
+          const rail = document.querySelector(".tool-rail");
+          if (!(dialog instanceof HTMLElement) || !(rail instanceof HTMLElement)) {{
+            return null;
+          }}
+          const controls = Array.from(dialog.querySelectorAll(
+            "a[href], button:not([disabled]), input:not([disabled]), "
+              + "select:not([disabled]), textarea:not([disabled]), "
+              + "[tabindex]:not([tabindex='-1'])"
+          )).filter(visible).map(element => {{
+            const bounds = rect(element);
+            const hit = document.elementFromPoint(
+              bounds.x + bounds.width / 2,
+              bounds.y + bounds.height / 2
+            );
+            return {{
+              rect: bounds,
+              hittable: hit === element || element.contains(hit),
+              point: {{
+                x: bounds.x + bounds.width / 2,
+                y: bounds.y + bounds.height / 2,
+              }},
+              hit: hit instanceof Element ? {{
+                tag: hit.tagName,
+                className: String(hit.className || ""),
+                label: hit.getAttribute("aria-label") || "",
+              }} : null,
+            }};
+          }});
+          return {{
+            popover: rect(dialog),
+            rail: rect(rail),
+            masterRoot: document.querySelector(".master-popup-root") instanceof HTMLElement
+              ? rect(document.querySelector(".master-popup-root"))
+              : null,
+            viewport: {{x: 0, y: 0, right: innerWidth, bottom: innerHeight}},
+            controls,
+          }};
+        }})()
+        """,
+    )
+    if not isinstance(value, dict):
+        raise AssertionError(f"{dialog_label} geometry is unavailable")
+    popover = value["popover"]
+    viewport = value["viewport"]
+    rail = value["rail"]
+    if not _contained(popover, viewport):
+        raise AssertionError(f"{dialog_label} escapes the mobile viewport")
+    overlap = _intersection(popover, rail)
+    if overlap:
+        raise AssertionError(
+            f"{dialog_label} overlaps the tool rail by {overlap:.0f}px2"
+        )
+    controls = value.get("controls")
+    if not isinstance(controls, list) or not controls:
+        raise AssertionError(f"{dialog_label} has no reachable controls")
+    _capture(connection, screenshot)
+    for index, control in enumerate(controls):
+        bounds = control["rect"]
+        if not _contained(bounds, popover):
+            raise AssertionError(
+                f"{dialog_label} control {index} escapes the visible popover"
+            )
+        if (
+            float(bounds["width"]) < MIN_TARGET_SIZE
+            or float(bounds["height"]) < MIN_TARGET_SIZE
+        ):
+            raise AssertionError(
+                f"{dialog_label} control {index} target is "
+                f"{bounds['width']:.0f}x{bounds['height']:.0f}"
+            )
+        if not control["hittable"]:
+            raise AssertionError(
+                f"{dialog_label} control {index} is pointer-occluded by "
+                f"{control.get('hit')} at {control.get('point')}; "
+                f"Master root is {value.get('masterRoot')}"
+            )
+    reached: set[int] = set()
+    for _ in controls:
+        connection.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "rawKeyDown",
+                "key": "Tab",
+                "code": "Tab",
+                "windowsVirtualKeyCode": 9,
+                "nativeVirtualKeyCode": 9,
+            },
+        )
+        connection.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyUp",
+                "key": "Tab",
+                "code": "Tab",
+                "windowsVirtualKeyCode": 9,
+                "nativeVirtualKeyCode": 9,
+            },
+        )
+        focused = _evaluation(
+            connection,
+            f"""
+            (() => {{
+              const dialog = document.querySelector({json.dumps(dialog_selector)});
+              if (!(dialog instanceof HTMLElement)) return null;
+              const controls = Array.from(dialog.querySelectorAll(
+                "a[href], button:not([disabled]), input:not([disabled]), "
+                  + "select:not([disabled]), textarea:not([disabled]), "
+                  + "[tabindex]:not([tabindex='-1'])"
+              )).filter(element => {{
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== "none"
+                  && style.visibility !== "hidden"
+                  && rect.width > 0
+                  && rect.height > 0;
+              }});
+              const active = document.activeElement;
+              const style = active instanceof HTMLElement
+                ? getComputedStyle(active)
+                : null;
+              return {{
+                index: controls.indexOf(active),
+                ring: !!style
+                  && parseFloat(style.outlineWidth) > 0
+                  && style.outlineStyle !== "none"
+                  && style.outlineColor !== "transparent",
+              }};
+            }})()
+            """,
+        )
+        if not isinstance(focused, dict) or int(focused.get("index", -1)) < 0:
+            raise AssertionError(f"{dialog_label} keyboard focus escaped the popover")
+        if not focused.get("ring"):
+            raise AssertionError(f"{dialog_label} keyboard target lacks a focus ring")
+        reached.add(int(focused["index"]))
+    if reached != set(range(len(controls))):
+        raise AssertionError(f"{dialog_label} keyboard order skips a control")
+    for event_type in ("keyDown", "keyUp"):
+        connection.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": event_type,
+                "key": "Escape",
+                "code": "Escape",
+                "windowsVirtualKeyCode": 27,
+            },
+        )
+    _wait_for(
+        connection,
+        f"!document.querySelector({json.dumps(dialog_selector)})",
+        message=f"{dialog_label} did not close by keyboard",
+    )
+    _evaluation(
+        connection,
+        f"document.querySelector({json.dumps(trigger_selector)})?.focus() || true",
+    )
+
+
+def _assert_activation_and_state(connection: object, output_dir: Path) -> None:
     from browser import _evaluation
 
     textarea = "form.composer textarea"
@@ -552,24 +830,17 @@ def _assert_activation_and_state(connection: object) -> None:
         message="Search did not close by keyboard",
     )
 
-    _keyboard_activate(connection, ".mobile-topbar .attention-trigger")
-    _wait_for(
+    _assert_status_popover(
         connection,
-        "!!document.querySelector(\"[role='dialog'][aria-label='Attention inbox']\")",
-        message="Attention did not open by keyboard",
+        trigger_selector=".mobile-topbar .attention-trigger",
+        dialog_label="Attention inbox",
+        screenshot=output_dir / STATUS_SCREENSHOTS[0],
     )
-    connection.call(
-        "Input.dispatchKeyEvent",
-        {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
-    )
-    connection.call(
-        "Input.dispatchKeyEvent",
-        {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
-    )
-    _wait_for(
+    _assert_status_popover(
         connection,
-        "!document.querySelector(\"[role='dialog'][aria-label='Attention inbox']\")",
-        message="Attention did not close by keyboard",
+        trigger_selector=".mobile-topbar .running-pill",
+        dialog_label="Running tasks",
+        screenshot=output_dir / STATUS_SCREENSHOTS[1],
     )
     stable_targets = _evaluation(
         connection,
@@ -657,6 +928,7 @@ def _run_browser(
     profile: Path,
     token: str,
     output_dir: Path,
+    visual_oracle: dict,
 ) -> dict:
     sys.path.insert(0, str(PROBE_ROOT))
     from browser import _WebSocket, _evaluation
@@ -758,20 +1030,36 @@ def _run_browser(
             "!!document.querySelector('.attention-trigger')",
             message="Attention trigger did not render",
         )
+        _wait_for(
+            connection,
+            "!!document.querySelector('.running-pill')",
+            message="Running trigger did not render",
+        )
 
         results: list[dict] = []
         contrast: dict[str, float] = {}
         tested_390 = False
         for width in range(320, 768):
             _set_viewport(connection, width, 844)
-            value = _geometry(connection)
             if width == 320:
-                _capture(connection, output_dir / "shell-safe-320x844.png")
+                _wait_for(
+                    connection,
+                    """
+                    (() => {
+                      const trigger = document.querySelector(
+                        ".mobile-topbar .attention-trigger"
+                      );
+                      return !!trigger && trigger.getBoundingClientRect().width > 0;
+                    })()
+                    """,
+                    message="Mobile Attention trigger did not render",
+                )
+            value = _geometry(connection)
             _assert_geometry(value, mobile=True)
             results.append(value)
             if width == 390:
                 tested_390 = True
-                _assert_activation_and_state(connection)
+                _assert_activation_and_state(connection, output_dir)
                 connection.call(
                     "Input.dispatchKeyEvent",
                     {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
@@ -787,6 +1075,7 @@ def _run_browser(
             _set_viewport(connection, width, height)
             value = _geometry(connection)
             _assert_geometry(value, mobile=width <= 767)
+            _assert_visual_oracle(value, visual_oracle)
             _capture(connection, output_dir / f"shell-safe-{width}x{height}.png")
             if width > 767:
                 results.append(value)
@@ -798,7 +1087,9 @@ def _run_browser(
             "screenshots": [
                 str(output_dir / f"shell-safe-{width}x{height}.png")
                 for width, height in SCREENSHOT_SIZES
-            ],
+            ] + [str(output_dir / name) for name in STATUS_SCREENSHOTS],
+            "visual_oracle": str(VISUAL_ORACLE_PATH),
+            "visual_oracle_viewports": len(visual_oracle["viewports"]),
             "viewports_checked": len(results),
         }
     finally:
@@ -823,6 +1114,7 @@ def main() -> None:
     args = parser.parse_args()
     if not args.skip_build:
         _build_web()
+    visual_oracle = _load_visual_oracle()
 
     with tempfile.TemporaryDirectory(prefix="proxima-shell-safe-areas-") as raw_root:
         fixture = Path(raw_root)
@@ -952,6 +1244,23 @@ def main() -> None:
                         ),
                     )
                     connection.execute(
+                        "INSERT INTO runs("
+                        "session_id, project_id, user_id, profile_id, runner_id, "
+                        "kind, status, prompt, started_at, heartbeat_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, "
+                        "datetime('now', '+1 hour'))",
+                        (
+                            session_id,
+                            project_id,
+                            owner_id,
+                            profile_id,
+                            "codex",
+                            "chat",
+                            "running",
+                            "Keep the Running popover visible.",
+                        ),
+                    )
+                    connection.execute(
                         "INSERT INTO attention_items("
                         "kind, title, target_json, inline_ok, actions_json, source_key"
                         ") VALUES (?, ?, ?, ?, ?, ?)",
@@ -970,6 +1279,7 @@ def main() -> None:
                     profile=fixture / "browser-profile",
                     token=token,
                     output_dir=args.output_dir.resolve(),
+                    visual_oracle=visual_oracle,
                 )
                 print(json.dumps(result, indent=2, sort_keys=True))
             finally:

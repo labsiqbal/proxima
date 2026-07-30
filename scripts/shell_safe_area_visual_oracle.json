@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "tolerance_px": 0.75,
+  "viewports": {
+    "320x844": {
+      "topbar": {"x": 0, "y": 0, "width": 320, "height": 103},
+      "toolRail": {"x": 274, "y": 103, "width": 46, "height": 741},
+      "master": {"x": 216, "y": 782, "width": 42, "height": 42}
+    },
+    "390x844": {
+      "topbar": {"x": 0, "y": 0, "width": 390, "height": 103},
+      "toolRail": {"x": 344, "y": 103, "width": 46, "height": 741},
+      "master": {"x": 286, "y": 782, "width": 42, "height": 42}
+    },
+    "767x844": {
+      "topbar": {"x": 0, "y": 0, "width": 767, "height": 61},
+      "toolRail": {"x": 721, "y": 61, "width": 46, "height": 783},
+      "master": {"x": 663, "y": 782, "width": 42, "height": 42}
+    },
+    "1024x768": {
+      "topbar": {"x": 0, "y": 0, "width": 1024, "height": 52},
+      "toolRail": {"x": 978, "y": 52, "width": 46, "height": 716},
+      "master": {"x": 920, "y": 706, "width": 42, "height": 42}
+    },
+    "1280x800": {
+      "topbar": {"x": 0, "y": 0, "width": 1280, "height": 52},
+      "toolRail": {"x": 1234, "y": 52, "width": 46, "height": 748},
+      "master": {"x": 1176, "y": 738, "width": 42, "height": 42}
+    },
+    "1440x1000": {
+      "topbar": {"x": 0, "y": 0, "width": 1440, "height": 52},
+      "toolRail": {"x": 1394, "y": 52, "width": 46, "height": 948},
+      "master": {"x": 1336, "y": 938, "width": 42, "height": 42}
+    }
+  }
+}
