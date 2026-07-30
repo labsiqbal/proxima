@@ -27,6 +27,34 @@ function displayStatus(status: string) {
   return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
+function MasterPanel({
+  eyebrow,
+  title,
+  count,
+  children,
+}: {
+  eyebrow: string
+  title: string
+  count: number
+  children: React.ReactNode
+}) {
+  const titleId = `master-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-title`
+  return (
+    <details className="master-side-section" open>
+      <summary className="master-section-head" aria-labelledby={titleId}>
+        <span>
+          <span className="eyebrow">{eyebrow}</span>
+          <strong id={titleId}>{title}</strong>
+        </span>
+        <span className="master-section-summary-meta">
+          <span className="master-count">{count}</span>
+        </span>
+      </summary>
+      <div className="master-side-panel-body">{children}</div>
+    </details>
+  )
+}
+
 function CheckpointTimeline({
   token,
   checkpoints,
@@ -106,14 +134,7 @@ function CheckpointTimeline({
   }
 
   return (
-    <section className="master-side-section" aria-labelledby="master-checkpoint-title">
-      <div className="master-section-head">
-        <div>
-          <span className="eyebrow">Safety</span>
-          <h2 id="master-checkpoint-title">Checkpoints</h2>
-        </div>
-        <span className="master-count">{checkpoints.length}</span>
-      </div>
+    <MasterPanel eyebrow="Safety" title="Checkpoints" count={checkpoints.length}>
       {!checkpoints.length ? (
         <div className="master-zero">
           <strong>No checkpoints yet</strong>
@@ -121,7 +142,7 @@ function CheckpointTimeline({
         </div>
       ) : (
         <ol className="master-checkpoints">
-          {checkpoints.slice(0, 10).map(checkpoint => (
+          {checkpoints.map(checkpoint => (
             <li key={checkpoint.id}>
               <span className="checkpoint-line" aria-hidden="true" />
               <div>
@@ -153,7 +174,7 @@ function CheckpointTimeline({
         </ol>
       )}
       {error && <p className="master-inline-error" role="alert">{error}</p>}
-    </section>
+    </MasterPanel>
   )
 }
 
@@ -178,14 +199,7 @@ export function MasterWorkPanel({
 
   return (
     <aside className="master-side" aria-label="Master work panel">
-      <section className="master-side-section master-work-section" aria-labelledby="master-work-title">
-        <div className="master-section-head">
-          <div>
-            <span className="eyebrow">Fleet work</span>
-            <h2 id="master-work-title">Master Tasks</h2>
-          </div>
-          <span className="master-count">{visibleJobs.length}</span>
-        </div>
+      <MasterPanel eyebrow="Fleet work" title="Master Tasks" count={visibleJobs.length}>
         <div className="master-work-counts" aria-label="Task status summary">
           {WORK_STATES.map(state => (
             <span className={`master-work-count ${state.status}`} key={state.status}>
@@ -233,16 +247,9 @@ export function MasterWorkPanel({
             })}
           </div>
         )}
-      </section>
+      </MasterPanel>
 
-      <section className="master-side-section" aria-labelledby="master-needs-title">
-        <div className="master-section-head">
-          <div>
-            <span className="eyebrow">Decisions</span>
-            <h2 id="master-needs-title">Needs your attention</h2>
-          </div>
-          <span className="master-count">{desk.attention.length}</span>
-        </div>
+      <MasterPanel eyebrow="Decisions" title="Needs your attention" count={desk.attention.length}>
         {!desk.attention.length ? (
           <div className="master-zero">
             <strong>Nothing needs a decision</strong>
@@ -270,7 +277,7 @@ export function MasterWorkPanel({
             ))}
           </ul>
         )}
-      </section>
+      </MasterPanel>
 
       <CheckpointTimeline token={token} checkpoints={desk.checkpoints} />
     </aside>

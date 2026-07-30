@@ -29,14 +29,20 @@ type MasterToolResult = {
   error?: { code?: string; message?: string }
 }
 
-function parseToolResults(content: string): MasterToolResult[] | null {
-  const match = content.match(/^Master tool results:\s*```json\s*([\s\S]*?)\s*```\s*$/)
+type MasterToolResultPayload = {
+  tools: MasterToolResult[] | null
+  raw: string
+}
+
+function parseToolResults(content: string): MasterToolResultPayload | null {
+  const match = content.match(/^Master tool results:\s*(?:```json\s*)?([\s\S]*?)(?:\s*```)?\s*$/)
   if (!match) return null
+  const raw = match[1].trim()
   try {
-    const value = JSON.parse(match[1])
-    return Array.isArray(value) ? value : null
+    const value = JSON.parse(raw)
+    return { tools: Array.isArray(value) ? value : null, raw }
   } catch {
-    return null
+    return { tools: null, raw }
   }
 }
 
@@ -73,14 +79,29 @@ function toolResultLabel(tool: MasterToolResult, jobs: MasterJobResult[]) {
 
 function MasterToolResults({
   tools,
+  raw,
   onOpenJob,
 }: {
-  tools: MasterToolResult[]
+  tools: MasterToolResult[] | null
+  raw: string
   onOpenJob: (id: number, engine?: string) => void
 }) {
+  const summaries = tools?.map(tool => {
+    const jobs = tool.result?.jobs || (tool.result?.job ? [tool.result.job] : [])
+    return toolResultLabel(tool, jobs)
+  }) || []
+  const summary = summaries.length
+    ? summaries.join(' · ')
+    : 'Master is updating a tool result'
   return (
-    <div className="master-tool-results" role="group" aria-label="Master tool results">
-      {tools.map((tool, toolIndex) => {
+    <details className={`master-tool-results${tools?.some(tool => !tool.ok) ? ' failed' : ''}`}>
+      <summary aria-label={`Master tool result: ${summary}`}>
+        <span>Master update</span>
+        <strong>{summary}</strong>
+        <span className="master-tool-disclosure-label">Details</span>
+      </summary>
+      <div className="master-tool-results-body" role="group" aria-label="Master tool results">
+      {tools?.map((tool, toolIndex) => {
         const jobs = tool.result?.jobs || (tool.result?.job ? [tool.result.job] : [])
         return (
           <div className={tool.ok ? 'ok' : 'failed'} key={`${tool.tool}-${toolIndex}`}>
@@ -103,7 +124,14 @@ function MasterToolResults({
           </div>
         )
       })}
-    </div>
+      {!tools && (
+        <p className="master-tool-unreadable" role="status">
+          Master is still receiving this tool result. Technical detail is available below.
+        </p>
+      )}
+      <pre className="master-tool-raw"><code>{raw}</code></pre>
+      </div>
+    </details>
   )
 }
 
@@ -261,8 +289,8 @@ export function MasterConversation({
           ? cleanMaster(message.content)
           : message.content
         if (!content) return null
-        const tools = message.role === 'system' ? parseToolResults(content) : null
-        if (tools) {
+        const toolPayload = message.role === 'system' ? parseToolResults(content) : null
+        if (toolPayload) {
           return (
             <article
               className="master-tool-message"
@@ -271,7 +299,8 @@ export function MasterConversation({
             >
               <MasterHistoryKind kind={message.historyKind} />
               <MasterToolResults
-                tools={tools}
+                tools={toolPayload.tools}
+                raw={toolPayload.raw}
                 onOpenJob={onOpenJob}
               />
             </article>

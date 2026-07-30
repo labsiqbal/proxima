@@ -4,7 +4,6 @@ import { MasterConversation, MasterEmpty } from '../components/master/MasterConv
 import { MasterComposer } from '../components/master/MasterComposer'
 import { MasterWorkPanel } from '../components/master/MasterWorkPanel'
 import { MasterFocusPicker, MasterHistoryPicker } from '../components/master/MasterTargetPicker'
-import { IconPanelLeft } from '../components/shell/icons'
 import { useMasterState } from '../master/MasterStateProvider'
 
 export { MasterEmpty }
@@ -50,7 +49,7 @@ export function MasterScreen({
   active?: boolean
 }) {
   const state = useMasterState()
-  const { desk, loading, connection, view, actions } = state
+  const { desk, loading, connection, actions } = state
   const setHomeActive = actions.setHomeActive
   const [settingBusy, setSettingBusy] = React.useState(false)
 
@@ -130,7 +129,7 @@ export function MasterScreen({
   }
 
   return (
-    <section className={`master-view ${view.sideCollapsed ? 'master-side-collapsed' : ''}`} aria-labelledby="master-title">
+    <section className="master-view" aria-labelledby="master-title">
       <header className="code-header master-head">
         <div className="master-title">
           <p className="eyebrow">Your orchestrator</p>
@@ -205,16 +204,6 @@ export function MasterScreen({
                 ? 'Unattended on'
                 : 'Unattended off'}
           </button>
-          <button
-            type="button"
-            className={`tool-btn master-side-toggle ${view.sideCollapsed ? '' : 'active'}`}
-            onClick={() => actions.setSideCollapsed(!view.sideCollapsed)}
-            aria-pressed={!view.sideCollapsed}
-            aria-label={view.sideCollapsed ? 'Show work panel' : 'Hide work panel'}
-            title={view.sideCollapsed ? 'Show work panel' : 'Hide work panel'}
-          >
-            <IconPanelLeft size={16} />
-          </button>
         </div>
       </header>
 
@@ -269,21 +258,7 @@ export function MasterScreen({
             <MasterConversation onOpenJob={onOpenJob} />
             <MasterComposer token={token} projectSlug={projectSlug} />
           </div>
-          {!view.sideCollapsed && (
-            <MasterWorkPanel token={token} onOpenJob={onOpenJob} />
-          )}
-          {view.sideCollapsed && (
-            <button
-              type="button"
-              className="master-side-reopen"
-              onClick={() => actions.setSideCollapsed(false)}
-              aria-label="Expand work panel"
-              title="Expand work panel"
-            >
-              <span className="eyebrow">Work</span>
-              <span aria-hidden="true">‹</span>
-            </button>
-          )}
+          <MasterWorkPanel token={token} onOpenJob={onOpenJob} />
         </div>
       </div>
     </section>

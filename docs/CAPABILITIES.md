@@ -290,7 +290,9 @@ composer for delegation (attach + `@` project mentions; submit still hits
 `/api/master/messages`). A successful send returns the canonical persisted user
 message with its durable id, so the provider can replace the pending row without
 polling or letting the streamed reply sort ahead of its prompt. The work side panel
-is collapsible with a persisted preference. One authenticated `MasterStateProvider` above `AppShell` owns the
+keeps independent, default-open Fleet work, Decisions, and Safety accordions. Each
+list has a three-entry scroll viewport, so the entire panel stays available without
+a hide/collapse preference. One authenticated `MasterStateProvider` above `AppShell` owns the
 canonical desk/session, ordered thread, active turn, durable event cursor, one SSE
 connection, reconnect reconciliation, unread count, composer draft and selection,
 Focus, per-message target, popup state, transient notifications, Fleet registry,
@@ -352,6 +354,12 @@ explicit on desktop and mobile. A compact New Task control seeds the one shared
 composer rather than starting a parallel launcher flow. The empty home is sparse by
 default (`CompactTeachingEmpty`: title, one lead, tooltip chips, **How it works**)
 so the Delegate composer stays the primary CTA.
+
+**Tool-result readability:** Master product-tool outcomes are compact collapsed
+disclosures in the durable conversation. Their summary uses plain product language
+for success, failure, and incomplete streaming results; linked Tasks and a bounded
+raw payload remain available only after explicit expansion, preserving auditability
+without letting JSON dominate the desk.
 
 **Restricted runtime and product tools:** the centralized runner contract requires
 an explicit `master_chat_only` capability. A conforming Master receives one dedicated

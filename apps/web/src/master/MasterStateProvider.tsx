@@ -101,7 +101,6 @@ export type MasterStateValue = {
   }
   view: {
     homeActive: boolean
-    sideCollapsed: boolean
     scrollTop: number
     followTail: boolean
     anchorMessageId: number | null
@@ -118,7 +117,6 @@ export type MasterStateValue = {
     send: (content?: string) => Promise<void>
     setHomeActive: (active: boolean) => void
     markRead: () => void
-    setSideCollapsed: (collapsed: boolean) => void
     setScrollState: (state: {
       scrollTop: number
       followTail: boolean
@@ -142,7 +140,6 @@ export type MasterStateValue = {
 
 const MasterStateContext = React.createContext<MasterStateValue | null>(null)
 
-const SIDE_COLLAPSED_KEY = 'proxima.master.sideCollapsed'
 const MASTER_TARGET_KEY = 'proxima.master.target'
 const MASTER_POPUP_CORNER_KEY = 'proxima.master.popupCorner'
 const MASTER_REFRESH_STATE_KEY = 'proxima.master.refreshState'
@@ -391,18 +388,6 @@ function rememberEventIds(
   )
 }
 
-function readSideCollapsed(): boolean {
-  if (typeof localStorage === 'undefined') return false
-  const stored = localStorage.getItem(SIDE_COLLAPSED_KEY)
-  if (stored === '1') return true
-  if (stored === '0') return false
-  try {
-    return Boolean(window.matchMedia?.('(max-width: 900px)').matches)
-  } catch {
-    return false
-  }
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -437,7 +422,6 @@ function MasterStateHost({
   const [sendError, setSendError] = React.useState('')
   const [focusRequest, setFocusRequest] = React.useState(0)
   const [homeActive, setHomeActiveState] = React.useState(false)
-  const [sideCollapsed, setSideCollapsedState] = React.useState(readSideCollapsed)
   const [scrollState, setScrollStateValue] = React.useState(restoredState.scroll)
   const [focus, setFocusState] = React.useState<MasterFocusState>(DEFAULT_FOCUS)
   const [history, setHistoryState] = React.useState<MasterHistoryState>(DEFAULT_HISTORY)
@@ -1297,15 +1281,6 @@ function MasterStateHost({
     if (active) setUnreadCount(0)
   }, [])
 
-  const setSideCollapsed = React.useCallback((collapsed: boolean) => {
-    setSideCollapsedState(collapsed)
-    try {
-      localStorage.setItem(SIDE_COLLAPSED_KEY, collapsed ? '1' : '0')
-    } catch {
-      // UI preference persistence is best effort.
-    }
-  }, [])
-
   const setScrollState = React.useCallback((next: {
     scrollTop: number
     followTail: boolean
@@ -1398,7 +1373,6 @@ function MasterStateHost({
     },
     view: {
       homeActive,
-      sideCollapsed,
       ...scrollState,
     },
     focus,
@@ -1413,7 +1387,6 @@ function MasterStateHost({
       send,
       setHomeActive,
       markRead: () => setUnreadCount(0),
-      setSideCollapsed,
       setScrollState,
       setFocus,
       setHistory,
@@ -1476,10 +1449,8 @@ function MasterStateHost({
     setPopupCorner,
     setScrollState,
     setSelection,
-    setSideCollapsed,
     setTargetArea,
     setTargetContainer,
-    sideCollapsed,
     target,
     toasts,
     togglePopup,
