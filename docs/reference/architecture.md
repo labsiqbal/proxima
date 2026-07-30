@@ -354,10 +354,17 @@ Attention reason, `lstat`-based path states, conflicts, active-layout usability,
 retry safety without changing the filesystem or following symlinks. The Project
 routes expose that projection for inspection and refresh. The retry route first
 requires a safe current projection, then delegates to the same hash-bound,
-same-filesystem migration routine used at startup. It does not add merge, overwrite,
-delete, cross-device move, symlink-following, or content-authority behavior.
+same-filesystem migration routine used at startup. Immediately before every manifest
+application, that boundary rechecks current code-Area ownership plus path type,
+symlink, hash, and filesystem constraints, including `ops/container.md`. A repaired
+already-physical layout with open migration Attention becomes explicitly retryable;
+the same boundary revalidates it and resolves Attention without moving content. It
+does not add merge, overwrite, delete, cross-device move, symlink-following, or
+content-authority behavior.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
-file API all resolve through the active Ops row.
+file API all resolve through the active Ops row. Recovery reveal actions can opt into
+an explicit Container-root file target so legacy `wiki` and physical `ops/wiki`
+remain independently inspectable even after physical Ops becomes active.
 
 The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers`, `GET /api/containers/{slug}`, and

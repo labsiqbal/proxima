@@ -1286,14 +1286,22 @@ builds and hashes a dry-run manifest, then uses atomic same-filesystem moves for
 known Ops-owned paths. Its durable marker resumes safely after interruption. Any
 collision, changed content, unsupported file type, or ambiguity stops only that
 Container, opens an owner-visible Attention item, and leaves the legacy row active.
+Every resumed marker rechecks current code-Area ownership and every path type,
+symlink, content hash, and filesystem constraint immediately before applying any
+remaining move. A repaired physical layout with an open Attention item can use the
+same explicit retry boundary to recheck the layout and resolve the item without
+moving content.
 The Attention item links to a durable Project settings detail route. That surface
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy
-and physical path states, conflicts, and which Ops paths remain usable. Owners can
-reveal either side and refresh read-only validation. Retry stays disabled until the
-current layout passes the existing collision, type, hash, symlink, overlap, and
-same-filesystem checks; retry then requires confirmation and resumes through the
-durable marker. Proxima never auto-merges, overwrites, deletes, follows symlinks,
-moves across filesystems, or decides which conflicting content is authoritative.
+and physical path states, exact physical-root entries, conflicts, and which Ops paths
+remain usable. Owners can reveal either side through an explicit Container-root
+target and refresh read-only validation. The durable detail route pins the shell to
+its Project across reload and refresh; switching Settings sections clears the detail
+route. Retry stays disabled until the current layout passes the existing collision,
+type, hash, symlink, overlap, and same-filesystem checks; retry then requires
+confirmation and resumes through the durable marker. Proxima never auto-merges,
+overwrites, deletes, follows symlinks, moves across filesystems, or decides which
+conflicting content is authoritative.
 All Ops consumers resolve through the row, so Archive, Wiki, artifacts, Designs,
 scripts, reports, exports, and uploads continue to use root-level legacy paths until
 that Container migrates cleanly. `container_registry` caches the bounded identity and

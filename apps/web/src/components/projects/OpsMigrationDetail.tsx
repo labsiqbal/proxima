@@ -11,20 +11,27 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   onBack: () => void
   onChanged: () => Promise<void>
 }) {
-  const [detail, setDetail] = React.useState<OpsMigrationDetailPayload | null>(null)
+  const [loaded, setLoaded] = React.useState<{
+    slug: string
+    value: OpsMigrationDetailPayload
+  } | null>(null)
   const [busy, setBusy] = React.useState<'load' | 'validate' | 'retry' | null>('load')
   const [error, setError] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const titleRef = React.useRef<HTMLHeadingElement>(null)
   const requestSeq = React.useRef(0)
+  const detail = loaded?.slug === project.slug ? loaded.value : null
 
   const load = React.useCallback(async () => {
     const seq = ++requestSeq.current
     setBusy('load')
     setError('')
+    setNotice('')
     try {
       const next = await getOpsMigration(token, project.slug)
-      if (seq === requestSeq.current) setDetail(next)
+      if (seq === requestSeq.current) {
+        setLoaded({ slug: project.slug, value: next })
+      }
     } catch (cause) {
       if (seq === requestSeq.current) {
         setError(cause instanceof Error ? cause.message : String(cause))
@@ -49,7 +56,7 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
     try {
       const next = await validateOpsMigration(token, project.slug)
       if (seq !== requestSeq.current) return
-      setDetail(next)
+      setLoaded({ slug: project.slug, value: next })
       setNotice(next.retry_safe
         ? 'Validation is safe. Retry is now available.'
         : 'Validation refreshed. The layout still needs owner attention.')
@@ -77,7 +84,7 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
     try {
       const next = await retryOpsMigration(token, project.slug)
       if (seq !== requestSeq.current) return
-      setDetail(next)
+      setLoaded({ slug: project.slug, value: next })
       setNotice('Ops migration completed. The Attention item is resolved.')
       await onChanged()
     } catch (cause) {
@@ -90,7 +97,13 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   }
 
   function reveal(path: string) {
-    window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path } }))
+    window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
+      detail: {
+        path,
+        projectSlug: project.slug,
+        rootSide: 'container',
+      },
+    }))
   }
 
   const phase = detail?.phase || 'loading'
@@ -132,6 +145,16 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
             <div><dt>Physical ops/</dt><dd>{stateLabel(detail.physical_ops.state)}</dd></div>
             <div><dt>Attention</dt><dd>{stateLabel(detail.attention.status)}</dd></div>
           </dl>
+          {detail.physical_ops.entries.length > 0 && (
+            <ul className="ops-migration-list" aria-label="Physical ops entries">
+              {detail.physical_ops.entries.map(entry => (
+                <li key={entry.path}>
+                  <code>{entry.path}</code>
+                  <span>{stateLabel(entry.kind)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </article>
       </div>
 

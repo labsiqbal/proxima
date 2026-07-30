@@ -1,10 +1,21 @@
 import '@testing-library/jest-dom/vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { projectFs } from '../../api/fsAdapter'
 import { ToolDock } from './ToolDock'
 import type { Project } from '../../types'
 
+vi.mock('../../api/fsAdapter', () => ({
+  projectFs: vi.fn(() => ({
+    list: vi.fn().mockResolvedValue({ entries: [] }),
+    read: vi.fn(),
+    write: vi.fn(),
+    mkdir: vi.fn(),
+    rename: vi.fn(),
+    remove: vi.fn(),
+  })),
+}))
 vi.mock('../terminal/TerminalTabs', () => ({
   TerminalTabs: ({ projectSlug }: { projectSlug?: string }) => <div data-testid="terminal-stub">terminal:{projectSlug || 'none'}</div>,
 }))
@@ -15,6 +26,10 @@ vi.mock('../files/AppRunner', () => ({
 const project = { slug: 'master', name: 'Master', visibility: 'private' } as Project
 
 describe('ToolDock', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('offers Terminal, Files, and Preview as rail tools plus Settings', () => {
     const onOpenSettings = vi.fn()
     render(<ToolDock token="t" project={project} onOpenSettings={onOpenSettings} />)
@@ -123,5 +138,20 @@ describe('ToolDock', () => {
     )
     expect(screen.getByRole('complementary', { name: 'Tools' })).toBeVisible()
     expect(screen.getByTestId('terminal-stub')).toBeInTheDocument()
+  })
+
+  it('uses an explicit container root for migration reveal targets', async () => {
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
+        detail: {
+          path: 'wiki',
+          projectSlug: project.slug,
+          rootSide: 'container',
+        },
+      }))
+    })
+    await screen.findByLabelText('Tool panel')
+    expect(projectFs).toHaveBeenLastCalledWith('t', project.slug, '', 'container')
   })
 })

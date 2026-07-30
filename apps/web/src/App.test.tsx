@@ -15,6 +15,7 @@ import {
 	workRouteFocusedItemIds,
 	workRouteSessionId,
 	planOpenMasterConversation,
+	projectForShellScope,
 } from "./App";
 import type { ChatSession, Project } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
@@ -1208,6 +1209,17 @@ describe("Shell project selection", () => {
 		).toBe("legacy collision");
 		expect(opsMigrationSlugFromHash("#settings/projects/legacy-collision")).toBeNull();
 		expect(opsMigrationSlugFromHash("#settings/projects/%E0%A4%A/ops-migration")).toBeNull();
+	});
+
+	it("pins shell scope to the routed migration project after reload", () => {
+		const alpha = { slug: "alpha" } as Project;
+		const recovery = { slug: "recovery" } as Project;
+		expect(projectForShellScope({
+			projects: [alpha, recovery],
+			migrationSlug: recovery.slug,
+			sessionProjectSlug: alpha.slug,
+			currentProject: alpha,
+		})).toBe(recovery);
 	});
 });
 

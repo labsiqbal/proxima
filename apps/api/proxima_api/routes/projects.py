@@ -341,6 +341,7 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}")
     def get_project(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Return one owner-visible Project compatibility payload."""
         return project_payload(visible_project(slug, user))
 
     @app.get("/api/projects/{slug}/ops-migration")

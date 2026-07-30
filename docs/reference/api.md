@@ -236,7 +236,7 @@
 | POST | `/api/projects` | `create_project` |  |
 | POST | `/api/projects/link` | `link_project` | Register a folder as a project (no scaffold under the data dir). The |
 | DELETE | `/api/projects/{slug}` | `delete_project` |  |
-| GET | `/api/projects/{slug}` | `get_project` | Inspect one Project's physical Ops migration without changing its files. |
+| GET | `/api/projects/{slug}` | `get_project` | Return one owner-visible Project compatibility payload. |
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
 | GET | `/api/projects/{slug}/areas` | `list_project_areas` | The project's container areas: code areas (git-repo subfolders, |
 | POST | `/api/projects/{slug}/areas` | `add_project_area` | Manually register (or correct) a code area - T1's hybrid override. |

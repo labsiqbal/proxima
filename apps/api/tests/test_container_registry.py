@@ -493,6 +493,174 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
     ).read_text(encoding="utf-8") == "artifact"
 
 
+def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "late-overlap-layout"
+    container_id = _owned_api_legacy(api, root, "late-overlap-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry.os.replace
+    moves = 0
+
+    def interrupt_second_move(source, destination):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+
+    registered = api.post(
+        "/api/projects/late-overlap-layout/areas",
+        headers=headers,
+        json={"rel_path": "artifacts"},
+    )
+    assert registered.status_code == 201, registered.text
+
+    detail = api.post(
+        "/api/projects/late-overlap-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "overlaps a repo Area" in detail.json()["validation_reason"]
+
+    retry = api.post(
+        "/api/projects/late-overlap-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert not (root / "ops" / "artifacts").exists()
+
+
+def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "container-doc-symlink-layout"
+    container_id = _owned_api_legacy(api, root, "container-doc-symlink-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry.os.replace
+    moves = 0
+
+    def interrupt_second_move(source, destination):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+
+    outside = tmp_path / "outside-container.md"
+    outside.write_text("outside", encoding="utf-8")
+    (root / "ops" / "container.md").symlink_to(outside)
+
+    detail = api.post(
+        "/api/projects/container-doc-symlink-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "container.md" in detail.json()["validation_reason"]
+    assert "symlink" in detail.json()["validation_reason"]
+
+    retry = api.post(
+        "/api/projects/container-doc-symlink-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert not (root / "ops" / "artifacts").exists()
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_repaired_physical_layout_can_retry_to_resolve_open_attention(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "repaired-physical-layout"
+    container_id = _owned_api_legacy(api, root, "repaired-physical-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+
+    unavailable = tmp_path / "temporarily-unavailable-ops"
+    (root / "ops").rename(unavailable)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    unavailable.rename(root / "ops")
+
+    detail = api.post(
+        "/api/projects/repaired-physical-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["phase"] == "complete"
+    assert body["attention"]["status"] == "open"
+    assert body["retry_safe"] is True
+
+    retry = api.post(
+        "/api/projects/repaired-physical-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 200, retry.text
+    resolved = retry.json()
+    assert resolved["phase"] == "complete"
+    assert resolved["attention"]["status"] == "resolved"
+    assert resolved["retry_safe"] is False
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+
+
+def test_file_api_can_inspect_explicit_container_side_after_migration(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "explicit-container-side"
+    container_id = _owned_api_legacy(api, root, "explicit-container-side")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "physical.txt").write_text("physical", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+    (root / "wiki").mkdir()
+    (root / "wiki" / "legacy.txt").write_text("legacy", encoding="utf-8")
+
+    virtual = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "wiki/physical.txt"},
+        headers=headers,
+    )
+    assert virtual.status_code == 200, virtual.text
+    assert virtual.json()["content"] == "physical"
+
+    legacy = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "wiki/legacy.txt", "root_side": "container"},
+        headers=headers,
+    )
+    physical = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "ops/wiki/physical.txt", "root_side": "container"},
+        headers=headers,
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["content"] == "legacy"
+    assert physical.status_code == 200, physical.text
+    assert physical.json()["content"] == "physical"
+
+
 def test_validation_blocks_cross_filesystem_retry_before_any_move(
     tmp_path: Path,
     monkeypatch,

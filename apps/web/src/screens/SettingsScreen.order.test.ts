@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { SETTINGS_GROUPS, settingsSectionOrder } from './SettingsScreen'
+import {
+  SETTINGS_GROUPS,
+  settingsSectionOrder,
+  shouldCloseOpsMigrationForSection,
+} from './SettingsScreen'
 
 describe('Settings IA groups (UI Flow M7)', () => {
   it('orders Work setup · Integrations · System · Help', () => {
@@ -27,5 +31,11 @@ describe('Settings IA groups (UI Flow M7)', () => {
   it('ends with Help as its own group', () => {
     const order = settingsSectionOrder()
     expect(order[order.length - 1]).toBe('help')
+  })
+
+  it('closes a migration detail when leaving Projects', () => {
+    expect(shouldCloseOpsMigrationForSection('account', 'legacy-collision')).toBe(true)
+    expect(shouldCloseOpsMigrationForSection('projects', 'legacy-collision')).toBe(false)
+    expect(shouldCloseOpsMigrationForSection('account', null)).toBe(false)
   })
 })

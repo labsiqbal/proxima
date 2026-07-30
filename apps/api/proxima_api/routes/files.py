@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -58,7 +58,7 @@ def register(app, deps):
     _ops_root = deps["_ops_root"]
     _virtual_root = deps["_virtual_root"]
 
-    def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
+def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
         authorization = request.headers.get("authorization", "")
         token = (
             authorization.removeprefix("Bearer ").strip()
@@ -114,6 +114,16 @@ def register(app, deps):
         ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    def _file_root(
+        slug: str,
+        path: str,
+        user: dict[str, Any],
+        root_side: Literal["virtual", "container"],
+    ) -> Path:
+        if root_side == "container":
+            return _project_root(slug, user)
+        return _virtual_root(slug, path, user)
+
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         """Project-scoped path audit (file writes, app starts, tree ops)."""
         _audit(user, action, "project", slug, {"path": path})
@@ -136,9 +146,13 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
         try:
+            if root_side == "container":
+                root = _file_root(slug, path, user, root_side)
+                return {"path": path, "entries": fsapi.list_tree(root, path)}
             project = visible_project(slug, user)
             context = file_targets.target_context(db(), project)
             if path or target:
@@ -254,8 +268,17 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            if not path:
+                raise HTTPException(status_code=400, detail="file path is required")
+            root = _file_root(slug, path, user, root_side)
+            try:
+                return {"path": path, "content": fsapi.read_file(root, path)}
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         resolved = _resolved_file(slug, user, path=path, target=target)
         if not resolved.locator.path:
             raise HTTPException(status_code=400, detail="file path is required")
@@ -277,8 +300,19 @@ def register(app, deps):
         payload: FileWriteRequest,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            if not path:
+                raise HTTPException(status_code=400, detail="file path is required")
+            root = _file_root(slug, path, user, root_side)
+            try:
+                fsapi.write_file(root, path, payload.content)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "file.write", slug, path)
+            return {"ok": True, "path": path}
         resolved = _resolved_file(slug, user, path=path, target=target)
         if not resolved.locator.path:
             raise HTTPException(status_code=400, detail="file path is required")
@@ -1107,8 +1141,19 @@ def register(app, deps):
 
     @app.post("/api/projects/{slug}/fs/mkdir")
     def project_mkdir(
-        slug: str, payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        payload: FsPathRequest,
+        root_side: Literal["virtual", "container"] = "virtual",
+        user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            root = _file_root(slug, payload.path, user, root_side)
+            try:
+                fsapi.mkdir(root, payload.path)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "fs.mkdir", slug, payload.path)
+            return {"ok": True, "path": payload.path}
         resolved = _resolved_file(
             slug,
             user,
@@ -1130,8 +1175,28 @@ def register(app, deps):
     def project_rename(
         slug: str,
         payload: FsRenameRequest,
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            source_root = _file_root(slug, payload.from_, user, root_side)
+            destination_root = _file_root(slug, payload.to, user, root_side)
+            if source_root.resolve() != destination_root.resolve():
+                raise HTTPException(
+                    status_code=400,
+                    detail="cannot move a file across Container Area boundaries",
+                )
+            try:
+                fsapi.rename(source_root, payload.from_, payload.to)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(
+                user,
+                "fs.rename",
+                slug,
+                f"{payload.from_} -> {payload.to}",
+            )
+            return {"ok": True}
         source = _resolved_file(
             slug,
             user,
@@ -1170,8 +1235,17 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            root = _file_root(slug, path, user, root_side)
+            try:
+                fsapi.delete(root, path)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "fs.delete", slug, path)
+            return {"ok": True, "path": path}
         resolved = _resolved_file(slug, user, path=path, target=target)
         try:
             fsapi.delete(resolved.root, resolved.locator.path)

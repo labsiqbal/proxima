@@ -1044,6 +1044,34 @@ def _physical_ops_state(path: Path) -> dict[str, Any]:
     return {"path": OPS_RELPATH, "state": state, "entries": entries}
 
 
+def _validate_manifest_area_ownership(
+    conn: sqlite3.Connection,
+    container: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> None:
+    code_paths = {
+        str(row["rel_path"])
+        for row in conn.execute(
+            "SELECT rel_path FROM project_areas "
+            "WHERE project_id = ? AND kind = 'code' AND source != 'excluded'",
+            (container["id"],),
+        ).fetchall()
+    }
+    for entry in manifest.get("entries") or []:
+        name = str(entry.get("name") or "")
+        physical_name = f"{OPS_RELPATH}/{name}"
+        for code_path in code_paths:
+            if (
+                code_path == name
+                or code_path.startswith(f"{name}/")
+                or code_path == physical_name
+                or code_path.startswith(f"{physical_name}/")
+            ):
+                raise OpsMigrationCollision(
+                    f"Ops migration path overlaps a repo Area: {code_path}"
+                )
+
+
 def _validated_retry_manifest(
     conn: sqlite3.Connection,
     container: Mapping[str, Any],
@@ -1072,6 +1100,9 @@ def _validated_retry_manifest(
     else:
         manifest = _build_manifest(conn, container)
 
+    validated_area_roots(conn, container, deep_ops_scan=True)
+    _validate_manifest_area_ownership(conn, container, manifest)
+
     physical_state = _path_state(physical)
     if physical_state == "symlink":
         raise OpsMigrationCollision("physical Ops root is a symlink")
@@ -1098,6 +1129,12 @@ def _validated_retry_manifest(
             raise OpsMigrationCollision(
                 f"physical Ops root contains unplanned content: {unexpected[0]}"
             )
+
+    container_doc_state = _path_state(physical / CONTAINER_DOC)
+    if container_doc_state == "symlink":
+        raise OpsMigrationCollision("ops/container.md is a symlink")
+    if container_doc_state not in {"missing", "file"}:
+        raise OpsMigrationCollision("ops/container.md is not a regular file")
 
     destination_device = (
         _path_device(physical) if physical_state == "directory" else _path_device(root)
@@ -1284,7 +1321,10 @@ def inspect_ops_migration(
         except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
             validation_reason = str(exc)
         else:
-            validation_reason = "Migration is already complete; no retry is needed."
+            if attention_row is not None and attention_row["status"] == "open":
+                retry_safe = True
+            else:
+                validation_reason = "Migration is already complete; no retry is needed."
     elif active_ops_path is None:
         validation_reason = "Container must have exactly one active Ops Area."
     else:
@@ -1370,7 +1410,7 @@ def migrate_container_ops(
         return False
     if row["rel_path"] == OPS_RELPATH:
         try:
-            validated_area_roots(conn, data)
+            validated_area_roots(conn, data, deep_ops_scan=True)
             refresh_registry_projection(conn, data)
         except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
             reason = str(exc)
@@ -1392,20 +1432,17 @@ def migrate_container_ops(
         return False
 
     marker = conn.execute(
-        "SELECT status, manifest_json FROM container_ops_migrations WHERE container_id = ?",
+        "SELECT status, manifest_json, manifest_hash "
+        "FROM container_ops_migrations WHERE container_id = ?",
         (data["id"],),
     ).fetchone()
     manifest: dict[str, Any] | None = None
-    if marker and marker["status"] == "moving" and marker["manifest_json"]:
-        manifest = json.loads(marker["manifest_json"])
-        if _manifest_digest(manifest) != conn.execute(
-            "SELECT manifest_hash FROM container_ops_migrations WHERE container_id = ?",
-            (data["id"],),
-        ).fetchone()["manifest_hash"]:
-            reason = "stored Ops migration manifest failed its integrity check"
-            _attention(conn, data, reason)
-            return False
-    if manifest is None:
+    resuming = bool(
+        marker
+        and marker["status"] == "moving"
+        and marker["manifest_json"]
+    )
+    if not resuming:
         try:
             manifest = _build_manifest(conn, data)
         except (ContainerBoundaryError, OSError) as exc:
@@ -1417,6 +1454,16 @@ def migrate_container_ops(
         _upsert_marker(conn, int(data["id"]), "moving", manifest)
 
     try:
+        current_marker = conn.execute(
+            "SELECT status, manifest_json, manifest_hash "
+            "FROM container_ops_migrations WHERE container_id = ?",
+            (data["id"],),
+        ).fetchone()
+        manifest = _validated_retry_manifest(
+            conn,
+            data,
+            dict(current_marker) if current_marker is not None else None,
+        )
         physical = _apply_manifest(manifest)
         _atomic_write_if_missing(
             physical / CONTAINER_DOC,
@@ -1439,7 +1486,15 @@ def migrate_container_ops(
             raise
     except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
         reason = str(exc)
-        _upsert_marker(conn, int(data["id"]), "moving", manifest, reason)
+        if manifest is not None:
+            _upsert_marker(conn, int(data["id"]), "moving", manifest, reason)
+        else:
+            conn.execute(
+                "UPDATE container_ops_migrations "
+                "SET last_error = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE container_id = ?",
+                (reason, data["id"]),
+            )
         _attention(conn, data, reason)
         return False
     return True

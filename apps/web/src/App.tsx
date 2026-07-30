@@ -337,6 +337,33 @@ export function opsMigrationSlugFromHash(hash: string): string | null {
   }
 }
 
+export function projectForShellScope(args: {
+  projects: Project[]
+  migrationSlug?: string | null
+  sessionProjectSlug?: string | null
+  currentProject?: Project | null
+}): Project | null {
+  if (args.migrationSlug) {
+    const routed = args.projects.find(project => project.slug === args.migrationSlug)
+    if (routed) return routed
+  }
+  if (args.sessionProjectSlug) {
+    const fromSession = args.projects.find(
+      project => project.slug === args.sessionProjectSlug,
+    )
+    if (fromSession) return fromSession
+  }
+  if (
+    args.currentProject
+    && args.projects.some(project => project.slug === args.currentProject?.slug)
+  ) {
+    return args.currentProject
+  }
+  return args.projects.find(project => project.visibility === 'private')
+    || args.projects[0]
+    || null
+}
+
 /** Delegate owns only its global desk and its cross-project review destinations. */
 export function isDelegateDestination(view: View): boolean {
   return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
@@ -1232,9 +1259,15 @@ export function App() {
       sessionEnabled,
     )
     setActiveSession(nextSession)
-    setActiveProject(nextProject)
+    // Ops migration hash locks shell scope onto that Project; otherwise keep the
+    // Work URL / preference resolution above.
+    setActiveProject(projectForShellScope({
+      projects: projectBody.projects,
+      migrationSlug: opsMigrationSlug,
+      currentProject: nextProject,
+    }))
     setWorkCatalogReady(true)
-  }, [token, sessionEnabled, user?.id, setActiveProject])
+  }, [opsMigrationSlug, token, sessionEnabled, user?.id, setActiveProject])
 
   React.useEffect(() => {
     if (!user || !activeProject) return
@@ -1247,12 +1280,15 @@ export function App() {
   // while an older chat session remains selected in memory (Chat header already
   // prefers the session project over a desynced shell pick).
   React.useEffect(() => {
-    if (!activeSession?.project_slug) return
     setActiveProject(current => {
-      if (current?.slug === activeSession.project_slug) return current
-      return projects.find(p => p.slug === activeSession.project_slug) || current
+      return projectForShellScope({
+        projects,
+        migrationSlug: opsMigrationSlug,
+        sessionProjectSlug: activeSession?.project_slug,
+        currentProject: current,
+      })
     })
-  }, [activeSession?.id, activeSession?.project_slug, projects])
+  }, [activeSession?.id, activeSession?.project_slug, opsMigrationSlug, projects])
 
   // On first load, treat existing sessions as already seen (only NEW activity dots).
   React.useEffect(() => {
@@ -1498,7 +1534,7 @@ export function App() {
     designCanvasOpen,
     settingsStack: false,
   }
-  const projectLocked = projectSwitcherLocked(deepFlags)
+  const projectLocked = projectSwitcherLocked(deepFlags) || opsMigrationSlug != null
   const chromeBackEnabled = canGoBack(navStack)
   const chromeBackTitle = chromeBackLabel(navStack)
 

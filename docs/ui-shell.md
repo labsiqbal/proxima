@@ -323,11 +323,17 @@ An open `container_ops_migration` Attention item routes to
 `#settings/projects/<slug>/ops-migration`, switches the active Project when needed,
 and preserves that detail route across reload. The same surface is available from
 each Project card in Settings. It presents the stored reason, phase, both physical
-layouts, conflicts, and remaining usable paths. Reveal actions open Files on the
-chosen side. Validation refresh is read-only, and guarded retry remains disabled
-until the backend confirms the layout is safe. The detail heading receives focus on
-entry; status changes use live regions, errors use alerts, and retry exposes its
-safety rule through `aria-describedby`.
+layouts, exact physical-root entries, conflicts, and remaining usable paths. While
+the detail is open, its Project pins the shell scope across session refreshes and the
+project switcher is locked. Reveal actions open Files with explicit Container-root
+targets for the chosen side. Changing Projects or leaving the Projects Settings
+section clears the durable detail hash, while changing directly between recovery
+routes clears stale detail data before loading the next Project. Validation refresh
+is read-only, and guarded retry remains disabled until the backend confirms the
+layout is safe. A repaired already-physical layout with open Attention can retry the
+same validation boundary to resolve the item without moving content. The detail
+heading receives focus on entry; status changes use live regions, errors use alerts,
+and retry exposes its safety rule through `aria-describedby`.
 
 ## Archive and Design
 

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getOpsMigration, retryOpsMigration, validateOpsMigration } from '../../api/projects'
@@ -116,14 +116,17 @@ describe('OpsMigrationDetail', () => {
     expect(await screen.findAllByText('physical Ops root is not empty')).toHaveLength(2)
     expect(screen.getByRole('heading', { name: 'Ops migration' })).toHaveFocus()
     expect(screen.getByText('Both wiki and ops/wiki exist.')).toBeInTheDocument()
+    const physicalEntries = screen.getByRole('list', { name: 'Physical ops entries' })
+    expect(within(physicalEntries).getByText('ops/wiki')).toBeInTheDocument()
+    expect(within(physicalEntries).getByText('directory')).toBeInTheDocument()
     expect(screen.getByText('The legacy Ops layout remains active.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry migration' })).toBeDisabled()
     expect(screen.getByText(/never merges, overwrites, deletes, follows symlinks/i)).toBeInTheDocument()
   })
 
   it('reveals each side without changing either layout', async () => {
-    const events: string[] = []
-    const listener = (event: Event) => events.push((event as CustomEvent).detail.path)
+    const events: unknown[] = []
+    const listener = (event: Event) => events.push((event as CustomEvent).detail)
     window.addEventListener('proxima:reveal-file', listener)
     const user = userEvent.setup()
     render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
@@ -132,8 +135,32 @@ describe('OpsMigrationDetail', () => {
     await user.click(screen.getByRole('button', { name: 'Reveal physical ops/' }))
     await user.click(screen.getByRole('button', { name: 'Reveal legacy wiki' }))
     await user.click(screen.getByRole('button', { name: 'Reveal physical ops/wiki' }))
-    expect(events).toEqual(['', 'ops', 'wiki', 'ops/wiki'])
+    expect(events).toEqual([
+      { path: '', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'ops', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'wiki', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'ops/wiki', projectSlug: project.slug, rootSide: 'container' },
+    ])
     window.removeEventListener('proxima:reveal-file', listener)
+  })
+
+  it('clears the previous project payload while the next request fails', async () => {
+    const nextProject = { ...project, slug: 'next-project', name: 'Next project' }
+    vi.mocked(getOpsMigration).mockImplementation((_token, slug) => {
+      if (slug === project.slug) return Promise.resolve(collision)
+      return Promise.reject(new Error('next project unavailable'))
+    })
+    const view = render(
+      <OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />,
+    )
+    expect(await screen.findAllByText('physical Ops root is not empty')).toHaveLength(2)
+
+    view.rerender(
+      <OpsMigrationDetail token="token" project={nextProject} onBack={vi.fn()} onChanged={vi.fn()} />,
+    )
+    expect(await screen.findByText('next project unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('physical Ops root is not empty')).not.toBeInTheDocument()
+    expect(screen.getByText('Next project')).toBeInTheDocument()
   })
 
   it('enables an explicit retry only after refreshed validation is safe', async () => {

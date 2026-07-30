@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { settingsMenuItemAriaLabel, themeSwatchAriaLabel } from './SettingsScreen'
+import React from 'react'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  SettingsScreen,
+  settingsMenuItemAriaLabel,
+  themeSwatchAriaLabel,
+} from './SettingsScreen'
+
+vi.mock('./ProjectsScreen', () => ({
+  ProjectsScreen: () => 'Migration project detail',
+}))
 
 describe('settingsMenuItemAriaLabel', () => {
   it('spaces short label and full hint so names do not smash', () => {
@@ -25,5 +36,30 @@ describe('themeSwatchAriaLabel', () => {
 
   it('falls back when label is blank', () => {
     expect(themeSwatchAriaLabel('', true)).toBe('Theme, selected')
+  })
+})
+
+describe('Settings migration route cleanup', () => {
+  it('closes the migration route when another section is selected', async () => {
+    const onCloseOpsMigration = vi.fn()
+    const user = userEvent.setup()
+    render(React.createElement(SettingsScreen, {
+      token: 'token',
+      user: { id: 1, username: 'owner' },
+      profiles: [],
+      projects: [],
+      activeProject: null,
+      opsMigrationSlug: 'legacy-collision',
+      onActiveProject: vi.fn(),
+      onCloseOpsMigration,
+      runners: [],
+      features: { masterOrchestrator: false },
+      onRefresh: vi.fn().mockResolvedValue(undefined),
+      onTokenChange: vi.fn(),
+      initialSection: 'projects',
+    } as never))
+
+    await user.click(screen.getByRole('button', { name: /Account\./ }))
+    expect(onCloseOpsMigration).toHaveBeenCalledOnce()
   })
 })

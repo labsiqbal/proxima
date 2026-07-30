@@ -1,6 +1,7 @@
 import React from 'react'
 import type { Project } from '../../types'
 import { projectFs } from '../../api/fsAdapter'
+import type { FileRootSide } from '../../api/files'
 import { WorkspaceTree } from '../files/WorkspaceTree'
 import { IconClose, IconFile, IconGear, IconMonitor, IconTerminal } from './icons'
 
@@ -12,6 +13,11 @@ const AppRunner = React.lazy(() => import('../files/AppRunner').then(m => ({ def
 // plan/chat you were reading stays where it was. All three are scoped to the
 // active project, in any context.
 export type Tool = 'terminal' | 'files' | 'preview'
+type RevealTarget = {
+  path: string
+  projectSlug?: string
+  rootSide: FileRootSide
+}
 const TOOLS: { id: Tool; label: string; Icon: React.ComponentType<{ size?: number }> }[] = [
   { id: 'terminal', label: 'Terminal', Icon: IconTerminal },
   { id: 'files', label: 'Files', Icon: IconFile },
@@ -65,19 +71,37 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
   // so far-away screens ask for it with an event instead of prop-drilling
   // through the whole shell. detail.path highlights the file in the tree.
-  const [revealPath, setRevealPath] = React.useState<string | null>(null)
+  const [revealTarget, setRevealTarget] = React.useState<RevealTarget | null>(null)
   React.useEffect(() => {
     const onReveal = (event: Event) => {
       if (!available) return
-      const path = (event as CustomEvent).detail?.path
-      if (typeof path === 'string') { setRevealPath(path); setOpen('files') }
+      const detail = (event as CustomEvent).detail
+      const path = detail?.path
+      const projectSlug = detail?.projectSlug
+      if (typeof path !== 'string') return
+      if (
+        typeof projectSlug === 'string'
+        && projectSlug
+        && projectSlug !== project?.slug
+      ) return
+      setRevealTarget({
+        path,
+        projectSlug: typeof projectSlug === 'string' ? projectSlug : undefined,
+        rootSide: detail?.rootSide === 'container' ? 'container' : 'virtual',
+      })
+      setOpen('files')
     }
     window.addEventListener('proxima:reveal-file', onReveal)
     return () => window.removeEventListener('proxima:reveal-file', onReveal)
-  }, [available])
+  }, [available, project?.slug])
 
   const slug = project?.slug
-  const fs = React.useMemo(() => (slug ? projectFs(token, slug) : null), [token, slug])
+  const rootSide = revealTarget?.rootSide || 'virtual'
+  const revealPath = revealTarget?.path || null
+  const fs = React.useMemo(
+    () => (slug ? projectFs(token, slug, '', rootSide) : null),
+    [rootSide, slug, token],
+  )
 
   const toolButton = (tool: typeof TOOLS[number], where: 'rail' | 'tab') => (
     <button
