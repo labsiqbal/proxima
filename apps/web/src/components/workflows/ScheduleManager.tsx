@@ -1,5 +1,5 @@
 import React from 'react'
-import type { GraphScheduleConfig, Schedule } from '../../types'
+import type { GraphScheduleConfig, Job, Schedule, WorkflowGraph, WorkflowInput } from '../../types'
 import { createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule } from '../../api/schedules'
 import { confirmDialog } from '../ui/Dialog'
 import { Dropdown } from '../ui/Dropdown'
@@ -12,8 +12,25 @@ export const CRON_PRESETS = [
   { value: 'custom', label: 'Custom…', cron: '' },
 ] as const
 
+export const browserTimezone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
+const timezoneOptions = (selected: string) => {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: 'timeZone') => string[] }
+  const values = intl.supportedValuesOf?.('timeZone') ?? ['UTC']
+  return Array.from(new Set(['UTC', selected, ...values]))
+    .filter(Boolean)
+    .map(value => ({ value, label: value }))
+}
+
 export const DEFAULT_GRAPH_SCHEDULE: GraphScheduleConfig = {
   cron: '0 9 * * *',
+  timezone: browserTimezone(),
   overlap_policy: 'skip',
   enabled: true,
 }
@@ -82,6 +99,12 @@ export function ScheduleSettingsEditor({ value, disabled = false, onChange }: {
       placeholder="0 9 * * *"
       spellCheck={false}
     /></label>
+    <label>Timezone<Dropdown
+      value={value.timezone}
+      onChange={timezone => onChange({ ...value, timezone })}
+      options={timezoneOptions(value.timezone)}
+      disabled={disabled}
+    /></label>
     <label>Overlap<div className="seg sched-seg">
       <button type="button" disabled={disabled} className={value.overlap_policy === 'skip' ? 'active' : ''} onClick={() => onChange({ ...value, overlap_policy: 'skip' })}>Skip</button>
       <button type="button" disabled={disabled} className={value.overlap_policy === 'allow' ? 'active' : ''} onClick={() => onChange({ ...value, overlap_policy: 'allow' })}>Allow</button>
@@ -95,33 +118,51 @@ export function ScheduleSettingsEditor({ value, disabled = false, onChange }: {
   </div>
 }
 
-// All a schedule needs to know about a workflow is which one to run and what to call it.
-// Scheduled graph runs deliberately carry no manual intake payload.
 export type SchedulableWorkflow = {
   id: number
   name: string
-  /** Owning project — schedules inherit this; never pick a different project here. */
+  status?: string
+  inputs?: WorkflowInput[]
+  graph?: WorkflowGraph
+  /** Owning project. Schedules inherit this and cannot target another project. */
   project_slug?: string | null
 }
 
-export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onChanged, onOpenJob }: {
+const workflowInputs = (workflow: SchedulableWorkflow | null): WorkflowInput[] => {
+  const trigger = workflow?.graph?.nodes.find(node => node.type === 'trigger')
+  return trigger?.inputs?.length ? trigger.inputs : workflow?.inputs ?? []
+}
+
+const nonblankBindings = (values: Record<string, string>) => Object.fromEntries(
+  Object.entries(values)
+    .map(([key, value]) => [key, value.trim()])
+    .filter(([, value]) => value),
+)
+
+export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onChanged, onOpenJob, defaultTimezone = browserTimezone() }: {
   token: string
   workflows: SchedulableWorkflow[]
   workflowId?: number
   compact?: boolean
   onClose?: () => void
+  defaultTimezone?: string
   /** Keep the owning workflow list in sync after create, update, or delete. */
   onChanged?: () => void
-  // Given, "Run now" hands the owner straight to the task it spawned — a schedule you
-  // cannot watch is a schedule you cannot trust.
-  onOpenJob?: (jobId: number, engine?: string) => void
+  /** Resolve only after the owning project has selected the exact returned job. */
+  onOpenJob?: (job: Job) => Promise<void> | void
 }) {
   const available = workflowId ? workflows.filter(w => w.id === workflowId) : workflows
   const [selectedId, setSelectedId] = React.useState(workflowId || available[0]?.id || 0)
   const selected = available.find(w => w.id === selectedId) || available[0] || null
-  const [settings, setSettings] = React.useState<GraphScheduleConfig>(DEFAULT_GRAPH_SCHEDULE)
+  const [settings, setSettings] = React.useState<GraphScheduleConfig>({
+    ...DEFAULT_GRAPH_SCHEDULE,
+    timezone: defaultTimezone,
+  })
+  const [bindings, setBindings] = React.useState<Record<string, string>>({})
+  const [editingId, setEditingId] = React.useState<number | null>(null)
   const [schedules, setSchedules] = React.useState<Schedule[]>([])
   const [busy, setBusy] = React.useState(false)
+  const [openingId, setOpeningId] = React.useState<number | null>(null)
   const [error, setError] = React.useState('')
   const mounted = React.useRef(true)
   const loadSeq = React.useRef(0)
@@ -142,7 +183,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   }, [token, workflowId])
   React.useEffect(() => { void reload() }, [reload])
 
-  const act = async (work: () => Promise<unknown>) => {
+  const act = async (work: () => Promise<unknown>, after?: () => void) => {
     if (busy) return
     const seq = ++actionSeq.current
     setBusy(true); setError('')
@@ -151,29 +192,82 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
       if (mounted.current && seq === actionSeq.current) {
         await reload()
         onChanged?.()
+        after?.()
       }
     }
     catch (e) { if (mounted.current && seq === actionSeq.current) setError(String(e)) }
     finally { if (mounted.current && seq === actionSeq.current) setBusy(false) }
   }
 
-  const add = () => {
+  const declaredInputs = workflowInputs(selected)
+  const missingBindings = declaredInputs.filter(
+    input => input.required && !(bindings[input.id] || '').trim(),
+  )
+  const resetEditor = () => {
+    setEditingId(null)
+    setBindings({})
+    setSettings({ ...DEFAULT_GRAPH_SCHEDULE, timezone: defaultTimezone })
+  }
+  const save = () => {
     if (!selected) { setError('Choose a workflow first.'); return }
     if (!isValidCron(settings.cron)) { setError('Enter a valid five-field cron using numbers, *, steps, ranges, or comma-separated parts.'); return }
-    void act(() => createSchedule(token, {
-      workflow_id: selected.id,
+    if (settings.enabled && missingBindings.length) {
+      setError(`Cannot enable this schedule. Add a source node or save a durable binding for: ${missingBindings.map(input => input.label).join(', ')}.`)
+      return
+    }
+    const body = {
       cron: settings.cron.trim(),
+      timezone: settings.timezone,
+      bindings: nonblankBindings(bindings),
       overlap_policy: settings.overlap_policy,
       enabled: settings.enabled,
-    }))
+    } as const
+    void act(() => editingId == null ? createSchedule(token, {
+      workflow_id: selected.id,
+      ...body,
+    }) : updateSchedule(token, editingId, body), resetEditor)
   }
-  const toggle = (schedule: Schedule) => void act(() => updateSchedule(token, schedule.id, { enabled: !schedule.enabled }))
-  const runNow = (schedule: Schedule) => void act(async () => {
-    const job = await runScheduleNow(token, schedule.id)
-    // Only navigate once the job really exists; a 409 (overlap skip / unrunnable
-    // workflow) throws above and surfaces in the error bar instead.
-    if (mounted.current) onOpenJob?.(job.id, job.engine)
-  })
+  const edit = (schedule: Schedule) => {
+    setEditingId(schedule.id)
+    setSettings({
+      cron: schedule.cron,
+      timezone: schedule.timezone || defaultTimezone,
+      overlap_policy: schedule.overlap_policy,
+      enabled: schedule.enabled,
+    })
+    setBindings(Object.fromEntries(
+      Object.entries(schedule.bindings || schedule.input || {})
+        .map(([key, value]) => [key, String(value ?? '')]),
+    ))
+    setError('')
+  }
+  const toggle = (schedule: Schedule) => {
+    if (!schedule.enabled && !schedule.ready) {
+      edit(schedule)
+      setError('This schedule is missing a required source. Add a source node or durable binding before turning it on.')
+      return
+    }
+    void act(() => updateSchedule(token, schedule.id, { enabled: !schedule.enabled }))
+  }
+  const runNow = async (schedule: Schedule) => {
+    if (busy || schedule.ready === false) return
+    const seq = ++actionSeq.current
+    setBusy(true)
+    setOpeningId(schedule.id)
+    setError('')
+    try {
+      const job = await runScheduleNow(token, schedule.id)
+      if (!mounted.current || seq !== actionSeq.current) return
+      await onOpenJob?.(job)
+    } catch (cause) {
+      if (mounted.current && seq === actionSeq.current) setError(String(cause))
+    } finally {
+      if (mounted.current && seq === actionSeq.current) {
+        setBusy(false)
+        setOpeningId(null)
+      }
+    }
+  }
   const remove = async (schedule: Schedule) => {
     const name = workflows.find(w => w.id === schedule.workflow_id)?.name || 'this workflow'
     if (!(await confirmDialog({ title: 'Delete schedule?', message: `Stop running “${name}” on ${cronHint(schedule.cron)}.`, confirmLabel: 'Delete', danger: true }))) return
@@ -181,7 +275,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   }
   return <section className={`schedule-manager ${compact ? 'compact' : ''}`} aria-labelledby="schedule-manager-title">
     <header className="schedule-manager-head">
-      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedule ${selected?.name || 'workflow'}` : 'Scheduled'}</h1><p className="muted">Run saved workflows on a five-field cron cadence.</p></div>
+      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedules for ${selected?.name || 'workflow'}` : 'Schedules'}</h1><p className="muted">Configure unattended runs with a cadence, timezone, and durable input sources.</p></div>
       {onClose && <button className="ghost-button" onClick={onClose} disabled={busy}>Close</button>}
     </header>
     {error && <div className="error-bar" role="alert">{error}</div>}
@@ -194,15 +288,46 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     <div className="schedule-create-card">
       {!workflowId && <label>Workflow<Dropdown value={selected?.id ? String(selected.id) : ''} onChange={v => setSelectedId(Number(v))} options={available.map(w => ({ value: String(w.id), label: w.name }))} /></label>}
       <ScheduleSettingsEditor value={settings} disabled={busy} onChange={setSettings} />
-      <button className="primary-button" disabled={busy || !selected} onClick={add}>{busy ? 'Saving…' : 'Add schedule'}</button>
+      {declaredInputs.length > 0 && <div className="schedule-bindings">
+        <strong>Automation bindings</strong>
+        <p className="muted">Manual runs ask for these each time. Schedules must save values here or get the data from a source node.</p>
+        {declaredInputs.map(input => <label key={input.id}>
+          {input.label} automation binding{input.required && <span className="muted"> (required to turn on)</span>}
+          <input
+            aria-label={`${input.label} automation binding`}
+            type={input.kind === 'number' ? 'number' : input.kind === 'url' ? 'url' : 'text'}
+            value={bindings[input.id] || ''}
+            onChange={event => setBindings(current => ({ ...current, [input.id]: event.target.value }))}
+            placeholder={input.kind === 'file' ? 'Stable path or URL' : input.label}
+            disabled={busy}
+          />
+        </label>)}
+      </div>}
+      <div className="schedule-form-actions">
+        {editingId != null && <button className="ghost-button" disabled={busy} onClick={resetEditor}>Cancel edit</button>}
+        <button className="primary-button" disabled={busy || !selected} onClick={save}>{busy && openingId == null ? 'Saving…' : editingId == null ? 'Add schedule' : 'Save schedule'}</button>
+      </div>
     </div>
     <div className="schedule-list" aria-live="polite">
       {schedules.length === 0 ? <p className="schedule-empty muted">No schedules yet.</p> : schedules.map(schedule => {
         const workflow = workflows.find(w => w.id === schedule.workflow_id)
+        const inputLabels = new Map(workflowInputs(workflow || null).map(input => [input.id, input.label]))
+        const ready = schedule.ready !== false
+        const unresolved = (schedule.unresolved_labels?.length
+          ? schedule.unresolved_labels
+          : (schedule.unresolved_inputs || []).map(input => inputLabels.get(input) || input))
+        const cadence = cronHint(schedule.cron)
         return <article className="schedule-row" key={schedule.id}>
-          <div><strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong><small>{cronHint(schedule.cron)} · <code>{schedule.cron}</code> · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'} · Scheduled</small></div>
-          <label className="schedule-toggle"><input type="checkbox" checked={schedule.enabled} disabled={busy} onChange={() => toggle(schedule)} /> {schedule.enabled ? 'On' : 'Off'}</label>
-          <button className="ghost-button" disabled={busy} onClick={() => runNow(schedule)} title="Run this schedule now, without waiting for its cron">Run now</button>
+          <div>
+            <strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong>
+            <small>{cadence} · {schedule.timezone || 'UTC'} · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'}</small>
+            <small className={ready ? 'schedule-ready' : 'schedule-needs-source'}>
+              {ready ? 'Inputs ready' : `Needs source: ${unresolved.join(', ')}`}
+            </small>
+          </div>
+          <label className="schedule-toggle"><input aria-label={`Schedule ${schedule.enabled ? 'on' : 'off'}`} type="checkbox" checked={schedule.enabled} disabled={busy} onChange={() => toggle(schedule)} /> {schedule.enabled ? 'On' : 'Off'}</label>
+          <button className="ghost-button" disabled={busy} onClick={() => edit(schedule)}>Configure</button>
+          <button className="ghost-button" disabled={busy || !ready} onClick={() => void runNow(schedule)} title="Run this schedule now with its saved automation sources">{openingId === schedule.id ? 'Opening run...' : 'Run now'}</button>
           <button className="ghost-button danger" disabled={busy} onClick={() => void remove(schedule)}>Delete</button>
         </article>
       })}

@@ -14,6 +14,7 @@ from .. import (
     container_registry,
     features,
     repo_remote,
+    schedule_policy,
     satpam,
     scripts_library,
     state,
@@ -78,15 +79,15 @@ def _graph_node(graph: Mapping[str, Any], node_id: str) -> dict[str, Any]:
 def _hydrate_trigger_contract(
     graph: Mapping[str, Any],
     legacy_inputs: list[dict[str, Any]],
-    schedule: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project legacy workflow metadata onto the trigger node.
 
     New graphs store the intake form and mode directly on their trigger. Existing
-    workflow rows keep ``inputs`` and schedules in their original columns/tables,
-    so the API adds the node fields on read. A legacy graph with declared inputs
-    but no trigger gets a no-op trigger connected to every former root. This keeps
-    its execution order and makes the intake contract editable in the node inspector.
+    workflow rows keep ``inputs`` in their original column, so the API adds the
+    node field on read. Schedule rows stay separate: the workflow's availability
+    and manual trigger contract must not change merely because automation exists.
+    A legacy graph with declared inputs but no trigger gets a no-op trigger
+    connected to every former root.
     """
     hydrated = {
         "nodes": [dict(node) for node in graph.get("nodes", [])],
@@ -96,7 +97,7 @@ def _hydrate_trigger_contract(
         (node for node in hydrated["nodes"] if node.get("type") == "trigger"),
         None,
     )
-    if trigger is None and (legacy_inputs or schedule is not None):
+    if trigger is None and legacy_inputs:
         node_ids = {str(node.get("id")) for node in hydrated["nodes"]}
         trigger_id = "trigger"
         suffix = 2
@@ -126,13 +127,6 @@ def _hydrate_trigger_contract(
         return normalize_graph(hydrated)
     if "inputs" not in trigger:
         trigger["inputs"] = legacy_inputs
-    if schedule is not None:
-        trigger["trigger_kind"] = "scheduled"
-        trigger["schedule"] = {
-            "cron": schedule["cron"],
-            "overlap_policy": schedule["overlap_policy"],
-            "enabled": bool(schedule["enabled"]),
-        }
     return normalize_graph(hydrated)
 
 
@@ -208,14 +202,9 @@ def register(app, deps):
         payload = dict(row)
         payload["steps"] = []
         payload["inputs"] = _decode_json(payload.get("inputs"), [])
-        latest_schedule = db().execute(
-            "SELECT * FROM schedules WHERE workflow_id = ? ORDER BY id DESC LIMIT 1",
-            (payload["id"],),
-        ).fetchone()
         payload["graph"] = _hydrate_trigger_contract(
             normalize_graph(payload.get("graph") or ""),
             payload["inputs"],
-            dict(latest_schedule) if latest_schedule else None,
         )
         trigger = _trigger_node(payload["graph"])
         if trigger is not None and "inputs" in trigger:
@@ -516,6 +505,26 @@ def register(app, deps):
                 status_code=422,
                 detail="invalid trigger schedule cron; expected five valid fields",
             )
+        if schedule_config is not None and not schedule_policy.timezone_valid(
+            schedule_config["timezone"]
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="invalid trigger schedule timezone; use an IANA timezone name",
+            )
+        if (
+            schedule_config is not None
+            and schedule_config["enabled"]
+            and schedule_policy.unresolved_required_inputs(
+                {"graph": graph, "inputs": declared_inputs}, {}
+            )
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=schedule_policy.missing_sources_detail(
+                    {"graph": graph, "inputs": declared_inputs}, {}
+                ),
+            )
         name = (payload.name or str(job["title"] or "Graph workflow")).strip()
         if not name:
             raise HTTPException(status_code=422, detail="template name must not be blank")
@@ -547,14 +556,15 @@ def register(app, deps):
                     conn.execute(
                         """
                         INSERT INTO schedules(
-                          workflow_id, project_id, cron, input, overlap_policy,
+                          workflow_id, project_id, cron, timezone, input, overlap_policy,
                           enabled, created_by
-                        ) VALUES (?, ?, ?, '{}', ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
                         """,
                         (
                             workflow_id,
                             job["project_id"],
                             schedule_config["cron"],
+                            schedule_config["timezone"],
                             schedule_config["overlap_policy"],
                             1 if schedule_config["enabled"] else 0,
                             user["id"],

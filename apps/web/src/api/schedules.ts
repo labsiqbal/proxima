@@ -1,13 +1,21 @@
 import { api } from './client'
 import type { Job, Schedule } from '../types'
 
+export type ScheduleWrite = {
+  cron?: string
+  timezone?: string
+  bindings?: Record<string, unknown>
+  overlap_policy?: 'skip' | 'allow'
+  enabled?: boolean
+}
+
 export const listSchedules = (token: string, workflowId?: number) =>
   api<Schedule[]>(`/api/schedules${workflowId != null ? `?workflow_id=${workflowId}` : ''}`, token)
 
-export const createSchedule = (token: string, body: { workflow_id: number; cron: string; input?: any; overlap_policy?: 'skip' | 'allow'; project_id?: number | null; enabled?: boolean }) =>
+export const createSchedule = (token: string, body: ScheduleWrite & { workflow_id: number; cron: string; project_id?: number | null }) =>
   api<Schedule>('/api/schedules', token, { method: 'POST', body: JSON.stringify(body) })
 
-export const updateSchedule = (token: string, id: number, body: { cron?: string; input?: any; overlap_policy?: 'skip' | 'allow'; enabled?: boolean }) =>
+export const updateSchedule = (token: string, id: number, body: ScheduleWrite) =>
   api<Schedule>(`/api/schedules/${id}`, token, { method: 'PATCH', body: JSON.stringify(body) })
 
 export const deleteSchedule = (token: string, id: number) =>

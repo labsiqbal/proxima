@@ -179,8 +179,12 @@ describe('GraphScreen workflow home tabs', () => {
 
     const workflowsTab = await screen.findByRole('tab', { name: 'Workflows 2' })
     expect(workflowsTab).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('table', { name: 'Manual workflows' })).toBeInTheDocument()
-    expect(screen.getByRole('table', { name: 'Scheduled workflows' })).toBeInTheDocument()
+    const workflows = screen.getByRole('table', { name: 'Reusable workflows' })
+    expect(within(workflows).getAllByText('Available')).toHaveLength(2)
+    expect(within(workflows).getByText('No schedules')).toBeInTheDocument()
+    expect(within(workflows).getByText('1 schedule on')).toBeInTheDocument()
+    expect(within(workflows).getAllByRole('button', { name: 'Run' })).toHaveLength(2)
+    expect(within(workflows).getAllByRole('button', { name: 'Schedules' })).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('tab', { name: 'Drafts 1' }))
     const drafts = screen.getByRole('table', { name: 'Draft plans' })

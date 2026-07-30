@@ -297,7 +297,7 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.queryByText('Intake form')).not.toBeInTheDocument()
     expect(screen.getByText('Schedule settings')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Cron' })).toHaveValue('0 9 * * *')
-    expect(screen.getByText(/without asking for manual input/i)).toBeInTheDocument()
+    expect(screen.getByText(/scheduled runs never ask for per-run input/i)).toBeInTheDocument()
   })
 
   it('keeps save false and Run blocked after persistence rejection until Retry succeeds', async () => {

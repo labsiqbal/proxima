@@ -263,6 +263,7 @@ def test_trigger_intake_and_schedule_survive_normalization():
         "cron": "0 7 * * 1-5",
         "overlap_policy": "allow",
         "enabled": False,
+        "timezone": "UTC",
     }
 
 

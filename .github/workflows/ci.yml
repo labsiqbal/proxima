@@ -44,6 +44,26 @@ jobs:
       - name: Build
         run: npm run build
 
+  scheduled-workflow-browser:
+    name: Scheduled workflow browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      - name: Sync API dependencies
+        working-directory: apps/api
+        run: uv sync --locked
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Run disposable real-browser regression
+        run: npm run test:e2e:schedules
+
   fresh-install:
     name: Fresh-install smoke
     runs-on: ubuntu-latest

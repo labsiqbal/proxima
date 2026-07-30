@@ -100,10 +100,6 @@ function triggerInputs(graph: WorkflowGraph | null | undefined): WorkflowInput[]
   return graphTrigger(graph)?.inputs ?? []
 }
 
-function templateIsScheduled(template: GraphTemplate): boolean {
-  return graphTrigger(template.graph)?.trigger_kind === 'scheduled'
-}
-
 type WorkflowHomeTab = 'drafts' | 'workflows' | 'runs'
 
 function readWorkflowHomeTab(): WorkflowHomeTab {
@@ -289,8 +285,8 @@ export function GraphScreen({
   const [notice, setNotice] = React.useState('')
   const [busy, setBusy] = React.useState<string | null>(null)
   const mounted = React.useRef(true)
-  const listSeq = React.useRef(0)
-  const jobSeq = React.useRef(0)
+  const listLoadSeq = React.useRef(0)
+  const jobLoadSeq = React.useRef(0)
   const draftSeq = React.useRef(0)
   const saveTimer = React.useRef<number | undefined>(undefined)
   const saveInFlight = React.useRef<Promise<void> | null>(null)
@@ -423,8 +419,8 @@ export function GraphScreen({
       mounted.current = false
       queueLatestAutosave(false)
       void drainAutosave().catch(() => undefined)
-      listSeq.current += 1
-      jobSeq.current += 1
+      listLoadSeq.current += 1
+      jobLoadSeq.current += 1
       draftSeq.current += 1
     }
   }, [drainAutosave, queueLatestAutosave])
@@ -446,29 +442,29 @@ export function GraphScreen({
   }, [job?.id, job?.status, plan, draftTitle, drainAutosave, queueLatestAutosave])
 
   const refreshList = React.useCallback(async () => {
-    const seq = ++listSeq.current
+    const seq = ++listLoadSeq.current
     try {
       const [jobResponse, templateResponse, scheduleRows] = await Promise.all([
         listGraphJobs(token, activeProject?.slug),
         listGraphTemplates(token, activeProject?.slug, true),
         listSchedules(token).catch(() => [] as Schedule[]),
       ])
-      if (mounted.current && seq === listSeq.current) {
+      if (mounted.current && seq === listLoadSeq.current) {
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
         setSchedules(scheduleRows)
         setScheduleCronByWorkflow(cronLabelsByWorkflow(scheduleRows, cronHint))
       }
     } catch (cause) {
-      if (mounted.current && seq === listSeq.current) setError(String(cause))
+      if (mounted.current && seq === listLoadSeq.current) setError(String(cause))
     }
   }, [token, activeProject?.slug])
 
   const loadJob = React.useCallback(async (jobId: number) => {
-    const seq = ++jobSeq.current
+    const seq = ++jobLoadSeq.current
     try {
       const next = await getGraphJob(token, jobId)
-      if (!mounted.current || seq !== jobSeq.current) return
+      if (!mounted.current || seq !== jobLoadSeq.current) return null
       const latest = latestDraft.current
       const titleHasLocalEdit = autosaveJobId.current === next.id
         && latest?.jobId === next.id
@@ -496,7 +492,7 @@ export function GraphScreen({
         }
       } else {
         await primeAutosave(next)
-        if (!mounted.current || seq !== jobSeq.current) return
+        if (!mounted.current || seq !== jobLoadSeq.current) return null
       }
       setJob(next)
       setPlan(next.graph)
@@ -520,13 +516,15 @@ export function GraphScreen({
         // leave/reopen mid-generate does not look like a broken empty editor.
         if (next.session_id && next.status === 'queued') {
           void activeRuns(token).then(r => {
-            if (!mounted.current || seq !== jobSeq.current || chatJobRef.current !== next.id) return
+            if (!mounted.current || seq !== jobLoadSeq.current || chatJobRef.current !== next.id) return
             if (r.session_ids.includes(next.session_id)) setChatOpen(true)
           }).catch(() => { /* optional signal */ })
         }
       }
+      return next
     } catch (cause) {
-      if (mounted.current && seq === jobSeq.current) setError(String(cause))
+      if (mounted.current && seq === jobLoadSeq.current) setError(String(cause))
+      return null
     }
   }, [token])
 
@@ -589,10 +587,10 @@ export function GraphScreen({
   const jobIdRef = React.useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
 
-  const openJob = React.useCallback((jobId: number) => {
+  const openJob = React.useCallback(async (jobId: number) => {
     setOpeningJobId(jobId)
     // Drop a mismatched keep-alive job so loading never displays or reports it.
-    // Read via ref so this callback stays stable when job loads — otherwise the
+    // Read via ref so this callback stays stable when job loads - otherwise the
     // pendingJobId effect re-fires, re-GETs, and can clear the editor mid-edit.
     if (jobIdRef.current !== jobId) {
       setJob(null)
@@ -601,16 +599,20 @@ export function GraphScreen({
     }
     setStage('editor')
     onStageChange?.('editor', jobId)
-    void loadJob(jobId)
+    const selected = await loadJob(jobId)
+    if (!selected || selected.id !== jobId) {
+      throw new Error(`Could not select spawned graph job ${jobId}.`)
+    }
+    return selected
   }, [loadJob, onStageChange])
 
   React.useEffect(() => { void refreshList() }, [refreshList])
 
   React.useEffect(() => {
     // Opening is idempotent (GET + set state). Do not once-claim at module scope:
-    // Strict Mode discards the first loadJob via jobSeq, so the re-run must open again.
+    // Strict Mode discards the first loadJob via jobLoadSeq, so the re-run must open again.
     if (!pendingJobId) return
-    openJob(pendingJobId)
+    void openJob(pendingJobId)
     onPendingConsumed?.()
   }, [pendingJobId, openJob, onPendingConsumed])
 
@@ -671,7 +673,9 @@ export function GraphScreen({
     }
   })
   usePolling(
-    () => job ? loadJob(job.id) : undefined,
+    async () => {
+      if (job) await loadJob(job.id)
+    },
     1500,
     { enabled: !!job && stage === 'editor' && ['running', 'review'].includes(job.status), immediate: false },
   )
@@ -1238,7 +1242,6 @@ export function GraphScreen({
   if (stage === 'home') {
     const drafts = jobs.filter(item => item.status === 'queued')
     const runs = jobs.filter(item => item.status !== 'queued')
-    const scheduledWorkflowIds = new Set(schedules.map(row => row.workflow_id))
     const query = homeQueries[homeTab].trim().toLowerCase()
     const matches = (...values: Array<string | null | undefined>) =>
       !query || values.some(value => value?.toLowerCase().includes(query))
@@ -1246,10 +1249,6 @@ export function GraphScreen({
     const visibleRuns = runs.filter(item => matches(item.title, projectRun(item).status))
     const searchedTemplates = (showArchived ? archivedTemplates : activeTemplates)
       .filter(item => matches(item.name, item.description, item.category, ...(scheduleCronByWorkflow.get(item.id) || [])))
-    const automaticTemplates = searchedTemplates.filter(item =>
-      templateIsScheduled(item) || scheduledWorkflowIds.has(item.id))
-    const automaticIds = new Set(automaticTemplates.map(item => item.id))
-    const manualTemplates = searchedTemplates.filter(item => !automaticIds.has(item.id))
     const searchPlaceholder = `Search ${homeTab}`
     const setTab = (tab: WorkflowHomeTab) => {
       setHomeTab(tab)
@@ -1263,43 +1262,40 @@ export function GraphScreen({
       })
     }
     const category = (template: GraphTemplate) => template.category?.trim() || 'other'
-    const scheduleLabel = (template: GraphTemplate) => {
-      const labels = scheduleCronByWorkflow.get(template.id) || []
-      if (labels.length === 0) return 'Scheduled'
-      return labels.length === 1 ? labels[0] : `${labels[0]} +${labels.length - 1}`
+    const scheduleSummary = (template: GraphTemplate) => {
+      const rows = schedules.filter(schedule => schedule.workflow_id === template.id)
+      if (rows.length === 0) return 'No schedules'
+      const needsSource = rows.filter(schedule => schedule.ready === false).length
+      const on = rows.filter(schedule => schedule.enabled && schedule.ready !== false).length
+      const off = rows.length - on - needsSource
+      const parts: string[] = []
+      if (on) parts.push(`${on} schedule${on === 1 ? '' : 's'} on`)
+      if (off) parts.push(`${off} schedule${off === 1 ? '' : 's'} off`)
+      if (needsSource) parts.push(`${needsSource} need${needsSource === 1 ? 's' : ''} source`)
+      return parts.join(' · ')
     }
-    const workflowRow = (template: GraphTemplate, automatic: boolean) => <div className="workflow-home-row workflow-home-workflow-row" role="row" key={template.id}>
+    const workflowRow = (template: GraphTemplate) => <div className="workflow-home-row workflow-home-workflow-row" role="row" key={template.id}>
       <div className="workflow-home-name" role="cell" data-label="Workflow">
         <strong>{template.name}</strong>
-        {template.status !== 'active' && <small>Paused</small>}
       </div>
       <div role="cell" data-label="Category"><span className="workflow-home-chip workflow-home-category">#{category(template)}</span></div>
-      <div role="cell" data-label="Trigger">
-        <span className={`workflow-home-chip workflow-home-trigger${automatic ? ' is-scheduled' : ''}`}>
-          {automatic ? `⏰ ${scheduleLabel(template)}` : '▷ Manual'}
+      <div role="cell" data-label="Availability">
+        <span className={`workflow-home-chip${template.status === 'active' ? ' workflow-home-available' : ' workflow-home-paused'}`}>
+          {template.status === 'active' ? 'Available' : 'Paused'}
         </span>
       </div>
+      <div role="cell" data-label="Automation"><span className="workflow-home-chip workflow-home-trigger">{scheduleSummary(template)}</span></div>
       <div className="workflow-home-actions" role="cell" data-label="Actions">
         <button className="ghost-button" disabled={!!busy} onClick={() => void editTemplate(template)}>Edit</button>
-        {automatic ? <>
-          <button className="ghost-button" disabled={!!busy} onClick={() => setSchedulingTemplate(template)}>Schedule</button>
-          <button
-            className="row-action"
-            title={template.status === 'active' ? 'Pause scheduled workflow' : 'Resume scheduled workflow'}
-            aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`}
-            disabled={!!busy}
-            onClick={() => void toggleTemplatePaused(template)}
-          >{template.status === 'active' ? '⏸' : '▶'}</button>
-        </> : <>
-          <button className="primary-button" disabled={!!busy} onClick={() => runTemplate(template)}>Run</button>
-          {template.status !== 'active' && <button
-            className="row-action"
-            title="Resume workflow"
-            aria-label={`Resume ${template.name}`}
-            disabled={!!busy}
-            onClick={() => void toggleTemplatePaused(template)}
-          >▶</button>}
-        </>}
+        <button className="primary-button" disabled={!!busy} onClick={() => runTemplate(template)}>Run</button>
+        <button className="ghost-button" disabled={!!busy} onClick={() => setSchedulingTemplate(template)}>Schedules</button>
+        <button
+          className="row-action"
+          title={template.status === 'active' ? 'Pause workflow availability' : 'Resume workflow availability'}
+          aria-label={`${template.status === 'active' ? 'Pause' : 'Resume'} ${template.name}`}
+          disabled={!!busy}
+          onClick={() => void toggleTemplatePaused(template)}
+        >{template.status === 'active' ? '⏸' : '▶'}</button>
         <button
           className="row-action"
           title="Archive workflow"
@@ -1309,14 +1305,15 @@ export function GraphScreen({
         ><IconArtifacts size={13} /></button>
       </div>
     </div>
-    const workflowTable = (rows: GraphTemplate[], automatic: boolean) => <div className="workflow-home-table" role="table" aria-label={`${automatic ? 'Scheduled' : 'Manual'} workflows`}>
+    const workflowTable = (rows: GraphTemplate[]) => <div className="workflow-home-table" role="table" aria-label="Reusable workflows">
       <div className="workflow-home-row workflow-home-table-head workflow-home-workflow-row" role="row">
         <div role="columnheader">Workflow</div>
         <div role="columnheader">Category</div>
-        <div role="columnheader">Trigger</div>
+        <div role="columnheader">Availability</div>
+        <div role="columnheader">Automation</div>
         <div className="workflow-home-actions-head" role="columnheader">Actions</div>
       </div>
-      {rows.map(template => workflowRow(template, automatic))}
+      {rows.map(template => workflowRow(template))}
     </div>
     const emptySearch = query ? 'No matching items.' : null
 
@@ -1387,7 +1384,7 @@ export function GraphScreen({
                     <div className="workflow-home-name" role="cell" data-label="Draft plan"><strong>{item.title || 'Untitled plan'}</strong></div>
                     <div role="cell" data-label="Status"><span className="workflow-home-chip workflow-home-draft-chip">Draft</span></div>
                     <div className="workflow-home-actions" role="cell" data-label="Actions">
-                      <button className="ghost-button" disabled={!!busy} onClick={() => openJob(item.id)}>Edit</button>
+                      <button className="ghost-button" disabled={!!busy} onClick={() => void openJob(item.id)}>Edit</button>
                       <button
                         className="primary-button"
                         disabled={!!busy || draftRunBlocked}
@@ -1427,26 +1424,15 @@ export function GraphScreen({
                         </div>)}
                       </div>}
                 </div>
-              : <>
-                  <div className="workflow-home-group">
-                    <div className="workflow-home-group-head is-manual">
-                      <div><strong>▷ Manual (on-demand)</strong><small>You run these and provide input each time.</small></div>
-                      <span>{manualTemplates.length}</span>
-                    </div>
-                    {manualTemplates.length === 0
-                      ? <p className="workflow-home-empty muted">{emptySearch || 'No manual workflows.'}</p>
-                      : workflowTable(manualTemplates, false)}
+              : <div className="workflow-home-group">
+                  <div className="workflow-home-group-head">
+                    <div><strong>Reusable workflows</strong><small>Run manually any time. Availability pauses all automation; each schedule has its own On or Off state.</small></div>
+                    <span>{searchedTemplates.length}</span>
                   </div>
-                  <div className="workflow-home-group">
-                    <div className="workflow-home-group-head is-scheduled">
-                      <div><strong>⏰ Scheduled</strong><small>These run themselves on a saved cadence.</small></div>
-                      <span>{automaticTemplates.length}</span>
-                    </div>
-                    {automaticTemplates.length === 0
-                      ? <p className="workflow-home-empty muted">{emptySearch || 'No scheduled workflows.'}</p>
-                      : workflowTable(automaticTemplates, true)}
-                  </div>
-                </>
+                  {searchedTemplates.length === 0
+                    ? <p className="workflow-home-empty muted">{emptySearch || 'No reusable workflows.'}</p>
+                    : workflowTable(searchedTemplates)}
+                </div>
           )}
 
           {homeTab === 'runs' && (
@@ -1468,7 +1454,7 @@ export function GraphScreen({
                       <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
                       <div className="workflow-home-secondary" role="cell" data-label="Duration">{formatRunDuration(projection)}</div>
                       <div className="workflow-home-actions" role="cell" data-label="Actions">
-                        <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                        <button className="ghost-button" onClick={() => void openJob(item.id)}>View</button>
                       </div>
                     </div>
                   })}
@@ -1510,9 +1496,22 @@ export function GraphScreen({
             compact
             onClose={() => setSchedulingTemplate(null)}
             onChanged={() => void refreshList()}
-            onOpenJob={jobId => {
+            onOpenJob={async spawned => {
+              if (spawned.engine !== 'graph') {
+                throw new Error(`Schedule returned non-graph job ${spawned.id}.`)
+              }
+              if (
+                spawned.project_slug
+                && schedulingTemplate.project_slug
+                && spawned.project_slug !== schedulingTemplate.project_slug
+              ) {
+                throw new Error('Schedule returned a job outside the workflow owner project.')
+              }
+              const selected = await openJob(spawned.id)
+              if (selected.project_slug !== schedulingTemplate.project_slug) {
+                throw new Error('Selected job does not belong to this workflow project.')
+              }
               setSchedulingTemplate(null)
-              openJob(jobId)
             }}
           />
         </div>
@@ -1794,7 +1793,7 @@ export function GraphScreen({
                     onChange={schedule => updateSelected({ schedule })}
                   />
                   <p className="muted graph-field-note">
-                    Scheduled runs start on this cadence without asking for manual input. Source nodes provide the run data.
+                    Scheduled runs never ask for per-run input. Save this schedule Off, then open Schedules to configure durable bindings before turning it On.
                   </p>
                 </div>}
               </> : definition.type === 'script' ? <>

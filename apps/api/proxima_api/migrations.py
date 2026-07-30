@@ -5746,6 +5746,57 @@ def _require_authoritative_recovery_task_session(
     )
 
 
+def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
+    """Add explicit timezone state and turn unsafe legacy schedules off."""
+    from .schedule_policy import (
+        decode_bindings,
+        local_timezone_name,
+        unresolved_required_inputs,
+    )
+
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {"schedules", "workflows"}.issubset(tables):
+        return
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(schedules)").fetchall()
+    }
+    if "timezone" not in columns:
+        conn.execute(
+            "ALTER TABLE schedules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
+        )
+        conn.execute(
+            "UPDATE schedules SET timezone = ?",
+            (local_timezone_name(),),
+        )
+    conn.execute(
+        "UPDATE schedules SET project_id = ("
+        "SELECT project_id FROM workflows WHERE workflows.id = schedules.workflow_id"
+        ") WHERE EXISTS ("
+        "SELECT 1 FROM workflows WHERE workflows.id = schedules.workflow_id "
+        "AND schedules.project_id IS NOT workflows.project_id"
+        ")"
+    )
+
+    rows = conn.execute(
+        "SELECT s.id, s.input, w.inputs, w.graph FROM schedules s "
+        "JOIN workflows w ON w.id = s.workflow_id WHERE s.enabled = 1"
+    ).fetchall()
+    for schedule_id, raw_bindings, raw_inputs, raw_graph in rows:
+        workflow = {"graph": raw_graph, "inputs": raw_inputs}
+        if unresolved_required_inputs(workflow, decode_bindings(raw_bindings)):
+            conn.execute(
+                "UPDATE schedules SET enabled = 0, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (schedule_id,),
+            )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -5890,6 +5941,11 @@ MIGRATIONS: list[Migration] = [
         53,
         "require authoritative recovery Task-session identity",
         _require_authoritative_recovery_task_session,
+    ),
+    (
+        54,
+        "add schedule timezone and disable unresolved unattended inputs",
+        _harden_schedule_automation_contract,
     ),
 ]
 

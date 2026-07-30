@@ -591,21 +591,49 @@ are:
 
 ## Scheduling a graph
 
-Schedules fire only for **`status='active'`** workflows — the tick and Run-now both go
-through the same spawn, so a paused workflow runs nowhere. Scheduled workflow rows carry a
-**pause ⏸ / resume ▶** toggle (`status` draft ⇄ active over `PATCH /api/workflows`,
-which is lifecycle-only for graph rows — authoring fields 422). "This workflow needs
-fixing" is therefore one click out of rotation and one click back, with its schedules
-kept; deleting remains the destructive path and takes schedules with it.
+Schedules fire only for **`status='active'`** workflows - the tick and Run now both go
+through the same spawn, so a paused workflow runs nowhere. The Workflows library presents
+that workflow Availability separately from each schedule's **On / Off** state. Pausing a
+workflow stops all of its schedules without changing those per-schedule choices. Every
+row keeps an explicit manual **Run** action; declared trigger inputs open the per-run
+intake dialog even when automation exists. Deleting remains the destructive path and
+takes schedules with it.
+
+A schedule is unattended. It stores a five-field cron, an explicit IANA timezone,
+overlap policy, and durable bindings for workflow inputs. It never consumes a per-run
+prompt or reuses answers from a manual run. `schedule_policy.py` derives the required
+input contract from the graph trigger and is used by the API, scheduler, Run now, and
+migration. A schedule with unresolved required inputs can be saved Off for configuration,
+but cannot be turned On; the 422 `schedule_missing_sources` detail names the unresolved
+fields and tells the owner to configure a durable binding or a supported source. The
+scheduler checks again immediately before spawning so legacy or drifted unsafe rows fail
+closed.
+
+Cron matching happens in the schedule timezone. The scheduler's minute claim includes
+the local UTC offset and timezone name, preserving once-per-minute behavior across
+timezones and daylight-saving transitions. Migration 45 backfills existing rows with the
+host timezone to preserve their former wall-clock behavior, locks schedule project
+ownership to the workflow, and turns unresolved enabled schedules Off.
 
 `POST /api/schedules` accepts a workflow of **either engine** (the linear-only
 `_workflow_or_404` guard still protects the linear editor/iterate/job routes, so a graph
 template cannot be edited or run as an ordered recipe). A schedule whose workflow row
-carries a `graph` spawns an **`engine='graph'` job** — the
+carries a `graph` spawns an **`engine='graph'` job** - the
 same frozen snapshot, `node_states` and executor a manual `POST /api/graph/jobs` +
 `/start` produces, so a cron run and a manual run cannot drift apart. It used to build
 `steps_state` from the template's `steps`, which is `'[]'` for a graph, and silently spawn
 nothing.
+
+`POST /api/schedules/{id}/run` uses that same resolver and spawn path without claiming the
+cron minute. The UI awaits the returned graph job, verifies it belongs to the workflow's
+owning project, selects that exact job, and closes the schedule dialog only after the
+selection is confirmed. List refreshes and exact-job loads use separate request
+generations, so refreshing schedule summaries cannot cancel the handoff.
+
+Run the disposable Chromium regression with `npm run test:e2e:schedules`. It builds the
+web app, starts an isolated API with synthetic data and a fake runner, verifies missing
+source refusal and reload behavior, then proves Run now opened the exact owning-project
+job with its durable binding. CI runs this scenario separately from unit tests.
 
 With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged
 warning** and its minute is still claimed: the executor would never dispatch the job, so

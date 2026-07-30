@@ -7,6 +7,7 @@
     "dev": "bash scripts/dev",
     "build": "bash scripts/build",
     "test": "cd apps/api && .venv/bin/ruff check proxima_api tests && .venv/bin/python -m pytest -q tests && cd ../.. && npm --prefix apps/web test && npm --prefix apps/web run build",
+    "test:e2e:schedules": "apps/api/.venv/bin/python scripts/verify_scheduled_workflow_browser.py",
     "smoke:fresh": "bash scripts/smoke-fresh",
     "smoke": "node scripts/smoke",
     "qa": "npm test && npm run smoke:fresh && npm run smoke",

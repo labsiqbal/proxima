@@ -296,6 +296,7 @@ def run_scenario(
     auth_token: str,
     drop_prefix: list[str],
     path: str = "/",
+    screenshot_path: Path | None = None,
 ) -> bytes:
     profile.mkdir(mode=0o777)
     profile.chmod(0o777)
@@ -393,6 +394,19 @@ def run_scenario(
         ]
         for step in scenario["steps"]:
             transcript.append(_step(connection, step))
+        if screenshot_path is not None:
+            captured = connection.call(
+                "Page.captureScreenshot",
+                {
+                    "captureBeyondViewport": True,
+                    "format": "png",
+                    "fromSurface": True,
+                },
+            ).get("data")
+            if not isinstance(captured, str):
+                raise BrowserProbeError("browser screenshot data is unavailable")
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            screenshot_path.write_bytes(base64.b64decode(captured, validate=True))
         return json.dumps(
             transcript,
             sort_keys=True,

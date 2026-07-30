@@ -18,6 +18,7 @@ from ..auth import iso_now
 from .. import artifact_registry
 from .. import features
 from .. import repo_remote
+from .. import schedule_policy
 from .. import satpam
 from .. import scheduler
 from .. import workflows as wf
@@ -833,9 +834,40 @@ def register(app, deps):
 
     def _schedule_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         d = dict(row)
-        d["input"] = _decode_json(d["input"]) if d.get("input") else None
+        bindings = schedule_policy.decode_bindings(d.get("input"))
+        d["input"] = bindings
+        d["bindings"] = bindings
         d["enabled"] = bool(d.get("enabled"))
+        d["timezone"] = d.get("timezone") or schedule_policy.local_timezone_name()
+        workflow = db().execute(
+            "SELECT graph, inputs FROM workflows WHERE id = ?",
+            (d["workflow_id"],),
+        ).fetchone()
+        if workflow:
+            d.update(schedule_policy.readiness_payload(dict(workflow), bindings))
+        else:
+            d.update(
+                {
+                    "ready": False,
+                    "unresolved_inputs": [],
+                    "unresolved_labels": [],
+                }
+            )
         return d
+
+    def _requested_schedule_bindings(
+        bindings: dict[str, Any] | None, legacy_input: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if (
+            bindings is not None
+            and legacy_input is not None
+            and bindings != legacy_input
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="send schedule bindings once, using 'bindings' rather than conflicting 'input'",
+            )
+        return bindings if bindings is not None else legacy_input
 
     def _schedule_or_404(schedule_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM schedules WHERE id = ?", (schedule_id,)).fetchone()
@@ -849,11 +881,39 @@ def register(app, deps):
     def create_schedule(payload: ScheduleCreateRequest, user: dict[str, Any] = Depends(current_user)):
         if not wf.cron_valid(payload.cron):
             raise HTTPException(status_code=422, detail="invalid cron — need 5 valid fields (min hour dom mon dow)")
+        if not schedule_policy.timezone_valid(payload.timezone):
+            raise HTTPException(
+                status_code=422,
+                detail="invalid schedule timezone; use an IANA name such as UTC or Asia/Jakarta",
+            )
         wfrow = _any_workflow_or_404(payload.workflow_id, user)
-        sched_project = _member_project_id(payload.project_id, None, user) if payload.project_id is not None else wfrow["project_id"]
+        bindings = _requested_schedule_bindings(payload.bindings, payload.input) or {}
+        if payload.enabled and schedule_policy.unresolved_required_inputs(
+            dict(wfrow), bindings
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=schedule_policy.missing_sources_detail(dict(wfrow), bindings),
+            )
+        if payload.project_id is not None and payload.project_id != wfrow["project_id"]:
+            raise HTTPException(
+                status_code=422,
+                detail="a schedule must run in its workflow's owning project",
+            )
+        sched_project = wfrow["project_id"]
         cur = db().execute(
-            "INSERT INTO schedules(workflow_id, project_id, cron, input, overlap_policy, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (payload.workflow_id, sched_project, payload.cron, json.dumps(payload.input or {}), payload.overlap_policy, 1 if payload.enabled else 0, user["id"]),
+            "INSERT INTO schedules(workflow_id, project_id, cron, timezone, input, "
+            "overlap_policy, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                payload.workflow_id,
+                sched_project,
+                payload.cron,
+                payload.timezone,
+                json.dumps(bindings, ensure_ascii=False),
+                payload.overlap_policy,
+                1 if payload.enabled else 0,
+                user["id"],
+            ),
         )
         return _schedule_payload(_schedule_or_404(_as_int(cur.lastrowid), user))
 
@@ -876,19 +936,63 @@ def register(app, deps):
 
     @app.patch("/api/schedules/{schedule_id}")
     def update_schedule(schedule_id: int, payload: ScheduleUpdateRequest, user: dict[str, Any] = Depends(current_user)):
-        _schedule_or_404(schedule_id, user)
+        row = _schedule_or_404(schedule_id, user)
         if payload.cron is not None and not wf.cron_valid(payload.cron):
             raise HTTPException(status_code=422, detail="invalid cron — need 5 valid fields (min hour dom mon dow)")
+        if payload.timezone is not None and not schedule_policy.timezone_valid(
+            payload.timezone
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="invalid schedule timezone; use an IANA name such as UTC or Asia/Jakarta",
+            )
+        requested_bindings = _requested_schedule_bindings(
+            payload.bindings, payload.input
+        )
+        merged_bindings = (
+            requested_bindings
+            if requested_bindings is not None
+            else schedule_policy.decode_bindings(row["input"])
+        )
+        merged_enabled = (
+            payload.enabled if payload.enabled is not None else bool(row["enabled"])
+        )
+        workflow = _any_workflow_or_404(row["workflow_id"], user)
+        if merged_enabled and schedule_policy.unresolved_required_inputs(
+            dict(workflow), merged_bindings
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=schedule_policy.missing_sources_detail(
+                    dict(workflow), merged_bindings
+                ),
+            )
         enabled = (1 if payload.enabled else 0) if payload.enabled is not None else None
-        schedule_input = json.dumps(payload.input) if payload.input is not None else None
+        schedule_input = (
+            json.dumps(requested_bindings, ensure_ascii=False)
+            if requested_bindings is not None
+            else None
+        )
         if any(value is not None for value in (
-            payload.cron, payload.overlap_policy, enabled, schedule_input
+            payload.cron,
+            payload.timezone,
+            payload.overlap_policy,
+            enabled,
+            schedule_input,
         )):
             db().execute(
                 "UPDATE schedules SET cron=COALESCE(?,cron), "
+                "timezone=COALESCE(?,timezone), "
                 "overlap_policy=COALESCE(?,overlap_policy), enabled=COALESCE(?,enabled), "
                 "input=COALESCE(?,input), updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (payload.cron, payload.overlap_policy, enabled, schedule_input, schedule_id),
+                (
+                    payload.cron,
+                    payload.timezone,
+                    payload.overlap_policy,
+                    enabled,
+                    schedule_input,
+                    schedule_id,
+                ),
             )
         return _schedule_payload(_schedule_or_404(schedule_id, user))
 
@@ -903,6 +1007,15 @@ def register(app, deps):
         """
         row = _schedule_or_404(schedule_id, user)
         sched = dict(row)
+        workflow = _any_workflow_or_404(sched["workflow_id"], user)
+        bindings = schedule_policy.decode_bindings(sched.get("input"))
+        if schedule_policy.unresolved_required_inputs(dict(workflow), bindings):
+            raise HTTPException(
+                status_code=409,
+                detail=schedule_policy.missing_sources_detail(
+                    dict(workflow), bindings
+                ),
+            )
         # Honour the stored overlap policy, but say so. Silently doing nothing is the
         # one thing a "run now" button must never do.
         if sched["overlap_policy"] == "skip" and scheduler.schedule_has_active_job(app, schedule_id):

@@ -111,6 +111,7 @@ function parseNodes(raw: unknown): GraphNodeDefinition[] {
           cron: typeof schedule.cron === 'string' ? schedule.cron : '0 9 * * *',
           overlap_policy: schedule.overlap_policy === 'allow' ? 'allow' : 'skip',
           enabled: schedule.enabled !== false,
+          timezone: typeof schedule.timezone === 'string' ? schedule.timezone : 'UTC',
         }
       }
     } else if (type === 'script') {

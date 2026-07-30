@@ -1236,6 +1236,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   workflow_id INTEGER REFERENCES workflows(id) ON DELETE CASCADE,
   project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
   cron TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
   input TEXT,
   overlap_policy TEXT NOT NULL DEFAULT 'skip',
   enabled INTEGER NOT NULL DEFAULT 1,
