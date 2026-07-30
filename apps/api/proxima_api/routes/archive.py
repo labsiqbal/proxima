@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Query
 
-from .. import artifact_registry, container_registry
+from .. import artifact_registry, container_registry, file_targets
 from ..schemas import ArchiveStatusRequest
 
 _TYPES = ("design", "app", "page", "image", "doc", "video-file", "file", "script-output")
@@ -30,10 +30,27 @@ def register(app, deps):
         parent = str(Path(path).parent)
         d["area"] = "" if parent in (".", "") else parent + "/"
         d["file_missing"] = bool(d.get("file_missing"))
+        project = {
+            "id": d["project_id"],
+            "slug": d["project_slug"],
+            "path": d.pop("project_path"),
+        }
+        try:
+            d["target"] = file_targets.ops_locator(
+                db(),
+                project,
+                path,
+            ).payload()
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ):
+            d["target"] = None
         return d
 
     _SELECT = (
         "SELECT ar.*, p.slug AS project_slug, p.name AS project_name, "
+        "p.path AS project_path, "
         "s.title AS session_title, j.title AS job_title, j.engine AS job_engine "
         "FROM artifact_records ar "
         "JOIN projects p ON p.id = ar.project_id "
@@ -99,21 +116,8 @@ def register(app, deps):
         ).fetchall()
         items = [_record_payload(r) for r in rows]
         # Durable-record contract: reflect file presence on the page we return.
-        roots: dict[int, Path | None] = {}
-        for it in items:
-            pid = int(it["project_id"])
-            if pid not in roots:
-                prow = conn.execute(
-                    "SELECT id, path, path_identity FROM projects WHERE id = ?",
-                    (pid,),
-                ).fetchone()
-                roots[pid] = (
-                    container_registry.try_ops_root(conn, prow)
-                    if prow and prow["path"]
-                    else None
-                )
         try:
-            artifact_registry.refresh_file_presence(conn, items, roots)
+            artifact_registry.refresh_file_presence(conn, items)
         except Exception:
             logging.getLogger("proxima.archive").exception("file presence refresh failed (non-fatal)")
         # Facet counts share every filter EXCEPT type/status, so the chips stay
@@ -146,11 +150,6 @@ def register(app, deps):
             artifact_registry.refresh_file_presence(
                 conn,
                 [record],
-                {
-                    int(p["id"]): container_registry.ops_root(conn, p)
-                    if p.get("path")
-                    else None
-                },
             )
         except Exception:
             logging.getLogger("proxima.archive").exception("file presence refresh failed (non-fatal)")

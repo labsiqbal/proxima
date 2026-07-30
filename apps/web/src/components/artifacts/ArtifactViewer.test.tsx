@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { ArtifactViewer } from './ArtifactViewer'
+import { previewUrl } from '../../api/files'
 
 const fsRead = vi.fn()
 
@@ -150,6 +151,51 @@ describe('ArtifactViewer v2 review flow', () => {
       sessionId: 7,
       text: expect.stringContaining('Recreate this report.'),
     }))
+  })
+
+  it('uses the artifact target for text and media resolution instead of its display path', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brief.md',
+    }
+    fsRead.mockResolvedValue({ content: '# Ops brief' })
+    const item = {
+      type: 'doc',
+      title: 'brief.md',
+      path: 'brief.md',
+      target,
+    } as Parameters<typeof ArtifactViewer>[0]['items'][number]
+    const { unmount } = render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[item]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(await screen.findByText('# Ops brief')).toBeInTheDocument()
+    expect(fsRead).toHaveBeenCalledWith(target)
+    unmount()
+
+    const image = {
+      ...item,
+      type: 'image',
+      title: 'visual.png',
+      path: 'visual.png',
+      target: { ...target, path: 'visual.png' },
+    } as Parameters<typeof ArtifactViewer>[0]['items'][number]
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[image]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(previewUrl).toHaveBeenCalledWith('master', 'visual.png', image.target)
   })
 
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {

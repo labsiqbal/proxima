@@ -1328,9 +1328,19 @@ limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents; produced artifacts from the
 project artifact scan are merged into the same picker on the client.
+Merged tree entries and produced/Archive artifacts carry a server-owned file target:
+the project slug, authoritative Container Area kind/id, and Area-relative path. Tree,
+read/write, raw/preview, file mutation, Archive presence checks, and ArtifactViewer all
+resolve that target through the same jailed resolver. This keeps direct files at the
+physical Ops root distinct from same-name Container files, including Markdown, images,
+and PDFs. Merely finding an Ops file does not create an Archive record; only established
+producer/registry flows do.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
+Path-only clients remain compatible, including explicit `ops/...` paths for physical
+layouts. For a legacy Ops Area at `.`, `ops/...` remains a real Container child and is
+not stripped or reinterpreted.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`

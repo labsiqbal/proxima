@@ -60,7 +60,11 @@ def test_tree_read_write_mkdir_rename_delete(tmp_path):
 
     assert c.put("/api/projects/demo/file?path=notes/a.txt", headers=headers, json={"content": "hello"}).status_code == 200
     tree = c.get("/api/projects/demo/tree?path=notes", headers=headers).json()["entries"]
-    assert {"name": "a.txt", "type": "file", "size": 5} in tree
+    assert any(
+        {key: entry[key] for key in ("name", "type", "size")}
+        == {"name": "a.txt", "type": "file", "size": 5}
+        for entry in tree
+    )
 
     body = c.get("/api/projects/demo/file?path=notes/a.txt", headers=headers).json()
     assert body["content"] == "hello"

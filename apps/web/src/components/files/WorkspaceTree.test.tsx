@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceTree } from './WorkspaceTree'
 import type { FsAdapter } from '../../api/fsAdapter'
+import type { FileRef } from '../../api/files'
 import type { FileEntry } from '../../types'
 
 function entries(...names: Array<[string, 'file' | 'dir']>): FileEntry[] {
@@ -12,7 +13,7 @@ function entries(...names: Array<[string, 'file' | 'dir']>): FileEntry[] {
 
 function mockFs(tree: Record<string, FileEntry[]>): FsAdapter {
   return {
-    list: vi.fn(async (path: string) => ({ entries: tree[path] || [] })),
+    list: vi.fn(async (ref: FileRef) => ({ entries: typeof ref === 'string' ? tree[ref] || [] : [] })),
     read: vi.fn(async () => ({ content: 'hello from file' })),
     write: vi.fn(async () => ({})),
     mkdir: vi.fn(async () => ({})),
@@ -28,6 +29,48 @@ const nestedTree: Record<string, FileEntry[]> = {
 }
 
 describe('WorkspaceTree reveal / activePath', () => {
+  it('keeps a server target attached while traversing and opening merged Ops entries', async () => {
+    const opsDirTarget = {
+      project: 'demo',
+      area: { kind: 'ops', id: 12 },
+      path: 'reports',
+    }
+    const opsFileTarget = {
+      project: 'demo',
+      area: { kind: 'ops', id: 12 },
+      path: 'reports/summary.md',
+    }
+    const fs = mockFs({})
+    vi.mocked(fs.list).mockImplementation(async (ref: unknown) => {
+      if (ref === '') {
+        return {
+          entries: [
+            { name: 'reports', type: 'dir', size: 0, target: opsDirTarget },
+          ] as unknown as FileEntry[],
+        }
+      }
+      if (ref === opsDirTarget) {
+        return {
+          entries: [
+            { name: 'summary.md', type: 'file', size: 10, target: opsFileTarget },
+          ] as unknown as FileEntry[],
+        }
+      }
+      return {
+        entries: [
+          { name: 'wrong-target.md', type: 'file', size: 10 },
+        ] as unknown as FileEntry[],
+      }
+    })
+    const onOpenFile = vi.fn()
+    render(<WorkspaceTree fs={fs} title="Demo" onOpenFile={onOpenFile} />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'reports' }))
+    expect(fs.list).toHaveBeenLastCalledWith(opsDirTarget)
+    await userEvent.click(await screen.findByRole('button', { name: 'summary.md' }))
+    expect(onOpenFile).toHaveBeenCalledWith('reports/summary.md', opsFileTarget)
+  })
+
   it('expands ancestors and highlights a nested activePath', async () => {
     const fs = mockFs(nestedTree)
     render(<WorkspaceTree fs={fs} title="Demo" activePath="artifacts/farewell-note.md" />)

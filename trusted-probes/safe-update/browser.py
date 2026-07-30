@@ -184,7 +184,17 @@ def _evaluation(connection: _WebSocket, expression: str) -> object:
         or result.get("subtype") == "error"
         or "exceptionDetails" in response
     ):
-        raise BrowserProbeError("browser scenario JavaScript failed")
+        details = response.get("exceptionDetails")
+        exception = details.get("exception") if isinstance(details, dict) else None
+        description = (
+            exception.get("description")
+            if isinstance(exception, dict)
+            else details.get("text")
+            if isinstance(details, dict)
+            else None
+        )
+        suffix = f": {description}" if description else ""
+        raise BrowserProbeError(f"browser scenario JavaScript failed{suffix}")
     return result.get("value")
 
 
@@ -222,16 +232,17 @@ def _element_expression(step: dict, action: str) -> str:
 def _step(connection: _WebSocket, step: dict) -> dict:
     action = step["action"]
     if action == "screenshot":
-        result = connection.call(
-            "Page.captureScreenshot",
-            {"format": "png", "fromSurface": True},
-        )
-        encoded = result.get("data")
-        if not isinstance(encoded, str):
-            raise BrowserProbeError("browser screenshot did not return image data")
         path = Path(step["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(base64.b64decode(encoded))
+        if not path.is_absolute() or not path.parent.is_dir():
+            raise BrowserProbeError("browser screenshot destination is invalid")
+        response = connection.call(
+            "Page.captureScreenshot",
+            {"format": "png", "captureBeyondViewport": False},
+        )
+        data = response.get("data")
+        if not isinstance(data, str):
+            raise BrowserProbeError("browser screenshot data is missing")
+        path.write_bytes(base64.b64decode(data, validate=True))
         return {"ok": True, "path": str(path)}
     if action == "request":
         result = _evaluation(
@@ -264,24 +275,28 @@ def _step(connection: _WebSocket, step: dict) -> dict:
         return {"ok": True, "skipped": True}
     deadline = time.monotonic() + float(step.get("timeout", 10))
     while True:
-        result = _evaluation(
-            connection,
-            _element_expression(
-                step,
-                "wait" if action == "assert" else action,
-            ),
-        )
+        if action == "script":
+            result = _evaluation(connection, step["expression"])
+        else:
+            result = _evaluation(
+                connection,
+                _element_expression(
+                    step,
+                    "wait" if action == "assert" else action,
+                ),
+            )
         if isinstance(result, dict) and result.get("ok") is True:
             if action in {"click", "fill", "select"}:
                 time.sleep(0.15)
             return result
         if time.monotonic() >= deadline:
+            label = step.get("name") if action == "script" else step.get("selector")
             page = _evaluation(
                 connection,
                 "({url:location.href,text:(document.body?.innerText || '').slice(0,2048)})",
             )
             raise BrowserProbeError(
-                f"browser scenario step failed: {action} {step['selector']}; "
+                f"browser scenario step failed: {action} {label or ''}; "
                 f"page={json.dumps(page, sort_keys=True)}"
             )
         time.sleep(0.05)

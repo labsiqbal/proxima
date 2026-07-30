@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import iso_now
+from . import file_targets
 from .container_registry import ops_root
 
 log = logging.getLogger("proxima.archive")
@@ -208,17 +209,37 @@ def set_status(conn: sqlite3.Connection, record_id: int, status: str) -> bool:
 
 
 def refresh_file_presence(
-    conn: sqlite3.Connection, rows: list[dict[str, Any]], roots: dict[int, Path | None]
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
 ) -> None:
     """Durable-record contract: a moved/deleted file flips file_missing on the
     record instead of removing it (and flips back if the file returns). Cheap -
     called for one page of rows at a time."""
     now = iso_now()
+    projects: dict[int, sqlite3.Row | None] = {}
     for row in rows:
-        root = roots.get(int(row["project_id"]))
-        if root is None:
+        project_id = int(row["project_id"])
+        if project_id not in projects:
+            projects[project_id] = conn.execute(
+                "SELECT id, slug, path FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+        project = projects[project_id]
+        if project is None:
             continue
-        missing = 0 if (root / str(row["path"])).exists() else 1
+        try:
+            locator = file_targets.ops_locator(
+                conn,
+                project,
+                str(row["path"]),
+            )
+            resolved = file_targets.resolve_locator(conn, project, locator)
+        except (
+            file_targets.FileTargetError,
+            ValueError,
+        ):
+            continue
+        missing = 0 if resolved.path.exists() else 1
         if missing != int(row["file_missing"] or 0):
             conn.execute(
                 "UPDATE artifact_records SET file_missing = ?, updated_at = ? WHERE id = ?",
