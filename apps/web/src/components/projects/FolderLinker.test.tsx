@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FolderLinker } from './FolderLinker'
@@ -110,8 +110,16 @@ describe('FolderLinker', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(folderName).toHaveFocus()
     expect(folderName).toHaveAttribute('aria-invalid', 'true')
-    expect(folderName).toHaveAttribute('aria-describedby', alert.id)
+    expect(folderName).not.toHaveAttribute('aria-describedby')
     expect(linkProject).not.toHaveBeenCalled()
+
+    act(() => screen.getByRole('button', { name: /Create “bad\/name” here/ }).click())
+    const repeatedAlert = screen.getByRole('alert')
+    expect(repeatedAlert).not.toBe(alert)
+    expect(repeatedAlert).toHaveTextContent(/cannot contain slashes/i)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(folderName).toHaveFocus()
+    expect(folderName).not.toHaveAttribute('aria-describedby')
   })
 
   it('returns an overlong display name to its corrective field', async () => {
@@ -129,7 +137,7 @@ describe('FolderLinker', () => {
     expect(alert).toHaveTextContent(/120 characters or fewer/i)
     expect(displayName).toHaveFocus()
     expect(displayName).toHaveAttribute('aria-invalid', 'true')
-    expect(displayName).toHaveAttribute('aria-describedby', alert.id)
+    expect(displayName).not.toHaveAttribute('aria-describedby')
     expect(screen.getByPlaceholderText('my-project')).not.toHaveAttribute('aria-invalid')
     expect(linkProject).not.toHaveBeenCalled()
   })
@@ -160,9 +168,57 @@ describe('FolderLinker', () => {
     expect(alert).not.toHaveTextContent('/api/projects/link')
     expect(displayName).toHaveFocus()
     expect(displayName).toHaveAttribute('aria-invalid', 'true')
-    expect(displayName).toHaveAttribute('aria-describedby', alert.id)
+    expect(displayName).not.toHaveAttribute('aria-describedby')
     expect(folderName).not.toHaveAttribute('aria-invalid')
     expect(linkProjectErrorField(error)).toBe('name')
+  })
+
+  it('returns a missing selected folder to its refresh control', async () => {
+    const user = userEvent.setup()
+    const selected = {
+      path: '/home/user/code/existing',
+      parent: '/home/user/code',
+      dirs: [],
+      roots: ['/home/user'],
+    }
+    const missingPath = new ApiError(
+      400,
+      'POST /api/projects/link failed (400): not a directory',
+      '/api/projects/link',
+      'POST',
+      'path',
+      'not a directory',
+    )
+    vi.mocked(browseDirs)
+      .mockResolvedValueOnce(dirs)
+      .mockResolvedValueOnce(selected)
+      .mockResolvedValueOnce(dirs)
+    vi.mocked(linkProject).mockRejectedValue(missingPath)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    await user.click(screen.getByRole('button', { name: 'existing' }))
+    const selectedFolder = await screen.findByRole('button', {
+      name: /Selected folder: \/home\/user\/code\/existing\. Refresh folders/,
+    })
+    await user.click(screen.getByRole('button', { name: /Link “existing”/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('not a directory')
+    expect(selectedFolder).toHaveFocus()
+    expect(selectedFolder).toHaveAttribute('aria-invalid', 'true')
+    expect(selectedFolder).not.toHaveAttribute('aria-describedby')
+    expect(screen.getByRole('textbox', { name: 'Project display name' }))
+      .not.toHaveAttribute('aria-invalid')
+
+    await user.click(selectedFolder)
+    const recoveredFolder = await screen.findByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    expect(recoveredFolder).toHaveFocus()
+    expect(recoveredFolder).not.toHaveAttribute('aria-invalid')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(browseDirs).toHaveBeenLastCalledWith('tok', '/home/user/code/existing')
   })
 
   it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {

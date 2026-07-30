@@ -1386,17 +1386,22 @@ the HttpOnly `proxima_session` cookie into an in-memory bearer token. The passwo
 uses one main landmark and supplies hidden, read-only `owner` identity metadata for
 password-manager compatibility without adding accounts. Validation exposes one
 fresh assertive alert for each invalid attempt after focus moves to the marked and
-described corrective password field. Repeating unchanged invalid values remounts that
-single alert while focus remains on the field. Gate title, subtitle, entered value,
+invalid corrective password field. That alert is the single semantic announcement owner;
+the focused field does not repeat the message as an accessible description. Repeating
+unchanged invalid values remounts the single alert while focus remains on the field. Gate
+title, subtitle, entered value,
 placeholder, error, button, and input/button focus styles use theme tokens that meet
 WCAG AA across every canonical preset.
 
 Project link/create failures use structured API details carrying the owning request
 field. The fetch client preserves FastAPI validation locations and explicit
-`path`/`name`/`slug` ownership; `FolderLinker` maps them to its folder or display-name
-input before focusing and publishing the single alert. The retained browser audit runs
-the production bundle with allowlisted child environments, disposable runtime/profile
-roots, and background/live-service features disabled. Its real Tailscale entry check
+`path`/`name`/`slug` ownership; `FolderLinker` maps create-path failures to its folder
+input, link-path failures to a focusable selected-folder refresh control, and name/slug
+failures to the display-name input before focusing and publishing the single alert.
+Every repeated attempt remounts that sole announcement owner. Refreshing a missing
+selection reloads the closest valid browsable location for reselection. The retained
+browser audit runs the production bundle with allowlisted child environments, disposable
+runtime/profile roots, and background/live-service features disabled. Its real Tailscale entry check
 correlates the origin to the current device root Serve handler, fetches the shell with
 one unauthenticated root GET, and forwards only allowlisted static shell requests.
 Config, setup status, and failed session resume are fulfilled inside the browser

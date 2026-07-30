@@ -40,6 +40,12 @@
         "name": "Folder name cannot contain slashes or be “.” / “..”"
       }
     ],
+    "unsafeFolderRepeat": [
+      {
+        "type": "alert",
+        "name": "Folder name cannot contain slashes or be “.” / “..”"
+      }
+    ],
     "overlongDisplayName": [
       {
         "type": "focus",
@@ -54,6 +60,16 @@
       {
         "type": "alert",
         "name": "A project with that display name already exists - choose another display name"
+      }
+    ],
+    "selectedPath": [
+      {
+        "type": "focus",
+        "name": "selected-folder"
+      },
+      {
+        "type": "alert",
+        "name": "not a directory"
       }
     ],
     "returningLogin": [
@@ -95,7 +111,7 @@
         {
           "role": "textbox",
           "name": "Confirm password",
-          "description": "Passwords don’t match.",
+          "description": "",
           "focused": true,
           "invalid": "true"
         }
@@ -142,7 +158,7 @@
         {
           "role": "textbox",
           "name": "Confirm password",
-          "description": "Passwords don’t match.",
+          "description": "",
           "focused": true,
           "invalid": "true"
         }
@@ -189,12 +205,26 @@
         {
           "role": "textbox",
           "name": "New folder name",
-          "description": "Folder name cannot contain slashes or be “.” / “..”",
+          "description": "",
           "focused": true,
           "invalid": "true"
         }
       ],
       "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home. Refresh folders",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "vanishing-folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
         {
           "role": "button",
           "name": "Create “bad/name” here",
@@ -224,6 +254,174 @@
           "focused": false,
           "invalid": "false",
           "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "unsafeFolderRepeat": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "Folder name cannot contain slashes or be “.” / “..”"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "textbox",
+          "name": "New folder name",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home. Refresh folders",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "vanishing-folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create “bad/name” here",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "selectedPath": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "not a directory"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home/vanishing-folder. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home/vanishing-folder. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        },
+        {
+          "role": "button",
+          "name": "↑ ..",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link “vanishing-folder”",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
         }
       ],
       "tabs": []
@@ -259,7 +457,7 @@
         {
           "role": "textbox",
           "name": "Password",
-          "description": "Incorrect password.",
+          "description": "",
           "focused": true,
           "invalid": "true"
         }
@@ -441,7 +639,7 @@
       "forwarded": "same-origin static shell GET only",
       "bootstrap": "fulfilled in browser fixture",
       "liveDataRequests": "blocked",
-      "blockedRequestCount": 4
+      "blockedRequestCount": 2
     }
   },
   "tailscaleEntry": {
@@ -462,6 +660,6 @@
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:36301/"
+    "url": "http://127.0.0.1:32769/"
   }
 }

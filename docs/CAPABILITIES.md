@@ -1075,13 +1075,17 @@ and its real files stay; a Proxima-scaffolded project is deleted from disk. On
 (`screens/WorkspaceOnboarding.tsx`, reusing `FolderLinker`) offers link, create-new-folder,
 or skip (starter project under the data dir). The two folder choices are mutually
 exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
-Validation exposes one assertive alert, marks and describes the corrective field, and
-returns focus there before the alert is published. Every invalid submission mounts a
-fresh single alert, including an unchanged repeat while the field remains focused.
+Validation exposes one assertive alert, marks the corrective target invalid, and returns
+focus there before the alert is published. The alert is the only semantic announcement
+owner, so the focused target does not duplicate the message as its description. Every
+invalid submission mounts a fresh single alert, including an unchanged repeat while the
+target remains focused.
 Display names are checked against the API's 120-character limit before submission. The
 project-link error contract also identifies `path`, `name`, or `slug`; the client maps
-path failures to the folder field and name/slug failures to the display-name field
-instead of guessing from the mode.
+create-path failures to the folder field, link-path failures to a focusable selected-folder
+refresh control, and name/slug failures to the display-name field instead of guessing
+from the mode. Refreshing a missing selection returns the chooser to a valid browsable
+ancestor so the owner can reselect a folder.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

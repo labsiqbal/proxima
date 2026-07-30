@@ -242,11 +242,15 @@ in, or create a new empty one under a parent you pick.
 The link/create choice is an ordinary labeled button group. Each button exposes
 `aria-pressed`, and both remain in normal Tab order with Enter and Space activation.
 Folder and display-name validation publishes one assertive alert only after focus has
-moved to the marked corrective field. The focused field references that alert as its
-description. Display names are checked against the API's 120-character limit before a
-link or create request. Structured project-link errors retain their `path`, `name`, or
-`slug` ownership through the API client, so a valid folder field is never blamed for a
-display-name or derived-slug failure.
+moved to the marked corrective target. The alert is the only semantic announcement owner;
+the focused target remains invalid without repeating the message as its description.
+Every attempt mounts a fresh alert, including an unchanged assistive or keyboard
+resubmission while focus stays on the target. Display names are checked against the API's
+120-character limit before a link or create request. Structured project-link errors
+retain their `path`, `name`, or `slug` ownership through the API client. Create-path
+failures focus the folder-name field, name/slug failures focus the display-name field,
+and link-path failures focus a selected-folder refresh control that returns the chooser
+to a valid location for reselection.
 
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima
@@ -275,7 +279,9 @@ Password fields have stable accessible names and password-manager autocomplete v
 with a hidden, read-only `owner` username field that does not create an account model.
 Validation focuses the marked password field before publishing its single assertive
 alert. Every validation attempt mounts a fresh alert instance, including an unchanged
-repeat while focus stays on the corrective field. Auth and onboarding text, errors,
+repeat while focus stays on the corrective field. That alert is the sole semantic
+announcement owner; the invalid field does not duplicate it as an accessible
+description. Auth and onboarding text, errors,
 primary controls, placeholders, entered values, and focus indicators use central theme
 tokens that maintain WCAG AA contrast in every supported theme.
 

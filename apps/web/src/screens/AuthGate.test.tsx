@@ -45,7 +45,7 @@ describe('AuthGate', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(confirmation).toHaveFocus()
     expect(confirmation).toHaveAttribute('aria-invalid', 'true')
-    expect(confirmation).toHaveAttribute('aria-describedby', alert.id)
+    expect(confirmation).not.toHaveAttribute('aria-describedby')
     expect(setPassword).not.toHaveBeenCalled()
 
     await user.keyboard('{Enter}')
@@ -70,7 +70,7 @@ describe('AuthGate', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(password).toHaveFocus()
     expect(password).toHaveAttribute('aria-invalid', 'true')
-    expect(password).toHaveAttribute('aria-describedby', alert.id)
+    expect(password).not.toHaveAttribute('aria-describedby')
     expect(onAuthed).not.toHaveBeenCalled()
   })
 

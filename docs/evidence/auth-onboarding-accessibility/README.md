@@ -10,8 +10,11 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | First-run mismatch focus and single announcement | pass |
 | Repeated mismatch gets one fresh announcement | pass |
 | Unsafe folder focus and single announcement | pass |
+| Repeated unsafe folder gets one fresh announcement | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
+| Missing selected folder focuses its refresh/reselect control | pass |
+| Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
 | Returning login failure and success | pass |
 | Accessibility trees and one main landmark | pass |
@@ -26,7 +29,7 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Flow | Before | After |
 | --- | --- | --- |
 | Password gate | [tour capture](../../screenshots/first-run-password.png) | [setup mismatch](auth-setup-mismatch-after.png), [returning login](auth-login-error-after.png) |
-| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png) |
+| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing selected folder](onboarding-path-error-after.png) |
 | Remote entry | - | [isolated Tailnet-host login](tailnet-unauthenticated-entry.png) |
 
 Machine-readable details are in [report.json](report.json), with the full

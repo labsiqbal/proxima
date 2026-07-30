@@ -352,6 +352,15 @@ function assertSingleAnnouncement(trace, fieldName, messagePattern, alreadyFocus
   assert.match(relevant[1]?.name || '', messagePattern)
 }
 
+function assertSingleSemanticOwner(summary, targetPredicate, messagePattern) {
+  assert.equal(summary.alerts.length, 1)
+  assert.match(summary.alerts[0].text, messagePattern)
+  const target = summary.focused.find(targetPredicate)
+  assert(target, 'Corrective target was not focused in the accessibility tree')
+  assert(target.invalid, 'Corrective target was not marked invalid')
+  assert.equal(target.description, '', 'Corrective target duplicated the alert as its description')
+}
+
 function axProperty(node, name) {
   return node.properties?.find(property => property.name === name)?.value?.value
 }
@@ -750,8 +759,11 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | First-run mismatch focus and single announcement | pass |
 | Repeated mismatch gets one fresh announcement | pass |
 | Unsafe folder focus and single announcement | pass |
+| Repeated unsafe folder gets one fresh announcement | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
+| Missing selected folder focuses its refresh/reselect control | pass |
+| Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
 | Returning login failure and success | pass |
 | Accessibility trees and one main landmark | pass |
@@ -766,7 +778,7 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Flow | Before | After |
 | --- | --- | --- |
 | Password gate | [tour capture](../../screenshots/first-run-password.png) | [setup mismatch](auth-setup-mismatch-after.png), [returning login](auth-login-error-after.png) |
-| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png) |
+| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing selected folder](onboarding-path-error-after.png) |
 | Remote entry | - | [isolated Tailnet-host login](tailnet-unauthenticated-entry.png) |
 
 Machine-readable details are in [report.json](report.json), with the full
@@ -809,6 +821,8 @@ async function main() {
   ]) {
     fs.mkdirSync(directory, { recursive: true })
   }
+  const vanishingFolder = path.join(fixtureHome, 'vanishing-folder')
+  fs.mkdirSync(vanishingFolder)
   const apiEnvironment = disposableApiEnvironment({
     fixtureRoot,
     fixtureHome,
@@ -900,9 +914,11 @@ async function main() {
     assertSingleAnnouncement(mismatchTrace, 'password-confirmation', /Passwords.*match/)
     const mismatchAx = await accessibilitySummary(cdp)
     assert.equal(mismatchAx.mains.length, 1)
-    assert.equal(mismatchAx.alerts.length, 1)
-    assert.match(mismatchAx.alerts[0].text, /Passwords.*match/)
-    assert(mismatchAx.focused.some(node => node.name === 'Confirm password' && node.invalid))
+    assertSingleSemanticOwner(
+      mismatchAx,
+      node => node.name === 'Confirm password',
+      /Passwords.*match/,
+    )
 
     const repeatedMismatchFocusedBeforeError = await startAnnouncementTrace(cdp)
     await pressKey(cdp, 'Enter', 'Enter', 13, '\r')
@@ -919,9 +935,11 @@ async function main() {
       repeatedMismatchFocusedBeforeError === 'password-confirmation',
     )
     const repeatedMismatchAx = await accessibilitySummary(cdp)
-    assert.equal(repeatedMismatchAx.alerts.length, 1)
-    assert.match(repeatedMismatchAx.alerts[0].text, /Passwords.*match/)
-    assert(repeatedMismatchAx.focused.some(node => node.name === 'Confirm password' && node.invalid))
+    assertSingleSemanticOwner(
+      repeatedMismatchAx,
+      node => node.name === 'Confirm password',
+      /Passwords.*match/,
+    )
     await screenshot(cdp, 'auth-setup-mismatch-after.png')
 
     await setInput(cdp, 'password-confirmation', 'longenough1')
@@ -949,10 +967,34 @@ async function main() {
     assertSingleAnnouncement(folderTrace, 'folder-name', /cannot contain slashes/)
     const folderAx = await accessibilitySummary(cdp)
     assert.equal(folderAx.mains.length, 1)
-    assert.equal(folderAx.alerts.length, 1)
     assert.equal(folderAx.tabs.length, 0)
     assert(folderAx.buttons.some(node => node.name === 'Create new folder' && node.pressed === 'true'))
-    assert(folderAx.focused.some(node => node.name.includes('New folder name') && node.invalid))
+    assertSingleSemanticOwner(
+      folderAx,
+      node => node.name.includes('New folder name'),
+      /cannot contain slashes/,
+    )
+
+    const repeatedFolderFocusedBeforeError = await startAnnouncementTrace(cdp)
+    await clickButton(cdp, 'Create “bad/name” here')
+    await waitForPage(
+      cdp,
+      `(window.__proximaA11yEvents || []).filter(event => event.type === 'alert').length === 1`,
+      'Repeated unsafe-folder announcement',
+    )
+    const repeatedFolderTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      repeatedFolderTrace,
+      'folder-name',
+      /cannot contain slashes/,
+      repeatedFolderFocusedBeforeError === 'folder-name',
+    )
+    const repeatedFolderAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      repeatedFolderAx,
+      node => node.name.includes('New folder name'),
+      /cannot contain slashes/,
+    )
     await screenshot(cdp, 'onboarding-validation-after.png')
 
     await setInput(cdp, 'folder-name', 'valid-folder')
@@ -994,6 +1036,59 @@ async function main() {
     assert.equal(await evaluate(cdp, `document.querySelector('input[name=folder-name]').getAttribute('aria-invalid')`), null)
     await screenshot(cdp, 'onboarding-slug-collision-after.png')
 
+    await clickButton(cdp, 'Link existing')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[aria-pressed=true]')?.textContent.trim() === 'Link existing'`,
+      'Link mode',
+    )
+    await clickButton(cdp, 'vanishing-folder')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent.endsWith('/vanishing-folder')`,
+      'Selected disposable folder',
+    )
+    fs.rmdirSync(vanishingFolder)
+    await startAnnouncementTrace(cdp)
+    await clickButton(cdp, 'Link “vanishing-folder”')
+    await waitForPage(
+      cdp,
+      `document.querySelector('[role=alert]')?.textContent.includes('not a directory')`,
+      'Missing selected folder error',
+    )
+    const selectedPathTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(selectedPathTrace, 'selected-folder', /not a directory/)
+    const selectedPathAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      selectedPathAx,
+      node => node.role === 'button' && node.name.includes('Selected folder:'),
+      /not a directory/,
+    )
+    await screenshot(cdp, 'onboarding-path-error-after.png')
+
+    const recovered = await evaluate(cdp, `(() => {
+      const button = document.querySelector('button[name=selected-folder]')
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`)
+    assert(recovered, 'Missing selected-folder recovery control')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent
+          === ${JSON.stringify(fixtureHome)}
+        && !document.querySelector('[role=alert]')`,
+      'Selected folder recovery',
+    )
+    assert.equal(await evaluate(
+      cdp,
+      `document.activeElement?.getAttribute('name')`,
+    ), 'selected-folder')
+    assert.equal(await evaluate(
+      cdp,
+      `document.querySelector('button[name=selected-folder]').getAttribute('aria-invalid')`,
+    ), null)
+
     await clickButton(cdp, 'Skip for now')
     await waitForPage(cdp, `Boolean(document.querySelector('.app-shell'))`, 'Authenticated shell')
     await cdp.send('Network.clearBrowserCookies')
@@ -1016,8 +1111,11 @@ async function main() {
     )
     const loginAx = await accessibilitySummary(cdp)
     assert.equal(loginAx.mains.length, 1)
-    assert.equal(loginAx.alerts.length, 1)
-    assert(loginAx.focused.some(node => node.name === 'Password' && node.invalid))
+    assertSingleSemanticOwner(
+      loginAx,
+      node => node.name === 'Password',
+      /Incorrect password/,
+    )
     await screenshot(cdp, 'auth-login-error-after.png')
 
     await setInput(cdp, 'password', 'longenough1')
@@ -1058,14 +1156,18 @@ async function main() {
         setupMismatch: mismatchTrace,
         setupMismatchRepeat: repeatedMismatchTrace,
         unsafeFolder: folderTrace,
+        unsafeFolderRepeat: repeatedFolderTrace,
         overlongDisplayName: displayTrace,
         derivedSlugCollision: collisionTrace,
+        selectedPath: selectedPathTrace,
         returningLogin: loginTrace,
       },
       accessibilityTrees: {
         setupMismatch: mismatchAx,
         setupMismatchRepeat: repeatedMismatchAx,
         unsafeFolder: folderAx,
+        unsafeFolderRepeat: repeatedFolderAx,
+        selectedPath: selectedPathAx,
         returningLogin: loginAx,
       },
       themes: themeResults,

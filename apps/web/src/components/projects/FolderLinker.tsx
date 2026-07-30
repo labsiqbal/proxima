@@ -4,8 +4,8 @@ import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projec
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
-type ErrorField = 'folder' | 'display'
-type FormError = { message: string; field: ErrorField | null }
+type ErrorField = 'path' | 'folder' | 'display'
+type FormError = { id: number; message: string; field: ErrorField }
 
 const PROJECT_NAME_MAX_LENGTH = 120
 
@@ -23,12 +23,16 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
+  const errorSeq = React.useRef(0)
+  const pathRef = React.useRef<HTMLButtonElement>(null)
   const folderNameRef = React.useRef<HTMLInputElement>(null)
   const displayNameRef = React.useRef<HTMLInputElement>(null)
   const reportError = React.useCallback((message: string, field: ErrorField) => {
-    const target = field === 'folder' ? folderNameRef : displayNameRef
+    const target = field === 'path'
+      ? pathRef
+      : field === 'folder' ? folderNameRef : displayNameRef
     target.current?.focus()
-    setError({ message, field })
+    setError({ id: errorSeq.current += 1, message, field })
   }, [])
   React.useEffect(() => {
     mountedRef.current = true
@@ -45,10 +49,10 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       .then(next => { if (mountedRef.current && seq === loadSeq.current) setCur(next) })
       .catch(e => {
         if (mountedRef.current && seq === loadSeq.current) {
-          setError({ message: e instanceof Error ? e.message : String(e), field: null })
+          reportError(e instanceof Error ? e.message : String(e), 'path')
         }
       })
-  }, [token])
+  }, [reportError, token])
   React.useEffect(() => { load() }, [load])
 
   const switchMode = (next: Mode) => {
@@ -102,7 +106,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         const apiField = linkProjectErrorField(e)
         const field = apiField === 'name'
           ? 'display'
-          : mode === 'create' ? 'folder' : 'display'
+          : mode === 'create' ? 'folder' : 'path'
         const message = e instanceof ApiError && e.detail
           ? e.detail
           : e instanceof Error ? e.message : String(e)
@@ -131,7 +135,20 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         ? 'Browse to a folder you already have. Nothing is moved or copied.'
         : 'Pick the parent directory, then name the new empty folder to create on disk.'}
     </p>
-    <div className="fl-path"><span className="muted" aria-hidden="true">📁</span> <code>{cur.path}</code></div>
+    <button
+      ref={pathRef}
+      type="button"
+      name="selected-folder"
+      className="fl-path"
+      aria-label={`Selected folder: ${cur.path}. Refresh folders`}
+      aria-invalid={errorField === 'path' || undefined}
+      aria-disabled={busy || undefined}
+      onClick={() => { if (!busy) load(cur.path) }}
+    >
+      <span className="muted" aria-hidden="true">📁</span>
+      <code>{cur.path}</code>
+      <span className="fl-path-refresh">Refresh</span>
+    </button>
     <div className="fl-list">
       {cur.parent && <button type="button" className="fl-row up" disabled={busy} onClick={() => load(cur.parent!)}>↑ ..</button>}
       {cur.dirs.map(d => <button type="button" className="fl-row" disabled={busy} key={d.path} onClick={() => load(d.path)}>{d.name}</button>)}
@@ -154,7 +171,6 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             autoComplete="off"
             spellCheck={false}
             aria-invalid={errorField === 'folder' || undefined}
-            aria-describedby={errorField === 'folder' ? 'folder-linker-error' : undefined}
           />
         </label>
         <label className="fl-field">
@@ -170,7 +186,6 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             placeholder={folderName.trim() || 'My project'}
             readOnly={busy}
             aria-invalid={errorField === 'display' || undefined}
-            aria-describedby={errorField === 'display' ? 'folder-linker-error' : undefined}
           />
         </label>
         <button type="button" className="primary-button" disabled={busy || !folderName.trim()} onClick={() => void submit()}>
@@ -185,11 +200,10 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             if (errorField === 'display') setError(null)
           }}
           placeholder={here} readOnly={busy} aria-label="Project display name"
-          aria-invalid={errorField === 'display' || undefined}
-          aria-describedby={errorField === 'display' ? 'folder-linker-error' : undefined} />
+          aria-invalid={errorField === 'display' || undefined} />
         <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Linking…' : `Link “${here}”`}</button>
       </div>
     )}
-    {error && <p id="folder-linker-error" className="error-text" role="alert">{error.message}</p>}
+    {error && <p key={error.id} className="error-text" role="alert">{error.message}</p>}
   </div>
 }

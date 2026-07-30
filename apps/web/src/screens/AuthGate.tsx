@@ -47,15 +47,13 @@ export function AuthGate({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed
           onChange={e => { setPw(e.target.value); if (error?.field === 'password') setError(null) }}
           autoComplete={isSetup ? 'new-password' : 'current-password'}
           aria-label="Password"
-          aria-invalid={error?.field === 'password' || undefined}
-          aria-describedby={error?.field === 'password' ? 'auth-error' : undefined} />
+          aria-invalid={error?.field === 'password' || undefined} />
         {isSetup && <input ref={confirmationRef} className="auth-input" type="password" name="password-confirmation" placeholder="Confirm password" value={confirm}
           onChange={e => { setConfirm(e.target.value); if (error?.field === 'confirmation') setError(null) }}
           autoComplete="new-password"
           aria-label="Confirm password"
-          aria-invalid={error?.field === 'confirmation' || undefined}
-          aria-describedby={error?.field === 'confirmation' ? 'auth-error' : undefined} />}
-        {error && <p key={error.id} id="auth-error" className="auth-error" role="alert">{error.message}</p>}
+          aria-invalid={error?.field === 'confirmation' || undefined} />}
+        {error && <p key={error.id} className="auth-error" role="alert">{error.message}</p>}
         <button className="primary-button auth-submit" type="submit" disabled={busy}>
           {busy ? 'Please wait…' : isSetup ? 'Set password & enter' : 'Log in'}
         </button>
