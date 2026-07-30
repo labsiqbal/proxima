@@ -14097,7 +14097,6 @@ button.moodboard-add-method:hover {
 .master-capacity span:last-child { margin-left: auto; color: var(--ui-text-tertiary); }
 .capacity-live { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-success); box-shadow: 0 0 0 var(--space-1) color-mix(in srgb, var(--ui-success) 14%, transparent); }
 .master-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--master-side-width); gap: var(--space-4); align-items: start; }
-.master-view.master-side-collapsed .master-grid { grid-template-columns: minmax(0, 1fr) auto; }
 /* Main conversation column: flat against the page - no outer card chrome. */
 .master-conversation {
 	display: flex;
@@ -14193,18 +14192,38 @@ button.moodboard-add-method:hover {
 .master-message.user { justify-self: end; border-bottom-right-radius: var(--radius-sm); background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface)); }
 .master-message.assistant,
 .master-message.system { justify-self: start; border: 1px solid var(--ui-stroke-tertiary); border-bottom-left-radius: var(--radius-sm); background: var(--ui-surface-subtle); }
-/* Tool-result rows: flat timeline text only - no border, fill, radius, or outer bubble. */
-.master-tool-results { display: grid; gap: var(--space-1); max-width: 100%; justify-self: stretch; min-width: 0; }
+/* Tool activity stays auditable without letting product-envelope JSON take over the thread. */
+.master-tool-results { max-width: 100%; min-width: 0; color: var(--ui-text-secondary); }
+.master-tool-results > summary {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	width: fit-content;
+	max-width: 100%;
+	padding: var(--space-2) 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	cursor: pointer;
+}
+.master-tool-results > summary > span:first-child { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
+.master-tool-results > summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.master-tool-results > summary::marker { color: var(--ui-text-tertiary); }
+.master-tool-results.failed > summary strong { color: var(--ui-danger-text); }
+.master-tool-disclosure-label { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
+.master-tool-results[open] .master-tool-disclosure-label { display: none; }
+.master-tool-results-body { display: grid; gap: var(--space-1); padding: 0 0 var(--space-2); }
 .master-tool-message { display: grid; gap: var(--space-2); width: 100%; min-width: 0; }
-.master-tool-results > div { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.master-tool-results > div.failed { color: var(--ui-danger-text); }
-.master-tool-results b { display: block; font-size: var(--text-sm); font-weight: 500; color: var(--ui-text-secondary); }
-.master-tool-results > div.failed b { color: inherit; }
-.master-tool-results ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 0; }
-.master-tool-results li button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; min-height: var(--master-control-height); border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-2); background: transparent; color: var(--ui-text-primary); text-align: left; cursor: pointer; }
-.master-tool-results li button:hover { background: var(--ui-row-hover-background); }
-.master-tool-results li small { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
-.master-tool-results p { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.5; color: inherit; }
+.master-tool-results-body > div { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.master-tool-results-body > div.failed { color: var(--ui-danger-text); }
+.master-tool-results-body b { display: block; font-size: var(--text-sm); font-weight: 500; color: var(--ui-text-secondary); }
+.master-tool-results-body > div.failed b { color: inherit; }
+.master-tool-results-body ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 0; }
+.master-tool-results-body li button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; min-height: var(--master-control-height); border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-2); background: transparent; color: var(--ui-text-primary); text-align: left; cursor: pointer; }
+.master-tool-results-body li button:hover { background: var(--ui-row-hover-background); }
+.master-tool-results-body li small { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
+.master-tool-results-body p { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.5; color: inherit; }
+.master-tool-unreadable { color: var(--ui-warning-text); }
+.master-tool-raw { max-height: calc(var(--master-control-height) * 4); margin: var(--space-2) 0 0; overflow: auto; border: 1px solid var(--ui-stroke-tertiary); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--ui-surface-subtle); color: var(--ui-text-secondary); font-size: var(--text-2xs); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .master-working,
 .master-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); color: var(--ui-text-secondary); font-size: var(--text-sm); }
 /* Chat-parity composer dock: reuse .composer styles; no Master-only tray chrome. */
@@ -14320,38 +14339,13 @@ button.moodboard-add-method:hover {
 	line-height: 1.5;
 }
 .master-side { display: grid; gap: var(--space-4); min-width: 0; }
-.master-side-toggle {
-	/* Match top-bar tool-btn footprint inside Master header. */
-	flex: 0 0 auto;
-}
-.master-side-reopen {
-	display: grid;
-	align-content: start;
-	justify-items: center;
-	gap: var(--space-2);
-	min-height: var(--master-thread-min-height);
-	width: calc(var(--space-8) + var(--space-2));
-	border: 1px solid var(--ui-stroke-secondary);
-	border-radius: var(--radius-lg);
-	padding: var(--space-3) var(--space-1);
-	background: var(--ui-surface);
-	color: var(--ui-text-secondary);
-	cursor: pointer;
-	transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
-}
-.master-side-reopen:hover {
-	border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary));
-	background: var(--ui-row-hover-background);
-	color: var(--ui-accent);
-}
-.master-side-reopen .eyebrow {
-	writing-mode: vertical-rl;
-	transform: rotate(180deg);
-	margin: 0;
-	letter-spacing: 0.08em;
-}
+.master-side-section > summary { list-style: revert; cursor: pointer; }
 .master-section-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
-.master-section-head h2 { margin: 0; font-size: var(--text-sm); font-weight: 650; }
+.master-section-head > span:first-child { display: grid; gap: var(--space-1); }
+.master-section-head strong { font-size: var(--text-sm); font-weight: 650; }
+.master-section-summary-meta { display: inline-flex; align-items: center; gap: var(--space-2); }
+.master-side-section:not([open]) .master-section-head { border-bottom: 0; }
+.master-side-panel-body { min-width: 0; }
 .master-count {
 	display: grid;
 	place-items: center;
@@ -14389,7 +14383,7 @@ button.moodboard-add-method:hover {
 .master-work-count.review b { color: var(--ui-accent); }
 .master-work-count.failed b { color: var(--ui-danger-strong); }
 .master-job-groups {
-	max-height: calc(100vh - var(--topbar-h) - var(--master-side-width));
+	max-height: calc((var(--master-control-height) + var(--space-3)) * 3 + var(--space-6));
 	overflow: auto;
 }
 .master-job-group + .master-job-group {
@@ -14421,7 +14415,7 @@ button.moodboard-add-method:hover {
 .master-job-status.done { background: var(--ui-success-strong); }
 .master-job-status.failed,
 .master-job-status.cancelled { background: var(--ui-danger); }
-.master-needs-list { list-style: none; margin: 0; padding: 0; }
+.master-needs-list { list-style: none; max-height: calc((var(--master-control-height) + var(--space-4)) * 3); margin: 0; overflow: auto; padding: 0; }
 .master-needs-list li { border-bottom: 1px solid var(--ui-stroke-tertiary); }
 .master-needs-list li:last-child { border-bottom: 0; }
 .master-needs-list button,
@@ -14430,7 +14424,7 @@ button.moodboard-add-method:hover {
 .master-needs-list button:hover { background: var(--ui-row-hover-background); }
 .master-needs-list strong { font-size: var(--text-sm); }
 .master-needs-list small { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
-.master-checkpoints { list-style: none; margin: 0; padding: 0; }
+.master-checkpoints { list-style: none; max-height: calc((var(--master-control-height) + var(--space-6)) * 3); margin: 0; overflow: auto; padding: 0; }
 .master-checkpoints li { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
 .master-checkpoints li:last-child { border-bottom: 0; }
 .checkpoint-line { width: var(--space-2); height: var(--space-2); margin-top: var(--space-2); border-radius: var(--radius-full); background: var(--ui-accent); }
@@ -14743,22 +14737,8 @@ button.moodboard-add-method:hover {
 
 @media (max-width: 900px) {
 	.master-grid { grid-template-columns: minmax(0, 1fr); }
-	.master-view.master-side-collapsed .master-grid { grid-template-columns: minmax(0, 1fr); }
 	.master-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.master-side-reopen {
-		width: 100%;
-		min-height: var(--master-control-height);
-		grid-auto-flow: column;
-		align-content: center;
-		justify-content: center;
-		padding: var(--space-2) var(--space-3);
-	}
-	.master-side-reopen .eyebrow {
-		writing-mode: horizontal-tb;
-		transform: none;
-	}
 	.master-controls .ui-select { min-width: 0; max-width: none; }
-	.master-job-groups { max-height: none; }
 }
 @media (max-width: 767px) {
 	.master-popup-root.corner-left,
@@ -14844,11 +14824,6 @@ button.moodboard-add-method:hover {
 	.master-controls .ui-select { width: 100%; max-width: none; }
 	.master-connection,
 	.master-new-task { justify-content: center; }
-	.master-side-toggle {
-		position: absolute;
-		top: var(--space-3);
-		right: var(--space-3);
-	}
 	.master-capacity {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, auto));

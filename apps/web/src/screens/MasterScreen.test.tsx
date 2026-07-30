@@ -24,7 +24,6 @@ const actions = {
   send: vi.fn().mockResolvedValue(undefined),
   setHomeActive: vi.fn(),
   markRead: vi.fn(),
-  setSideCollapsed: vi.fn(),
   setScrollState: vi.fn(),
   setFocus: vi.fn().mockResolvedValue(undefined),
   setHistory: vi.fn(),
@@ -85,7 +84,6 @@ const state = {
   },
   view: {
     homeActive: true,
-    sideCollapsed: false,
     scrollTop: 0,
     followTail: true,
     anchorMessageId: null,
@@ -332,7 +330,7 @@ describe('MasterScreen', () => {
       .toBeInTheDocument()
   })
 
-  it('labels focused tool-result rows with their shared history attribution', () => {
+  it('keeps successful tool activity compact until its audit details are requested', async () => {
     vi.mocked(useMasterState).mockReturnValue({
       ...state,
       history: { kind: 'container', containerId: 21 },
@@ -346,8 +344,43 @@ describe('MasterScreen', () => {
 
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
-    const results = screen.getByRole('group', { name: 'Master tool results' })
-    expect(results.closest('article')).toHaveTextContent('Focused segment')
+    const disclosure = document.querySelector('.master-tool-results') as HTMLDetailsElement
+    expect(disclosure).not.toBeNull()
+    expect(disclosure.open).toBe(false)
+    expect(disclosure.closest('article')).toHaveTextContent('Focused segment')
+    expect(disclosure.querySelector('summary')).toHaveTextContent('Work queue checked')
+
+    await userEvent.setup().click(disclosure.querySelector('summary') as HTMLElement)
+    expect(disclosure.open).toBe(true)
+    expect(screen.getByRole('group', { name: 'Master tool results' })).toBeInTheDocument()
+  })
+
+  it('summarizes failed and streaming tool results without expanding raw payloads', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      historyMessages: [
+        {
+          id: 92,
+          role: 'system',
+          content: 'Master tool results:\n```json\n[{"ok":false,"tool":"delegate_tasks","error":{"message":"Task capacity is full"}}]\n```',
+        },
+        {
+          id: 93,
+          role: 'system',
+          content: 'Master tool results:\n```json\n[{"ok":true,"tool":"delegate_tasks"',
+        },
+      ],
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    const disclosures = document.querySelectorAll<HTMLDetailsElement>('.master-tool-results')
+    expect(disclosures).toHaveLength(2)
+    expect([...disclosures].every(disclosure => !disclosure.open)).toBe(true)
+    expect(disclosures[0].querySelector('summary')).toHaveTextContent('Product action could not run')
+    expect(disclosures[1].querySelector('summary')).toHaveTextContent('Master is updating a tool result')
+    expect(disclosures[1].querySelector('.master-tool-unreadable'))
+      .toHaveTextContent('Master is still receiving this tool result. Technical detail is available below.')
   })
 
   it('disables the only composer while Master is working', () => {
@@ -371,10 +404,29 @@ describe('MasterScreen', () => {
     expect(sideBlock?.[0]).toMatch(/border-radius:\s*var\(--radius-lg\)/)
   })
 
-  it('collapses the provider-owned work panel preference', async () => {
+  it('keeps every Delegate information panel available without a hide control', () => {
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Hide work panel' }))
-    expect(actions.setSideCollapsed).toHaveBeenCalledWith(true)
+    expect(screen.getByText('Master Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Needs your attention')).toBeInTheDocument()
+    expect(screen.getByText('Checkpoints')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /work panel/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps Fleet Work, Decisions, and Safety as independent accordions with bounded lists', async () => {
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    const panels = document.querySelectorAll<HTMLDetailsElement>('.master-side-section')
+    expect(panels).toHaveLength(3)
+    expect([...panels].every(panel => panel.open)).toBe(true)
+
+    await userEvent.setup().click(screen.getByText('Needs your attention'))
+    expect(panels[1].open).toBe(false)
+    expect(panels[0].open).toBe(true)
+    expect(panels[2].open).toBe(true)
+
+    const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+    expect(css).toMatch(/\.master-job-groups\s*\{\s*max-height:[\s\S]*?\* 3/)
+    expect(css).toMatch(/\.master-needs-list\s*\{\s*list-style: none; max-height:[\s\S]*?\* 3/)
+    expect(css).toMatch(/\.master-checkpoints\s*\{\s*list-style: none; max-height:[\s\S]*?\* 3/)
   })
 
   it('shows an honest reconnect state without starting a polling fallback', () => {

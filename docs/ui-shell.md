@@ -53,20 +53,21 @@ itself keeps the counterpart label **Master** and does not expose a fake worker 
 A compact capacity strip always states running/free out of three, queued count, and the
 saved unattended budgets. One authenticated provider owns the Master session, durable
 thread, live SSE cursor, reconnect state, unread count, composer draft/selection,
-Focus, target, selected history projection, popup, toast queue, scroll anchor, and
-work-panel state across navigation. The full-page home and floating popup are two
+Focus, target, selected history projection, popup, toast queue, and scroll anchor
+across navigation. The full-page home and floating popup are two
 views of that provider, so only one composer and one live connection exist. The main
 column is the Master thread plus one shared **Chat composer** stack (attach + `@`
 project file/artifact mentions) wired to Master's send API rather than a normal
 chat run; attachment context comes from an active Master job when one is available,
 not a Work project selection. The side column groups queued, running, review/attention, completed,
-and failed Master-owned Tasks,
-then owner decisions and a job-scoped checkpoint timeline. It is **collapsible**
-(header toggle + reopen
-edge control; preference in `localStorage` as `proxima.master.sideCollapsed`; mobile
-defaults collapsed). Idle, loading, failure/retry, populated, and in-flight states all
-retain the same geometry. On narrow screens the side column stacks after the thread
-with no horizontal scroll.
+and failed Master-owned Tasks, then owner decisions and a job-scoped checkpoint
+timeline. **Fleet work**, **Decisions**, and **Safety** are independent native
+accordions, open by default. Each list reserves a three-row viewport and scrolls
+internally for remaining entries, so the desk remains scannable without hiding its
+information rail. The Delegate sidebar stays visible at desktop widths; it has no
+hide/collapse or resize control. Idle, loading, failure/retry, populated, and
+in-flight states retain the same geometry. On narrow screens the side column stacks
+after the thread with no horizontal scroll.
 
 Opening a graph plan from the global Tasks index is an explicit transition back to Work,
 because its editor belongs to Workflows. Task workspace Design actions are unavailable
@@ -93,6 +94,11 @@ canonical thread into Roving, Fleet, and per-Container folders. Selecting an
 available Fleet or Container folder explicitly requests that Focus; Roving and
 unavailable historical folders are read-only. **Focus Master here** is the only
 bridge from the shell Container into Master Focus.
+
+Master product-tool outcomes appear as concise, collapsed **Master update**
+disclosures. The visible line is a human-readable success, failure, or in-progress
+summary; opening it exposes linked Tasks, error context, and the bounded raw payload
+needed for audit. Raw tool JSON never takes over the conversation by default.
 
 Normal authenticated surfaces show a labeled floating Master trigger with the
 `Ctrl`/`Command` + `Shift` + `M` shortcut. The popup persists at the bottom-left or

@@ -191,7 +191,10 @@ export function AppShell(props: {
     const direction = event.key === 'ArrowRight' ? 1 : -1
     setLeftWidth(value => clamp(value + direction * 10, LEFT_MIN, LEFT_MAX))
   }
-  const shellStyle = { ['--left-w']: leftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
+  // Delegate keeps its three global destinations visible. The Work preference to
+  // collapse its navigation never hides this bounded navigation surface.
+  const effectiveLeftCollapsed = !delegateMode && leftCollapsed
+  const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
 
   // Account menu "Projects" opens Settings → Projects manage (not a primary nav destination).
   const openProjectsManage = () => {
@@ -200,15 +203,15 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'}`} style={shellStyle}>
+    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled={props.features.masterOrchestrator} onChange={mode => props.onModeChange?.(mode)} />
-        <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         {!delegateMode && <>
+        <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
         <button
           type="button"
@@ -275,7 +278,7 @@ export function AppShell(props: {
       <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
         <Sidebar {...props} delegate={delegateMode} onClose={() => setDrawerOpen(false)} />
       </aside>
-      <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
+      {!delegateMode && <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />}
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
       {props.features.masterOrchestrator && !delegateMode && (

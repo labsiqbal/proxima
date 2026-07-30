@@ -642,15 +642,22 @@ The authenticated application mounts exactly one `MasterStateProvider` above
 `AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
 resume cursor, one `EventSource`, reconnect reconciliation, unread state, composer
 draft/selection, Focus, target, Fleet data, popup state, transient toasts, and stable
-scroll/panel state. `MasterScreen` and `MasterPopup` are view-only consumers and
+scroll state. `MasterScreen` and `MasterPopup` are view-only consumers and
 never mount their own stream, store, polling loop, or draft owner. The hidden home
 does not render a composer while another surface is active.
 When the Master feature is enabled, Delegate keeps the shared AppShell sidebar and
-its keyboard-resizable desktop / focus-managed mobile drawer behavior. Its distinct
+its focus-managed mobile drawer behavior. Its desktop navigation is fixed alongside
+the desk without hide/collapse or resize controls. Its distinct
 global navigation is Master, Tasks, and Archive only. Delegate passes no Work active
 project into the Master desk and suppresses project filtering and Work-only escape
 paths from its Tasks and Archive views, while preserving task and archive-record deep
 links in the same mode.
+Fleet work, Decisions, and Safety are independent native accordions, open by
+default, with each underlying list constrained to a three-entry internal scroll
+viewport. Durable product-tool result messages render as collapsed, human-readable
+Master-update disclosures. Explicit expansion reveals linked Tasks, failure context,
+and a bounded raw envelope for audit; raw JSON is never the default conversation
+surface, including while a result is still streaming.
 Owner-keyed session storage restores draft, selection, and scroll after browser
 refresh; the target remains an owner-keyed local preference. Neither store restores
 server-owned Focus.
