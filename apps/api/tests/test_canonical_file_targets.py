@@ -149,7 +149,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         assert raw.status_code == 200, raw.text
         assert raw.content == expected
         preview = api.get(
-            f"/api/preview/identity/area/ops/{ops_area_id}/{name}",
+            f"/api/target-preview/identity/ops/{ops_area_id}/{name}",
             headers=headers,
         )
         assert preview.status_code == 200, preview.text
@@ -177,20 +177,49 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
             / "scene.json"
         ).read_text(encoding="utf-8")
     )
-    assert scene["artboards"][0]["layers"][0]["src"] == "visual.png"
+    image_layer = scene["artboards"][0]["layers"][0]
+    assert image_layer["src"] == "visual.png"
+    assert image_layer["target"] == image_target
+
+    malformed = api.post(
+        "/api/projects/identity/designs/from-image",
+        headers=headers,
+        json={"path": "visual.png", "target": 1},
+    )
+    assert malformed.status_code == 400
+    assert malformed.json()["detail"] == "invalid file target"
 
     page = api.get(
-        f"/api/preview/identity/area/ops/{ops_area_id}/site/index.html",
+        f"/api/target-preview/identity/ops/{ops_area_id}/site/index.html",
         headers=headers,
     )
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
     nested_asset = api.get(
-        f"/api/preview/identity/area/ops/{ops_area_id}/site/theme.css",
+        f"/api/target-preview/identity/ops/{ops_area_id}/site/theme.css",
         headers=headers,
     )
     assert nested_asset.status_code == 200, nested_asset.text
     assert nested_asset.text == "body { color: canonical-ops; }"
+
+    legacy_collision = root / "area" / "ops" / str(ops_area_id) / "site"
+    legacy_collision.mkdir(parents=True)
+    (legacy_collision / "theme.css").write_text(
+        "body { color: legacy-container; }",
+        encoding="utf-8",
+    )
+    legacy_preview = api.get(
+        f"/api/preview/identity/area/ops/{ops_area_id}/site/theme.css",
+        headers=headers,
+    )
+    assert legacy_preview.status_code == 200, legacy_preview.text
+    assert legacy_preview.text == "body { color: legacy-container; }"
+    escaped_namespace = api.get(
+        f"/api/target-preview/identity/ops/{ops_area_id}/site/"
+        "../../../../brief.md",
+        headers=headers,
+    )
+    assert escaped_namespace.status_code == 404
 
     # Documented path-only callers remain compatible, including an explicit
     # physical ops/ path. Their response is upgraded to the canonical target.
@@ -235,18 +264,18 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
         ],
     )
 
-    resolve_calls = 0
-    original_resolve = file_targets.resolve_locator
+    context_calls = 0
+    original_context = file_targets.target_context
 
-    def counted_resolve(*args, **kwargs):
-        nonlocal resolve_calls
-        resolve_calls += 1
-        return original_resolve(*args, **kwargs)
+    def counted_context(*args, **kwargs):
+        nonlocal context_calls
+        context_calls += 1
+        return original_context(*args, **kwargs)
 
-    monkeypatch.setattr(file_targets, "resolve_locator", counted_resolve)
+    monkeypatch.setattr(file_targets, "target_context", counted_context)
     archive = api.get("/api/archive?project=identity", headers=headers).json()
     assert archive["total"] == 3
-    assert resolve_calls == 1
+    assert context_calls == 1
     assert all(item["target"]["area"]["kind"] == "ops" for item in archive["items"])
     assert all(item["target"]["project"] == "identity" for item in archive["items"])
     assert all(item["file_missing"] is False for item in archive["items"])
@@ -262,15 +291,16 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
     # Presence must follow the record's Ops identity, not a same-name Container
     # shadow that still exists.
     (ops / "visual.png").unlink()
-    calls_before_refresh = resolve_calls
+    calls_before_refresh = context_calls
     refreshed = api.get("/api/archive?project=identity", headers=headers).json()
-    assert resolve_calls == calls_before_refresh + 1
+    assert context_calls == calls_before_refresh + 1
     visual = next(item for item in refreshed["items"] if item["path"] == "visual.png")
     assert visual["file_missing"] is True
 
 
 def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
     tmp_path: Path,
+    monkeypatch,
 ):
     api, headers, root = _api(tmp_path)
     repo = root / "repo"
@@ -286,7 +316,17 @@ def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
     )
     code_area_id = cursor.lastrowid
 
+    binding_calls = 0
+    original_bindings = file_targets._area_bindings
+
+    def counted_bindings(*args, **kwargs):
+        nonlocal binding_calls
+        binding_calls += 1
+        return original_bindings(*args, **kwargs)
+
+    monkeypatch.setattr(file_targets, "_area_bindings", counted_bindings)
     root_entries = _by_name(api, headers)
+    assert binding_calls == 1
     repo_target = root_entries["repo"]["target"]
     assert repo_target == {
         "project": "identity",
@@ -299,6 +339,7 @@ def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
         params=_target_params(repo_target),
     )
     assert repo_tree.status_code == 200, repo_tree.text
+    assert binding_calls == 2
     readme_target = repo_tree.json()["entries"][0]["target"]
     assert readme_target == {
         "project": "identity",
@@ -349,6 +390,75 @@ def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
     )
     assert legacy_code.status_code == 200, legacy_code.text
     assert legacy_code.json()["target"] == readme_target
+
+
+def test_ops_at_dot_scans_and_task_outputs_derive_nested_code_ownership(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    project = api.app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'identity'"
+    ).fetchone()
+    ops_area = api.app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (project["id"],),
+    ).fetchone()
+    api.app.state.db.execute(
+        "UPDATE project_areas SET rel_path = '.' WHERE id = ?",
+        (ops_area["id"],),
+    )
+    repo = root / "repo"
+    repo.mkdir()
+    cursor = api.app.state.db.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'code', 'repo', 'manual')",
+        (project["id"],),
+    )
+    code_area_id = int(cursor.lastrowid)
+    (repo / "output.md").write_text("# Nested code output", encoding="utf-8")
+
+    scanned = api.get(
+        "/api/projects/identity/artifacts?since_minutes=525600",
+        headers=headers,
+    ).json()["artifacts"]
+    output = next(item for item in scanned if item["path"] == "repo/output.md")
+    expected_target = {
+        "project": "identity",
+        "area": {"kind": "code", "id": code_area_id},
+        "path": "output.md",
+    }
+    assert output["target"] == expected_target
+
+    produced = api.app.state.worker._produced_artifacts(
+        {
+            "project_id": project["id"],
+            "started_at": "1970-01-01T00:00:00+00:00",
+        },
+        None,
+    )
+    produced_output = next(
+        item for item in produced if item["path"] == "repo/output.md"
+    )
+    assert produced_output["target"] == expected_target
+
+    artifact_registry.record_artifacts(
+        api.app.state.db,
+        project["id"],
+        root,
+        [produced_output],
+    )
+    archive = api.get("/api/archive?project=identity", headers=headers).json()
+    record = next(
+        item for item in archive["items"] if item["path"] == "repo/output.md"
+    )
+    assert record["target"] == expected_target
+    opened = api.get(
+        "/api/projects/identity/file",
+        headers=headers,
+        params=_target_params(record["target"]),
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["content"] == "# Nested code output"
 
 
 def test_session_artifact_reads_and_deletion_keep_ops_target(

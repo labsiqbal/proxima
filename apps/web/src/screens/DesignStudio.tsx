@@ -34,7 +34,7 @@ import {
   parseProjectComponentsJson,
 } from '../components/design/studioHelpers'
 import { Dropdown, type DropdownOption } from '../components/ui/Dropdown'
-import type { Project, RunEvent } from '../types'
+import type { FileTarget, Project, RunEvent } from '../types'
 
 const GAP = 96 // space between artboards on the infinite canvas
 const ARTBOARD_PRESETS = [
@@ -235,7 +235,7 @@ const traceFrameClip = (ctx: Konva.Context, l: Layer) => {
   }
 }
 
-function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode, onDropImage }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean; onDropImage?: (cx: number, cy: number) => boolean }) {
+function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc, onContext, onEdit, aw, ah, snapT, onGuides, boxes, multi, onGroupEnd, onGroupStart, onAltClone, editing, cropEditing, shiftRef, onGroupSnap, mobileSnap, panMode, onDropImage }: { layer: Layer; onRef: (n: Konva.Node | null) => void; onSelect: (additive: boolean) => void; onChange: (patch: Partial<Layer>) => void; onLiveChange?: (patch: Partial<Layer>) => void; resolveSrc?: (s: string, target?: FileTarget) => string; onContext?: (x: number, y: number) => void; onEdit?: () => void; aw?: number; ah?: number; snapT?: number; onGuides?: (lines: { axis: 'x' | 'y'; pos: number }[]) => void; boxes?: { id: string; x: number; y: number; w: number; h: number }[]; multi?: boolean; onGroupEnd?: () => void; onGroupStart?: () => void; onAltClone?: () => void; editing?: boolean; cropEditing?: boolean; shiftRef?: React.MutableRefObject<boolean>; onGroupSnap?: (dx: number, dy: number) => { cx: number; cy: number }; mobileSnap?: boolean; panMode?: boolean; onDropImage?: (cx: number, cy: number) => boolean }) {
   const l = layer as unknown as AnyL
   const dragLast = React.useRef<{ x: number; y: number } | null>(null)
   const lastGuides = React.useRef<string>('') // dedupe guide emits — only setState when the lines change (else every frame re-renders and resets the dragged node = flicker)
@@ -345,7 +345,8 @@ function LayerNode({ layer, onRef, onSelect, onChange, onLiveChange, resolveSrc,
   }
   // Load the pixels for an image layer OR a shape that's being used as an image frame.
   const rawImgSrc = layer.type === 'image' ? layer.src : (isImageFrame(layer) ? (layer.imageSrc || '') : '')
-  const img = useImg(rawImgSrc ? (resolveSrc ? resolveSrc(rawImgSrc) : rawImgSrc) : '')
+  const rawImgTarget = layer.type === 'image' ? layer.target : (isImageFrame(layer) ? layer.imageTarget : undefined)
+  const img = useImg(rawImgSrc ? (resolveSrc ? resolveSrc(rawImgSrc, rawImgTarget) : rawImgSrc) : '')
   // Keep the image's size + crop consistent in EVERY painted frame. react-konva can
   // apply the new width/height a beat before the recomputed crop rect, so mid crop-drag
   // the image draws stretched for a frame. useLayoutEffect runs synchronously after the
@@ -558,7 +559,7 @@ function StartScreen({ onCreate, onShowGallery, designCount, mentionItems }: { o
   </div></div>
 }
 
-function GalleryView({ designs, onOpen, onDelete, onDeleteMany, onBack, resolveSrc, projectName }: { designs: { id: string; title: string; type: string; w: number; h: number; artboards: number; art?: Artboard }[]; onOpen: (id: string) => void; onDelete: (id: string) => void; onDeleteMany: (ids: string[]) => void; onBack: () => void; resolveSrc: (s: string) => string; projectName: string }) {
+function GalleryView({ designs, onOpen, onDelete, onDeleteMany, onBack, resolveSrc, projectName }: { designs: { id: string; title: string; type: string; w: number; h: number; artboards: number; art?: Artboard }[]; onOpen: (id: string) => void; onDelete: (id: string) => void; onDeleteMany: (ids: string[]) => void; onBack: () => void; resolveSrc: (s: string, target?: FileTarget) => string; projectName: string }) {
   const [sel, setSel] = React.useState<Set<string>>(new Set())
   const toggle = (id: string) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const allSelected = designs.length > 0 && sel.size === designs.length
@@ -1433,7 +1434,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
-  const resolveSrc = (s: string) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(project.slug, s) : s))
+  const resolveSrc = (s: string, target?: FileTarget) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(project.slug, s, target) : s))
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'
@@ -1643,7 +1644,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     setScene(s => s && ({ ...s, artboards: s.artboards.map((a, i) => i !== ai ? a : ({
       ...a,
       layers: a.layers
-        .map(l => l.id === target.id ? ({ ...l, imageSrc: (src as ImageLayer).src, imageCropX: 50, imageCropY: 50, imageCropZoom: 1 } as Layer) : l)
+        .map(l => l.id === target.id ? ({ ...l, imageSrc: (src as ImageLayer).src, imageTarget: (src as ImageLayer).target, imageCropX: 50, imageCropY: 50, imageCropZoom: 1 } as Layer) : l)
         .filter(l => l.id !== imageId),
     })) }))
     setSelectedId(target.id)
@@ -1654,8 +1655,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     const l = findLayer(id) as ShapeLayer | undefined
     if (!l || !isImageFrame(l)) return
     snapshot()
-    const imgLayer: ImageLayer = { id: uid('img'), type: 'image', x: l.x, y: l.y, width: l.width, height: l.height, src: l.imageSrc as string, rotation: l.rotation, opacity: l.opacity, cropX: l.imageCropX, cropY: l.imageCropY, cropZoom: l.imageCropZoom } as ImageLayer
-    setScene(s => s && ({ ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.flatMap(x => x.id === id ? [{ ...x, imageSrc: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Layer, imgLayer] : [x]) })) }))
+    const imgLayer: ImageLayer = { id: uid('img'), type: 'image', x: l.x, y: l.y, width: l.width, height: l.height, src: l.imageSrc as string, target: l.imageTarget, rotation: l.rotation, opacity: l.opacity, cropX: l.imageCropX, cropY: l.imageCropY, cropZoom: l.imageCropZoom } as ImageLayer
+    setScene(s => s && ({ ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.flatMap(x => x.id === id ? [{ ...x, imageSrc: undefined, imageTarget: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Layer, imgLayer] : [x]) })) }))
     setSelectedId(imgLayer.id)
   }
   const groupSelected = () => {
@@ -2000,7 +2001,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       const r = await genDesignImageWithTimeout({ prompt: contextualPrompt, images: images.length ? images : undefined, size })
       if (!mountedRef.current || seq !== actionSeq.current) return
       loadAssets()
-      if (editId && ed && ed.type === 'image') patchLayer(editId, { src: r.path } as Partial<Layer>)
+      if (editId && ed && ed.type === 'image') patchLayer(editId, { src: r.path, target: undefined } as Partial<Layer>)
       else if (wantsBackgroundImage(prompt)) addBackgroundImage(r.path)
       else await addImage(r.path)
       setImgPrompt(''); setRefImages([])
@@ -2032,7 +2033,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
         const r = await genDesignImageWithTimeout({ prompt: buildImageContextPrompt(raw, { sceneOverride: sc, layerId: l.id }), size: sizeForFrame(l.width, l.height) })
         if (!mountedRef.current) return
         // Swap by layer id, only while the same scene is still on the canvas.
-        setScene(s => s && s.id === sc.id ? { ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.map(x => x.id === l.id ? { ...x, src: r.path } as Layer : x) })) } : s)
+        setScene(s => s && s.id === sc.id ? { ...s, artboards: s.artboards.map(a => ({ ...a, layers: a.layers.map(x => x.id === l.id ? { ...x, src: r.path, target: undefined } as Layer : x) })) } : s)
       } catch (e) {
         failed += 1 // leave gen: src so it retries next reopen
         lastError = e instanceof Error ? e.message : String(e)
@@ -2240,12 +2241,13 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       if (near(1056, 816)) return 'Letter landscape'
       return `${a.width}px ${a.height}px`
     }
-    const toDataUrl = async (src: string) => {
-      if (cache[src]) return cache[src]
+    const toDataUrl = async (src: string, target?: FileTarget) => {
+      const cacheKey = `${src}\n${target ? JSON.stringify(target) : ''}`
+      if (cache[cacheKey]) return cache[cacheKey]
       if (/^gen:/i.test(src)) return ''
-      const resolved = resolveSrc(src)
+      const resolved = resolveSrc(src, target)
       if (!resolved) return ''
-      try { const r = await fetch(resolved); const blob = await r.blob(); const d = await new Promise<string>(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob) }); cache[src] = d; return d } catch { return resolved }
+      try { const r = await fetch(resolved); const blob = await r.blob(); const d = await new Promise<string>(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob) }); cache[cacheKey] = d; return d } catch { return resolved }
     }
     const boards: string[] = []
     const pageStyles: string[] = []
@@ -2270,13 +2272,13 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
             for (let i = 0; i < n * 2; i++) { const rr = i % 2 ? ri : ro, ang = (Math.PI / n) * i - Math.PI / 2; pts.push(`${((scx + Math.cos(ang) * rr) / sw * 100).toFixed(2)}% ${((scy + Math.sin(ang) * rr) / sh * 100).toFixed(2)}%`) }
             clip = `clip-path:polygon(${pts.join(',')});`
           } else clip = `border-radius:${cssRadius(f as unknown as RectLayer)};`
-          els.push(`<div style="${at}width:${f.width}px;height:${f.height}px;overflow:hidden;box-sizing:border-box;${clip}${cssEffects((l as RectLayer).effects)}"><img src="${await toDataUrl(f.imageSrc)}" style="width:100%;height:100%;object-fit:cover;object-position:${cx}% ${cy}%;transform:scale(${cz});transform-origin:${cx}% ${cy}%;display:block;"/></div>`)
+          els.push(`<div style="${at}width:${f.width}px;height:${f.height}px;overflow:hidden;box-sizing:border-box;${clip}${cssEffects((l as RectLayer).effects)}"><img src="${await toDataUrl(f.imageSrc, f.imageTarget)}" style="width:100%;height:100%;object-fit:cover;object-position:${cx}% ${cy}%;transform:scale(${cz});transform-origin:${cx}% ${cy}%;display:block;"/></div>`)
           continue
         }
         if (l.type === 'text') { const t = l as TextLayer; const tsh = cssTextShadow(t); els.push(`<div style="${at}width:${t.width}px;${t.height ? `height:${t.height}px;display:grid;align-content:${t.verticalAlign === 'middle' ? 'center' : t.verticalAlign === 'bottom' ? 'end' : 'start'};` : ''}font-family:'${t.fontFamily || 'Inter'}',sans-serif;font-size:${t.fontSize}px;font-weight:${t.fontStyle?.includes('bold') ? 700 : 400};font-style:${t.fontStyle?.includes('italic') ? 'italic' : 'normal'};${t.textDecoration ? `text-decoration:${t.textDecoration};` : ''}${cssTextFill(t)}${t.textStroke ? `-webkit-text-stroke:${t.textStrokeWidth ?? 1}px ${t.textStroke};` : ''}text-align:${t.align || 'left'};line-height:${t.lineHeight || 1.2};letter-spacing:${t.letterSpacing || 0}px;${tsh ? `text-shadow:${tsh};` : ''}${cssEffects(t.effects)}white-space:pre-wrap;overflow-wrap:break-word;">${esc(textDisplayValue(t))}</div>`) }
         else if (l.type === 'rect') { const r = l as RectLayer; els.push(`<div style="${at}width:${r.width}px;height:${r.height}px;background:${cssFill(r)};opacity:${(r.opacity ?? 1) * (r.fillOpacity ?? 1)};box-sizing:border-box;border-radius:${cssRadius(r)};${cssStroke(r)}${r.shadow ? 'box-shadow:0 20px 45px rgba(0,0,0,.30);' : ''}${cssEffects(r.effects)}"></div>`) }
         else if (l.type === 'ellipse') { const e = l as EllipseLayer; els.push(`<div style="${at}width:${e.width}px;height:${e.height}px;background:${cssFill(e)};opacity:${(e.opacity ?? 1) * (e.fillOpacity ?? 1)};border-radius:50%;box-sizing:border-box;${cssStroke(e)}${cssEffects(e.effects)}"></div>`) }
-        else if (l.type === 'image') { const im = l as ImageLayer; const cx = im.cropX ?? 50, cy = im.cropY ?? 50, cz = im.cropZoom || 1; els.push(`<div style="${at}width:${im.width}px;height:${im.height}px;overflow:hidden;border-radius:${cssRadius(im)};${cssEffects(im.effects)}"><img src="${await toDataUrl(im.src)}" style="width:100%;height:100%;object-fit:cover;object-position:${cx}% ${cy}%;transform:scale(${cz});transform-origin:${cx}% ${cy}%;display:block;"/></div>`) }
+        else if (l.type === 'image') { const im = l as ImageLayer; const cx = im.cropX ?? 50, cy = im.cropY ?? 50, cz = im.cropZoom || 1; els.push(`<div style="${at}width:${im.width}px;height:${im.height}px;overflow:hidden;border-radius:${cssRadius(im)};${cssEffects(im.effects)}"><img src="${await toDataUrl(im.src, im.target)}" style="width:100%;height:100%;object-fit:cover;object-position:${cx}% ${cy}%;transform:scale(${cz});transform-origin:${cx}% ${cy}%;display:block;"/></div>`) }
         else if (l.type === 'line') { const ln = l as LineLayer; const len = Math.hypot(ln.x2 - ln.x, ln.y2 - ln.y), ang = Math.atan2(ln.y2 - ln.y, ln.x2 - ln.x) * 180 / Math.PI; els.push(`<svg style="position:absolute;left:${ln.x}px;top:${ln.y}px;overflow:visible;transform:rotate(${ang}deg);transform-origin:0 0;opacity:${(ln.opacity ?? 1) * (ln.strokeOpacity ?? 1)}" width="${len}" height="${Math.max(ln.strokeWidth, 1)}"><line x1="0" y1="${ln.strokeWidth / 2}" x2="${len}" y2="${ln.strokeWidth / 2}" stroke="${ln.stroke}" stroke-width="${ln.strokeWidth}" stroke-linecap="${ln.strokeCap || 'round'}" ${ln.strokeDash ? `stroke-dasharray="${ln.strokeDash} ${ln.strokeDash}"` : ''}/></svg>`) }
         else if (l.type === 'triangle') { const s = l as TriangleLayer; els.push(`<svg style="${at}" width="${s.width}" height="${s.height}" viewBox="0 0 ${s.width} ${s.height}"><defs>${s.fillType === 'linear-gradient' ? `<linearGradient id="g${s.id}" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${s.fill}"/><stop offset="1" stop-color="${s.fill2 || s.fill}"/></linearGradient>` : ''}</defs><polygon points="${s.width / 2},0 ${s.width},${s.height} 0,${s.height}" fill="${s.fillType === 'linear-gradient' ? `url(#g${s.id})` : s.fill}" stroke="${s.stroke || 'none'}" stroke-width="${s.strokeWidth ?? 0}"/></svg>`) }
         else if (l.type === 'star') { const s = l as StarLayer; const n = s.points || 5, cx = s.width / 2, cy = s.height / 2, ro = Math.min(s.width, s.height) / 2, ri = ro * 0.5, pts: string[] = []; for (let i = 0; i < n * 2; i++) { const rr = i % 2 ? ri : ro, ang = (Math.PI / n) * i - Math.PI / 2; pts.push(`${(cx + Math.cos(ang) * rr).toFixed(1)},${(cy + Math.sin(ang) * rr).toFixed(1)}`) } els.push(`<svg style="${at}" width="${s.width}" height="${s.height}"><polygon points="${pts.join(' ')}" fill="${s.fill}" stroke="${s.stroke || 'none'}" stroke-width="${s.strokeWidth ?? 0}"/></svg>`) }
@@ -2747,7 +2749,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
                 ? <PropertySection title="Image frame" defaultOpen>
                     <div className="ds-row2"><NumberAdjuster label="Position X" value={sh.imageCropX ?? 50} min={0} max={100} step={1} onChange={v => patchLayer(sh.id, { imageCropX: v } as Partial<Layer>)} /><NumberAdjuster label="Position Y" value={sh.imageCropY ?? 50} min={0} max={100} step={1} onChange={v => patchLayer(sh.id, { imageCropY: v } as Partial<Layer>)} /></div>
                     <NumberAdjuster label="Zoom" value={sh.imageCropZoom ?? 1} min={1} max={4} step={0.01} onChange={v => patchLayer(sh.id, { imageCropZoom: v } as Partial<Layer>)} />
-                    <div className="ds-row2"><button className="ghost-button" onClick={() => detachFrameImage(sh.id)}>Detach image</button><button className="ghost-button" onClick={() => patchLayer(sh.id, { imageSrc: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Partial<Layer>)}>Remove image</button></div>
+                    <div className="ds-row2"><button className="ghost-button" onClick={() => detachFrameImage(sh.id)}>Detach image</button><button className="ghost-button" onClick={() => patchLayer(sh.id, { imageSrc: undefined, imageTarget: undefined, imageCropX: undefined, imageCropY: undefined, imageCropZoom: undefined } as Partial<Layer>)}>Remove image</button></div>
                   </PropertySection>
                 : <PropertySection title="Image frame">
                     <p className="muted ds-frame-hint">Drag an image onto this shape to fill it — the image clips to the shape's outline (Canva-style).</p>

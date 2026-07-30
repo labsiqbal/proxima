@@ -5,6 +5,7 @@ import { projectFs } from '../../api/fsAdapter'
 import { MessageContent } from '../chat/MessageContent'
 import { MiniPreview } from '../design/MiniPreview'
 import type { Artboard } from '../design/scene'
+import type { FileTarget } from '../../types'
 
 // Shared pieces of the Archive registry UI (Phase-1 slice 8, T4): type badges,
 // the status pill, formatting, lineage line, and the per-type preview used by
@@ -144,13 +145,13 @@ export function RecordPreview({ token, record, compact = false }: {
   if (isImg) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <img src={media} alt={record.name} />}</div>
   if (isVideo) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <video src={media} controls={!compact} muted={compact} playsInline preload="metadata" />}</div>
   if (isHtml) return <div className={`archive-preview-box frame ${compact ? 'compact' : ''}`}><iframe title={record.name} src={previewUrl(slug, path, record.target || undefined)} sandbox="allow-scripts" /></div>
-  if (isMd) return <div className={`archive-preview-box doc ${compact ? 'compact' : ''}`}><div className="md">{md != null ? <MessageContent content={md} /> : <p className="muted">Loading…</p>}</div></div>
+  if (isMd) return <div className={`archive-preview-box doc ${compact ? 'compact' : ''}`}><div className="md">{md != null ? <MessageContent content={md} token={token} slug={slug} sourcePath={record.target?.path || path} fileTarget={record.target || undefined} /> : <p className="muted">Loading…</p>}</div></div>
   if (isDesign) {
     if (designArt === undefined) {
       return <div className={`archive-preview-box empty ${compact ? 'compact' : ''}`}><p className="muted">Loading design…</p></div>
     }
     if (designArt) {
-      const resolveSrc = (src: string) => /^(https?:|data:|blob:)/.test(src) ? src : fileUrl(slug, src)
+      const resolveSrc = (src: string, target?: FileTarget) => /^(https?:|data:|blob:)/.test(src) ? src : fileUrl(slug, src, target)
       return <div className={`archive-preview-box design ${compact ? 'compact' : ''}`} aria-label={`Preview of ${record.name}`}>
         <div className="archive-design-thumb"><MiniPreview art={designArt} resolveSrc={resolveSrc} /></div>
       </div>

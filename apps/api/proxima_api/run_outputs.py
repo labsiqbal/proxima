@@ -33,7 +33,7 @@ class RunOutputs:
                 return []
             fresh = scan_project_artifacts(ops_root(db, prow), run_start_ts - 5)
             links = artifacts_for_output_links(fresh, prow["slug"])
-            return file_targets.add_ops_targets(db, prow, links)
+            return file_targets.add_artifact_targets(db, prow, links)
         except Exception:
             logging.getLogger("proxima.worker").exception("chat artifact scan failed (non-fatal)")
             return []

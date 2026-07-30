@@ -25,8 +25,14 @@ vi.mock('../components/design/MiniPreview', () => ({
     art ? <div data-testid="design-mini-preview">{art.width}×{art.height}</div> : null,
 }))
 vi.mock('../components/files/AppRunner', () => ({ AppRunner: () => null }))
-vi.mock('../components/artifacts/ArtifactViewer', () => ({ ArtifactViewer: () => <div data-testid="viewer" /> }))
-vi.mock('../components/chat/MessageContent', () => ({ MessageContent: ({ content }: { content: string }) => <div>{content}</div> }))
+vi.mock('../components/artifacts/ArtifactViewer', () => ({
+  ArtifactViewer: ({ items }: { items: Array<{ target?: unknown }> }) =>
+    <div data-testid="viewer" data-target={JSON.stringify(items[0]?.target)} />,
+}))
+vi.mock('../components/chat/MessageContent', () => ({
+  MessageContent: ({ content, sourcePath, fileTarget }: { content: string; sourcePath?: string; fileTarget?: unknown }) =>
+    <div data-testid="archive-markdown" data-source-path={sourcePath} data-file-target={JSON.stringify(fileTarget)}>{content}</div>,
+}))
 
 const projects: Project[] = [
   { slug: 'wingoh', name: 'wingoh', path: '/w' } as Project,
@@ -100,6 +106,9 @@ describe('ArtifactsScreen (Archive registry)', () => {
 
     await userEvent.click(await screen.findByText('report.md'))
     await waitFor(() => expect(fsRead).toHaveBeenCalledWith(target))
+    const markdown = await screen.findByTestId('archive-markdown')
+    expect(markdown).toHaveAttribute('data-source-path', 'report.md')
+    expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
   it('renders registry records with status, lineage, and facet counts', async () => {
@@ -224,7 +233,6 @@ describe('ArtifactsScreen (Archive registry)', () => {
     expect(await screen.findByTestId('design-mini-preview')).toHaveTextContent('1920×1080')
     expect(screen.queryByText(/use Open to view it/)).not.toBeInTheDocument()
   })
-})
 
   it('opens ArtifactViewer for unregistered chat output paths', async () => {
     vi.mocked(listArchive).mockResolvedValue(listResponse([]))
@@ -234,3 +242,20 @@ describe('ArtifactsScreen (Archive registry)', () => {
     await waitFor(() => expect(onConsumed).toHaveBeenCalled())
     expect(await screen.findByTestId('viewer')).toBeInTheDocument()
   })
+
+  it('preserves a task file target when opening ArtifactViewer', async () => {
+    vi.mocked(listArchive).mockResolvedValue(listResponse([]))
+    const target = {
+      project: 'wingoh',
+      area: { kind: 'ops' as const, id: 8 },
+      path: 'report.md',
+    }
+    render(<ArtifactsScreen
+      {...base}
+      pendingFile={{ slug: 'wingoh', path: 'report.md', target }}
+    />)
+
+    const viewer = await screen.findByTestId('viewer')
+    expect(JSON.parse(viewer.getAttribute('data-target') || '{}')).toEqual(target)
+  })
+})

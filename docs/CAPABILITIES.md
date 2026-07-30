@@ -1334,19 +1334,23 @@ read/write, raw/preview, file mutation, Archive presence checks, and ArtifactVie
 resolve that target through the same jailed resolver. The resolver rejects a Container
 or Code target when the path belongs to a more specific active Area, and merged tree
 traversal switches to the authoritative Ops or Code target when it enters that Area.
+Artifact scans resolve every discovered absolute path through the same ownership
+boundary, so Ops-at-dot scans preserve nested Code identity instead of forcing Ops.
 This keeps direct files at the physical Ops root distinct from same-name Container
 files, including Markdown, images, and PDFs. Session artifact reads, inline chat media,
-Iterate deletion, and the Design Studio image bridge retain that target. Merely finding
-an Ops file does not create an Archive record; only established producer/registry flows
-do.
+Task and Iterate results, Archive Markdown, deletion, and the Design Studio image
+bridge retain that target. Design scenes persist image targets and use them across
+canvas, thumbnail, frame, and export rendering. Merely finding an Ops file does not
+create an Archive record; only established producer/registry flows do.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
 layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
-and is not stripped or reinterpreted. Targeted previews use an Area-stable URL path,
-so relative HTML assets keep the same Area identity; Markdown siblings resolve from
-the source document's Area and directory.
+and is not stripped or reinterpreted. Targeted previews use the disjoint
+`/api/target-preview` namespace, so relative HTML assets keep the same Area identity
+and traversal cannot fall into legacy path-only preview; Markdown siblings resolve
+from the source document's Area and directory.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
@@ -1357,7 +1361,7 @@ placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlab
 box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
 `/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`,
-`/api/preview/{slug}/area/{kind}/{id}/{path}`.
+`/api/target-preview/{slug}/{kind}/{id}/{path}`.
 
 ## 12. Run & Preview app
 

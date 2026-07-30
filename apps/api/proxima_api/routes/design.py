@@ -229,8 +229,10 @@ def register(app, deps):
         features.require(cfg, features.DESIGN_STUDIO)
         payload = payload or {}
         rel = str(payload.get("path") or "").strip()
-        target = payload.get("target") or ""
-        if not rel and not target:
+        target = payload.get("target", "")
+        if target is None:
+            target = ""
+        if not rel and target == "":
             raise HTTPException(status_code=400, detail="path is required")
         try:
             project = visible_project(slug, user)
@@ -255,7 +257,12 @@ def register(app, deps):
         root = resolved.root
         if not source.is_file():
             raise HTTPException(status_code=404, detail=f"file not found: {rel}")
-        design_id, scene = design_scenes.scene_for_image(rel, design_scenes.image_dims(source), payload.get("title"))
+        design_id, scene = design_scenes.scene_for_image(
+            rel,
+            design_scenes.image_dims(source),
+            payload.get("title"),
+            resolved.locator.payload(),
+        )
         d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
         d.mkdir(parents=True, exist_ok=True)
         (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")

@@ -28,6 +28,7 @@ from .acp import format_rpc_error
 from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
+from . import file_targets
 from . import master_runtime
 from . import features
 from .maintenance_status import IngressLease
@@ -1151,7 +1152,7 @@ class RunWorker:
         if not job["project_id"]:
             return []
         prow = db.execute(
-            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            "SELECT id, path, path_identity, slug FROM projects WHERE id = ?",
             (job["project_id"],),
         ).fetchone()
         if not prow:
@@ -1171,7 +1172,8 @@ class RunWorker:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 start = dt.timestamp() - 5
-        return scan_project_artifacts(ops_root(db, prow), start)
+        artifacts = scan_project_artifacts(ops_root(db, prow), start)
+        return file_targets.add_artifact_targets(db, prow, artifacts)
 
     async def execute_run(self, run: dict[str, Any]) -> None:
         db = self.app.state.worker_db

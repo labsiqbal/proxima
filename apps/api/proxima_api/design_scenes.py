@@ -110,7 +110,12 @@ def persist_draft(root: Path, design_id: str, scene: dict[str, Any], project_slu
     return {"type": "design", "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}", "project_slug": project_slug}
 
 
-def scene_for_image(image_rel_path: str, dims: tuple[int, int] | None, title: str | None = None) -> tuple[str, dict[str, Any]]:
+def scene_for_image(
+    image_rel_path: str,
+    dims: tuple[int, int] | None,
+    title: str | None = None,
+    target: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """A scene whose artboard is the image, full-bleed — the 'edit this image'
     entry point. Returns (design_id, scene)."""
     name = Path(image_rel_path).stem
@@ -131,7 +136,16 @@ def scene_for_image(image_rel_path: str, dims: tuple[int, int] | None, title: st
                 "height": ah,
                 "background": ARTBOARD_BG,
                 "layers": [
-                    {"id": "i1", "type": "image", "x": 0, "y": 0, "width": aw, "height": ah, "src": image_rel_path}
+                    {
+                        "id": "i1",
+                        "type": "image",
+                        "x": 0,
+                        "y": 0,
+                        "width": aw,
+                        "height": ah,
+                        "src": image_rel_path,
+                        **({"target": target} if target is not None else {}),
+                    }
                 ],
             }
         ],

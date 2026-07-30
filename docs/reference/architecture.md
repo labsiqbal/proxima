@@ -253,8 +253,10 @@ cycle catches direct owner edits without adding filesystem work to Fleet request
 marker for legacy root-level Ops data.
 `file_targets.py` defines the public file identity used after an entry has crossed the
 API boundary: `(project slug, authoritative Area kind/id, Area-relative path)`. The
-server constructs these targets for merged tree entries, artifact scan results, run
-outputs, and Archive records. File tree traversal, read/write, mutation, raw/preview,
+server constructs these targets for merged tree entries, artifact scan results, task
+and chat run outputs, and Archive records. Scanned paths are resolved from the
+validated Ops scan root back through physical ownership, so a nested Code Area under
+an Ops-at-dot layout remains Code-owned. File tree traversal, read/write, mutation, raw/preview,
 Archive presence refresh, and ArtifactViewer use the same resolver, which revalidates
 the project/Area relationship before applying `fsapi` realpath jailing. The resolver
 then requires the target Area to be the authoritative owner of the resolved path:
@@ -264,10 +266,14 @@ Ops or Code target as traversal enters that Area, so cross-Area aliases are reje
 Display names never select a physical root. Path-only callers remain a compatibility
 input, with historical virtual Ops names and physical `ops/...` support; legacy
 Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
-Targeted previews use `/api/preview/{slug}/area/{kind}/{id}/{path}`, which keeps
-browser-relative HTML resources inside the originating Area namespace. Markdown
-resources resolve relative to both the source document directory and its target.
-See [ADR-0010](../adr/0010-canonical-file-targets.md).
+Targeted previews use the disjoint
+`/api/target-preview/{slug}/{kind}/{id}/{path}` namespace, which keeps
+browser-relative HTML resources inside the originating Area and cannot normalize
+into the legacy path-only preview route. Markdown resources resolve relative to both
+the source document directory and its target. A validated target context is reused
+throughout each tree or Archive request while each path still crosses the realpath
+jail. See [ADR-0010](../adr/0010-canonical-file-targets.md) and
+[ADR-0011](../adr/0011-area-scoped-artifact-media.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -337,8 +343,9 @@ superseded`) both approval doors write, an automatic version chain
 (new producer at the same identity ⇒ v(n+1), prior versions superseded), and a
 permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
-via `file_missing`. Archive presence follows each record's canonical Ops target, so
-a same-name Container file cannot hide a missing deliverable. Workspace discovery
+via `file_missing`. Archive presence derives each record's canonical target from its
+validated scan root, including a nested Code owner, so a same-name Container file
+cannot hide a missing deliverable. Workspace discovery
 does not itself create registry rows. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Migration 26 introduced the original orchestrator foundation. Migration 31
@@ -554,8 +561,11 @@ Every renderer uses an artifact's canonical file target when present. Markdown t
 image/video media, PDF/HTML frames, and download links therefore resolve the same Area
 identity returned by the server instead of re-deriving a root from a display path.
 HTML frames use the Area-stable preview namespace, and Markdown sibling resources
-inherit the source document's Area and directory. Chat result media, Iterate reads
-and deletion, and the Design Studio image bridge retain the same target.
+inherit the source document's Area and directory. Chat and task result media,
+Iterate and Archive Markdown, session deletion, and the Design Studio image bridge
+retain the same target. Design scene image layers persist the target beside the
+source path, and canvas, gallery, Archive thumbnail, image-frame, and export
+renderers pass it to the media resolver.
 
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with

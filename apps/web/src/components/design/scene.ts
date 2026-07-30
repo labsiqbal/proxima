@@ -1,5 +1,6 @@
 // Design Studio scene model (Konva surfaces: graphic/deck/mobile).
 // A design doc is a typed set of artboards; each artboard holds absolute layers.
+import type { FileTarget } from '../../types'
 
 // Shared geometry/style fields. rotation (deg) + opacity apply to every layer;
 // stroke/shadow apply to shapes/text/images.
@@ -18,7 +19,7 @@ export function gradientStopList(l: { fill: string; fill2?: string; gradientStop
 export type FillStyle = { fill: string; fillType?: 'solid' | 'linear-gradient' | 'radial-gradient'; fill2?: string; gradientAngle?: number; gradientStartX?: number; gradientStartY?: number; gradientEndX?: number; gradientEndY?: number; gradientStops?: GradientStop[]; fillOpacity?: number; blendMode?: string }
 // imageSrc turns a shape into a Canva-style "image frame": the image is clipped to the
 // shape's outline (crop fields position it inside, same semantics as ImageLayer).
-type Styled = FillStyle & { stroke?: string; strokeWidth?: number; strokeOpacity?: number; strokeDash?: number; strokeCap?: 'butt' | 'round' | 'square'; strokeJoin?: 'miter' | 'round' | 'bevel'; strokePosition?: 'center' | 'inside' | 'outside'; shadow?: boolean; imageSrc?: string; imageCropX?: number; imageCropY?: number; imageCropZoom?: number }
+type Styled = FillStyle & { stroke?: string; strokeWidth?: number; strokeOpacity?: number; strokeDash?: number; strokeCap?: 'butt' | 'round' | 'square'; strokeJoin?: 'miter' | 'round' | 'bevel'; strokePosition?: 'center' | 'inside' | 'outside'; shadow?: boolean; imageSrc?: string; imageTarget?: FileTarget; imageCropX?: number; imageCropY?: number; imageCropZoom?: number }
 
 export type TextLayer = Base & WithEffects & {
   type: 'text'; width: number; height?: number; text: string; fontSize: number; fontFamily?: string; fontStyle?: string; textDecoration?: string; textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize'; listStyle?: 'none' | 'bullet' | 'number'; fill: string; fillType?: 'solid' | 'linear-gradient' | 'radial-gradient'; fill2?: string; gradientAngle?: number; gradientStartX?: number; gradientStartY?: number; gradientEndX?: number; gradientEndY?: number; gradientStops?: GradientStop[]; fillOpacity?: number; align?: 'left' | 'center' | 'right' | 'justify'; verticalAlign?: 'top' | 'middle' | 'bottom'; lineHeight?: number; letterSpacing?: number; textStroke?: string; textStrokeWidth?: number; textStrokeOpacity?: number
@@ -31,15 +32,16 @@ export type TriangleLayer = Base & WithEffects & Styled & { type: 'triangle'; wi
 export type StarLayer = Base & WithEffects & Styled & { type: 'star'; width: number; height: number; points?: number }
 export type LineLayer = Base & WithEffects & { type: 'line'; x2: number; y2: number; stroke: string; strokeWidth: number; strokeOpacity?: number; strokeDash?: number; strokeCap?: 'butt' | 'round' | 'square'; startArrow?: boolean; endArrow?: boolean }
 export type PathLayer = Base & WithEffects & Styled & { type: 'path'; width: number; height: number; d: string } // SVG path (e.g. organic blob)
-export type ImageLayer = Base & WithEffects & { type: 'image'; width: number; height: number; src: string; cornerRadius?: number; cropZoom?: number; cropX?: number; cropY?: number }
+export type ImageLayer = Base & WithEffects & { type: 'image'; width: number; height: number; src: string; target?: FileTarget; cornerRadius?: number; cropZoom?: number; cropX?: number; cropY?: number }
 export type Layer = TextLayer | RectLayer | EllipseLayer | TriangleLayer | StarLayer | LineLayer | PathLayer | ImageLayer
 export type ShapeLayer = RectLayer | EllipseLayer | TriangleLayer | StarLayer | PathLayer
+export type FrameShapeLayer = RectLayer | EllipseLayer | TriangleLayer | StarLayer
 
 // Which shapes can host a clipped image (Canva image frame). Blobs (path) are excluded
 // for now — clipping to an arbitrary SVG path needs a path parser in the clipFunc.
 export const FRAME_SHAPE_TYPES = ['rect', 'ellipse', 'triangle', 'star'] as const
-export const canBeImageFrame = (l: Layer): l is ShapeLayer => (FRAME_SHAPE_TYPES as readonly string[]).includes(l.type)
-export const isImageFrame = (l: Layer): l is ShapeLayer => canBeImageFrame(l) && !!(l as { imageSrc?: string }).imageSrc
+export const canBeImageFrame = (l: Layer): l is FrameShapeLayer => (FRAME_SHAPE_TYPES as readonly string[]).includes(l.type)
+export const isImageFrame = (l: Layer): l is FrameShapeLayer => canBeImageFrame(l) && !!l.imageSrc
 
 // Generate a random organic blob as an SVG path within a box of the given size.
 export function blobPath(size = 320, points = 8, seed = 0): string {

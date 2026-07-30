@@ -27,7 +27,7 @@ beforeEach(() => {
 describe('canonical file URLs', () => {
   it('keeps the Area identity in the preview path namespace', () => {
     expect(previewUrl('identity', 'display/brief.md', target)).toBe(
-      '/api/preview/identity/area/ops/42/reports/brief.md',
+      '/api/target-preview/identity/ops/42/reports/brief.md',
     )
   })
 
@@ -40,7 +40,7 @@ describe('canonical file URLs', () => {
         target,
       ),
     ).toBe(
-      '/api/preview/identity/area/ops/42/reports/images/chart.png?v=7#figure',
+      '/api/target-preview/identity/ops/42/reports/images/chart.png?v=7#figure',
     )
     expect(
       relativeFileUrl('identity', '../../escape.png', target.path, target),
