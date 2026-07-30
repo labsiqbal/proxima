@@ -1118,15 +1118,18 @@ only its own managed process group. It never reaches, signals, or terminates the
 foreign listener. Missing or incomplete procfs evidence fails closed as
 `ownership_unknown`. An uncontained child that detaches into another process group is
 also ownership-unknown; a detached descendant is accepted only inside the configured
-PID namespace, whose teardown owns the full descendant lifetime.
+PID namespace, whose teardown owns the full descendant lifetime. Each launch carries
+an ephemeral lineage marker so an observed descendant that is later reparented remains
+ownership-unknown instead of becoming a foreign-port conflict.
 
 A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
 origin), so `PreviewRelayManager` starts a per-app listener on the Proxima host for
 local and remote browsers
 (`preview_port` in app status; interface via `preview_bind_host` /
-`PROXIMA_PREVIEW_BIND`, default `auto` = the Tailscale interface if the host has one,
-else loopback - never `0.0.0.0` unless set explicitly; `off` disables) - the app's own
+`PROXIMA_PREVIEW_BIND`, default `auto` = one shared port bound separately on loopback
+and the Tailscale interface when present, otherwise loopback only - never `0.0.0.0`
+unless set explicitly; `off` disables) - the app's own
 origin by port. The relay guards only its own port: the dev server itself is defaulted
 onto loopback (suggested commands bind `127.0.0.1`, `HOST=127.0.0.1` in the child env)
 and app status flags `broad_bind` when its port is found listening beyond loopback,
@@ -1139,14 +1142,17 @@ forever. The bounded 40-line status buffer and Logs toggle remain available whil
 starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
 the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
 including terminal shutdown output, remains available for the stopped/retry
-state. Conflict feedback keeps the candidate port visible with Stop, retry, and
+state. Final draining has a bounded grace period: output already available is retained,
+while an uncontained child that inherited stdout cannot block Stop and is not signaled.
+Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
 `preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to
 `127.0.0.1:<dev port>`, gated by a one-hour, signed `proxima_preview` capability that
 is unrelated to the owner API session (minted host-scoped by `POST /api/preview-auth`,
-so the browser also sends it to relay ports — cookies ignore ports). Proxy paths remove
+so the browser also sends it to relay ports — cookies ignore ports). Capability
+authentication runs before target resolution or procfs ownership work. Proxy paths remove
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.

@@ -47,7 +47,9 @@ evidence live in [ui-shell.md](ui-shell.md#validation) and
 
 The preview browser verifier builds the web app, installs its pinned Astro
 dependency inside a disposable fixture, authenticates a real headless browser,
-and records ready plus stopped/rebound screenshots in the selected evidence
+uses Astro as both the managed app and the pre-existing/rebound foreign listener,
+proves foreign request bytes remain empty and the foreign process survives, and
+records conflict, ready, and stopped/rebound screenshots in the selected evidence
 directory.
 
 Current local environment note:

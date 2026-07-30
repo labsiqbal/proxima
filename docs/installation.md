@@ -195,9 +195,10 @@ Notes:
   hatch and should remain off when opening unfamiliar projects.
 - Uploads default to 100 MB per file; adjust `PROXIMA_MAX_UPLOAD_MB` if needed.
 - `PROXIMA_PREVIEW_BIND` is the interface for per-app preview relay ports (Run &
-  Preview from a remote browser without an apps domain). Default `auto`: the
-  Tailscale interface when the host is on a tailnet, otherwise loopback - never
-  `0.0.0.0`, so previews reach your tailnet devices without also reaching every
+  Preview from a remote browser without an apps domain). Default `auto`: one
+  shared port binds separately on loopback and the Tailscale interface when the
+  host is on a tailnet, otherwise loopback only - never `0.0.0.0`, so previews
+  reach local and tailnet devices without also reaching every
   device on the home LAN. The ports are gated by a short-lived preview capability
   either way. Set an explicit interface (e.g. `0.0.0.0` to deliberately include
   the LAN) or `127.0.0.1`/`off` for strict loopback-only installs. Firewalled

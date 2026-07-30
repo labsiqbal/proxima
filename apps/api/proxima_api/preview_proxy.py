@@ -78,16 +78,25 @@ def tailnet_address() -> str | None:
 def resolve_preview_bind_host(configured: str | None) -> str:
     """Resolve the relay bind interface, keeping the default off the plain LAN.
 
-    "auto" (the shipped default) binds the Tailscale interface when the host
-    has one, else loopback. The fallback is loopback, never 0.0.0.0: a home-LAN
-    install must not open all-interface listeners unless the operator says so
-    (PROXIMA_PREVIEW_BIND=0.0.0.0 remains an explicit override). Every other
-    value - an IP, "off" - is the operator's explicit choice and passes through.
+    "auto" resolves the preferred remote interface. The relay manager adds
+    loopback separately when that interface is Tailscale. The fallback is
+    loopback, never 0.0.0.0. Every other value is the operator's explicit
+    choice and passes through.
     """
     value = (configured or "").strip()
     if value.lower() != "auto":
         return value
     return tailnet_address() or "127.0.0.1"
+
+
+def resolve_preview_bind_hosts(configured: str | None) -> tuple[str, ...]:
+    host = resolve_preview_bind_host(configured)
+    if (
+        (configured or "").strip().lower() == "auto"
+        and host != "127.0.0.1"
+    ):
+        return ("127.0.0.1", host)
+    return (host,)
 
 
 def mint_preview_token(secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS) -> str:
@@ -458,7 +467,7 @@ async def _serve_preview(
     send,
     *,
     validate_token,
-    port: int | None,
+    resolve_port: Callable[[], int | None],
     verify_connection: Callable[[int, int], bool],
     maintenance=None,
 ) -> None:
@@ -467,6 +476,7 @@ async def _serve_preview(
         return await _reject(scope, send, 423, "maintenance write fenced")
     if not _authed(scope, validate_token):
         return await _reject(scope, send, 403, "preview: not authorized")
+    port = resolve_port()
     if not port:
         return await _reject(scope, send, 503, "preview app not running")
     if scope["type"] == "http":
@@ -528,7 +538,8 @@ class PreviewProxyMiddleware:
         if scope["type"] in ("http", "websocket"):
             slug = self._slug_for(scope)
             if slug is not None:
-                port = self.fastapi_app.state.app_manager.preview_target(slug)
+                def resolve_port() -> int | None:
+                    return self.fastapi_app.state.app_manager.preview_target(slug)
 
                 def verify_connection(
                     target_port: int,
@@ -545,7 +556,7 @@ class PreviewProxyMiddleware:
                     receive,
                     send,
                     validate_token=self.validate_token,
-                    port=port,
+                    resolve_port=resolve_port,
                     verify_connection=verify_connection,
                     maintenance=self.maintenance,
                 )
@@ -581,12 +592,13 @@ class PreviewRelayManager:
         maintenance=None,
     ) -> None:
         # bind_host must be remote-reachable for remote preview to work. "auto"
-        # resolves to the tailnet interface or loopback - never 0.0.0.0; "off"
+        # adds loopback beside the tailnet interface - never 0.0.0.0; "off"
         # (or empty) disables relays entirely for strict loopback-only installs.
-        self.bind_host = resolve_preview_bind_host(bind_host)
+        self.bind_hosts = resolve_preview_bind_hosts(bind_host)
+        self.bind_host = self.bind_hosts[-1]
         self.enabled = self.bind_host.lower() not in ("", "off", "none", "disabled")
         if self.enabled:
-            _LOG.info("preview relays bind %s", self.bind_host)
+            _LOG.info("preview relays bind %s", ", ".join(self.bind_hosts))
         self.port_for = port_for
         self.verify_connection = verify_connection
         self.validate_token = validate_token
@@ -620,7 +632,7 @@ class PreviewRelayManager:
                 receive,
                 send,
                 validate_token=self.validate_token,
-                port=self.port_for(slug),
+                resolve_port=lambda: self.port_for(slug),
                 verify_connection=verify_connection,
                 maintenance=self.maintenance,
             )
@@ -630,11 +642,22 @@ class PreviewRelayManager:
         if not self.enabled:
             return None
         await self.stop(slug)
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((self.bind_host, 0))  # OS-assigned free port
-        sock.listen(128)
-        port = int(sock.getsockname()[1])
+        sockets: list[socket.socket] = []
+        port = 0
+        try:
+            for bind_host in self.bind_hosts:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((bind_host, port))
+                sock.listen(128)
+                sockets.append(sock)
+                if port == 0:
+                    port = int(sock.getsockname()[1])
+        except OSError:
+            for sock in sockets:
+                with contextlib.suppress(OSError):
+                    sock.close()
+            raise
         server = _RelayServer(uvicorn.Config(
             self._asgi_for(slug),
             lifespan="off",
@@ -642,8 +665,13 @@ class PreviewRelayManager:
             log_level="warning",
             ws="websockets-sansio",
         ))
-        task = asyncio.create_task(server.serve(sockets=[sock]))
-        self._relays[slug] = {"server": server, "task": task, "socket": sock, "port": port}
+        task = asyncio.create_task(server.serve(sockets=sockets))
+        self._relays[slug] = {
+            "server": server,
+            "task": task,
+            "sockets": sockets,
+            "port": port,
+        }
         return port
 
     async def stop(self, slug: str) -> None:
@@ -657,8 +685,9 @@ class PreviewRelayManager:
             relay["task"].cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await relay["task"]
-        with contextlib.suppress(OSError):
-            relay["socket"].close()
+        for sock in relay["sockets"]:
+            with contextlib.suppress(OSError):
+                sock.close()
 
     async def shutdown(self) -> None:
         for slug in list(self._relays):

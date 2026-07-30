@@ -1204,12 +1204,14 @@ environment. The preview must be served root-relative on its own origin (SPA HTM
 absolute asset paths and HMR opens a WebSocket to the page origin), so each vantage gets
 one: local and remote preview use the app's **preview relay port** on the Proxima host
 (reported as `preview_port` in app status; bind interface via
-`PROXIMA_PREVIEW_BIND`, default `auto` = the tailnet interface or loopback, never
-`0.0.0.0`; `off` disables) or, with an apps domain configured, the
+`PROXIMA_PREVIEW_BIND`, default `auto` = the same port on loopback plus the tailnet
+interface when present, otherwise loopback only, never `0.0.0.0`; `off` disables) or,
+with an apps domain configured, the
 `preview-<slug>.<apps_domain>` subdomain. Relay and subdomain proxy share one engine:
 HTTP + WebSocket forwarding, Host rewritten to the local dev port (Vite-style
 allowed-host checks pass), gated by a short-lived preview-only cookie — never the owner
-API token — and they strip cookies/auth before forwarding and strip upstream
+API token. Authentication completes before target resolution or procfs scanning, and
+the proxies strip cookies/auth before forwarding and strip upstream
 `Set-Cookie`. Same-origin fallback and generated HTML use an opaque iframe sandbox.
 This is credential-leak mitigation, not OS/container isolation; the command still runs
 as the Proxima service user. The relay only guards its own port: detected-app
@@ -1227,6 +1229,8 @@ signaled by its recorded process group, the foreign listener remains untouched, 
 the conflict stays visible with logs, Stop, retry, and change-port actions. Unavailable
 procfs evidence and uncontained detached descendants fail closed as
 `ownership_unknown`; detached descendants qualify only under PID-namespace containment.
+An ephemeral per-launch lineage marker keeps a reparented uncontained descendant in
+that fail-closed state instead of misclassifying it as a foreign listener.
 A start with no listener after 15 seconds shows an actionable prolonged-start warning
 with Stop and logs instead of an infinite spinner. When a command self-exits (short
 script, crash, or non-server entry point), status keeps
@@ -1237,6 +1241,8 @@ The existing bounded 40-line status buffer survives preview Reload and explicit 
 so stopped/retry feedback shows the most recent command output, including terminal
 shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
+Final drain waiting is bounded, retains output already available, and never signals an
+uncontained detached child merely because it inherited stdout.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

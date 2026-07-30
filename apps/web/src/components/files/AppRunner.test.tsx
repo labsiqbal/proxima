@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRunner } from './AppRunner'
 import { appExitSummary, appStart, appStatus, appStop, detectApps, getPublicConfig, previewAuth } from '../../api/files'
 
@@ -18,6 +18,10 @@ vi.mock('../../api/files', () => ({
 vi.mock('../ui/Dialog', () => ({ confirmDialog: vi.fn().mockResolvedValue(true) }))
 
 describe('AppRunner collision feedback', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getPublicConfig).mockResolvedValue({ apps_domain: null })
@@ -170,7 +174,7 @@ describe('AppRunner collision feedback', () => {
     expect(screen.getByRole('spinbutton')).toHaveValue(5180)
   })
 
-  it('uses the ownership-verified relay for local preview', async () => {
+  it('uses the capability relay from a localhost origin', async () => {
     vi.mocked(appStatus).mockResolvedValue({
       state: 'ready',
       running: true,
@@ -186,6 +190,30 @@ describe('AppRunner collision feedback', () => {
     const frame = await screen.findByTitle('App preview')
     expect(frame).toHaveAttribute('src', expect.stringContaining('http://localhost:43123/'))
     expect(frame).not.toHaveAttribute('src', expect.stringContaining('127.0.0.1:5180'))
+  })
+
+  it('uses the capability relay from a Tailscale origin', async () => {
+    vi.stubGlobal('location', {
+      hostname: '100.101.102.103',
+      protocol: 'http:',
+    })
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'ready',
+      running: true,
+      ready: true,
+      requested_port: 5180,
+      port: 5180,
+      preview_port: 43123,
+      command: 'npm run dev',
+      log: [],
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    const frame = await screen.findByTitle('App preview')
+    expect(frame).toHaveAttribute(
+      'src',
+      expect.stringContaining('http://100.101.102.103:43123/'),
+    )
   })
 
   it('keeps the Logs toggle usable after an exit with no output', async () => {

@@ -10,6 +10,7 @@ import asyncio
 from enum import Enum
 import os
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -20,6 +21,8 @@ from .process_containment import pid_namespace_argv
 from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15
+FINAL_DRAIN_SECONDS = 1
+_LINEAGE_ENV = "PROXIMA_APP_LINEAGE"
 
 
 def _port_open(port: int) -> bool:
@@ -128,6 +131,7 @@ def _listener_ownership(
     *,
     contained: bool,
     group_id: int | None = None,
+    lineage_token: str | None = None,
 ) -> PortOwnership:
     """Classify a listener without equating reachability with ownership.
 
@@ -142,6 +146,7 @@ def _listener_ownership(
         inodes,
         contained=contained,
         group_id=group_id,
+        lineage_token=lineage_token,
     )
 
 
@@ -178,6 +183,7 @@ def _socket_ownership(
     *,
     contained: bool,
     group_id: int | None = None,
+    lineage_token: str | None = None,
 ) -> PortOwnership:
     if inodes is None:
         return PortOwnership.UNKNOWN
@@ -203,7 +209,22 @@ def _socket_ownership(
         return PortOwnership.VERIFIED
     if all(_is_descendant(pid, leader_pid, processes) for pid in owner_pids):
         return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
+    if lineage_token and all(
+        _process_has_lineage(pid, lineage_token)
+        for pid in owner_pids
+    ):
+        return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
     return PortOwnership.FOREIGN
+
+
+def _process_has_lineage(pid: int, lineage_token: str) -> bool:
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            environment = fh.read().split(b"\0")
+    except OSError:
+        return False
+    marker = f"{_LINEAGE_ENV}={lineage_token}".encode()
+    return marker in environment
 
 
 def _connected_socket_ownership(
@@ -213,12 +234,14 @@ def _connected_socket_ownership(
     *,
     contained: bool,
     group_id: int | None = None,
+    lineage_token: str | None = None,
 ) -> PortOwnership:
     return _socket_ownership(
         leader_pid,
         _connected_socket_inodes(port, client_port),
         contained=contained,
         group_id=group_id,
+        lineage_token=lineage_token,
     )
 
 
@@ -314,7 +337,9 @@ class AppManager:
             allowlist_env="PROXIMA_APP_ENV_ALLOWLIST",
             inherit_env="PROXIMA_APP_INHERIT_ENV",
         )
+        lineage_token = secrets.token_urlsafe(24)
         env["PORT"] = str(port)
+        env[_LINEAGE_ENV] = lineage_token
         # Default the dev server onto loopback: frameworks that honor $HOST
         # (webpack-dev-server/CRA and friends) then bind 127.0.0.1, keeping the
         # unauthenticated dev port off the LAN/tailnet - the gated preview relay
@@ -353,34 +378,45 @@ class AppManager:
             "log": [],
             "effect_lease": effect_lease,
             "process_group": proc.pid if not IS_WINDOWS else None,
+            "lineage_token": lineage_token,
         }
         self._apps[slug] = app
         app["drain_task"] = asyncio.create_task(self._drain(slug, proc))
 
+    @staticmethod
+    def _append_log(app: dict[str, Any], line: bytes) -> None:
+        text = line.decode("utf-8", "replace").rstrip()
+        app["log"].append(text)
+        del app["log"][:-200]
+        if not app.get("detected_port"):
+            match = _PORT_RE.search(text) or _PORT_RE2.search(text)
+            if match:
+                found = int(match.group(1))
+                if 1024 <= found <= 65535:
+                    app["detected_port"] = found
+
     async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
         assert proc.stdout
+        pending = b""
         try:
             while True:
-                line = await proc.stdout.readline()
-                if not line:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
                     break
-                app = self._apps.get(slug)
-                if app and app.get("proc") is proc:
-                    text = line.decode("utf-8", "replace").rstrip()
-                    app["log"].append(text)
-                    del app["log"][:-200]
-                    if not app.get("detected_port"):
-                        m = _PORT_RE.search(text) or _PORT_RE2.search(text)
-                        if m:
-                            found = int(m.group(1))
-                            if 1024 <= found <= 65535:
-                                app["detected_port"] = found
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    app = self._apps.get(slug)
+                    if app and app.get("proc") is proc:
+                        self._append_log(app, line)
             wait = getattr(proc, "wait", None)
             if wait is not None:
                 await wait()
         finally:
             app = self._apps.get(slug)
             if app and app.get("proc") is proc:
+                if pending:
+                    self._append_log(app, pending)
                 if proc.returncode is not None and not app.get("stop_requested"):
                     result = self._terminal_status_after_exit(app)
                     self._apps.pop(slug, None)
@@ -402,6 +438,19 @@ class AppManager:
                 result[key] = previous[key]
         result["log"] = list(previous.get("log") or [])[-40:]
         return result
+
+    @staticmethod
+    async def _wait_for_returncode(
+        proc: asyncio.subprocess.Process,
+        timeout: float,
+    ) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while proc.returncode is None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.02, remaining))
+        return True
 
     async def stop(
         self,
@@ -430,25 +479,31 @@ class AppManager:
                     proc.terminate()
                 except Exception:
                     pass
-            # Wait for the process tree to actually die so the port is freed before
-            # the next app starts on it — otherwise the new server fails to bind and
-            # the preview keeps showing the old one.
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=4)
-            except (asyncio.TimeoutError, Exception):
+            # Wait for the managed leader to exit before the next app starts.
+            if not await self._wait_for_returncode(proc, 4):
                 try:
                     if not IS_WINDOWS:
                         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    await asyncio.wait_for(proc.wait(), timeout=2)
                 except Exception:
                     pass
+                await self._wait_for_returncode(proc, 2)
         drain_task = app.get("drain_task")
         if (
             isinstance(drain_task, asyncio.Task)
             and drain_task is not asyncio.current_task()
             and not drain_task.done()
         ):
-            await drain_task
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(drain_task),
+                    timeout=FINAL_DRAIN_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                drain_task.cancel()
+                await asyncio.gather(drain_task, return_exceptions=True)
+                stdout_transport = getattr(proc.stdout, "_transport", None)
+                if stdout_transport is not None:
+                    stdout_transport.close()
         if self._apps.get(slug) is app:
             self._apps.pop(slug, None)
         self._finish_effect(
@@ -509,6 +564,7 @@ class AppManager:
                 candidate_port,
                 contained=self.contained,
                 group_id=app.get("process_group"),
+                lineage_token=app.get("lineage_token"),
             )
             if _port_open(candidate_port)
             else PortOwnership.NO_LISTENER
@@ -523,6 +579,8 @@ class AppManager:
                 requested_port=app["port"],
                 log=app["log"],
             )
+        if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
+            return self._ownership_unknown_status(app, ownership)
         return self._exited_status(app)
 
     @staticmethod
@@ -558,6 +616,27 @@ class AppManager:
             "prolonged_start": prolonged,
         }
 
+    @staticmethod
+    def _ownership_unknown_status(
+        app: dict[str, Any],
+        ownership: PortOwnership,
+    ) -> dict[str, Any]:
+        reason = (
+            "The listener detached from Proxima's managed process group, "
+            "so its lifetime cannot be verified."
+            if ownership == PortOwnership.DETACHED
+            else "Proxima cannot verify who owns the listener on this host."
+        )
+        return {
+            "state": "ownership_unknown",
+            "running": True,
+            "ready": False,
+            "requested_port": app["port"],
+            "command": app["command"],
+            "log": app["log"][-40:],
+            "message": reason,
+        }
+
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
@@ -585,6 +664,7 @@ class AppManager:
                 candidate_port,
                 contained=self.contained,
                 group_id=app.get("process_group"),
+                lineage_token=app.get("lineage_token"),
             )
             if port_open
             else PortOwnership.NO_LISTENER
@@ -602,6 +682,8 @@ class AppManager:
                 self._finish_effect(app, terminated=True)
                 self._last_exit[slug] = result
             return result
+        if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
+            return self._ownership_unknown_status(app, ownership)
         if app["proc"].returncode is not None:
             return self._exited_status(app)
         if not port_open:
@@ -612,22 +694,6 @@ class AppManager:
                     >= PROLONGED_START_SECONDS
                 ),
             )
-        if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
-            reason = (
-                "The listener detached from Proxima's managed process group, "
-                "so its lifetime cannot be verified."
-                if ownership == PortOwnership.DETACHED
-                else "Proxima cannot verify who owns the listener on this host."
-            )
-            return {
-                "state": "ownership_unknown",
-                "running": True,
-                "ready": False,
-                "requested_port": app["port"],
-                "command": app["command"],
-                "log": app["log"][-40:],
-                "message": reason,
-            }
         if ownership == PortOwnership.NO_LISTENER:
             return self._starting_status(
                 app,
@@ -682,6 +748,7 @@ class AppManager:
             client_port,
             contained=self.contained,
             group_id=app.get("process_group"),
+            lineage_token=app.get("lineage_token"),
         )
         if ownership == PortOwnership.FOREIGN:
             app["terminal_state"] = "port_conflict"

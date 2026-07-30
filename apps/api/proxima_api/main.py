@@ -703,7 +703,7 @@ def _config_from_env() -> dict[str, Any]:
         # cf_* creds let the app create/remove that subdomain hostname on the tunnel.
         "apps_domain": os.environ.get("PROXIMA_APPS_DOMAIN") or None,
         # Interface for per-app preview relay ports (remote preview without an apps
-        # domain). Default "auto": the tailnet interface if present, else loopback -
+        # domain). Default "auto": loopback plus the tailnet interface if present -
         # never 0.0.0.0 unless explicitly set. "off" disables relays.
         "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
         # Browser-tab label (e.g. "STAGING") so staging/prod aren't confused. Unset ⇒ none.

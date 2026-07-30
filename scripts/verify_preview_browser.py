@@ -85,21 +85,85 @@ def _wait_http(url: str, process: subprocess.Popen, log_path: Path) -> None:
             time.sleep(0.1)
 
 
+def _wait_port(
+    port: int,
+    process: subprocess.Popen,
+    log_path: Path,
+) -> None:
+    deadline = time.monotonic() + 30
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError(log_path.read_text(encoding="utf-8"))
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("disposable Astro readiness timed out")
+            time.sleep(0.05)
+
+
+def _wait_port_closed(port: int) -> None:
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                pass
+        except OSError:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("disposable Astro shutdown timed out")
+        time.sleep(0.05)
+
+
+def _start_astro(
+    project: Path,
+    port: int,
+    output,
+) -> subprocess.Popen:
+    return subprocess.Popen(
+        [
+            "npm",
+            "run",
+            "dev",
+            "--",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=project,
+        stdin=subprocess.DEVNULL,
+        stdout=output,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+
 def _stop_group(process: subprocess.Popen | None) -> None:
     if process is None:
         return
+    group_id = process.pid
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(group_id, signal.SIGTERM)
     except ProcessLookupError:
         return
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(group_id, signal.SIGKILL)
         except ProcessLookupError:
             pass
         process.wait(timeout=5)
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(group_id, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _browser_session(executable: str, profile: Path):
@@ -207,6 +271,7 @@ def main() -> None:
         fixture = Path(raw_root)
         workspace = fixture / "workspace"
         project = workspace / "astro-preview"
+        request_log = fixture / "astro-requests.log"
         project.mkdir(parents=True)
         (project / "src" / "pages").mkdir(parents=True)
         (project / "package.json").write_text(
@@ -224,10 +289,22 @@ def main() -> None:
             "<html><body><h1>Disposable Astro preview</h1></body></html>\n",
             encoding="utf-8",
         )
-        (project / "index.html").write_text(
-            "<h1>FOREIGN PREVIEW</h1>\n",
+        (project / "astro.config.mjs").write_text(
+            "import { appendFileSync } from 'node:fs';\n"
+            "import { defineConfig } from 'astro/config';\n"
+            "export default defineConfig({ vite: { plugins: [{\n"
+            "  name: 'request-audit',\n"
+            "  configureServer(server) {\n"
+            "    server.middlewares.use((request, _response, next) => {\n"
+            f"      appendFileSync({json.dumps(str(request_log))}, "
+            "`${request.method} ${request.url}\\n`);\n"
+            "      next();\n"
+            "    });\n"
+            "  },\n"
+            "}] } });\n",
             encoding="utf-8",
         )
+        request_log.write_text("", encoding="utf-8")
         _run(
             ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"],
             cwd=project,
@@ -259,8 +336,9 @@ def main() -> None:
         }
         Path(environment["PROXIMA_HERMES_PROFILES_ROOT"]).mkdir(parents=True)
         server_log = fixture / "server.log"
+        foreign_log = fixture / "foreign-astro.log"
         foreign: subprocess.Popen | None = None
-        foreign_output = None
+        foreign_output = foreign_log.open("ab")
         browser_process: subprocess.Popen | None = None
         connection = None
         with server_log.open("wb") as log:
@@ -312,9 +390,7 @@ def main() -> None:
                 )
                 connection.call("Page.navigate", {"url": base_url})
                 _wait_expression(connection, "document.readyState", "complete")
-                start_result = _evaluate(
-                    connection,
-                    f"""
+                start_expression = f"""
 (async () => {{
   const response = await fetch(
     "/api/projects/astro-preview/app/start",
@@ -331,8 +407,42 @@ def main() -> None:
   );
   return {{status: response.status, body: await response.text()}};
 }})()
-""",
+"""
+                foreign = _start_astro(project, app_port, foreign_output)
+                _wait_port(app_port, foreign, foreign_log)
+                request_log.write_text("", encoding="utf-8")
+                conflict_result = _evaluate(connection, start_expression)
+                if (
+                    conflict_result["status"] != 409
+                    or "port_conflict" not in conflict_result["body"]
+                ):
+                    raise RuntimeError(
+                        f"foreign Astro conflict was not reported: {conflict_result}"
+                    )
+                connection.call(
+                    "Page.navigate",
+                    {"url": f"{base_url}/api/appview/astro-preview/"},
                 )
+                _wait_expression(
+                    connection,
+                    "document.body.textContent.includes('port_conflict')",
+                    True,
+                )
+                conflict_shot = (
+                    evidence_dir / "preview-ownership-conflict.png"
+                )
+                _screenshot(connection, conflict_shot)
+                if foreign.poll() is not None:
+                    raise RuntimeError("Proxima terminated the foreign Astro app")
+                if request_log.read_text(encoding="utf-8"):
+                    raise RuntimeError(
+                        "Proxima sent request bytes to the foreign Astro app"
+                    )
+                _stop_group(foreign)
+                _wait_port_closed(app_port)
+                foreign = None
+
+                start_result = _evaluate(connection, start_expression)
                 if start_result["status"] != 200:
                     raise RuntimeError(f"browser app start failed: {start_result}")
                 status = _evaluate(
@@ -376,35 +486,9 @@ fetch("/api/preview-auth", {
                     body={},
                     token=token,
                 )
-                foreign_log = fixture / "foreign.log"
-                foreign_output = foreign_log.open("wb")
-                foreign = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "http.server",
-                        str(app_port),
-                        "--bind",
-                        "127.0.0.1",
-                    ],
-                    cwd=project,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=foreign_output,
-                    start_new_session=True,
-                )
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    try:
-                        with socket.create_connection(
-                            ("127.0.0.1", app_port),
-                            timeout=0.1,
-                        ):
-                            break
-                    except OSError:
-                        time.sleep(0.05)
-                else:
-                    raise RuntimeError("foreign listener readiness timed out")
+                request_log.write_text("", encoding="utf-8")
+                foreign = _start_astro(project, app_port, foreign_output)
+                _wait_port(app_port, foreign, foreign_log)
                 connection.call(
                     "Page.navigate",
                     {"url": f"{base_url}/api/appview/astro-preview/"},
@@ -414,25 +498,23 @@ fetch("/api/preview-auth", {
                     "document.body.textContent.includes('stopped')",
                     True,
                 )
-                if _evaluate(
-                    connection,
-                    "document.body.textContent.includes('FOREIGN PREVIEW')",
-                ):
-                    raise RuntimeError("browser received foreign preview content")
                 stopped_shot = evidence_dir / "preview-ownership-stopped.png"
                 _screenshot(connection, stopped_shot)
                 if foreign.poll() is not None:
-                    raise RuntimeError("Proxima terminated the foreign listener")
-                foreign_output.flush()
-                if foreign_log.read_text(encoding="utf-8"):
-                    raise RuntimeError("browser request reached the foreign listener")
+                    raise RuntimeError("Proxima terminated the rebound Astro app")
+                if request_log.read_text(encoding="utf-8"):
+                    raise RuntimeError(
+                        "browser request reached the rebound Astro app"
+                    )
                 print(
                     json.dumps(
                         {
                             "app": "Astro",
                             "authenticated": True,
                             "fixture": "disposable",
+                            "foreign_app": "Astro",
                             "ok": True,
+                            "conflict_screenshot": str(conflict_shot),
                             "ready_screenshot": str(ready_shot),
                             "stopped_screenshot": str(stopped_shot),
                         },

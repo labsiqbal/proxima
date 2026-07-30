@@ -20,7 +20,7 @@ class _FakeStdout:
     def __init__(self, lines: list[bytes]) -> None:
         self._lines = lines
 
-    async def readline(self) -> bytes:
+    async def read(self, _size: int) -> bytes:
         if self._lines:
             return self._lines.pop(0)
         return b""
@@ -157,7 +157,7 @@ def test_app_runner_stop_waits_for_terminal_output(tmp_path):
         assert armed.is_file()
 
         async def release_drain():
-            await asyncio.sleep(1.1)
+            await asyncio.sleep(0.1)
             gate.set()
 
         release_task = asyncio.create_task(release_drain())
@@ -168,6 +168,77 @@ def test_app_runner_stop_waits_for_terminal_output(tmp_path):
         status = manager.status("demo")
         assert status["state"] == "stopped"
         assert "terminal-line" in status["log"]
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="setsid requires POSIX")
+def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
+    manager = AppManager()
+    port = _free_port()
+    child_pid_file = tmp_path / "inherited-pipe.pid"
+    output_ready_file = tmp_path / "inherited-output.ready"
+
+    async def run_case():
+        child_pid = None
+        try:
+            worker = [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(60)",
+            ]
+            managed = (
+                "import sys, time; "
+                "sys.stdout.write('inherited-tail'); "
+                "sys.stdout.flush(); "
+                f"open({str(output_ready_file)!r}, 'w').write('ready'); "
+                "time.sleep(60)"
+            )
+            launcher = (
+                "import os, subprocess; "
+                f"child = subprocess.Popen({worker!r}, start_new_session=True); "
+                f"open({str(child_pid_file)!r}, 'w').write(str(child.pid)); "
+                f"os.execv({sys.executable!r}, "
+                f"[{sys.executable!r}, '-c', {managed!r}])"
+            )
+            command = (
+                f"exec {shlex.quote(sys.executable)} "
+                f"-c {shlex.quote(launcher)}"
+            )
+            await manager.start("demo", str(tmp_path), command, port)
+            for _ in range(100):
+                if child_pid_file.is_file():
+                    child_pid = int(child_pid_file.read_text().strip())
+                    break
+                await asyncio.sleep(0.01)
+            assert child_pid is not None
+            for _ in range(100):
+                if output_ready_file.is_file():
+                    break
+                await asyncio.sleep(0.01)
+            assert output_ready_file.is_file()
+            managed_group = manager._apps["demo"]["process_group"]
+            for _ in range(100):
+                if os.getpgid(child_pid) != managed_group:
+                    break
+                await asyncio.sleep(0.01)
+            assert os.getpgid(child_pid) != managed_group
+
+            await asyncio.wait_for(
+                manager.stop("demo"),
+                timeout=apprunner.FINAL_DRAIN_SECONDS + 2,
+            )
+
+            status = manager.status("demo")
+            assert status["state"] == "stopped"
+            assert "inherited-tail" in status["log"]
+            os.kill(child_pid, 0)
+        finally:
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     asyncio.run(run_case())
 
@@ -399,6 +470,60 @@ def test_uncontained_detached_listener_is_not_a_preview(tmp_path):
                     except ProcessLookupError:
                         break
                     await asyncio.sleep(0.025)
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="setsid requires POSIX")
+def test_reparented_uncontained_listener_stays_ownership_unknown(tmp_path):
+    port = _free_port()
+    child_pid_file = tmp_path / "reparented.pid"
+    manager = AppManager(contained=False)
+
+    async def run_case():
+        child_pid = None
+        try:
+            command = (
+                f"setsid {shlex.quote(sys.executable)} -m http.server "
+                "$PORT --bind 127.0.0.1 >/dev/null 2>&1 & "
+                f"echo $! > {shlex.quote(str(child_pid_file))}; "
+                "for i in $(seq 1 200); do "
+                "(echo >/dev/tcp/127.0.0.1/$PORT) >/dev/null 2>&1 "
+                "&& exit 0; sleep 0.01; done; exit 3"
+            )
+            await manager.start("demo", str(tmp_path), command, port)
+            for _ in range(100):
+                if child_pid_file.is_file():
+                    child_pid = int(child_pid_file.read_text().strip())
+                    break
+                await asyncio.sleep(0.01)
+            assert child_pid is not None
+
+            status = {}
+            for _ in range(200):
+                status = manager.status("demo")
+                if status.get("state") in {
+                    "ownership_unknown",
+                    "port_conflict",
+                    "exited",
+                }:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert status["state"] == "ownership_unknown"
+            assert status["ready"] is False
+            assert manager.preview_target("demo") is None
+            os.kill(child_pid, 0)
+
+            await manager.stop("demo")
+            assert manager.status("demo")["state"] == "stopped"
+            os.kill(child_pid, 0)
+        finally:
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     asyncio.run(run_case())
 

@@ -17,6 +17,7 @@ import signal
 import socket
 import subprocess
 from http.cookies import SimpleCookie
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -32,7 +33,7 @@ from apps.safe_updater.write_fence import (
 from proxima_api import apprunner
 from proxima_api.main import create_app
 from proxima_api.maintenance_status import MaintenanceBoundary
-from proxima_api.preview_proxy import PreviewRelayManager
+from proxima_api.preview_proxy import PreviewProxyMiddleware, PreviewRelayManager
 
 
 class FakeDevServer:
@@ -181,6 +182,98 @@ def test_relay_requires_preview_capability_and_running_app():
                 assert gone.status_code == 503
         finally:
             await relays.shutdown()
+
+    asyncio.run(run_case())
+
+
+def test_unauthenticated_preview_does_not_resolve_managed_target():
+    async def run_case():
+        relay_resolutions = 0
+
+        def relay_target(_slug):
+            nonlocal relay_resolutions
+            relay_resolutions += 1
+            return 5180
+
+        relays = PreviewRelayManager(
+            "127.0.0.1",
+            port_for=relay_target,
+            verify_connection=lambda *_args: False,
+            validate_token=lambda _token: False,
+        )
+        relay = relays._asgi_for("demo")
+        relay_messages = []
+
+        async def receive():
+            return {
+                "type": "http.request",
+                "body": b"",
+                "more_body": False,
+            }
+
+        async def relay_send(message):
+            relay_messages.append(message)
+
+        await relay(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [],
+            },
+            receive,
+            relay_send,
+        )
+
+        class Manager:
+            resolutions = 0
+
+            def preview_target(self, _slug):
+                self.resolutions += 1
+                return 5180
+
+            def verify_preview_connection(self, *_args):
+                raise AssertionError("verification must follow authentication")
+
+        manager = Manager()
+
+        async def downstream(_scope, _receive, _send):
+            raise AssertionError("preview subdomain must not reach downstream")
+
+        middleware = PreviewProxyMiddleware(
+            downstream,
+            SimpleNamespace(
+                state=SimpleNamespace(app_manager=manager),
+            ),
+            "apps.example.test",
+            validate_token=lambda _token: False,
+        )
+        middleware_messages = []
+
+        async def middleware_send(message):
+            middleware_messages.append(message)
+
+        await middleware(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"preview-demo.apps.example.test"),
+                ],
+            },
+            receive,
+            middleware_send,
+        )
+
+        assert relay_messages[0]["status"] == 403
+        assert middleware_messages[0]["status"] == 403
+        assert relay_resolutions == 0
+        assert manager.resolutions == 0
 
     asyncio.run(run_case())
 
@@ -613,7 +706,7 @@ def test_appview_returns_non_proxy_responses_for_starting_unknown_and_exited(
         monkeypatch.setattr(
             apprunner,
             "_listener_ownership",
-            lambda _pid, _port, *, contained, group_id=None: (
+            lambda _pid, _port, *, contained, group_id=None, lineage_token=None: (
                 apprunner.PortOwnership.UNKNOWN
             ),
         )

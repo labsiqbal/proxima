@@ -412,16 +412,20 @@ terminal states until Stop releases them.
 
 This proof deliberately fails closed. Hosts without usable procfs, incomplete
 socket-owner visibility, and uncontained descendants that detach into another process
-group report `ownership_unknown`; their command and logs remain stoppable, but their
-listener is not previewed. A detached descendant can qualify only when PID-namespace
-containment is active, because namespace teardown owns that descendant lifetime. This
-policy preserves the ownership boundary instead of treating a successful TCP handshake
-as ownership evidence. See [ADR-0010](adr/0010-preview-authority-requires-verified-connections.md).
+group report `ownership_unknown`; their listener is not previewed. Each launch receives
+an ephemeral lineage marker so a detached owner remains identifiable after reparenting
+without becoming trusted. A detached descendant can qualify only when PID-namespace
+containment is active, because namespace teardown owns that descendant lifetime.
+Stopping waits a bounded interval for available stdout, retains the collected tail, and
+never signals an uncontained detached child that keeps the pipe open. This policy
+preserves the ownership boundary instead of treating a successful TCP handshake as
+ownership evidence. See [ADR-0010](adr/0010-preview-authority-requires-verified-connections.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
-interface when the host is on a tailnet, otherwise loopback - never `0.0.0.0`. Tailnet
-devices can reach previews out of the box; untrusted plain-LAN devices cannot. The
+interface and loopback share one port when the host is on a tailnet, otherwise it binds
+loopback only - never `0.0.0.0`. Local and tailnet devices can reach previews out of
+the box; untrusted plain-LAN devices cannot. The
 listener answers 403 without the preview capability and 503 without an
 ownership-verified ready target; what it exposes when authorized and ready is the
 previewed dev server, never the Proxima API or owner
