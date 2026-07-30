@@ -202,6 +202,8 @@ def test_jobs_list_filters_by_project_slug(tmp_path):
 
     assert [j["id"] for j in alpha] == [ja["id"]]
     assert [j["id"] for j in beta] == [jb["id"]]
+    assert [j["project_name"] for j in alpha] == ["Alpha"]
+    assert [j["project_name"] for j in beta] == ["Beta"]
 
 
 def test_delete_started_job_cancels_run_before_session_cleanup(tmp_path):

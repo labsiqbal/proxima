@@ -47,7 +47,7 @@ export function MasterComposer({
           ? 'Master may continue already queued Tasks within your saved budgets.'
           : 'Master responds when you ask. Every delegated action remains a visible Task.'}
         {!attachmentSlug
-          ? ' Choose a Container target when you need attachments or file mentions.'
+          ? ' Choose a Project target when you need attachments or file mentions.'
           : ''}
       </p>
       {composer.error && (

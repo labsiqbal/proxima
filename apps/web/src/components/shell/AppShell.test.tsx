@@ -161,6 +161,7 @@ describe('AppShell mobile drawer + search', () => {
     const topBar = document.querySelector('.top-bar') as HTMLElement
     const back = within(topBar).getByRole('button', { name: 'Back to Tasks' })
     expect(back).toBeEnabled()
+    expect(back).toHaveTextContent('Back to Tasks')
     await user.click(back)
     expect(onChromeBack).toHaveBeenCalled()
   })

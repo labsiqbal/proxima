@@ -229,9 +229,14 @@ def register(app, deps):
         d = dict(row)
         d["input"] = _decode_json(d["input"]) if d.get("input") else None
         d["steps_state"] = _decode_json(d.get("steps_state") or "[]")
-        if d.get("project_id") and not d.get("project_slug"):
-            pr = db().execute("SELECT slug FROM projects WHERE id = ?", (d["project_id"],)).fetchone()
+        if d.get("project_id") and (
+            not d.get("project_slug") or not d.get("project_name")
+        ):
+            pr = db().execute(
+                "SELECT slug, name FROM projects WHERE id = ?", (d["project_id"],)
+            ).fetchone()
             d["project_slug"] = pr["slug"] if pr else None
+            d["project_name"] = pr["name"] if pr else None
         # Repo jobs (slice 2): surface the worktree lifecycle for the review UI.
         # Only when a row exists - flag-off installs have none, so their job
         # payloads are unchanged.

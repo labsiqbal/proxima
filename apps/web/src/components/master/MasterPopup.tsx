@@ -4,6 +4,10 @@ import { MasterComposer } from './MasterComposer'
 import { MasterConversation } from './MasterConversation'
 import { MasterPendingFocus } from './MasterTargetPicker'
 import {
+  areaDisplayLabel,
+  projectSecondaryContext,
+} from './projectContext'
+import {
   IconChevronLeft,
   IconChevronRight,
   IconClose,
@@ -41,7 +45,7 @@ export function MasterPopup({
   onOpenHome: () => void
   onOpenJob: (id: number, engine?: string) => void
 }) {
-  const { enabled, desk, connection, unread, popup, focus, fleet, actions } =
+  const { enabled, desk, connection, unread, popup, focus, target, fleet, actions } =
     useMasterState()
   const {
     closePopup,
@@ -122,9 +126,21 @@ export function MasterPopup({
   const focusedContainer = fleet.containers.find(
     container => container.id === focus.containerId,
   )
-  const focusLabel = focus.mode === 'container'
-    ? focusedContainer?.identity_label || focusedContainer?.name || 'Focused Container'
-    : 'Fleet'
+  const targetContainer = fleet.containers.find(
+    container => container.id === target.containerId,
+  )
+  const contextProject = target.mode === 'explicit' ? targetContainer : focusedContainer
+  const contextAreas = contextProject
+    ? fleet.areasByContainer[contextProject.id]
+    : null
+  const contextPrimary = contextProject?.name
+    || (focus.mode === 'container' ? 'Focused Project' : 'Fleet')
+  const contextSecondary = contextProject
+    ? projectSecondaryContext(
+        contextProject,
+        areaDisplayLabel(contextAreas, target.mode === 'explicit' ? target.areaId : null),
+      )
+    : 'Project and Area chosen by Master'
   const cornerLabel = popup.preferredCorner === 'right'
     ? 'Move popup to bottom left'
     : 'Move popup to bottom right'
@@ -172,11 +188,9 @@ export function MasterPopup({
                 </span>
                 <span>
                   <strong id="master-popup-title">Master</strong>
-                  <small>
-                    {focusLabel}
-                    {' · '}
-                    {connection.state === 'connected' ? 'Live' : 'Reconnecting'}
-                  </small>
+                  <strong className="master-popup-project">{contextPrimary}</strong>
+                  <small className="master-popup-context">{contextSecondary}</small>
+                  <small>{connection.state === 'connected' ? 'Live' : 'Reconnecting'}</small>
                   <MasterPendingFocus />
                 </span>
               </div>

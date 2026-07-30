@@ -282,8 +282,13 @@ describe('MasterScreen', () => {
         containers: [{
           id: 21,
           slug: 'acme',
-          name: 'Acme',
-          identity_label: 'Acme',
+          name: 'Beacon release',
+          identity_label: 'General',
+        }, {
+          id: 22,
+          slug: 'atlas',
+          name: 'Atlas private ops',
+          identity_label: 'General',
         }],
         areasByContainer: {
           21: {
@@ -298,7 +303,14 @@ describe('MasterScreen', () => {
     const user = userEvent.setup()
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
-    expect(screen.getByText('Sending will Focus Master on Acme')).toBeInTheDocument()
+    const warning = document.querySelector('.master-target-warning')
+    expect(warning).not.toBeNull()
+    expect(warning).toHaveTextContent('Identity: General')
+    expect(warning).toHaveTextContent('Area: Master chooses')
+    expect(screen.getAllByRole('option', { name: 'Beacon release (General)' }).length)
+      .toBeGreaterThan(0)
+    expect(screen.getAllByRole('option', { name: 'Atlas private ops (General)' }).length)
+      .toBeGreaterThan(0)
     await user.click(screen.getByText('Area override (advanced)'))
     expect(screen.getByRole('combobox', { name: 'Target Area override' }))
       .toHaveAccessibleName('Target Area override')
@@ -326,8 +338,51 @@ describe('MasterScreen', () => {
 
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
 
-    expect(screen.getByRole('option', { name: 'Unavailable Container #44' }))
+    expect(screen.getByRole('option', { name: 'Unavailable Project #44' }))
       .toBeInTheDocument()
+  })
+
+  it('keeps unique Project, identity, and Area in sent message metadata', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      historyMessages: [{
+        id: 94,
+        role: 'user',
+        content: 'Ship the release',
+        master_target: {
+          focus_mode: 'fleet',
+          focus_container_id: null,
+          target_mode: 'explicit',
+          target_container_id: 21,
+          target_area_id: 211,
+        },
+      }],
+      fleet: {
+        loading: false,
+        error: '',
+        containers: [{
+          id: 21,
+          slug: 'beacon',
+          name: 'Beacon release',
+          identity_label: 'General',
+        }],
+        areasByContainer: {
+          21: {
+            container_id: 21,
+            container_slug: 'beacon',
+            ops_area: { id: 210, kind: 'ops', rel_path: '.proxima/ops' },
+            code_areas: [{ id: 211, kind: 'code', rel_path: '.' }],
+          },
+        },
+      },
+    } as never)
+
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+
+    const metadata = document.querySelector('.master-message-target')
+    expect(metadata).toHaveTextContent('Beacon release')
+    expect(metadata).toHaveTextContent('Identity: General')
+    expect(metadata).toHaveTextContent('Area: Code: repository root')
   })
 
   it('keeps successful tool activity compact until its audit details are requested', async () => {

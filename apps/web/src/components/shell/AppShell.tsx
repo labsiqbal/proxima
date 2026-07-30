@@ -76,6 +76,8 @@ export function AppShell(props: {
   /** Deep surfaces lock the header/mobile project switcher. */
   projectLocked?: boolean
   projectLockedReason?: string
+  /** Project-bound tools stay hidden until a deep Task and shell Project agree. */
+  projectToolsAvailable?: boolean
   mode?: ShellMode
   onModeChange?: (mode: ShellMode) => void
 }) {
@@ -203,7 +205,7 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'}`} style={shellStyle}>
+    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
@@ -222,6 +224,11 @@ export function AppShell(props: {
           title={props.chromeBackEnabled ? (props.chromeBackLabel || 'Back') : 'Back'}
         >
           <IconChevronLeft size={17} />
+          {props.chromeBackEnabled && (
+            <span className="chrome-back-label">
+              {props.chromeBackLabel || 'Back'}
+            </span>
+          )}
         </button>
         <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         </>}
@@ -304,6 +311,7 @@ export function AppShell(props: {
       {!delegateMode && <ToolDock
         token={props.token}
         project={props.activeProject}
+        available={props.projectToolsAvailable !== false}
         onOpenSettings={() => props.onSelectView('settings')}
         onOpenChange={setToolOpen}
       />}
