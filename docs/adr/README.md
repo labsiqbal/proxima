@@ -87,3 +87,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0027](0027-durable-task-reconciliation-protocol.md) | Durable Task reconciliation protocol | Accepted |
 | [0028](0028-linux-first-daily-driver-support.md) | Linux-first daily-driver support | Accepted |
 | [0010](0010-canonical-file-targets.md) | Canonical file targets preserve Area identity | Accepted |
+| [0011](0011-area-scoped-artifact-media.md) | Area-scoped artifact media and preview routing | Accepted |

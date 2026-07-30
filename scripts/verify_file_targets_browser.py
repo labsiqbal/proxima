@@ -165,9 +165,20 @@ def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
         ).fetchone()
         if canonical_row is None or legacy_row is None:
             raise RuntimeError("browser fixture projects were not registered")
+        canonical_ops = connection.execute(
+            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (int(canonical_row["id"]),),
+        ).fetchone()
+        if canonical_ops is None:
+            raise RuntimeError("canonical browser Ops Area is unavailable")
         connection.execute(
             "UPDATE project_areas SET rel_path = '.' "
             "WHERE project_id = ? AND kind = 'ops'",
+            (int(legacy_row["id"]),),
+        )
+        connection.execute(
+            "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+            "VALUES (?, 'code', 'repo', 'manual')",
             (int(legacy_row["id"]),),
         )
         record_artifacts(
@@ -185,6 +196,18 @@ def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
     finally:
         connection.close()
 
+    collision = (
+        canonical
+        / "area"
+        / "ops"
+        / str(int(canonical_ops["id"]))
+        / "site"
+    )
+    collision.mkdir(parents=True)
+    (collision / "theme.css").write_text(
+        "body { color: legacy-container; }",
+        encoding="utf-8",
+    )
     (legacy / "legacy.md").write_text(
         "# Legacy root\n\nLEGACY OPS AT DOT\n",
         encoding="utf-8",
@@ -193,6 +216,12 @@ def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
     legacy_child.mkdir(exist_ok=True)
     (legacy_child / "legacy.md").write_text(
         "# Real child\n\nLEGACY REAL OPS CHILD\n",
+        encoding="utf-8",
+    )
+    repo = legacy / "repo"
+    repo.mkdir()
+    (repo / "output.md").write_text(
+        "# Nested Code output\n\nAUTHORITATIVE CODE AREA\n",
         encoding="utf-8",
     )
 
@@ -218,6 +247,16 @@ def _browser_expression() -> str:
     if (!response.ok) throw new Error(`${path}: ${response.status} ${JSON.stringify(body)}`);
     return body;
   };
+  const jsonPost = async (path, body) => {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const value = await response.json();
+    if (!response.ok) throw new Error(`${path}: ${response.status} ${JSON.stringify(value)}`);
+    return value;
+  };
   const bytesFetch = async path => {
     const response = await fetch(path);
     if (!response.ok) throw new Error(`${path}: ${response.status}`);
@@ -229,7 +268,7 @@ def _browser_expression() -> str:
   };
   const previewFor = target => {
     const encodePath = path => path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-    return `/api/preview/${encodeURIComponent(target.project)}/area/${encodeURIComponent(target.area.kind)}/${target.area.id ?? "root"}/${encodePath(target.path)}`;
+    return `/api/target-preview/${encodeURIComponent(target.project)}/${encodeURIComponent(target.area.kind)}/${target.area.id ?? "root"}/${encodePath(target.path)}`;
   };
   const checks = [];
 
@@ -292,6 +331,47 @@ def _browser_expression() -> str:
   }
   checks.push("raw-image-and-preview-pdf");
 
+  const oldCollision = await (await fetch(
+    `/api/preview/canonical-browser/area/ops/${briefTarget.area.id}/site/theme.css`
+  )).text();
+  if (!oldCollision.includes("legacy-container")) {
+    throw new Error("legacy preview path still collides with the targeted namespace");
+  }
+  const escapedPreview = new URL(
+    "../../../../brief.md",
+    location.origin + previewFor({...briefTarget, path: "site/index.html"})
+  );
+  const escapedResponse = await fetch(escapedPreview);
+  if (escapedResponse.status !== 404) {
+    throw new Error(`Area preview traversal escaped into another resolver: ${escapedResponse.status}`);
+  }
+  checks.push("collision-free-preview-namespace");
+
+  const fromImage = await jsonPost(
+    "/api/projects/canonical-browser/designs/from-image",
+    {path: "visual.png", target: archivedByName["visual.png"].target, title: "Canonical visual"}
+  );
+  const sceneTarget = {
+    ...archivedByName["visual.png"].target,
+    path: `${fromImage.path}/scene.json`,
+  };
+  const sceneFile = await jsonFetch(
+    `/api/projects/canonical-browser/file?${queryFor(`${fromImage.path}/scene.json`, sceneTarget)}`
+  );
+  const scene = JSON.parse(sceneFile.content);
+  const sceneImage = scene.artboards?.[0]?.layers?.[0];
+  if (
+    sceneImage?.src !== "visual.png"
+    || JSON.stringify(sceneImage.target) !== JSON.stringify(archivedByName["visual.png"].target)
+  ) {
+    throw new Error("Design scene dropped its source image target");
+  }
+  const sceneImageBytes = await bytesFetch(previewFor(sceneImage.target));
+  if (sceneImageBytes[0] !== 0x89 || sceneImageBytes[1] !== 0x50) {
+    throw new Error("Design scene image target resolved to the Container shadow");
+  }
+  checks.push("design-scene-image-target");
+
   const legacyTree = await jsonFetch("/api/projects/legacy-browser/tree?path=");
   const legacyEntry = legacyTree.entries.find(entry => entry.name === "legacy.md");
   if (!legacyEntry?.target || legacyEntry.target.area.kind !== "ops") {
@@ -307,7 +387,19 @@ def _browser_expression() -> str:
   if (!legacyChild.content.includes("LEGACY REAL OPS CHILD")) {
     throw new Error("legacy explicit ops path was incorrectly virtualized");
   }
-  checks.push("legacy-layout");
+  const legacyArtifacts = await jsonFetch(
+    "/api/projects/legacy-browser/artifacts?since_minutes=525600"
+  );
+  const codeOutput = legacyArtifacts.artifacts.find(item => item.path === "repo/output.md");
+  if (
+    !codeOutput?.target
+    || codeOutput.target.area.kind !== "code"
+    || codeOutput.target.path !== "output.md"
+    || !codeOutput.target.area.id
+  ) {
+    throw new Error("Ops-at-dot scan forced a nested Code artifact to Ops");
+  }
+  checks.push("legacy-layout-and-code-artifact-ownership");
 
   document.querySelector('[aria-label="Close tool panel"]')?.click();
   const archive = await until("Archive navigation", () => exactButton("Archive"));
@@ -329,12 +421,20 @@ def _browser_expression() -> str:
     open.click();
     const overlay = await until(`${name} ArtifactViewer`, () => document.querySelector(".av-overlay"));
     if (kind === "markdown") {
+      await until(`${name} compact nested Markdown image`, () => {
+        const image = expanded.querySelector("img.md-img");
+        return image?.src.includes("/api/target-preview/")
+          && image.src.includes("/ops/")
+          && image.complete
+          && image.naturalWidth === 2;
+      });
       await until(`${name} Markdown preview`, () =>
         (overlay.querySelector(".av-doc")?.textContent || "").includes("OPS DIRECT MARKDOWN")
       );
       await until(`${name} nested Markdown image`, () => {
         const image = overlay.querySelector("img.md-img");
-        return image?.src.includes("/area/ops/")
+        return image?.src.includes("/api/target-preview/")
+          && image.src.includes("/ops/")
           && !image.src.includes("target=")
           && image.complete
           && image.naturalWidth === 2;
@@ -342,7 +442,8 @@ def _browser_expression() -> str:
     } else if (kind === "image") {
       await until(`${name} image preview`, () => {
         const image = overlay.querySelector("img.av-img");
-        return image?.src.includes("/area/ops/")
+        return image?.src.includes("/api/target-preview/")
+          && image.src.includes("/ops/")
           && !image.src.includes("target=")
           && image.complete
           && image.naturalWidth === 2;
@@ -350,7 +451,7 @@ def _browser_expression() -> str:
     } else if (kind === "html") {
       await until(`${name} nested HTML asset`, async () => {
         const frame = overlay.querySelector("iframe.av-frame");
-        if (!frame?.src.includes("/area/ops/")) return false;
+        if (!frame?.src.includes("/api/target-preview/") || !frame.src.includes("/ops/")) return false;
         const html = await (await fetch(frame.src)).text();
         const css = await (await fetch(new URL("theme.css", frame.src))).text();
         return html.includes("OPS NESTED HTML") && css.includes("canonical-ops");
@@ -358,7 +459,9 @@ def _browser_expression() -> str:
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
-        return frame?.src.includes("/area/ops/") && !frame.src.includes("target=");
+        return frame?.src.includes("/api/target-preview/")
+          && frame.src.includes("/ops/")
+          && !frame.src.includes("target=");
       });
     }
     if (close) {
@@ -404,6 +507,7 @@ def main() -> None:
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(database),
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "0",
+            "PROXIMA_FEATURE_DESIGN_STUDIO": "1",
             "PROXIMA_FEATURE_SAFE_SELF_UPDATE": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),

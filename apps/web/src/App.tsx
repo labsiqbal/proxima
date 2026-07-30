@@ -8,7 +8,7 @@ import { createJob, deleteJob, getJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
 import { getAppFeatures } from './api/config'
 import { DEFAULT_FEATURES, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
-import type { AppFeatures, ChatSession, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
+import type { AppFeatures, ChatSession, FileTarget, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
 import type { ArtifactReviewFeedback } from './components/artifacts/ArtifactViewer'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
@@ -254,7 +254,7 @@ export function App() {
   const [runRecipePrompt, setRunRecipePrompt] = React.useState<string | undefined>(undefined)
   const [runRecipeLabel, setRunRecipeLabel] = React.useState<string | undefined>(undefined)
   const [runRecipeInstantResult, setRunRecipeInstantResult] = React.useState<string | undefined>(undefined)
-  const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string } | null>(null)
+  const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string; target?: FileTarget } | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const reviewDraftNonce = React.useRef(0)
   const [reviewDraft, setReviewDraft] = React.useState<{ text: string; nonce: number } | null>(null)
@@ -1172,7 +1172,7 @@ export function App() {
           setPendingDesignId(id)
           setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' }))
           setView('design')
-        } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
+        } : undefined} onOpenFile={(slug, path, target) => { setPendingFile({ slug, path, target }); setView('artifacts') }} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
       {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
       {!features.designStudio && designActive && (

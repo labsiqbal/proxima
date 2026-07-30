@@ -30,7 +30,7 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
 // cookie (sent same-origin) — no token in the URL.
 export const previewUrl = (slug: string, path: string, target?: FileTarget) =>
   target
-    ? `/api/preview/${q(slug)}/area/${q(target.area.kind)}/${target.area.id ?? 'root'}/${encodedPath(target.path)}`
+    ? `/api/target-preview/${q(slug)}/${q(target.area.kind)}/${target.area.id ?? 'root'}/${encodedPath(target.path)}`
     : `/api/preview/${q(slug)}/${encodedPath(path)}`
 
 export function relativeFileUrl(

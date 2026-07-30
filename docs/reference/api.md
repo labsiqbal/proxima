@@ -120,7 +120,6 @@
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
 | API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
-| GET | `/api/preview/{slug}/area/{area_kind}/{area_id}/{file_path:path}` | `project_area_preview` |  |
 | GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
 | GET | `/api/projects/{slug}/app/status` | `app_status` |  |
@@ -152,6 +151,7 @@
 | PUT | `/api/settings/runs` | `set_run_settings` |  |
 | GET | `/api/settings/satpam` | `get_satpam_settings` | Satpam supervision thresholds (slice 12, T10): N consecutive |
 | PUT | `/api/settings/satpam` | `set_satpam_settings` |  |
+| GET | `/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}` | `project_target_preview` |  |
 
 
 ## routes/graph.py

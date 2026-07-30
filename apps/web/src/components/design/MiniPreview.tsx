@@ -1,5 +1,7 @@
 import { gradientStopList } from './scene'
+import { canBeImageFrame } from './scene'
 import type { Artboard, FillStyle, ImageLayer, Layer, LayerEffect, TextLayer } from './scene'
+import type { FileTarget } from '../../types'
 
 export const cssTextShadow = (t: TextLayer, scale = 1): string => {
   const parts: string[] = []
@@ -32,7 +34,7 @@ const textDisplayValue = (t: TextLayer) => {
 
 // Real scaled thumbnail of a design's first artboard (layers rendered as DOM,
 // sized in container-query units so it scales to whatever the card width is).
-export function MiniPreview({ art, resolveSrc }: { art?: Artboard; resolveSrc: (s: string) => string }) {
+export function MiniPreview({ art, resolveSrc }: { art?: Artboard; resolveSrc: (s: string, target?: FileTarget) => string }) {
   if (!art) return <span className="ds-frame" />
   const W = art.width, H = art.height
   const pos = (l: Layer) => ({ position: 'absolute' as const, left: `${l.x / W * 100}cqw`, top: `${l.y / H * 100}cqh`, width: `${('width' in l ? l.width : 0) / W * 100}cqw` })
@@ -42,7 +44,7 @@ export function MiniPreview({ art, resolveSrc }: { art?: Artboard; resolveSrc: (
       if (l.type === 'image') {
         const im = l as ImageLayer
         const cropTransform = [rot.transform, im.cropZoom && im.cropZoom !== 1 ? `scale(${im.cropZoom})` : ''].filter(Boolean).join(' ')
-        return <img key={l.id} src={resolveSrc(l.src)} alt="" style={{ ...pos(l), ...rot, ...cssEffects(im.effects), transform: cropTransform || undefined, transformOrigin: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, height: `${l.height / H * 100}cqh`, objectFit: 'cover', objectPosition: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, borderRadius: `${(l.cornerRadius || 0) / W * 100}cqw`, opacity: l.opacity ?? 1 }} />
+        return <img key={l.id} src={resolveSrc(l.src, l.target)} alt="" style={{ ...pos(l), ...rot, ...cssEffects(im.effects), transform: cropTransform || undefined, transformOrigin: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, height: `${l.height / H * 100}cqh`, objectFit: 'cover', objectPosition: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, borderRadius: `${(l.cornerRadius || 0) / W * 100}cqw`, opacity: l.opacity ?? 1 }} />
       }
       if (l.type === 'text') {
         const t = l as TextLayer
@@ -50,6 +52,17 @@ export function MiniPreview({ art, resolveSrc }: { art?: Artboard; resolveSrc: (
       }
       if (l.type === 'line') return null
       const s = l as { width: number; height: number; fill: string; cornerRadius?: number }
+      const frame = canBeImageFrame(l) && l.imageSrc ? l : null
+      if (frame) {
+        const frameRadius = frame.type === 'ellipse'
+          ? '50%'
+          : frame.type === 'star'
+            ? '30%'
+            : frame.type === 'rect'
+              ? cssRadius(frame, W)
+              : '0'
+        return <img key={frame.id} src={resolveSrc(frame.imageSrc || '', frame.imageTarget)} alt="" style={{ ...pos(frame), ...rot, ...cssEffects(frame.effects), height: `${frame.height / H * 100}cqh`, objectFit: 'cover', objectPosition: `${frame.imageCropX ?? 50}% ${frame.imageCropY ?? 50}%`, borderRadius: frameRadius, opacity: frame.opacity ?? 1 }} />
+      }
       const radius = l.type === 'ellipse' ? '50%' : l.type === 'path' || l.type === 'star' ? '30%' : cssRadius(s, W)
       return <div key={l.id} style={{ ...pos(l), ...rot, ...cssEffects((s as { effects?: LayerEffect[] }).effects), height: `${s.height / H * 100}cqh`, background: cssFill(s), borderRadius: radius, opacity: (l.opacity ?? 1) * ((s as FillStyle).fillOpacity ?? 1), border: (s as { stroke?: string; strokeWidth?: number }).stroke && (s as { strokeWidth?: number }).strokeWidth !== 0 ? `${((s as { strokeWidth?: number }).strokeWidth ?? 2) / W * 100}cqw solid ${(s as { stroke?: string }).stroke}` : undefined }} />
     })}

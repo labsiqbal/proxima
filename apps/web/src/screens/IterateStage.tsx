@@ -42,7 +42,12 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [arts, setArts] = React.useState<Artifact[]>([])   // non-design artifacts
   const [tab, setTab] = React.useState<'recipe' | 'result'>('recipe')
   const [runnerOpen, setRunnerOpen] = React.useState(false)
-  const [doc, setDoc] = React.useState<{ title: string; content: string } | null>(null)
+  const [doc, setDoc] = React.useState<{
+    title: string
+    content: string
+    sourcePath: string
+    target?: Artifact['target']
+  } | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [events, setEvents] = React.useState<RunEvent[]>([])
   const [error, setError] = React.useState('')
@@ -201,7 +206,14 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     const seq = ++docSeq.current
     try {
       const f = await activeFs.read(a.target || a.path)
-      if (mountedRef.current && seq === docSeq.current) setDoc({ title: a.title, content: f.content })
+      if (mountedRef.current && seq === docSeq.current) {
+        setDoc({
+          title: a.title,
+          content: f.content,
+          sourcePath: a.target?.path || a.path,
+          target: a.target,
+        })
+      }
     } catch { /* ignore */ }
   }
   const openFile = (a: Artifact) => {
@@ -488,7 +500,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     {doc && <div className="art-doc-scrim" onClick={() => setDoc(null)}>
       <div className="art-doc" onClick={e => e.stopPropagation()}>
         <header className="art-doc-head"><strong>{doc.title}</strong><button className="icon-btn" onClick={() => setDoc(null)}>✕</button></header>
-        <div className="art-doc-body"><MessageContent content={doc.content} token={token} slug={projectSlug || undefined} /></div>
+        <div className="art-doc-body"><MessageContent content={doc.content} token={token} slug={projectSlug || undefined} sourcePath={doc.sourcePath} fileTarget={doc.target} /></div>
       </div>
     </div>}
   </section>

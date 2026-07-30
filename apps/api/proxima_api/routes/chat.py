@@ -149,7 +149,7 @@ def register(app, deps):
         if project is None:
             return links
         try:
-            return file_targets.add_ops_targets(conn, project, links)
+            return file_targets.add_artifact_targets(conn, project, links)
         except (
             container_registry.ContainerBoundaryError,
             file_targets.FileTargetError,

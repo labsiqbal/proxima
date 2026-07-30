@@ -40,7 +40,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   /** Delegate's Archive is global and intentionally has no project filter menu. */
   globalScope?: boolean
   archiveRecord?: { project: string; slug: string } | null
-  pendingFile?: { slug: string; path: string } | null
+  pendingFile?: { slug: string; path: string; target?: Artifact['target'] } | null
   pendingArtifact?: OutputLink | null
   onPendingConsumed?: () => void
   onPendingArtifactConsumed?: () => void
@@ -124,7 +124,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   React.useEffect(() => {
     if (!pendingFile) return
     onPendingConsumed?.()
-    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path }], slug: pendingFile.slug, sessionId: reviewSessionId })
+    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path, target: pendingFile.target }], slug: pendingFile.slug, sessionId: reviewSessionId })
   }, [pendingFile, onPendingConsumed, reviewSessionId])
 
   const approve = async (record: ArchiveRecord) => {

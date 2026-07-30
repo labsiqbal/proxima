@@ -14,7 +14,7 @@ import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
 import { IconTrash } from '../components/shell/icons'
 
-import type { Artifact } from '../api/files'
+import { retargetFile, type Artifact } from '../api/files'
 import { stripQuestionForms } from '../components/chat/questionForm'
 import { usePolling } from '../hooks/usePolling'
 import { useEventStream } from '../hooks/useEventStream'
@@ -57,7 +57,7 @@ export function TaskWorkspace({
   onChanged?: () => void
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string, projectSlug?: string | null) => void
-  onOpenFile?: (slug: string, path: string) => void
+  onOpenFile?: (slug: string, path: string, target?: Artifact['target']) => void
   projects?: Project[]
   containers?: Container[]
   areasByContainer?: Record<number, ContainerAreas>
@@ -299,9 +299,25 @@ export function TaskWorkspace({
           const list: Artifact[] = cur.produced_artifacts?.length ? cur.produced_artifacts
             : (cur.produced_designs || []).map(d => ({ type: 'design' as const, id: d.id, title: d.title, path: '' }))
           if (!list.length) return null
-          const open = (a: Artifact) => a.type === 'design' && designStudioEnabled
-            ? onOpenDesign?.(a.id || '', job?.project_slug)
-            : (job?.project_slug && a.path && onOpenFile?.(job.project_slug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path))
+          const open = (a: Artifact) => {
+            if (a.type === 'design' && designStudioEnabled) {
+              onOpenDesign?.(a.id || '', job?.project_slug)
+              return
+            }
+            if (!job?.project_slug || !a.path) return
+            const path = a.type === 'design'
+              ? `${a.path.replace(/\/$/, '')}/scene.json`
+              : a.path
+            const target = a.target
+              ? retargetFile(
+                  a.target,
+                  a.type === 'design'
+                    ? `${a.target.path.replace(/\/$/, '')}/scene.json`
+                    : a.target.path,
+                )
+              : undefined
+            onOpenFile?.(job.project_slug, path, target)
+          }
           return <div className="jfd-artifacts">
             {list.map(a => <button key={a.path || a.id} className="artifact-chip" onClick={() => open(a)} disabled={a.type === 'design' && !designStudioEnabled && !a.path} title={`Open ${a.title}`}>
               {ART_ICON[a.type] || '📎'} <span>{a.title}</span> <span className="muted">· {a.type === 'design' && designStudioEnabled ? 'open in Design Studio' : 'open'}</span>

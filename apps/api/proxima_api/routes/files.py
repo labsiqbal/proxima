@@ -55,15 +55,18 @@ def register(app, deps):
         user: dict[str, Any],
         *,
         path: str = "",
-        target: str | dict[str, Any] = "",
+        target: Any = "",
+        project: Any | None = None,
+        context: file_targets.FileTargetContext | None = None,
     ) -> file_targets.ResolvedFile:
-        project = visible_project(slug, user)
+        selected_project = project or visible_project(slug, user)
         try:
             return file_targets.resolve_request(
                 db(),
-                project,
+                selected_project,
                 path=path,
                 target=target,
+                context=context,
             )
         except (
             container_registry.ContainerBoundaryError,
@@ -97,12 +100,15 @@ def register(app, deps):
     ):
         try:
             project = visible_project(slug, user)
+            context = file_targets.target_context(db(), project)
             if path or target:
                 resolved = _resolved_file(
                     slug,
                     user,
                     path=path,
                     target=target,
+                    project=project,
+                    context=context,
                 )
                 return {
                     "path": path or resolved.locator.path,
@@ -112,11 +118,17 @@ def register(app, deps):
                         project,
                         fsapi.list_tree(resolved.root, resolved.locator.path),
                         resolved.path,
+                        context=context,
                     ),
                 }
             ops_target = file_targets.ops_locator(db(), project)
             container_root = container_registry.container_root(project)
-            ops = file_targets.resolve_locator(db(), project, ops_target)
+            ops = file_targets.resolve_locator(
+                db(),
+                project,
+                ops_target,
+                context=context,
+            )
             if container_root == ops.root:
                 return {
                     "path": path,
@@ -126,6 +138,7 @@ def register(app, deps):
                         project,
                         fsapi.list_tree(ops.root, ""),
                         ops.path,
+                        context=context,
                     ),
                 }
             entries = {
@@ -135,6 +148,7 @@ def register(app, deps):
                     project,
                     fsapi.list_tree(container_root, ""),
                     container_root,
+                    context=context,
                 )
                 if entry["name"] != "ops"
             }
@@ -143,6 +157,7 @@ def register(app, deps):
                 project,
                 fsapi.list_tree(ops.root, ""),
                 ops.path,
+                context=context,
             ):
                 if entry["name"] in container_registry.OPS_VIRTUAL_NAMES:
                     entries[entry["name"]] = entry
@@ -594,7 +609,7 @@ def register(app, deps):
         start = time.time() - max(1, since_minutes) * 60
         items = scan_project_artifacts(_ops_root(slug, user), start)
         return {
-            "artifacts": file_targets.add_ops_targets(
+            "artifacts": file_targets.add_artifact_targets(
                 db(),
                 p,
                 items,
@@ -622,7 +637,7 @@ def register(app, deps):
                 (session["project_id"],),
             ).fetchone()
             if project is not None:
-                items = file_targets.add_ops_targets(db(), project, items)
+                items = file_targets.add_artifact_targets(db(), project, items)
         return {"artifacts": items}
 
     @app.delete("/api/sessions/{session_id}/artifacts")
@@ -638,6 +653,7 @@ def register(app, deps):
         except file_targets.FileTargetError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         resolved: file_targets.ResolvedFile | None = None
+        stored_path = artifact_path
         if session.get("project_id"):
             p = (
                 db()
@@ -649,25 +665,48 @@ def register(app, deps):
             )
             if p:
                 try:
-                    locator = (
-                        file_targets.parse_locator(target)
-                        if target
-                        else file_targets.ops_locator(db(), p, artifact_path)
+                    context = file_targets.target_context(db(), p)
+                    if target:
+                        locator = file_targets.parse_locator(target)
+                    else:
+                        if not artifact_path:
+                            raise file_targets.FileTargetError(
+                                "artifact path is required"
+                            )
+                        locator = file_targets.add_artifact_targets(
+                            db(),
+                            p,
+                            [{"path": artifact_path}],
+                            context=context,
+                        )[0]["target"]
+                    resolved = file_targets.resolve_locator(
+                        db(),
+                        p,
+                        locator,
+                        context=context,
                     )
+                    ops_root = context.ops_root()
                     if (
-                        artifact_path
-                        and locator.path != artifact_path
+                        resolved.path != ops_root
+                        and ops_root not in resolved.path.parents
                     ):
+                        raise file_targets.FileTargetError(
+                            "session artifact is outside the Ops workspace"
+                        )
+                    stored_path = (
+                        ""
+                        if resolved.path == ops_root
+                        else resolved.path.relative_to(ops_root).as_posix()
+                    )
+                    if not stored_path:
+                        raise file_targets.FileTargetError(
+                            "artifact path is required"
+                        )
+                    if artifact_path and artifact_path != stored_path:
                         raise file_targets.FileTargetError(
                             "artifact path does not match file target"
                         )
-                    resolved = file_targets.resolve_locator(db(), p, locator)
-                    if resolved.locator.area.kind != "ops":
-                        raise file_targets.FileTargetError(
-                            "session artifacts must belong to the Ops Area"
-                        )
-                    artifact_path = resolved.locator.path
-                    fsapi.delete(resolved.root, artifact_path)
+                    fsapi.delete(resolved.root, resolved.locator.path)
                 except fsapi.FsError:
                     pass
                 except (
@@ -675,14 +714,30 @@ def register(app, deps):
                     file_targets.FileTargetError,
                 ) as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
-                _audit_fs(user, "artifact.delete", p["slug"], artifact_path)
-        if not artifact_path:
+                _audit_fs(user, "artifact.delete", p["slug"], stored_path)
+        if not stored_path:
             raise HTTPException(status_code=400, detail="artifact path is required")
-        update_produced_artifacts(
-            db(),
-            session_id,
-            lambda current: [a for a in current if a.get("path") != artifact_path],
-        )
+        target_payload = resolved.locator.payload() if resolved is not None else None
+
+        def retained(items: list[Any]) -> list[Any]:
+            kept: list[Any] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    kept.append(item)
+                    continue
+                if item.get("path") == stored_path:
+                    continue
+                raw_target = item.get("target")
+                if raw_target and target_payload is not None:
+                    try:
+                        if file_targets.parse_locator(raw_target) == resolved.locator:
+                            continue
+                    except file_targets.FileTargetError:
+                        pass
+                kept.append(item)
+            return kept
+
+        update_produced_artifacts(db(), session_id, retained)
         for m in (
             db()
             .execute(
@@ -695,7 +750,7 @@ def register(app, deps):
                 links = json.loads(m["output_links"] or "[]")
             except Exception:
                 continue
-            filtered = [a for a in links if a.get("path") != artifact_path]
+            filtered = retained(links)
             if len(filtered) != len(links):
                 db().execute(
                     "UPDATE messages SET output_links = ? WHERE id = ?",
@@ -705,7 +760,7 @@ def register(app, deps):
             db()
             .execute(
                 "SELECT id, payload FROM events WHERE session_id = ? AND payload LIKE ?",
-                (session_id, f"%{artifact_path}%"),
+                (session_id, f"%{stored_path}%"),
             )
             .fetchall()
         ):
@@ -716,7 +771,7 @@ def register(app, deps):
             links = payload.get("output_links")
             if not isinstance(links, list):
                 continue
-            filtered = [a for a in links if a.get("path") != artifact_path]
+            filtered = retained(links)
             if len(filtered) != len(links):
                 payload["output_links"] = filtered
                 db().execute(
@@ -725,8 +780,8 @@ def register(app, deps):
                 )
         return {
             "ok": True,
-            "path": artifact_path,
-            "target": resolved.locator.payload() if resolved is not None else None,
+            "path": stored_path,
+            "target": target_payload,
         }
 
     # ── Run & preview a project app (managed dev server + proxy) ──────
@@ -1089,8 +1144,8 @@ def register(app, deps):
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(str(resolved.path), filename=resolved.path.name)
 
-    @app.get("/api/preview/{slug}/area/{area_kind}/{area_id}/{file_path:path}")
-    def project_area_preview(
+    @app.get("/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}")
+    def project_target_preview(
         slug: str,
         area_kind: str,
         area_id: str,
