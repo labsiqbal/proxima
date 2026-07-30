@@ -239,6 +239,14 @@ prompt dialog, and the hover/focus **×** removes it. Add opens a modal holding 
 create a new project, or point Proxima at a folder on disk - link one you already work
 in, or create a new empty one under a parent you pick.
 
+The link/create choice is an ordinary labeled button group. Each button exposes
+`aria-pressed`, and both remain in normal Tab order with Enter and Space activation.
+Folder and display-name validation publishes one assertive alert only after focus has
+moved to the marked corrective field. The focused field references that alert as its
+description. Display names are checked against the API's 120-character limit before a
+link or create request, so a valid folder field is never blamed for a display-name
+failure.
+
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima
 created is deleted from disk. Chats and tasks go in both cases.
@@ -261,10 +269,17 @@ delegation step in the general core tour. A stale `?mode=delegate` URL falls bac
 
 The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Archive navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
+The setup and returning-owner password gates each expose exactly one `main` landmark.
+Password fields have stable accessible names and password-manager autocomplete values,
+with a hidden, read-only `owner` username field that does not create an account model.
+Validation focuses the marked password field before publishing its single assertive
+alert. Auth and onboarding text, errors, primary controls, and focus indicators use
+central theme tokens that maintain WCAG AA text contrast in all six themes.
+
 ## Extension points
 
 Add destinations through the existing `View`, feature policy, App routing, Sidebar, and SearchModal boundaries together. Every new destination must declare whether it belongs to the flow navigation or the global account layer; new tools belong on the rail, not in the nav. Destination-specific inspectors remain owned by their destination rather than the application shell.
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. Browser QA should check authenticated desktop and narrow layouts, focus order, themes, zoom, and reduced motion; if authentication prevents inspection, record that rather than using credentials.
+For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. `npm --prefix apps/web run test:accessibility` runs the password and folder flows in a disposable real-browser fixture, records accessibility-tree, keyboard, six-theme contrast, Lighthouse, and [screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without touching live data. Set `PROXIMA_A11Y_REMOTE_BASE` to the private Tailscale URL to add the read-only unauthenticated entry check. Browser QA should also check authenticated desktop and narrow layouts, zoom, and reduced motion; if remote authentication prevents inspection, record that rather than using credentials.

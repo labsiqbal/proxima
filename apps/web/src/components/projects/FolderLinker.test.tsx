@@ -109,6 +109,26 @@ describe('FolderLinker', () => {
     expect(linkProject).not.toHaveBeenCalled()
   })
 
+  it('returns an overlong display name to its corrective field', async () => {
+    const user = userEvent.setup()
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
+    await user.type(screen.getByPlaceholderText('my-project'), 'valid-folder')
+    const displayName = screen.getByPlaceholderText('valid-folder')
+    await user.type(displayName, 'x'.repeat(121))
+    await user.click(screen.getByRole('button', { name: /Create “valid-folder” here/ }))
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(/120 characters or fewer/i)
+    expect(displayName).toHaveFocus()
+    expect(displayName).toHaveAttribute('aria-invalid', 'true')
+    expect(displayName).toHaveAttribute('aria-describedby', alert.id)
+    expect(screen.getByPlaceholderText('my-project')).not.toHaveAttribute('aria-invalid')
+    expect(linkProject).not.toHaveBeenCalled()
+  })
+
   it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {
     const user = userEvent.setup()
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)

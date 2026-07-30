@@ -3,6 +3,10 @@ import { browseDirs, linkProject } from '../../api/projects'
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
+type ErrorField = 'folder' | 'display'
+type FormError = { message: string; field: ErrorField | null }
+
+const PROJECT_NAME_MAX_LENGTH = 120
 
 // Browse the folders under the configured link roots (default: home) and either
 // register an EXISTING folder as a Proxima project, or create a brand-new empty
@@ -13,14 +17,18 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const [cur, setCur] = React.useState<{ path: string; parent: string | null; dirs: { name: string; path: string }[] } | null>(null)
   const [name, setName] = React.useState('')
   const [folderName, setFolderName] = React.useState('')
-  const [err, setErr] = React.useState('')
-  const [errorField, setErrorField] = React.useState<'folder' | 'display' | null>(null)
+  const [error, setError] = React.useState<FormError | null>(null)
   const [busy, setBusy] = React.useState(false)
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
   const folderNameRef = React.useRef<HTMLInputElement>(null)
   const displayNameRef = React.useRef<HTMLInputElement>(null)
+  const reportError = React.useCallback((message: string, field: ErrorField) => {
+    const target = field === 'folder' ? folderNameRef : displayNameRef
+    target.current?.focus()
+    setError({ message, field })
+  }, [])
   React.useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -31,24 +39,21 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   }, [])
   const load = React.useCallback((path = '') => {
     const seq = ++loadSeq.current
-    setErr('')
-    setErrorField(null)
+    setError(null)
     browseDirs(token, path)
       .then(next => { if (mountedRef.current && seq === loadSeq.current) setCur(next) })
-      .catch(e => { if (mountedRef.current && seq === loadSeq.current) setErr(e instanceof Error ? e.message : String(e)) })
+      .catch(e => {
+        if (mountedRef.current && seq === loadSeq.current) {
+          setError({ message: e instanceof Error ? e.message : String(e), field: null })
+        }
+      })
   }, [token])
   React.useEffect(() => { load() }, [load])
-  React.useEffect(() => {
-    if (!err || busy) return
-    if (errorField === 'folder') folderNameRef.current?.focus()
-    if (errorField === 'display') displayNameRef.current?.focus()
-  }, [busy, err, errorField])
 
   const switchMode = (next: Mode) => {
     if (busy || next === mode) return
     setMode(next)
-    setErr('')
-    setErrorField(null)
+    setError(null)
     setName('')
     setFolderName('')
   }
@@ -58,20 +63,22 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
     if (mode === 'create') {
       const folder = folderName.trim()
       if (!folder) {
-        setErrorField('folder')
-        setErr('Enter a name for the new folder')
+        reportError('Enter a name for the new folder', 'folder')
         return
       }
       if (/[/\\]/.test(folder) || folder === '.' || folder === '..') {
-        setErrorField('folder')
-        setErr('Folder name cannot contain slashes or be “.” / “..”')
+        reportError('Folder name cannot contain slashes or be “.” / “..”', 'folder')
         return
       }
     }
+    const displayName = name.trim()
+    if (displayName.length > PROJECT_NAME_MAX_LENGTH) {
+      reportError(`Display name must be ${PROJECT_NAME_MAX_LENGTH} characters or fewer`, 'display')
+      return
+    }
     const seq = ++actionSeq.current
     setBusy(true)
-    setErr('')
-    setErrorField(null)
+    setError(null)
     try {
       let p: Project
       if (mode === 'create') {
@@ -91,8 +98,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       await onLinked(p)
     } catch (e) {
       if (mountedRef.current && seq === actionSeq.current) {
-        setErrorField(mode === 'create' ? 'folder' : 'display')
-        setErr(e instanceof Error ? e.message : String(e))
+        reportError(e instanceof Error ? e.message : String(e), mode === 'create' ? 'folder' : 'display')
       }
     } finally {
       if (mountedRef.current && seq === actionSeq.current) setBusy(false)
@@ -102,6 +108,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   if (!cur) return <p className="muted">Loading folders…</p>
   const here = cur.path.split('/').filter(Boolean).pop() || cur.path
   const createLabel = folderName.trim() || 'new-folder'
+  const errorField = error?.field
   return <div className="folder-linker">
     <div className="seg fl-mode" role="group" aria-label="Folder action">
       <button type="button" aria-pressed={mode === 'link'} className={mode === 'link' ? 'active' : ''} disabled={busy} onClick={() => switchMode('link')}>
@@ -132,10 +139,10 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             value={folderName}
             onChange={e => {
               setFolderName(e.target.value)
-              if (errorField === 'folder') { setErr(''); setErrorField(null) }
+              if (errorField === 'folder') setError(null)
             }}
             placeholder="my-project"
-            disabled={busy}
+            readOnly={busy}
             autoComplete="off"
             spellCheck={false}
             aria-invalid={errorField === 'folder' || undefined}
@@ -150,10 +157,10 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             value={name}
             onChange={e => {
               setName(e.target.value)
-              if (errorField === 'display') { setErr(''); setErrorField(null) }
+              if (errorField === 'display') setError(null)
             }}
             placeholder={folderName.trim() || 'My project'}
-            disabled={busy}
+            readOnly={busy}
             aria-invalid={errorField === 'display' || undefined}
             aria-describedby={errorField === 'display' ? 'folder-linker-error' : undefined}
           />
@@ -167,14 +174,14 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         <input ref={displayNameRef} name="project-display-name" value={name}
           onChange={e => {
             setName(e.target.value)
-            if (errorField === 'display') { setErr(''); setErrorField(null) }
+            if (errorField === 'display') setError(null)
           }}
-          placeholder={here} disabled={busy} aria-label="Project display name"
+          placeholder={here} readOnly={busy} aria-label="Project display name"
           aria-invalid={errorField === 'display' || undefined}
           aria-describedby={errorField === 'display' ? 'folder-linker-error' : undefined} />
         <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Linking…' : `Link “${here}”`}</button>
       </div>
     )}
-    {err && <p id="folder-linker-error" className="error-text" role="alert">{err}</p>}
+    {error && <p id="folder-linker-error" className="error-text" role="alert">{error.message}</p>}
   </div>
 }

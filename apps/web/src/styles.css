@@ -153,6 +153,7 @@
 	--ui-danger: #dc2626;
 	--ui-danger-strong: #b91c1c;
 	--ui-danger-text: #7f1d1d;
+	--ui-error-text: var(--ui-danger-strong);
 	--ui-danger-bg: #fef2f2;
 	--ui-danger-bg-2: #fee2e2;
 	--ui-danger-border: #fecaca;
@@ -993,7 +994,7 @@ button:disabled {
 	color: var(--ui-text-secondary);
 }
 .error-text {
-	color: var(--ui-danger-strong);
+	color: var(--ui-error-text);
 	font-size: var(--text-sm);
 }
 .placeholder-view {
@@ -1741,7 +1742,7 @@ button:disabled {
 }
 .auth-error {
 	margin: 0;
-	color: var(--ui-danger, #c0263e);
+	color: var(--ui-error-text);
 	font-size: var(--text-sm);
 }
 .auth-submit {
@@ -13708,6 +13709,7 @@ button.moodboard-add-method:hover {
   --ui-text-primary: #f2f0ea;
   --ui-text-secondary: #c0beb7;
   --ui-text-tertiary: #8f8d87;
+  --ui-error-text: #ff8d85;
   --ui-row-hover-background: rgba(255,255,255,.055);
   --ui-row-active-background: rgba(255,255,255,.1);
 }

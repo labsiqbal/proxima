@@ -89,6 +89,10 @@ Create tabs, then used Skip for the rest of the tour.
 
 ![Create a new empty folder](screenshots/onboarding-create-folder.png)
 
+The retained [auth and onboarding accessibility pass](evidence/auth-onboarding-accessibility/README.md)
+adds before/after validation states, real accessibility trees, keyboard traversal,
+all-theme contrast measurements, an isolated Tailnet-host entry, and Lighthouse.
+
 ## 3. Chat: hands-on work
 
 Chat is the direct path. An empty Chat is sparse by default (title + short lead,

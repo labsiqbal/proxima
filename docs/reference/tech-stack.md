@@ -85,6 +85,7 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
 | Search | **minisearch** | client-side global search |
 | Markdown | **react-markdown** + **remark-gfm** | chat + wiki rendering |
 | Export | **jspdf**, **jszip** | retained Studio PNG/PDF/zip implementation |
+| Browser accessibility QA | **Lighthouse 13** + Chrome DevTools Protocol | disposable auth/onboarding flows, accessibility trees, theme contrast, and retained screenshots |
 | Dependency hardening | npm `overrides` | pins security-fixed transitive releases of `nanoid`, `lodash-es`, `dompurify`, and `postcss` |
 
 Frontend source layout: `src/screens` (top-level views), `src/components`

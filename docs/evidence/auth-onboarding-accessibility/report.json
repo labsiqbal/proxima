@@ -1,0 +1,311 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "fixture": "disposable production bundle and owner database",
+  "announcements": {
+    "setupMismatch": [
+      {
+        "type": "focus",
+        "name": "password-confirmation"
+      },
+      {
+        "type": "alert",
+        "name": "Passwords don’t match."
+      }
+    ],
+    "unsafeFolder": [
+      {
+        "type": "focus",
+        "name": "folder-name"
+      },
+      {
+        "type": "alert",
+        "name": "Folder name cannot contain slashes or be “.” / “..”"
+      }
+    ],
+    "overlongDisplayName": [
+      {
+        "type": "focus",
+        "name": "project-display-name"
+      },
+      {
+        "type": "alert",
+        "name": "Display name must be 120 characters or fewer"
+      }
+    ],
+    "returningLogin": [
+      {
+        "type": "alert",
+        "name": "Incorrect password."
+      }
+    ]
+  },
+  "accessibilityTrees": {
+    "setupMismatch": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "Passwords don’t match."
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "textbox",
+          "name": "Confirm password",
+          "description": "Passwords don’t match.",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Set password & enter",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        }
+      ],
+      "tabs": []
+    },
+    "unsafeFolder": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "Folder name cannot contain slashes or be “.” / “..”"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "textbox",
+          "name": "New folder name",
+          "description": "Folder name cannot contain slashes or be “.” / “..”",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Create “bad/name” here",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "returningLogin": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "Incorrect password."
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "textbox",
+          "name": "Password",
+          "description": "Incorrect password.",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Log in",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        }
+      ],
+      "tabs": []
+    }
+  },
+  "themes": [
+    {
+      "theme": "light",
+      "subtitleContrast": 7.557378129674007,
+      "errorContrast": 6.4700447145121895,
+      "buttonContrast": 5.744497230939534,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(0, 83, 253)"
+      }
+    },
+    {
+      "theme": "dark",
+      "subtitleContrast": 7.61992057670097,
+      "errorContrast": 6.344486619180806,
+      "buttonContrast": 4.631017848592519,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(95, 146, 230)"
+      }
+    },
+    {
+      "theme": "ocean",
+      "subtitleContrast": 7.557378129674007,
+      "errorContrast": 6.4700447145121895,
+      "buttonContrast": 5.3577549124490425,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(14, 116, 144)"
+      }
+    },
+    {
+      "theme": "violet",
+      "subtitleContrast": 7.557378129674007,
+      "errorContrast": 6.4700447145121895,
+      "buttonContrast": 5.698586217871195,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(124, 58, 237)"
+      }
+    },
+    {
+      "theme": "sunset",
+      "subtitleContrast": 7.557378129674007,
+      "errorContrast": 6.4700447145121895,
+      "buttonContrast": 7.3070519776298735,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(234, 88, 12)"
+      }
+    },
+    {
+      "theme": "forest",
+      "subtitleContrast": 7.557378129674007,
+      "errorContrast": 6.4700447145121895,
+      "buttonContrast": 5.0155974781114745,
+      "focus": {
+        "style": "solid",
+        "width": 3,
+        "color": "rgb(21, 128, 61)"
+      }
+    }
+  ],
+  "tailnetFixture": {
+    "url": "http://proxima.tailnet.test:37473/",
+    "mainCount": 1,
+    "ownerMetadata": "owner",
+    "requests": [
+      "GET /",
+      "GET /css2",
+      "GET /assets/index-CAHawFda.js",
+      "GET /assets/rolldown-runtime-aKtaBQYM.js",
+      "GET /assets/jsx-runtime-2Zwg-L3c.js",
+      "GET /assets/lib-iMw8T7-H.js",
+      "GET /assets/client-D9AL9z8n.js",
+      "GET /assets/files-o9lOlMe4.js",
+      "GET /assets/runs-gmLclOUd.js",
+      "GET /assets/eventTypes-D8Afem4o.js",
+      "GET /assets/icons-Dgww-zVO.js",
+      "GET /assets/useEventStream-DqZrElp3.js",
+      "GET /assets/index-BBzm6cFf.css",
+      "GET /manifest.webmanifest",
+      "GET /s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2",
+      "GET /api/config",
+      "GET /api/setup/status",
+      "GET /icons/icon-512.svg",
+      "POST /auth/resume"
+    ]
+  },
+  "tailscaleEntry": null,
+  "lighthouse": {
+    "score": 100,
+    "version": "13.4.1",
+    "url": "http://127.0.0.1:37473/"
+  }
+}

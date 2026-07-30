@@ -1076,7 +1076,8 @@ and its real files stay; a Proxima-scaffolded project is deleted from disk. On
 or skip (starter project under the data dir). The two folder choices are mutually
 exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
 Validation exposes one assertive alert, marks and describes the corrective field, and
-returns focus there.
+returns focus there before the alert is published. Display names are checked against
+the API's 120-character limit before submission so failures identify the right field.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

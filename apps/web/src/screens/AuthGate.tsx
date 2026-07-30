@@ -14,9 +14,9 @@ export function AuthGate({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed
   const confirmationRef = React.useRef<HTMLInputElement>(null)
 
   const reportError = (message: string, field: 'password' | 'confirmation') => {
-    setError({ message, field })
     const target = field === 'confirmation' ? confirmationRef : passwordRef
     target.current?.focus()
+    setError({ message, field })
   }
 
   async function submit(e: React.FormEvent) {
@@ -45,11 +45,13 @@ export function AuthGate({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed
         <input ref={passwordRef} className="auth-input" type="password" name="password" autoFocus placeholder="Password" value={pw}
           onChange={e => { setPw(e.target.value); if (error?.field === 'password') setError(null) }}
           autoComplete={isSetup ? 'new-password' : 'current-password'}
+          aria-label="Password"
           aria-invalid={error?.field === 'password' || undefined}
           aria-describedby={error?.field === 'password' ? 'auth-error' : undefined} />
         {isSetup && <input ref={confirmationRef} className="auth-input" type="password" name="password-confirmation" placeholder="Confirm password" value={confirm}
           onChange={e => { setConfirm(e.target.value); if (error?.field === 'confirmation') setError(null) }}
           autoComplete="new-password"
+          aria-label="Confirm password"
           aria-invalid={error?.field === 'confirmation' || undefined}
           aria-describedby={error?.field === 'confirmation' ? 'auth-error' : undefined} />}
         {error && <p id="auth-error" className="auth-error" role="alert">{error.message}</p>}
