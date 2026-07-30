@@ -69,4 +69,21 @@ describe('Sidebar single-workspace IA', () => {
     const active = Array.from(document.querySelectorAll('.primary-nav > .nav-item.active strong')).map(node => node.textContent)
     expect(active).toEqual(['Workflows'])
   })
+
+  it('uses a global Delegate nav without project context or Work destinations', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<Sidebar {...base} currentView="master" delegate />)
+    const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
+    expect(labels()).toEqual(['Master', 'Tasks', 'Archive'])
+    expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
+    expect(screen.queryByText('Work project')).not.toBeInTheDocument()
+    expect(screen.queryByText('Recent chats')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Agents' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Master' })).toHaveAttribute('aria-current', 'page')
+
+    await user.click(screen.getByRole('button', { name: 'Tasks' }))
+    expect(base.onSelectView).toHaveBeenCalledWith('activity')
+    rerender(<Sidebar {...base} currentView="activity" delegate />)
+    expect(screen.getByRole('button', { name: 'Tasks' })).toHaveAttribute('aria-current', 'page')
+  })
 })

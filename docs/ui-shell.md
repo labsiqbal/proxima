@@ -6,11 +6,12 @@ This is the durable contract for Proxima's application shell. It describes produ
 
 There is **one workspace** with two intentional modes. **Work** is the ordinary
 workspace; **Delegate** is the focused Master desk. The old Ops/Code split is gone.
-The desktop Work shell has three regions:
+The desktop shell has a persisted, collapsible left navigation and a destination
+work surface. Work also adds a slim right tool rail whose tools open as overlays:
 
-- a persisted, collapsible **left navigation** ordered by the flow,
+- **left navigation** ordered by the mode's flow,
 - the **destination work surface** in the center,
-- a slim **right tool rail** whose tools open as overlay panels above the current screen.
+- Work-only **right tool rail** overlay panels.
 
 The header-level **Work / Delegate** control is URL durable (`?mode=work` or
 `?mode=delegate`) and uses pressed-button semantics. Work navigation is flow-ordered:
@@ -19,7 +20,8 @@ The header-level **Work / Delegate** control is URL durable (`?mode=work` or
 switcher belongs to the Work sidebar, not global chrome or Master. Project management
 (list / link / create / remove / container settings) lives under **Settings → Projects**,
 not primary nav. Agents and Settings stay in the Work account menu. The default landing
-mode and surface are Work and Chat.
+mode and surface are Work and Chat. Delegate uses the same header and left-panel
+geometry but its global navigation is only **Master**, **Tasks**, and **Archive**.
 
 ## Chat — the front door
 
@@ -39,10 +41,13 @@ until the
 [documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
 pass. Stale local view state cannot bypass this gate.
 
-Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It removes
-the Work sidebar, project selector, search, tool rail, ordinary destinations, popup, and
-account surfaces, leaving only the Master conversation and its necessary desk status.
-Switching back restores the prior Work surface. Its header identifies
+Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
+the shared, persisted sidebar panel but replaces Work navigation with **Master**,
+**Tasks**, and **Archive**. Those destinations are global: they do not show a project
+switcher, recent chat history, project filter menu, account controls, ordinary Work Chat,
+Workflows, Design, search, tool rail, or popup. Tasks and Archive query across projects;
+their task and record deep links remain usable without leaving Delegate. Switching back
+restores the prior Work surface. Its header identifies
 the built-in system orchestrator and lets the owner choose a server-qualified backing runner; the desk
 itself keeps the counterpart label **Master** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
@@ -53,8 +58,8 @@ work-panel state across navigation. The full-page home and floating popup are tw
 views of that provider, so only one composer and one live connection exist. The main
 column is the Master thread plus one shared **Chat composer** stack (attach + `@`
 project file/artifact mentions) wired to Master's send API rather than a normal
-chat run; project context follows the shell active project (or an active Master
-job's project). The side column groups queued, running, review/attention, completed,
+chat run; attachment context comes from an active Master job when one is available,
+not a Work project selection. The side column groups queued, running, review/attention, completed,
 and failed Master-owned Tasks,
 then owner decisions and a job-scoped checkpoint timeline. It is **collapsible**
 (header toggle + reopen
@@ -62,6 +67,11 @@ edge control; preference in `localStorage` as `proxima.master.sideCollapsed`; mo
 defaults collapsed). Idle, loading, failure/retry, populated, and in-flight states all
 retain the same geometry. On narrow screens the side column stacks after the thread
 with no horizontal scroll.
+
+Opening a graph plan from the global Tasks index is an explicit transition back to Work,
+because its editor belongs to Workflows. Task workspace Design actions are unavailable
+while Delegate is active, so neither path embeds a Workflows or Design surface in the
+Delegate shell.
 
 The provider uses the existing Master session SSE stream as its only live path.
 Reconnect or a detected cursor gap triggers one authoritative reconciliation; there
@@ -206,7 +216,7 @@ Attention stays a separate `!` control and remains hidden when empty.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, Design) keep that contract. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector; Master Focus and explicit target controls remain its own bounded context.
+Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, Design) keep that contract. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Archive indices are global, while Master Focus and explicit target controls remain its own bounded context.
 
 ## Projects
 
@@ -243,7 +253,7 @@ delegation step in the general core tour. A stale `?mode=delegate` URL falls bac
 
 ## Responsive and accessibility behavior
 
-The left Work navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths Work navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics; Delegate keeps only the mode switch and Master desk. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
+The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Archive navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 ## Extension points
 

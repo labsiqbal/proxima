@@ -207,8 +207,8 @@ export function AppShell(props: {
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled={props.features.masterOrchestrator} onChange={mode => props.onModeChange?.(mode)} />
-        {!delegateMode && <>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
+        {!delegateMode && <>
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
         <button
           type="button"
@@ -268,12 +268,15 @@ export function AppShell(props: {
         mode="work"
         delegateEnabled={props.features.masterOrchestrator}
         onModeChange={props.onModeChange}
-      /> : <header className="mobile-topbar delegate-mobile-topbar"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></header>}
-      {!delegateMode && <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
-        <Sidebar {...props} onClose={() => setDrawerOpen(false)} />
-      </aside>}
-      {!delegateMode && <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />}
-      {!delegateMode && drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
+      /> : <header className="mobile-topbar delegate-mobile-topbar">
+        <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconPanelLeft size={18} /></button>
+        <div className="mobile-context"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></div>
+      </header>}
+      <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
+        <Sidebar {...props} delegate={delegateMode} onClose={() => setDrawerOpen(false)} />
+      </aside>
+      <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
+      {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
       {props.features.masterOrchestrator && !delegateMode && (
         <>

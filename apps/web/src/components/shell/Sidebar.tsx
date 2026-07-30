@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout } from './icons'
+import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 import { ProjectSwitcher } from './ProjectSwitcher'
@@ -18,6 +18,11 @@ const primary: Destination[] = [
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
+const delegatePrimary: Destination[] = [
+  { id: 'master', label: 'Master', icon: IconSparkle },
+  { id: 'activity', label: 'Tasks', icon: IconTasks },
+  { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
+]
 const enabled = (item: Destination, features: AppFeatures) =>
   (item.id !== 'design' || features.designStudio)
   && (item.id !== 'graph' || features.workflowGraph)
@@ -32,10 +37,17 @@ export function Sidebar(props: {
   profiles: Profile[]; projects: Project[]; sessions: ChatSession[]; seen: Record<number, string>; busySessions?: number[]; user: User
   token: string; onProjectRenamed?: (project: Project) => void; projectLocked?: boolean; projectLockedReason?: string
   updateVersion?: string | null; onUpdateClick?: () => void
+  /** Delegate is global by design: it has no project switcher, history, or account menu. */
+  delegate?: boolean
 }) {
   const [acctOpen, setAcctOpen] = useState(false)
   const go = (view: View) => { props.onSelectView(view); props.onClose() }
   const isActive = (item: Destination) => {
+    if (props.delegate) {
+      if (item.id === 'master') return props.currentView === 'master'
+      if (item.id === 'activity') return props.currentView === 'activity' || props.currentView === 'task'
+      return props.currentView === item.id
+    }
     // A workflow-iteration chat belongs to Workflows, not Chat; the New task
     // launcher ('home') and an open task both belong to the Tasks flow.
     const inWorkflowChat = props.currentView === 'chat' && !!props.activeSession?.workflow_id
@@ -52,27 +64,29 @@ export function Sidebar(props: {
     return <button className={`nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} key={item.id} onClick={() => go(item.id)}><span className="nav-icon"><Icon /></span><strong>{item.label}</strong></button>
   }
 
-  return <div className="sidebar-inner">
+  const destinations = props.delegate ? delegatePrimary : primary.filter(item => enabled(item, props.features))
+
+  return <div className={`sidebar-inner${props.delegate ? ' delegate-sidebar' : ''}`}>
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
-    <div className="sidebar-work-context">
+    {!props.delegate && <div className="sidebar-work-context">
       <span>Work project</span>
       <ProjectSwitcher projects={props.projects} activeProject={props.activeProject} onSelectProject={props.onSelectProject} token={props.token} onProjectRenamed={props.onProjectRenamed} locked={props.projectLocked} lockedReason={props.projectLockedReason} />
-    </div>
+    </div>}
 
-    <nav className="shell-navigation" aria-label="Navigation">
+    <nav className="shell-navigation" aria-label={props.delegate ? 'Delegate navigation' : 'Navigation'}>
       <section className="nav-group primary-nav">
         {/* Destinations only — blank session is started from Chat header (or mobile
             topbar / `/new`), not a twin primary-nav row above Chat. */}
-        {primary.filter(item => enabled(item, props.features)).map(destination)}
+        {destinations.map(destination)}
       </section>
     </nav>
-    <SessionGroups {...props} />
+    {!props.delegate && <SessionGroups {...props} />}
 
-    {props.updateVersion && props.onUpdateClick && <button type="button" className="sidebar-update-pill" onClick={() => { props.onUpdateClick?.(); props.onClose() }}><span className="update-dot" aria-hidden="true" />Update available · v{props.updateVersion}</button>}
-    <div className="sidebar-user">
+    {!props.delegate && props.updateVersion && props.onUpdateClick && <button type="button" className="sidebar-update-pill" onClick={() => { props.onUpdateClick?.(); props.onClose() }}><span className="update-dot" aria-hidden="true" />Update available · v{props.updateVersion}</button>}
+    {!props.delegate && <div className="sidebar-user">
       <button className="su-id" onClick={() => setAcctOpen(value => !value)} aria-expanded={acctOpen}><span className="avatar">{props.user.username[0]?.toUpperCase()}</span><div><strong>{props.user.username}</strong><small>{props.activeProfile?.name || ''}</small></div><span className={`chevron ${acctOpen ? 'open' : ''}`}>▸</span></button>
       {acctOpen && <div className="su-menu"><button className="nav-item" onClick={() => go('profiles')}><span className="nav-icon"><IconAgents /></span><strong>Agents</strong></button><button className="nav-item" onClick={() => go('settings')}><span className="nav-icon"><IconGear /></span><strong>Settings</strong></button><button className="nav-item su-logout" onClick={props.onLogout}><span className="nav-icon"><IconLogout /></span><strong>Log out</strong></button></div>}
-    </div>
+    </div>}
   </div>
 }
 

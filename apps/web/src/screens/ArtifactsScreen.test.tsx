@@ -132,6 +132,14 @@ describe('ArtifactsScreen (Archive registry)', () => {
     await waitFor(() => expect(listArchive).toHaveBeenLastCalledWith('t', expect.objectContaining({ type: 'image' })))
   })
 
+  it('keeps Delegate Archive global without a project filter menu', async () => {
+    vi.mocked(listArchive).mockResolvedValue(listResponse([rec()]))
+    render(<ArtifactsScreen {...base} globalScope />)
+    await screen.findByText('report.md')
+    expect(screen.queryByRole('button', { name: 'All projects' })).not.toBeInTheDocument()
+    expect(listArchive).toHaveBeenLastCalledWith('t', expect.objectContaining({ project: '' }))
+  })
+
   it('marks a missing file on its durable record instead of dropping it', async () => {
     vi.mocked(listArchive).mockResolvedValue(listResponse([rec({ file_missing: true })]))
     render(<ArtifactsScreen {...base} />)
@@ -210,4 +218,3 @@ describe('ArtifactsScreen (Archive registry)', () => {
     await waitFor(() => expect(onConsumed).toHaveBeenCalled())
     expect(await screen.findByTestId('viewer')).toBeInTheDocument()
   })
-

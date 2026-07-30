@@ -5,6 +5,7 @@ import {
 	recentSessionForProject,
 	resolveArtifactReviewSession,
 	shellModeFromSearch,
+	isDelegateDestination,
 } from "./App";
 import type { ChatSession } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
@@ -85,6 +86,16 @@ describe("Shell project selection", () => {
 		expect(shellModeFromSearch("?mode=delegate")).toBe("delegate");
 		expect(shellModeFromSearch("?mode=work")).toBe("work");
 		expect(shellModeFromSearch("?mode=obsolete")).toBe("work");
+	});
+
+	it("keeps only Master and global review destinations in Delegate", () => {
+		expect(isDelegateDestination("master")).toBe(true);
+		expect(isDelegateDestination("activity")).toBe(true);
+		expect(isDelegateDestination("artifacts")).toBe(true);
+		expect(isDelegateDestination("task")).toBe(true);
+		expect(isDelegateDestination("chat")).toBe(false);
+		expect(isDelegateDestination("workflows")).toBe(false);
+		expect(isDelegateDestination("design")).toBe(false);
 	});
 });
 
