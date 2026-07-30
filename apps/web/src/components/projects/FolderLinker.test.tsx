@@ -56,7 +56,7 @@ describe('FolderLinker', () => {
     render(<FolderLinker token="tok" onLinked={onLinked} />)
 
     await screen.findByText('/home/user/code')
-    await user.click(screen.getByRole('tab', { name: /Create new folder/ }))
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
     expect(screen.getByPlaceholderText('my-project'))
       .toHaveAttribute('name', 'folder-name')
     await user.type(screen.getByPlaceholderText('my-project'), 'fresh-app')
@@ -81,11 +81,13 @@ describe('FolderLinker', () => {
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)
 
     await screen.findByText('/home/user/code')
-    await user.click(screen.getByRole('tab', { name: /Create new folder/ }))
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
     await user.type(screen.getByPlaceholderText('my-project'), 'taken')
     await user.click(screen.getByRole('button', { name: /Create “taken” here/ }))
 
-    expect(await screen.findByText(/already exists/i)).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already exists/i)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByPlaceholderText('my-project')).toHaveFocus()
   })
 
   it('rejects slash-containing folder names client-side', async () => {
@@ -93,11 +95,41 @@ describe('FolderLinker', () => {
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)
 
     await screen.findByText('/home/user/code')
-    await user.click(screen.getByRole('tab', { name: /Create new folder/ }))
-    await user.type(screen.getByPlaceholderText('my-project'), 'bad/name')
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
+    const folderName = screen.getByPlaceholderText('my-project')
+    await user.type(folderName, 'bad/name')
     await user.click(screen.getByRole('button', { name: /Create “bad\/name” here/ }))
 
-    expect(await screen.findByText(/cannot contain slashes/i)).toBeInTheDocument()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/cannot contain slashes/i)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(folderName).toHaveFocus()
+    expect(folderName).toHaveAttribute('aria-invalid', 'true')
+    expect(folderName).toHaveAttribute('aria-describedby', alert.id)
     expect(linkProject).not.toHaveBeenCalled()
+  })
+
+  it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {
+    const user = userEvent.setup()
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    const group = screen.getByRole('group', { name: 'Folder action' })
+    const link = screen.getByRole('button', { name: 'Link existing' })
+    const create = screen.getByRole('button', { name: 'Create new folder' })
+
+    expect(group).toContainElement(link)
+    expect(group).toContainElement(create)
+    expect(link).toHaveAttribute('aria-pressed', 'true')
+    expect(create).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+
+    link.focus()
+    await user.tab()
+    expect(create).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(create).toHaveAttribute('aria-pressed', 'true')
+    expect(link).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByPlaceholderText('my-project')).toBeInTheDocument()
   })
 })

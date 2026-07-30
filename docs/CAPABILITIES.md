@@ -1073,7 +1073,10 @@ distinguishes what the API actually does: a linked/created-on-disk folder is unl
 and its real files stay; a Proxima-scaffolded project is deleted from disk. On
 **first run**, right after setting a password, an onboarding step
 (`screens/WorkspaceOnboarding.tsx`, reusing `FolderLinker`) offers link, create-new-folder,
-or skip (starter project under the data dir).
+or skip (starter project under the data dir). The two folder choices are mutually
+exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
+Validation exposes one assertive alert, marks and describes the corrective field, and
+returns focus there.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

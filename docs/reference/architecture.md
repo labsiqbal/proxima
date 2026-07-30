@@ -1381,4 +1381,10 @@ tree with a second implementation. Master is deliberately outside this generic
 polling path: its provider uses the existing session SSE stream plus recovery-only
 reconciliation.
 
-Authentication boot checks setup state, requires set-password or login, and resumes from the HttpOnly `proxima_session` cookie into an in-memory bearer token.
+Authentication boot checks setup state, requires set-password or login, and resumes from
+the HttpOnly `proxima_session` cookie into an in-memory bearer token. The password gate
+uses one main landmark and supplies hidden, read-only `owner` identity metadata for
+password-manager compatibility without adding accounts. Validation exposes one
+assertive alert, marks and describes the corrective password field, and returns focus
+there. Gate text and visible focus indicators use theme tokens that meet WCAG AA across
+the supported presets.

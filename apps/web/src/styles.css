@@ -1697,7 +1697,7 @@ button:disabled {
 	align-content: center;
 	gap: 12px;
 }
-/* First-run set-password / login gate */
+/* First-run password setup and returning-owner login gate */
 .auth-card {
 	display: flex;
 	flex-direction: column;
@@ -1717,7 +1717,7 @@ button:disabled {
 }
 .auth-sub {
 	margin: 0 0 6px;
-	color: var(--ui-text-tertiary);
+	color: var(--ui-text-secondary);
 	font-size: var(--text-sm);
 }
 .auth-input {
@@ -1730,9 +1730,14 @@ button:disabled {
 	font-size: var(--text-md);
 }
 .auth-input:focus {
-	outline: 2px solid var(--ui-accent);
-	outline-offset: 1px;
+	outline: var(--focus-ring-width) solid var(--ui-accent);
+	outline-offset: var(--space-1);
 	border-color: transparent;
+}
+.auth-card button:focus-visible,
+.onboard-card button:focus-visible {
+	outline: var(--focus-ring-width) solid var(--ui-accent);
+	outline-offset: var(--space-1);
 }
 .auth-error {
 	margin: 0;
@@ -2981,6 +2986,7 @@ button:disabled {
 :root[data-theme="sunset"] {
 	--ui-accent: #ea580c;
 	--ui-accent-text: #9a3412;
+	--ui-accent-fill: var(--ui-accent-text);
 	--theme-primary: #ea580c;
 	--ui-row-hover-background: rgba(234, 88, 12, 0.07);
 	--ui-row-active-background: rgba(234, 88, 12, 0.13);
