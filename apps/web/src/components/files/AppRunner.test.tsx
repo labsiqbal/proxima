@@ -170,6 +170,24 @@ describe('AppRunner collision feedback', () => {
     expect(screen.getByRole('spinbutton')).toHaveValue(5180)
   })
 
+  it('uses the ownership-verified relay for local preview', async () => {
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'ready',
+      running: true,
+      ready: true,
+      requested_port: 5180,
+      port: 5180,
+      preview_port: 43123,
+      command: 'npm run dev',
+      log: [],
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    const frame = await screen.findByTitle('App preview')
+    expect(frame).toHaveAttribute('src', expect.stringContaining('http://localhost:43123/'))
+    expect(frame).not.toHaveAttribute('src', expect.stringContaining('127.0.0.1:5180'))
+  })
+
   it('keeps the Logs toggle usable after an exit with no output', async () => {
     const user = userEvent.setup()
     vi.mocked(appStatus).mockResolvedValue({

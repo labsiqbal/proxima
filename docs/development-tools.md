@@ -38,11 +38,17 @@ cd apps/api && .venv/bin/python -m pytest -q tests
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
 npm --prefix apps/web run test:accessibility
+python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
 ```
 
 `test:accessibility` owns the disposable auth/onboarding browser pass. Details and
 evidence live in [ui-shell.md](ui-shell.md#validation) and
 [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md).
+
+The preview browser verifier builds the web app, installs its pinned Astro
+dependency inside a disposable fixture, authenticates a real headless browser,
+and records ready plus stopped/rebound screenshots in the selected evidence
+directory.
 
 Current local environment note:
 

@@ -9,8 +9,8 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
@@ -22,6 +22,11 @@ from .. import image_providers
 from .. import media_settings
 from .. import cf_hostnames
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
+from ..preview_proxy import (
+    PreviewConnectionRejected,
+    PreviewUpstreamError,
+    proxy_http_request,
+)
 from ..schemas import (
     AppStartRequest, AppStatusResponse, FileWriteRequest, FsPathRequest,
     FsRenameRequest,
@@ -573,15 +578,6 @@ def register(app, deps):
                 status["preview_port"] = relay_port
         return status
 
-    # Project code is owner-triggered but still untrusted. Never pass Proxima/API
-    # credentials into it and never let it set cookies on the Proxima origin.
-    _HOP = {
-        "authorization", "cf-access-jwt-assertion", "connection", "content-encoding",
-        "content-length", "cookie", "host", "keep-alive", "proxy-authorization",
-        "transfer-encoding",
-    }
-    _RESPONSE_HOP = _HOP | {"set-cookie", "www-authenticate"}
-
     @app.api_route("/api/appview/{slug}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def app_view(slug: str, path: str, request: Request, user: dict[str, Any] = Depends(current_user)):
         # Proxy to the project's running app. Proxima authenticates the inbound request,
@@ -600,16 +596,52 @@ def register(app, deps):
                     ),
                 },
             )
-        url = f"http://127.0.0.1:{port}/{path}"
-        fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
         try:
             body = await request.body()
-            async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-                up = await client.request(request.method, url, params=request.query_params, content=body, headers=fwd)
-        except httpx.RequestError:
+
+            def verify_connection(
+                target_port: int,
+                client_port: int,
+            ) -> bool:
+                return app.state.app_manager.verify_preview_connection(
+                    slug,
+                    target_port,
+                    client_port,
+                )
+
+            upstream_status, upstream_headers, content = await proxy_http_request(
+                method=request.method,
+                path="/" + quote(path, safe="/:@!$&'()*+,;=-._~%"),
+                query_string=request.scope.get("query_string") or b"",
+                headers=list(request.scope["headers"]),
+                body=body,
+                port=port,
+                verify_connection=verify_connection,
+            )
+        except PreviewConnectionRejected:
+            current = app.state.app_manager.status(slug)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "state": current.get("state", "stopped"),
+                    "message": (
+                        "Preview is unavailable because endpoint ownership "
+                        "changed before connection."
+                    ),
+                },
+            ) from None
+        except PreviewUpstreamError:
             raise HTTPException(status_code=502, detail="app not reachable yet") from None
-        out = {k: v for k, v in up.headers.items() if k.lower() not in _RESPONSE_HOP}
-        return Response(content=up.content, status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
+        out = {
+            key.decode("latin-1"): value.decode("latin-1")
+            for key, value in upstream_headers
+        }
+        return Response(
+            content=content,
+            status_code=upstream_status,
+            headers=out,
+            media_type=out.get("content-type"),
+        )
 
 
     @app.post("/api/projects/{slug}/fs/mkdir")

@@ -18,7 +18,7 @@ it ships no model and no credentials of its own.
 | ASGI server | **Uvicorn** (`>=0.30`) | entrypoint `proxima_api.main:app` |
 | Data validation | **Pydantic v2** (`>=2.8`) | request models in `schemas.py` |
 | JSON contracts | **jsonschema** (`>=4.23`) | validates graph-node output schemas before execution |
-| HTTP client | **httpx** (`>=0.27`) | outbound calls (image providers, Cloudflare, proxy) |
+| HTTP client | **httpx** (`>=0.27`) + **httpcore** (`>=1.0,<2.0`) | outbound calls; httpcore supplies the connection-bound preview ownership hook |
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
 | Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex/Grok TOML MCP selections while preserving unrelated settings |

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import signal
 import socket
 import subprocess
 from http.cookies import SimpleCookie
@@ -114,6 +116,9 @@ async def _relay_against_fake_devserver(
     relays = PreviewRelayManager(
         "127.0.0.1",
         port_for=lambda slug: upstream_port if slug == "demo" else None,
+        verify_connection=lambda slug, port, client_port: (
+            slug == "demo" and port == upstream_port and client_port > 0
+        ),
         validate_token=validate_token,
         maintenance=maintenance,
     )
@@ -166,6 +171,7 @@ def test_relay_requires_preview_capability_and_running_app():
             assert fake.seen == {}  # nothing unauthorized ever reached project code
         # Same relay shape, but the app is gone: capability holds, target doesn't.
         relays = PreviewRelayManager("127.0.0.1", port_for=lambda slug: None,
+                                     verify_connection=lambda slug, port, client_port: False,
                                      validate_token=lambda t: t == "good-token")
         try:
             port = await relays.start("demo")
@@ -451,6 +457,111 @@ def test_post_preflight_port_theft_never_reaches_the_foreign_listener(
             foreign.wait(timeout=5)
 
 
+def test_stop_rebind_between_target_lookup_and_connect_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post(
+            "/api/projects",
+            json={"slug": "demo", "name": "Demo"},
+            headers=auth,
+        ).status_code == 201
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            app_port = int(probe.getsockname()[1])
+        assert client.post(
+            "/api/projects/demo/app/start",
+            headers=auth,
+            json={
+                "command": (
+                    "python3 -m http.server $PORT --bind 127.0.0.1"
+                ),
+                "port": app_port,
+                "dir": "",
+            },
+        ).status_code == 200
+        status = _wait_ready(client, auth)
+        assert status["state"] == "ready"
+
+        manager = client.app.state.app_manager
+        original_target = manager.preview_target
+        foreign_log = tmp_path / "rebound-foreign.log"
+        foreign_output = foreign_log.open("wb")
+        foreign: subprocess.Popen | None = None
+        armed = True
+
+        def stop_and_rebind(slug: str) -> int | None:
+            nonlocal armed, foreign
+            target = original_target(slug)
+            if target is None or not armed:
+                return target
+            armed = False
+            managed = manager._apps[slug]["proc"]
+            os.killpg(os.getpgid(managed.pid), signal.SIGTERM)
+            for _ in range(100):
+                if not apprunner._port_open(target):
+                    break
+                import time
+                time.sleep(0.01)
+            foreign = subprocess.Popen(
+                [
+                    "python3",
+                    "-m",
+                    "http.server",
+                    str(target),
+                    "--bind",
+                    "127.0.0.1",
+                ],
+                cwd=tmp_path,
+                stdout=subprocess.DEVNULL,
+                stderr=foreign_output,
+                start_new_session=True,
+            )
+            for _ in range(100):
+                if apprunner._port_open(target):
+                    break
+                import time
+                time.sleep(0.01)
+            return target
+
+        monkeypatch.setattr(manager, "preview_target", stop_and_rebind)
+        preview_cookie = client.post(
+            "/api/preview-auth",
+            headers=auth,
+        ).cookies["proxima_preview"]
+        try:
+            relay = httpx.get(
+                f"http://127.0.0.1:{status['preview_port']}/",
+                cookies={"proxima_preview": preview_cookie},
+                timeout=5,
+            )
+            assert relay.status_code == 503
+            current = client.get(
+                "/api/projects/demo/app/status",
+                headers=auth,
+            ).json()
+            assert current["state"] == "port_conflict"
+            appview = client.get("/api/appview/demo/", headers=auth)
+            assert appview.status_code == 503
+            assert appview.json()["detail"]["state"] == "port_conflict"
+            assert foreign is not None and foreign.poll() is None
+            assert client.post(
+                "/api/projects/demo/app/stop",
+                headers=auth,
+            ).status_code == 200
+            assert foreign.poll() is None
+            foreign_output.flush()
+            assert foreign_log.read_text() == ""
+        finally:
+            foreign_output.close()
+            if foreign is not None:
+                foreign.terminate()
+                foreign.wait(timeout=5)
+
+
 def test_appview_returns_non_proxy_responses_for_starting_unknown_and_exited(
     tmp_path,
     monkeypatch,
@@ -502,7 +613,9 @@ def test_appview_returns_non_proxy_responses_for_starting_unknown_and_exited(
         monkeypatch.setattr(
             apprunner,
             "_listener_ownership",
-            lambda _pid, _port, *, contained: apprunner.PortOwnership.UNKNOWN,
+            lambda _pid, _port, *, contained, group_id=None: (
+                apprunner.PortOwnership.UNKNOWN
+            ),
         )
         unknown = client.get("/api/appview/demo/", headers=auth)
         assert unknown.status_code == 503

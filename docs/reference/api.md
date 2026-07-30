@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-187 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+188 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,7 +14,7 @@
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
-- [`routes/files.py`](#routes-files-py) - 31 endpoints
+- [`routes/files.py`](#routes-files-py) - 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 17 endpoints
@@ -41,7 +41,7 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| GET | `/api/archive` | `list_archive` |  |
+| GET | `/api/archive` | `list_archive` | Paginated deliverable records, newest first, with filter facet counts. |
 | POST | `/api/archive/records/{record_id}/status` | `set_archive_status` | The Archive door of the ONE approval status (late/batch/supersede |
 | GET | `/api/archive/{slug}/{record_slug}` | `get_archive_record` | One full record by its permanent address: metadata, lineage, |
 
@@ -50,7 +50,7 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| GET | `/api/me` | `me` | Boot resume: authenticated by the HttpOnly cookie, echo the session token |
+| GET | `/api/me` | `me` |  |
 | GET | `/api/setup/status` | `setup_status` |  |
 | POST | `/auth/auto` | `auth_auto` | First-run passwordless session bootstrap. Disabled once the owner password |
 | POST | `/auth/change-password` | `change_password` | Change the password (from Settings): verify the current one, set the new, |
@@ -122,6 +122,7 @@
 | API_ROUTE | `/api/appview/{slug}/{path:path}` | `app_view` |  |
 | GET | `/api/preview/{slug}/{file_path:path}` | `project_preview` |  |
 | POST | `/api/projects/{slug}/app/start` | `app_start` |  |
+| GET | `/api/projects/{slug}/app/status` | `app_status` |  |
 | POST | `/api/projects/{slug}/app/stop` | `app_stop` |  |
 | GET | `/api/projects/{slug}/apps` | `detect_apps` | Scan the project for runnable apps so the user picks one instead of |
 | GET | `/api/projects/{slug}/artifacts` | `list_artifacts` | Typed artifacts recently produced in a project (design/app/page/doc/file) so |
@@ -161,9 +162,9 @@
 | GET | `/api/graph/jobs/{job_id}` | `get_graph_job` |  |
 | POST | `/api/graph/jobs/{job_id}/approve` | `approve_graph_job` |  |
 | PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
-| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/answer` | `answer_node_decision` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/answer` | `answer_node_decision` | Answer a decision-held node's question (slice 12, T10 #4). The node |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
-| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script` | `approve_node_script` |  |
+| POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve-script` | `approve_node_script` | The one-time, hash-bound script approval (T6 #5, captain's decision). |
 | PATCH | `/api/graph/jobs/{job_id}/nodes/{node_id}/output` | `edit_node_output` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/rerun` | `rerun_node` |  |
 | GET | `/api/graph/jobs/{job_id}/nodes/{node_id}/script` | `read_node_script` | What the approval card shows (audit F4): the script's CURRENT bytes |
@@ -207,7 +208,7 @@
 
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
-| GET | `/api/commands/catalog` | `commands_catalog` |  |
+| GET | `/api/commands/catalog` | `commands_catalog` | Built-in Proxima commands plus enabled skills for the active profile |
 | POST | `/api/commands/execute` | `commands_execute` |  |
 | GET | `/api/profiles` | `list_profiles` |  |
 | POST | `/api/profiles` | `create_profile` |  |
@@ -324,4 +325,4 @@
 
 
 ---
-_Generated 2026-07-30 20:08 UTC._
+_Generated 2026-07-30 23:02 UTC._

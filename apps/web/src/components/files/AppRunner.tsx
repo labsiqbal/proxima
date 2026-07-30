@@ -173,14 +173,9 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   // without one — the app's preview relay port on the same host: its own origin, so
   // absolute asset paths and HMR websockets work, gated by the proxima_preview
   // cookie (host-scoped cookies ignore ports) and credential-stripped upstream.
-  // Local: use the *other* loopback hostname, because browser cookies are
-  // host-scoped but not port-scoped; this keeps Proxima's localhost cookie away
-  // from project code without a container. The same-origin sub-path proxy remains
-  // only as a last resort (relay disabled): its opaque sandbox drops the session
-  // cookie on subresources and absolute paths escape the prefix.
   const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
   const subdomainUrl = appsDomain && isRemote && status.running && status.ready ? `${location.protocol}//preview-${slug}.${appsDomain}/` : ''
-  const relayUrl = !subdomainUrl && isRemote && status.running && status.preview_port ? `${location.protocol}//${location.hostname}:${status.preview_port}/` : ''
+  const relayUrl = !subdomainUrl && status.running && status.preview_port ? `${location.protocol}//${location.hostname}:${status.preview_port}/` : ''
   // A freshly-provisioned preview subdomain can lag on DNS for a few seconds (and a
   // relay iframe can race the preview-auth cookie mint). Retry the frame ONLY while
   // it hasn't loaded yet — the iframe's onLoad clears this — so a preview that loads
@@ -192,14 +187,12 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     const timers = [5000, 12000].map(ms => setTimeout(() => { if (!previewLoadedRef.current) setReloadKey(k => k + 1) }, ms))
     return () => timers.forEach(clearTimeout)
   }, [subdomainUrl, relayUrl])
-  const isolatedLoopbackHost = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname === '127.0.0.1' ? 'localhost' : ''
-  const directUrl = isolatedLoopbackHost && status.running && status.port ? `${location.protocol}//${isolatedLoopbackHost}:${status.port}/` : ''
-  const baseUrl = subdomainUrl || relayUrl || directUrl || appViewUrl(slug)
+  const baseUrl = subdomainUrl || relayUrl || appViewUrl(slug)
   // Cache-bust per (re)load so switching apps on the same port doesn't show a
   // cached page; static servers don't send no-cache headers.
   const previewUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}_proxima=${reloadKey}`
-  const openUrl = subdomainUrl || relayUrl || directUrl || appViewUrl(slug)
-  const isolatedOrigin = Boolean(subdomainUrl || relayUrl || directUrl)
+  const openUrl = subdomainUrl || relayUrl || appViewUrl(slug)
+  const isolatedOrigin = Boolean(subdomainUrl || relayUrl)
   const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
   const exitInfo = status.state === 'exited' ? appExitSummary(status) : null
   const conflictPort = status.requested_port ?? port

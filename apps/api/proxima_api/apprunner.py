@@ -127,6 +127,7 @@ def _listener_ownership(
     port: int,
     *,
     contained: bool,
+    group_id: int | None = None,
 ) -> PortOwnership:
     """Classify a listener without equating reachability with ownership.
 
@@ -136,14 +137,57 @@ def _listener_ownership(
     procfs, or incomplete socket-to-process evidence, preview fails closed.
     """
     inodes = _listening_socket_inodes(port)
+    return _socket_ownership(
+        leader_pid,
+        inodes,
+        contained=contained,
+        group_id=group_id,
+    )
+
+
+def _connected_socket_inodes(
+    port: int,
+    client_port: int,
+) -> set[str] | None:
+    server_port = f"{int(port):04X}"
+    peer_port = f"{int(client_port):04X}"
+    checked = False
+    inodes: set[str] = set()
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path, encoding="ascii") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        checked = True
+        for row in rows:
+            cols = row.split()
+            if (
+                len(cols) > 9
+                and cols[3] == "01"
+                and cols[1].endswith(":" + server_port)
+                and cols[2].endswith(":" + peer_port)
+            ):
+                inodes.add(cols[9])
+    return inodes if checked else None
+
+
+def _socket_ownership(
+    leader_pid: int,
+    inodes: set[str] | None,
+    *,
+    contained: bool,
+    group_id: int | None = None,
+) -> PortOwnership:
     if inodes is None:
         return PortOwnership.UNKNOWN
     if not inodes:
         return PortOwnership.NO_LISTENER
-    try:
-        group_id = os.getpgid(leader_pid)
-    except OSError:
-        return PortOwnership.UNKNOWN
+    if group_id is None:
+        try:
+            group_id = os.getpgid(leader_pid)
+        except OSError:
+            return PortOwnership.UNKNOWN
     processes = _process_table(inodes)
     if processes is None:
         return PortOwnership.UNKNOWN
@@ -160,6 +204,22 @@ def _listener_ownership(
     if all(_is_descendant(pid, leader_pid, processes) for pid in owner_pids):
         return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
     return PortOwnership.FOREIGN
+
+
+def _connected_socket_ownership(
+    leader_pid: int,
+    port: int,
+    client_port: int,
+    *,
+    contained: bool,
+    group_id: int | None = None,
+) -> PortOwnership:
+    return _socket_ownership(
+        leader_pid,
+        _connected_socket_inodes(port, client_port),
+        contained=contained,
+        group_id=group_id,
+    )
 
 
 def _hex_addr_is_loopback(hex_addr: str) -> bool:
@@ -285,15 +345,17 @@ class AppManager:
             if effect_lease is not None:
                 effect_lease.release()
             raise
-        self._apps[slug] = {
+        app = {
             "proc": proc,
             "port": port,
             "command": command,
             "started_at": time.time(),
             "log": [],
             "effect_lease": effect_lease,
+            "process_group": proc.pid if not IS_WINDOWS else None,
         }
-        asyncio.create_task(self._drain(slug, proc))
+        self._apps[slug] = app
+        app["drain_task"] = asyncio.create_task(self._drain(slug, proc))
 
     async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
         assert proc.stdout
@@ -319,6 +381,10 @@ class AppManager:
         finally:
             app = self._apps.get(slug)
             if app and app.get("proc") is proc:
+                if proc.returncode is not None and not app.get("stop_requested"):
+                    result = self._terminal_status_after_exit(app)
+                    self._apps.pop(slug, None)
+                    self._last_exit[slug] = result
                 self._finish_effect(
                     app,
                     terminated=proc.returncode is not None,
@@ -349,6 +415,7 @@ class AppManager:
             if preserve_status and previous:
                 self._last_exit[slug] = self._stopped_status(previous)
             return
+        app["stop_requested"] = True
         proc = app["proc"]
         if proc.returncode is None:
             try:
@@ -375,6 +442,13 @@ class AppManager:
                     await asyncio.wait_for(proc.wait(), timeout=2)
                 except Exception:
                     pass
+        drain_task = app.get("drain_task")
+        if (
+            isinstance(drain_task, asyncio.Task)
+            and drain_task is not asyncio.current_task()
+            and not drain_task.done()
+        ):
+            await drain_task
         if self._apps.get(slug) is app:
             self._apps.pop(slug, None)
         self._finish_effect(
@@ -410,6 +484,46 @@ class AppManager:
                 "Proxima did not open, proxy, or stop it."
             ),
         }
+
+    @staticmethod
+    def _exited_status(app: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "state": "exited",
+            "running": False,
+            "ready": False,
+            "requested_port": app["port"],
+            "command": app["command"],
+            "log": app["log"][-40:],
+            "exited": True,
+            "exit_code": int(app["proc"].returncode),
+        }
+
+    def _terminal_status_after_exit(
+        self,
+        app: dict[str, Any],
+    ) -> dict[str, Any]:
+        candidate_port = app.get("detected_port") or app["port"]
+        ownership = (
+            _listener_ownership(
+                app["proc"].pid,
+                candidate_port,
+                contained=self.contained,
+                group_id=app.get("process_group"),
+            )
+            if _port_open(candidate_port)
+            else PortOwnership.NO_LISTENER
+        )
+        if (
+            app.get("terminal_state") == "port_conflict"
+            or ownership == PortOwnership.FOREIGN
+        ):
+            app["terminal_state"] = "port_conflict"
+            return self._port_conflict_status(
+                command=app["command"],
+                requested_port=app["port"],
+                log=app["log"],
+            )
+        return self._exited_status(app)
 
     @staticmethod
     def _signal_managed_process(app: dict[str, Any]) -> None:
@@ -463,44 +577,40 @@ class AppManager:
                 self._finish_effect(app, terminated=True)
                 self._last_exit[slug] = result
             return result
-        if app["proc"].returncode is not None:  # exited on its own
-            self._apps.pop(slug, None)
-            self._finish_effect(app, terminated=True)
-            # exit_code + exited stay sticky across 2s polls so the UI can say
-            # "Finished" vs "Failed" instead of a bare log dump after a short run.
-            result = {
-                "state": "exited",
-                "running": False,
-                "ready": False,
-                "requested_port": app["port"],
-                "command": app["command"],
-                "log": app["log"][-40:],
-                "exited": True,
-                "exit_code": int(app["proc"].returncode),
-            }
-            self._last_exit[slug] = result
-            return result
         candidate_port = app.get("detected_port") or app["port"]
-        if not _port_open(candidate_port):
+        port_open = _port_open(candidate_port)
+        ownership = (
+            _listener_ownership(
+                app["proc"].pid,
+                candidate_port,
+                contained=self.contained,
+                group_id=app.get("process_group"),
+            )
+            if port_open
+            else PortOwnership.NO_LISTENER
+        )
+        if ownership == PortOwnership.FOREIGN:
+            app["terminal_state"] = "port_conflict"
+            self._signal_managed_process(app)
+            result = self._port_conflict_status(
+                command=app["command"],
+                requested_port=app["port"],
+                log=app["log"],
+            )
+            if app["proc"].returncode is not None:
+                self._apps.pop(slug, None)
+                self._finish_effect(app, terminated=True)
+                self._last_exit[slug] = result
+            return result
+        if app["proc"].returncode is not None:
+            return self._exited_status(app)
+        if not port_open:
             return self._starting_status(
                 app,
                 prolonged=(
                     time.time() - app["started_at"]
                     >= PROLONGED_START_SECONDS
                 ),
-            )
-        ownership = _listener_ownership(
-            app["proc"].pid,
-            candidate_port,
-            contained=self.contained,
-        )
-        if ownership == PortOwnership.FOREIGN:
-            app["terminal_state"] = "port_conflict"
-            self._signal_managed_process(app)
-            return self._port_conflict_status(
-                command=app["command"],
-                requested_port=app["port"],
-                log=app["log"],
             )
         if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
             reason = (
@@ -549,6 +659,34 @@ class AppManager:
             return None
         port = status.get("port")
         return int(port) if isinstance(port, int) else None
+
+    def verify_preview_connection(
+        self,
+        slug: str,
+        port: int,
+        client_port: int,
+    ) -> bool:
+        app = self._apps.get(slug)
+        if (
+            not app
+            or app["proc"].returncode is not None
+            or app.get("terminal_state") == "port_conflict"
+        ):
+            return False
+        candidate_port = app.get("detected_port") or app["port"]
+        if int(candidate_port) != int(port):
+            return False
+        ownership = _connected_socket_ownership(
+            app["proc"].pid,
+            port,
+            client_port,
+            contained=self.contained,
+            group_id=app.get("process_group"),
+        )
+        if ownership == PortOwnership.FOREIGN:
+            app["terminal_state"] = "port_conflict"
+            self._signal_managed_process(app)
+        return ownership == PortOwnership.VERIFIED
 
     async def shutdown(self) -> None:
         for slug in list(self._apps):

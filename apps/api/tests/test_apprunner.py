@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 import pytest
@@ -120,6 +122,115 @@ def test_app_runner_keeps_bounded_log_after_explicit_stop(tmp_path):
         assert manager.status("demo") == status
 
     asyncio.run(run_case())
+
+
+def test_app_runner_stop_waits_for_terminal_output(tmp_path):
+    manager = AppManager()
+    port = _free_port()
+
+    async def run_case():
+        gate = asyncio.Event()
+        drained = asyncio.Event()
+        armed = tmp_path / "terminal-trap-armed"
+        original_drain = manager._drain
+
+        async def delayed_drain(slug, proc):
+            await gate.wait()
+            try:
+                await original_drain(slug, proc)
+            finally:
+                drained.set()
+
+        manager._drain = delayed_drain
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "trap 'echo terminal-line; exit 0' TERM; "
+            "touch terminal-trap-armed; "
+            "while true; do sleep 1; done",
+            port,
+        )
+        for _ in range(100):
+            if armed.is_file():
+                break
+            await asyncio.sleep(0.01)
+        assert armed.is_file()
+
+        async def release_drain():
+            await asyncio.sleep(1.1)
+            gate.set()
+
+        release_task = asyncio.create_task(release_drain())
+        await manager.stop("demo")
+        await release_task
+        await asyncio.wait_for(drained.wait(), timeout=2)
+
+        status = manager.status("demo")
+        assert status["state"] == "stopped"
+        assert "terminal-line" in status["log"]
+
+    asyncio.run(run_case())
+
+
+def test_fast_strict_port_exit_is_a_sticky_conflict(tmp_path, monkeypatch):
+    manager = AppManager()
+    port = _free_port()
+    original_port_open = apprunner._port_open
+    foreign: subprocess.Popen | None = None
+
+    def lose_candidate_after_preflight(candidate: int) -> bool:
+        nonlocal foreign
+        if candidate == port and foreign is None:
+            foreign = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "http.server",
+                    str(port),
+                    "--bind",
+                    "127.0.0.1",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            for _ in range(100):
+                if original_port_open(port):
+                    break
+                time.sleep(0.01)
+            return False
+        return original_port_open(candidate)
+
+    monkeypatch.setattr(apprunner, "_port_open", lose_candidate_after_preflight)
+
+    async def run_case():
+        try:
+            command = (
+                f"{shlex.quote(sys.executable)} -m http.server "
+                "$PORT --bind 127.0.0.1"
+            )
+            await manager.start("demo", str(tmp_path), command, port)
+            status = {}
+            for _ in range(100):
+                status = manager.status("demo")
+                if status.get("state") in {"port_conflict", "exited"}:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert status["state"] == "port_conflict"
+            assert status["running"] is False
+            assert status["requested_port"] == port
+            assert manager.status("demo") == status
+            assert foreign is not None and foreign.poll() is None
+        finally:
+            await manager.shutdown()
+
+    try:
+        asyncio.run(run_case())
+    finally:
+        if foreign is not None:
+            foreign.terminate()
+            foreign.wait(timeout=5)
 
 
 def test_app_runner_reports_ready_when_port_accepts_connections():

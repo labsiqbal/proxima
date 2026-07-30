@@ -581,6 +581,14 @@ def _create_app(
     app.state.preview_relays = PreviewRelayManager(
         cfg.get("preview_bind_host"),
         port_for=lambda slug: app.state.app_manager.preview_target(slug),
+        verify_connection=(
+            lambda slug, port, client_port:
+            app.state.app_manager.verify_preview_connection(
+                slug,
+                port,
+                client_port,
+            )
+        ),
         validate_token=_valid_preview_token,
         maintenance=maintenance,
     )

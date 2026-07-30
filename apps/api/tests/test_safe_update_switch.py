@@ -1275,33 +1275,18 @@ def test_appview_request_drains_before_fence_activation(
     outbound_started = threading.Event()
     finish_outbound = threading.Event()
 
-    class UpstreamResponse:
-        status_code = 200
-        content = b"ok"
-        headers: dict[str, str] = {}
-
-    class FakeAsyncClient:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args) -> None:
-            return None
-
-        async def request(self, *_args, **_kwargs):
-            outbound_started.set()
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                finish_outbound.wait,
-                5,
-            )
-            return UpstreamResponse()
+    async def fake_proxy_http_request(**_kwargs):
+        outbound_started.set()
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            finish_outbound.wait,
+            5,
+        )
+        return 200, [], b"ok"
 
     monkeypatch.setattr(
-        "proxima_api.routes.files.httpx.AsyncClient",
-        FakeAsyncClient,
+        "proxima_api.routes.files.proxy_http_request",
+        fake_proxy_http_request,
     )
 
     with TestClient(app) as client:

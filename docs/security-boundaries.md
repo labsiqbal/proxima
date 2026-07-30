@@ -394,14 +394,15 @@ both HTTP access logs and WebSocket/error logs before they reach the journal.
 
 Run & Preview remains an explicit owner-power action. Its subprocess receives a
 filtered environment (additional names require `PROXIMA_APP_ENV_ALLOWLIST`) but runs as
-the service OS user. Preview transport is isolated from owner credentials: local direct
-preview switches between `localhost` and `127.0.0.1`, remote preview uses a short-lived
-preview-only capability, reverse proxies strip Cookie/Authorization and upstream
-`Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
+the service OS user. Preview transport is isolated from owner credentials: local and
+remote previews use a short-lived preview-only capability, reverse proxies strip
+Cookie/Authorization and upstream `Set-Cookie`, and same-origin generated HTML is
+rendered without `allow-same-origin`.
 
 The requested dev-server port is never a preview authority. It is a candidate until
 procfs maps every listening socket back to the managed process group. Appview, relay,
-and subdomain paths resolve a target only through this ownership-verified ready state.
+and subdomain paths then open an upstream connection and map its server-side socket
+back to that managed group before sending HTTP or WebSocket bytes.
 A pre-existing listener produces a structured port conflict before spawn. A listener
 that wins after preflight produces the same sticky terminal conflict and only the
 managed process group is signaled. Starting, conflict, ownership-unknown, and exited
@@ -414,10 +415,10 @@ socket-owner visibility, and uncontained descendants that detach into another pr
 group report `ownership_unknown`; their command and logs remain stoppable, but their
 listener is not previewed. A detached descendant can qualify only when PID-namespace
 containment is active, because namespace teardown owns that descendant lifetime. This
-policy preserves the ownership boundary instead of treating successful TCP connection
-as evidence.
+policy preserves the ownership boundary instead of treating a successful TCP handshake
+as ownership evidence. See [ADR-0010](adr/0010-preview-authority-requires-verified-connections.md).
 
-Remote preview without an apps domain opens one **relay listener per running app**.
+Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
 interface when the host is on a tailnet, otherwise loopback - never `0.0.0.0`. Tailnet
 devices can reach previews out of the box; untrusted plain-LAN devices cannot. The

@@ -1202,9 +1202,8 @@ tool on the right rail, from an app-type artifact, or from the recipe test bench
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
 environment. The preview must be served root-relative on its own origin (SPA HTML uses
 absolute asset paths and HMR opens a WebSocket to the page origin), so each vantage gets
-one: local direct preview uses the other loopback hostname so the Proxima cookie is not
-sent across ports; remote preview uses the app's **preview relay port** on the Proxima
-host (reported as `preview_port` in app status; bind interface via
+one: local and remote preview use the app's **preview relay port** on the Proxima host
+(reported as `preview_port` in app status; bind interface via
 `PROXIMA_PREVIEW_BIND`, default `auto` = the tailnet interface or loopback, never
 `0.0.0.0`; `off` disables) or, with an apps domain configured, the
 `preview-<slug>.<apps_domain>` subdomain. Relay and subdomain proxy share one engine:
@@ -1219,8 +1218,9 @@ and app status reports `broad_bind` (surfaced as a UI warning) when the dev serv
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
 The selected port is only a candidate. App status uses the structured
 `stopped | starting | ready | port_conflict | ownership_unknown | exited` contract,
-and appview, relay, and preview-subdomain targets exist only for an
-ownership-verified `ready` endpoint. A pre-existing listener returns a structured
+and appview, relay, and preview-subdomain paths open a connection and verify its
+server-side socket before sending HTTP or WebSocket bytes. A pre-existing listener
+returns a structured
 conflict without stopping or signaling it. Linux procfs verification also closes the
 post-preflight bind race: if an unrelated listener wins, the managed command is
 signaled by its recorded process group, the foreign listener remains untouched, and
@@ -1234,7 +1234,8 @@ a sticky `exited` + `exit_code` payload across polls so Run & Preview can show F
 vs Failed with the log and a next-step hint instead of a silent bare dump. Logs remain
 toggleable in stopped, starting, ready, conflict, ownership-unknown, and exited states.
 The existing bounded 40-line status buffer survives preview Reload and explicit Stop,
-so stopped/retry feedback shows the most recent command output. The exited relay
+so stopped/retry feedback shows the most recent command output, including terminal
+shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 

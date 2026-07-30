@@ -1105,10 +1105,11 @@ process for the project with a filtered environment. The requested port is only 
 candidate. Status is a discriminated state:
 `stopped | starting | ready | port_conflict | ownership_unknown | exited`.
 Only `ready` carries a proxy target, and readiness requires Linux procfs evidence that
-every listener socket belongs to the managed process group. This ownership check runs
-again when appview, a relay, or a preview subdomain asks for its target. Starting,
-conflict, ownership-unknown, and exited states return a non-proxy response. An
-existing relay remains available to return that safe response until Stop releases it.
+every listener socket belongs to the managed process group. Appview, relay, and preview
+subdomain paths open a fresh TCP connection and verify its server-side socket belongs
+to that process group before sending HTTP or WebSocket bytes. Starting, conflict,
+ownership-unknown, and exited states return a non-proxy response. An existing relay
+remains available to return that safe response until Stop releases it.
 
 If an unrelated process owns the candidate before start, start returns a structured
 HTTP 409 conflict. If it claims the port after preflight but before the managed app
@@ -1121,9 +1122,8 @@ PID namespace, whose teardown owns the full descendant lifetime.
 
 A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
-origin), so the transport depends on the vantage. Locally the iframe uses the other
-loopback hostname, avoiding host-cookie reuse across ports. Remotely,
-`PreviewRelayManager` starts a per-app listener on the Proxima host
+origin), so `PreviewRelayManager` starts a per-app listener on the Proxima host for
+local and remote browsers
 (`preview_port` in app status; interface via `preview_bind_host` /
 `PROXIMA_PREVIEW_BIND`, default `auto` = the Tailscale interface if the host has one,
 else loopback - never `0.0.0.0` unless set explicitly; `off` disables) - the app's own
@@ -1137,7 +1137,8 @@ HTTP 503 until Stop or the next start. A start that has no listener after 15 sec
 becomes a prolonged-start warning with Stop and log controls instead of spinning
 forever. The bounded 40-line status buffer and Logs toggle remain available while
 starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
-the log panel, and explicit Stop retains the most recent buffer for the stopped/retry
+the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
+including terminal shutdown output, remains available for the stopped/retry
 state. Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
