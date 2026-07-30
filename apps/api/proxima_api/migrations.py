@@ -2327,6 +2327,74 @@ def _add_knowledge_rebuild_outbox(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_task_projection_outbox(conn: sqlite3.Connection) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {"jobs", "events", "master_projections"}.issubset(tables):
+        return
+    conn.execute("DROP INDEX IF EXISTS uq_master_projections_source_type")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_projection_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          projection_epoch INTEGER NOT NULL DEFAULT 0
+            CHECK (projection_epoch >= 0),
+          task_status TEXT NOT NULL CHECK (
+            task_status IN (
+              'queued', 'running', 'review', 'done', 'failed', 'cancelled'
+            )
+          ),
+          mutation TEXT NOT NULL CHECK (length(mutation) BETWEEN 1 AND 80),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (
+            state IN ('pending', 'projected', 'failed_attribution')
+          ),
+          projection_id INTEGER
+            REFERENCES master_projections(id) ON DELETE SET NULL,
+          failure_code TEXT CHECK (
+            failure_code IS NULL OR failure_code IN (
+              'focus_attribution_unavailable',
+              'projection_scope_unavailable',
+              'projection_failed'
+            )
+          ),
+          attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(task_event_id),
+          CHECK (
+            (state = 'pending' AND projection_id IS NULL
+              AND (
+                failure_code IS NULL OR failure_code = 'projection_failed'
+              ))
+            OR
+            (state = 'projected' AND projection_id IS NOT NULL
+              AND failure_code IS NULL)
+            OR
+            (state = 'failed_attribution' AND projection_id IS NULL
+              AND failure_code IN (
+                'focus_attribution_unavailable',
+                'projection_scope_unavailable'
+              ))
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_projection_outbox_state "
+        "ON task_projection_outbox(state, id)"
+    )
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(conn)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -2427,6 +2495,11 @@ MIGRATIONS: list[Migration] = [
     ),
     (43, "add external safe-update owner projection", _add_self_update_runs),
     (44, "pin Project filesystem identities", backfill_project_path_identities),
+    (
+        45,
+        "add durable Task projection outbox and lifecycle generations",
+        _add_task_projection_outbox,
+    ),
 ]
 
 

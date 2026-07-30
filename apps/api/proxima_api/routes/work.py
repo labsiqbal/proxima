@@ -59,6 +59,12 @@ def register(app, deps):
     _can_access = deps["_can_access"]
     _member_project_id = deps["_member_project_id"]
 
+    def _process_task_projection(task_event: dict[str, int]) -> None:
+        outbox_id = task_event.get("projection_outbox_id")
+        projection = getattr(app.state, "master_projection", None)
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
+
     def _workflow_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         d = dict(row)
         d["steps"] = _decode_json(d.get("steps") or "[]")
@@ -583,23 +589,13 @@ def register(app, deps):
                         mutation="review_approved",
                     )
                     notify_sessions.add(task_event["session_id"])
-                    projection = getattr(
-                        app.state,
-                        "master_projection",
-                        None,
-                    )
-                    if projection is not None:
-                        projection.project_task(
-                            job_id,
-                            connection=conn,
-                            notify_sessions=notify_sessions,
-                        )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
             for session_id in notify_sessions:
                 app.state.hub.notify(session_id)
+            _process_task_projection(task_event)
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
             # Repo job (slice 2, flag-gated): the final approve is the merge
@@ -667,23 +663,13 @@ def register(app, deps):
                         mutation="review_approved",
                     )
                     notify_sessions.add(task_event["session_id"])
-                    projection = getattr(
-                        app.state,
-                        "master_projection",
-                        None,
-                    )
-                    if projection is not None:
-                        projection.project_task(
-                            job_id,
-                            connection=conn,
-                            notify_sessions=notify_sessions,
-                        )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
             for session_id in notify_sessions:
                 app.state.hub.notify(session_id)
+            _process_task_projection(task_event)
             app.state.task_delegation.prerequisite_changed(
                 job_id, connection=conn
             )
@@ -725,23 +711,13 @@ def register(app, deps):
                     mutation="review_rejected",
                 )
                 notify_sessions.add(task_event["session_id"])
-                projection = getattr(
-                    app.state,
-                    "master_projection",
-                    None,
-                )
-                if projection is not None:
-                    projection.project_task(
-                        job_id,
-                        connection=conn,
-                        notify_sessions=notify_sessions,
-                    )
                 conn.execute("COMMIT")
             except Exception:
                 _rollback(conn)
                 raise
         for session_id in notify_sessions:
             app.state.hub.notify(session_id)
+        _process_task_projection(task_event)
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.

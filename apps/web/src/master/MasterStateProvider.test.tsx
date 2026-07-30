@@ -494,6 +494,76 @@ describe('MasterStateProvider', () => {
     )
   })
 
+  it('applies a restored rerun after an earlier matching lifecycle', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    const event = (
+      id: number,
+      type: string,
+      messageId: number,
+      payload: Record<string, unknown> = {},
+    ) => ({
+      id,
+      seq: id - 11,
+      type,
+      run_id: null,
+      session_id: 9,
+      payload: {
+        ...fleetProjectionPayload(messageId, 7),
+        ...payload,
+      },
+      created_at: `2026-07-27T10:0${id - 13}:00Z`,
+    })
+
+    act(() => {
+      source.emit(
+        'master.task.completed',
+        event(13, 'master.task.completed', 55),
+      )
+      source.emit('master.task.recovered', event(
+        14,
+        'master.task.recovered',
+        56,
+        {
+          task_status: 'queued',
+          container_id: 21,
+          container_slug: 'acme',
+          area_id: 210,
+          checkpoint_id: 3,
+          actor: { id: 1, username: 'owner' },
+          prior_status: 'done',
+          restored_status: 'queued',
+          discarded_progress: [],
+          conflicting_progress: [],
+        },
+      ))
+      source.emit(
+        'master.task.started',
+        event(15, 'master.task.started', 57),
+      )
+      source.emit(
+        'master.task.review_ready',
+        event(16, 'master.task.review_ready', 58),
+      )
+      source.emit(
+        'master.task.completed',
+        event(17, 'master.task.completed', 59),
+      )
+    })
+
+    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:done')
+    expect(
+      screen.getAllByTestId('messages')[0].textContent
+        ?.match(/Completed Task #7\./g),
+    ).toHaveLength(2)
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
+      'owner restored Task #7 from checkpoint #3: Done to Queued.',
+    )
+    expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('17')
+  })
+
   it('projects a production master projection event whose run_id is absent', async () => {
     vi.mocked(listEvents).mockResolvedValueOnce({ events: [] })
     renderProvider()

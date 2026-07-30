@@ -259,6 +259,16 @@ def _preflight_git(
         raise CheckpointError(f"could not validate git ref for {path}: {exc}") from exc
 
 
+def _preflight_checkpoint_git(
+    checkpoint: dict[str, Any],
+) -> list[tuple[Path, str, str]]:
+    return [
+        plan
+        for ref in checkpoint["git_refs"]
+        if (plan := _preflight_git(ref)) is not None
+    ]
+
+
 def _verify_git_restore_plan(plan: tuple[Path, str, str]) -> None:
     path, _sha, original_sha = plan
     try:
@@ -325,54 +335,77 @@ def restore_checkpoint(
     actor: dict[str, Any] | None = None,
     on_restore: Callable[[Any, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    impact = restore_impact(conn, checkpoint_id)
     if not confirmed:
         raise CheckpointError("restore confirmation is required")
-    if impact["conflicts"]:
-        raise CheckpointError("conflicting jobs are running in this project")
-    row = conn.execute(
+    preflight_row = conn.execute(
         "SELECT * FROM job_checkpoints WHERE id = ?", (checkpoint_id,)
     ).fetchone()
-    checkpoint = checkpoint_payload(row)
-    snapshot = checkpoint["payload"]
-    current_job = dict(
-        conn.execute(
-            "SELECT * FROM jobs WHERE id = ?", (checkpoint["job_id"],)
-        ).fetchone()
-    )
-    current_nodes = {
-        str(item["node_id"]): dict(item)
-        for item in conn.execute(
-            "SELECT * FROM node_states WHERE job_id = ? ORDER BY id",
-            (checkpoint["job_id"],),
-        ).fetchall()
-    }
-    checkpoint_nodes = {
-        str(item.get("node_id")): item
-        for item in snapshot.get("node_states") or []
-    }
-    git_restore_plans = [
-        plan
-        for ref in checkpoint["git_refs"]
-        if (plan := _preflight_git(ref)) is not None
-    ]
-    job = snapshot.get("job") or {}
-    values = [job.get(field) for field in RESTORABLE_JOB_FIELDS]
-    assignments = ", ".join(f"{field} = ?" for field in RESTORABLE_JOB_FIELDS)
+    if preflight_row is None:
+        raise CheckpointError("checkpoint not found")
+    preflight_checkpoint = checkpoint_payload(preflight_row)
+    git_restore_plans = _preflight_checkpoint_git(preflight_checkpoint)
     attempted_plans: list[tuple[Path, str, str]] = []
     conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
-            f"UPDATE jobs SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (*values, checkpoint["job_id"]),
-        )
-        checkpoint_run_ids = {int(value) for value in snapshot.get("run_ids") or []}
-        current_runs = [dict(item) for item in conn.execute(
-            "SELECT r.id, r.status FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.job_id = ?",
+        impact = restore_impact(conn, checkpoint_id)
+        if impact["conflicts"]:
+            raise CheckpointError(
+                "conflicting jobs are running in this project"
+            )
+        row = conn.execute(
+            "SELECT * FROM job_checkpoints WHERE id = ?",
+            (checkpoint_id,),
+        ).fetchone()
+        if row is None:
+            raise CheckpointError("checkpoint not found")
+        if any(
+            row[field] != preflight_row[field]
+            for field in ("job_id", "payload_json", "git_refs_json")
+        ):
+            raise CheckpointError("checkpoint changed during restore")
+        checkpoint = checkpoint_payload(row)
+        snapshot = checkpoint["payload"]
+        current_job_row = conn.execute(
+            "SELECT * FROM jobs WHERE id = ?",
             (checkpoint["job_id"],),
-        ).fetchall()]
+        ).fetchone()
+        if current_job_row is None:
+            raise CheckpointError("job not found")
+        current_job = dict(current_job_row)
+        current_nodes = {
+            str(item["node_id"]): dict(item)
+            for item in conn.execute(
+                "SELECT * FROM node_states WHERE job_id = ? ORDER BY id",
+                (checkpoint["job_id"],),
+            ).fetchall()
+        }
+        current_runs = [
+            dict(item)
+            for item in conn.execute(
+                "SELECT r.id, r.status FROM runs r "
+                "JOIN sessions s ON s.id = r.session_id "
+                "WHERE s.job_id = ?",
+                (checkpoint["job_id"],),
+            ).fetchall()
+        ]
+        checkpoint_nodes = {
+            str(item.get("node_id")): item
+            for item in snapshot.get("node_states") or []
+        }
+        job = snapshot.get("job") or {}
+        values = [job.get(field) for field in RESTORABLE_JOB_FIELDS]
+        assignments = ", ".join(
+            f"{field} = ?" for field in RESTORABLE_JOB_FIELDS
+        )
+        checkpoint_run_ids = {
+            int(value) for value in snapshot.get("run_ids") or []
+        }
         current_run_ids = [item["id"] for item in current_runs]
-        remove_ids = [run_id for run_id in current_run_ids if run_id not in checkpoint_run_ids]
+        remove_ids = [
+            run_id
+            for run_id in current_run_ids
+            if run_id not in checkpoint_run_ids
+        ]
         discarded_progress = []
         if remove_ids:
             label = "run" if len(remove_ids) == 1 else "runs"
@@ -380,11 +413,15 @@ def restore_checkpoint(
                 f"{len(remove_ids)} {label} created after the checkpoint"
             )
         if current_job.get("steps_state") != job.get("steps_state"):
-            discarded_progress.append("Task step progress changed after the checkpoint")
+            discarded_progress.append(
+                "Task step progress changed after the checkpoint"
+            )
         changed_nodes = 0
         for node_id in sorted(set(current_nodes) | set(checkpoint_nodes)):
             current_status = (current_nodes.get(node_id) or {}).get("status")
-            checkpoint_status = (checkpoint_nodes.get(node_id) or {}).get("status")
+            checkpoint_status = (checkpoint_nodes.get(node_id) or {}).get(
+                "status"
+            )
             if current_status != checkpoint_status:
                 changed_nodes += 1
         if changed_nodes:
@@ -393,8 +430,15 @@ def restore_checkpoint(
                 f"{changed_nodes} Recipe node progress {label} "
                 "changed after the checkpoint"
             )
+        conn.execute(
+            f"UPDATE jobs SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (*values, checkpoint["job_id"]),
+        )
         if remove_ids:
-            conn.executemany("DELETE FROM runs WHERE id = ?", ((run_id,) for run_id in remove_ids))
+            conn.executemany(
+                "DELETE FROM runs WHERE id = ?",
+                ((run_id,) for run_id in remove_ids),
+            )
         conn.execute("DELETE FROM node_states WHERE job_id = ?", (checkpoint["job_id"],))
         node_fields = (
             "job_id", "node_id", "status", "run_id", "inputs", "output_kind", "output",

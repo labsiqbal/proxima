@@ -670,12 +670,49 @@ CREATE INDEX IF NOT EXISTS idx_master_projections_session
   ON master_projections(master_session_id, id);
 CREATE INDEX IF NOT EXISTS idx_master_projections_source
   ON master_projections(source_table, source_id, projection_type);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_source_type
-  ON master_projections(owner_user_id, source_table, source_id, projection_type);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_message
   ON master_projections(message_id) WHERE message_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_master_projections_event
   ON master_projections(event_id) WHERE event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS task_projection_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  projection_epoch INTEGER NOT NULL DEFAULT 0 CHECK (projection_epoch >= 0),
+  task_status TEXT NOT NULL CHECK (
+    task_status IN ('queued', 'running', 'review', 'done', 'failed', 'cancelled')
+  ),
+  mutation TEXT NOT NULL CHECK (length(mutation) BETWEEN 1 AND 80),
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (
+    state IN ('pending', 'projected', 'failed_attribution')
+  ),
+  projection_id INTEGER REFERENCES master_projections(id) ON DELETE SET NULL,
+  failure_code TEXT CHECK (
+    failure_code IS NULL OR failure_code IN (
+      'focus_attribution_unavailable',
+      'projection_scope_unavailable',
+      'projection_failed'
+    )
+  ),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(task_event_id),
+  CHECK (
+    (state = 'pending' AND projection_id IS NULL
+      AND (failure_code IS NULL OR failure_code = 'projection_failed'))
+    OR
+    (state = 'projected' AND projection_id IS NOT NULL
+      AND failure_code IS NULL)
+    OR
+    (state = 'failed_attribution' AND projection_id IS NULL
+      AND failure_code IN (
+        'focus_attribution_unavailable', 'projection_scope_unavailable'
+      ))
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_task_projection_outbox_state
+  ON task_projection_outbox(state, id);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.

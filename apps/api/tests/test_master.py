@@ -15,6 +15,7 @@ from proxima_api.job_checkpoints import (
     create_checkpoint,
     restore_checkpoint,
 )
+from proxima_api.db import connect
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
 from proxima_api import master_focus
@@ -800,6 +801,7 @@ def test_master_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path
         if item["id"] == job["id"]
     )
     assert fleet_job["run_projection"]["status"] == "failed"
+    assert fleet_job["desk_status"] == "failed"
     projection = app.state.master_projection.project_task(job["id"])
     assert projection["projection_type"] == "master.task.failed"
 
@@ -1046,6 +1048,100 @@ def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
         "SELECT status FROM jobs WHERE id = ?",
         (job["id"],),
     ).fetchone()["status"] == "failed"
+
+
+def test_checkpoint_restore_rereads_concurrent_progress_after_preflight(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from proxima_api import job_checkpoints
+
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    job = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        {
+            "start": False,
+            "tasks": [{
+                "title": "Concurrent restore",
+                "brief": "Preserve newly started work",
+                "project_slug": project["slug"],
+            }],
+        },
+    )["result"]["jobs"][0]
+    checkpoint = create_checkpoint(app.state.db, job["id"])
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed' WHERE id = ?",
+        (job["id"],),
+    )
+    task = app.state.db.execute(
+        "SELECT session_id, project_id FROM jobs WHERE id = ?",
+        (job["id"],),
+    ).fetchone()
+    profile = app.state.db.execute(
+        "SELECT id, runner_id FROM profiles WHERE is_default = 1"
+    ).fetchone()
+    racer = connect(tmp_path / "proxima.db")
+    raced_run_id: int | None = None
+
+    def race_after_preflight(_checkpoint):
+        nonlocal raced_run_id
+        racer.execute("BEGIN IMMEDIATE")
+        racer.execute(
+            "UPDATE jobs SET status = 'running', "
+            "started_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (job["id"],),
+        )
+        raced_run_id = racer.execute(
+            "INSERT INTO runs("
+            "session_id, project_id, user_id, profile_id, runner_id, "
+            "status, prompt, kind"
+            ") VALUES (?, ?, 1, ?, ?, 'running', 'new progress', 'job')",
+            (
+                task["session_id"],
+                task["project_id"],
+                profile["id"],
+                profile["runner_id"],
+            ),
+        ).lastrowid
+        racer.execute("COMMIT")
+        return []
+
+    monkeypatch.setattr(
+        job_checkpoints,
+        "_preflight_checkpoint_git",
+        race_after_preflight,
+    )
+
+    response = client.post(
+        f"/api/jobs/{job['id']}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+    racer.close()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "conflicting jobs are running in this project"
+    )
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job["id"],),
+    ).fetchone()["status"] == "running"
+    assert app.state.db.execute(
+        "SELECT status FROM runs WHERE id = ?",
+        (raced_run_id,),
+    ).fetchone()["status"] == "running"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
+        "AND json_extract(payload, '$.mutation') = 'checkpoint_restored' "
+        "AND json_extract(payload, '$.job_id') = ?",
+        (job["id"],),
+    ).fetchone()[0] == 0
 
 
 def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):

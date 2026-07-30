@@ -8,6 +8,7 @@ from typing import Any
 
 from . import master_focus
 from .event_payloads import encode_bounded_event_payload
+from .master_persistence import canonical_job_payload
 
 
 _ACTOR_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
@@ -24,6 +25,13 @@ _CONFLICT_LABEL = re.compile(
 )
 _JOB_STATUSES = {"queued", "running", "review", "done", "failed", "cancelled"}
 _MAX_RECOVERY_ITEMS = 4
+_PROJECTABLE_TASK_STATUSES = {
+    "running",
+    "review",
+    "done",
+    "failed",
+    "cancelled",
+}
 
 
 def _as_int(value: Any) -> int:
@@ -41,6 +49,39 @@ def _next_session_seq(conn: sqlite3.Connection, session_id: int) -> int:
     return _as_int(row["seq"])
 
 
+def task_projection_epoch(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    session_id: int | None = None,
+    through_event_id: int | None = None,
+) -> int:
+    if session_id is None:
+        job = conn.execute(
+            "SELECT session_id FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if job is None or job["session_id"] is None:
+            return 0
+        session_id = _as_int(job["session_id"])
+    clauses = [
+        "session_id = ?",
+        "type = 'job.update'",
+        "json_extract(payload, '$.job_id') = ?",
+        "json_extract(payload, '$.mutation') = 'checkpoint_restored'",
+    ]
+    params: list[int] = [session_id, job_id]
+    if through_event_id is not None:
+        clauses.append("id <= ?")
+        params.append(through_event_id)
+    row = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) AS projection_epoch FROM events WHERE "
+        + " AND ".join(clauses),
+        tuple(params),
+    ).fetchone()
+    return _as_int(row["projection_epoch"])
+
+
 def append_task_update(
     conn: sqlite3.Connection,
     *,
@@ -50,7 +91,7 @@ def append_task_update(
 ) -> dict[str, int]:
     """Append the shared Task-session invalidation in the caller's transaction."""
     job = conn.execute(
-        "SELECT id, session_id, project_id, status FROM jobs WHERE id = ?",
+        "SELECT * FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     if job is None or job["session_id"] is None:
@@ -73,7 +114,39 @@ def append_task_update(
             encode_bounded_event_payload(payload),
         ),
     )
-    return {"session_id": session_id, "event_id": _as_int(cursor.lastrowid)}
+    event_id = _as_int(cursor.lastrowid)
+    result = {"session_id": session_id, "event_id": event_id}
+    if job["origin_master_session_id"] is not None:
+        task_status = str(
+            canonical_job_payload(
+                dict(job),
+                connection=conn,
+            )["run_projection"]["status"]
+        )
+        projectable = task_status in _PROJECTABLE_TASK_STATUSES or (
+            task_status == "queued"
+            and str(job["blocked_reason"] or "").startswith("Blocked by prerequisite")
+        )
+        if projectable:
+            outbox = conn.execute(
+                "INSERT INTO task_projection_outbox("
+                "job_id, task_event_id, projection_epoch, task_status, mutation"
+                ") VALUES (?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    event_id,
+                    task_projection_epoch(
+                        conn,
+                        job_id=job_id,
+                        session_id=session_id,
+                        through_event_id=event_id,
+                    ),
+                    task_status,
+                    mutation,
+                ),
+            )
+            result["projection_outbox_id"] = _as_int(outbox.lastrowid)
+    return result
 
 
 def _safe_recovery_items(
@@ -182,12 +255,9 @@ def append_master_recovery(
     if row is None or row["origin_master_session_id"] is None:
         return None
     master_session_id = _as_int(row["origin_master_session_id"])
-    if (
-        not row["origin_focus_captured"]
-        or (
+    if not row["origin_focus_captured"] or (
             row["origin_focus_epoch_id"] is not None
             and row["epoch_session_id"] != master_session_id
-        )
     ):
         raise ValueError("recovery Master Focus origin is unavailable")
 

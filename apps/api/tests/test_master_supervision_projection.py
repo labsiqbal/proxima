@@ -400,7 +400,83 @@ def test_task_lifecycle_review_checkpoint_and_sse_replay_are_exactly_once(
     )
 
 
-def test_final_approval_rolls_back_task_and_projection_together(
+def test_checkpoint_restore_starts_a_new_projection_lifecycle(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="projection-lifecycle-epoch",
+        tasks=[{
+            "key": "task",
+            "title": "Repeat lifecycle",
+            "brief": "Project every restored run",
+        }],
+    )
+    job_id = jobs[0]["id"]
+    checkpoint = create_checkpoint(app.state.db, job_id)
+    for status in ("running", "review", "done"):
+        app.state.db.execute(
+            "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (status, job_id),
+        )
+        app.state.master_projection.project_task(job_id)
+
+    restored = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+
+    assert restored.status_code == 200
+    assert restored.json()["restored_status"] == "queued"
+    epoch = app.state.db.execute(
+        "SELECT id FROM events WHERE type = 'job.update' "
+        "AND json_extract(payload, '$.job_id') = ? "
+        "AND json_extract(payload, '$.mutation') = 'checkpoint_restored'",
+        (job_id,),
+    ).fetchone()["id"]
+    for status in ("running", "review", "done"):
+        app.state.db.execute(
+            "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (status, job_id),
+        )
+        app.state.master_projection.project_task(job_id)
+
+    rows = app.state.db.execute(
+        "SELECT projection_key, projection_type "
+        "FROM master_projections WHERE task_id = ? ORDER BY id",
+        (job_id,),
+    ).fetchall()
+    assert [row["projection_type"] for row in rows] == [
+        "master.task.started",
+        "master.task.review_ready",
+        "master.task.completed",
+        "master.task.started",
+        "master.task.review_ready",
+        "master.task.completed",
+    ]
+    assert [row["projection_key"] for row in rows] == [
+        f"task:{job_id}:started",
+        f"task:{job_id}:review",
+        f"task:{job_id}:completed",
+        f"task:{job_id}:epoch:{epoch}:started",
+        f"task:{job_id}:epoch:{epoch}:review",
+        f"task:{job_id}:epoch:{epoch}:completed",
+    ]
+    for _ in range(3):
+        app.state.master_projection.project_task(job_id)
+        assert app.state.master_projection.reconcile()["created"] == 0
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE task_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 6
+
+
+def test_final_approval_commits_outbox_and_replays_projection_failure(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -434,25 +510,63 @@ def test_final_approval_rolls_back_task_and_projection_together(
     notifications: list[int] = []
     monkeypatch.setattr(app.state.hub, "notify", notifications.append)
 
-    with pytest.raises(sqlite3.IntegrityError, match="projection rejected"):
-        client.post(f"/api/jobs/{job_id}/approve")
+    approved = client.post(f"/api/jobs/{job_id}/approve")
 
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "done"
     assert app.state.db.execute(
         "SELECT status FROM jobs WHERE id = ?",
         (job_id,),
-    ).fetchone()["status"] == "review"
+    ).fetchone()["status"] == "done"
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
         "AND json_extract(payload, '$.job_id') = ? "
         "AND json_extract(payload, '$.mutation') = 'review_approved'",
         (job_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()[0] == 1
+    outbox = app.state.db.execute(
+        "SELECT id, state, failure_code, attempt_count "
+        "FROM task_projection_outbox WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert dict(outbox) == {
+        "id": outbox["id"],
+        "state": "pending",
+        "failure_code": "projection_failed",
+        "attempt_count": 1,
+    }
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM master_projections "
         "WHERE task_id = ? AND projection_type = 'master.task.completed'",
         (job_id,),
     ).fetchone()[0] == 0
-    assert notifications == []
+    task_session_id = app.state.db.execute(
+        "SELECT session_id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["session_id"]
+    assert notifications == [task_session_id]
+
+    app.state.db.execute("DROP TRIGGER reject_atomic_completion")
+    replay = app.state.master_projection.reconcile()
+
+    assert replay["created"] == 1
+    assert dict(
+        app.state.db.execute(
+            "SELECT state, failure_code, attempt_count "
+            "FROM task_projection_outbox WHERE id = ?",
+            (outbox["id"],),
+        ).fetchone()
+    ) == {
+        "state": "projected",
+        "failure_code": None,
+        "attempt_count": 2,
+    }
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE task_id = ? AND projection_type = 'master.task.completed'",
+        (job_id,),
+    ).fetchone()[0] == 1
+    assert app.state.master_projection.reconcile()["created"] == 0
 
 
 def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
@@ -800,7 +914,9 @@ def test_idle_reconcile_ticks_do_not_reinsert_projected_rows(
     ).fetchone()[0] == 1
 
 
-def test_uncaptured_legacy_master_task_remains_startable(tmp_path: Path):
+def test_uncaptured_legacy_master_task_remains_startable_and_approvable(
+    tmp_path: Path,
+):
     app, client, project = _app_and_client(tmp_path)
     _desk, jobs = _delegate(
         app,
@@ -826,6 +942,31 @@ def test_uncaptured_legacy_master_task_remains_startable(tmp_path: Path):
         (job_id,),
     ).fetchone()["status"] == "running"
     assert app.state.master_projection.safe_project_task(job_id) is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections WHERE source_table = 'jobs' "
+        "AND source_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review' WHERE id = ?",
+        (job_id,),
+    )
+
+    approved = client.post(f"/api/jobs/{job_id}/approve")
+
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "done"
+    assert dict(
+        app.state.db.execute(
+            "SELECT state, failure_code, attempt_count "
+            "FROM task_projection_outbox WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    ) == {
+        "state": "failed_attribution",
+        "failure_code": "focus_attribution_unavailable",
+        "attempt_count": 1,
+    }
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM master_projections WHERE source_table = 'jobs' "
         "AND source_id = ?",

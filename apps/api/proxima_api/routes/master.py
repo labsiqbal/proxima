@@ -198,14 +198,15 @@ def register(app, deps):
             (data.get("session_id"),),
         ).fetchone()
         data["run_status"] = run["status"] if run else None
-        if data.get("status") == "running" and data["run_status"] == "queued":
-            data["desk_status"] = "queued"
-        else:
-            data["desk_status"] = data.get("status")
         project = db().execute("SELECT slug, name FROM projects WHERE id = ?", (data.get("project_id"),)).fetchone()
         data["project_slug"] = project["slug"] if project else None
         data["project_name"] = project["name"] if project else None
-        return canonical_job_payload(data, connection=db())
+        canonical = canonical_job_payload(data, connection=db())
+        if data.get("status") == "running" and data["run_status"] == "queued":
+            canonical["desk_status"] = "queued"
+        else:
+            canonical["desk_status"] = canonical["run_projection"]["status"]
+        return canonical
 
     @app.get("/api/master/desk")
     def get_master_desk(user: dict[str, Any] = Depends(current_user)):

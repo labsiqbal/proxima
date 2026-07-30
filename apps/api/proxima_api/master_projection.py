@@ -19,6 +19,7 @@ from .event_payloads import (
 )
 from .master_persistence import canonical_job_payload
 from .run_projection import effective_job_status_sql
+from .task_state_events import task_projection_epoch
 from . import master_focus
 
 log = logging.getLogger("proxima.master_projection")
@@ -36,6 +37,17 @@ _BASE_PAYLOAD_FIELDS = {
     "source",
     "subject_container_id",
 }
+
+
+class ProjectionAttributionError(ValueError):
+    def __init__(self, code: str):
+        if code not in {
+            "focus_attribution_unavailable",
+            "projection_scope_unavailable",
+        }:
+            raise ValueError("invalid projection attribution failure")
+        self.code = code
+        super().__init__(code.replace("_", " "))
 _TASK_PAYLOAD_FIELDS = {
     "area_id",
     "area_kind",
@@ -216,6 +228,16 @@ def _as_int(value: Any) -> int:
     return int(value)
 
 
+def _task_projection_key(
+    job_id: int,
+    key_suffix: str,
+    projection_epoch: int,
+) -> str:
+    if projection_epoch <= 0:
+        return f"task:{job_id}:{key_suffix}"
+    return f"task:{job_id}:epoch:{projection_epoch}:{key_suffix}"
+
+
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -266,8 +288,9 @@ def assert_master_projection_ledger(conn: sqlite3.Connection) -> None:
             "PRAGMA index_list(master_projections)"
         ).fetchall()
     }
+    if indexes.get("idx_master_projections_source") is not False:
+        raise RuntimeError("Master projection ledger indexes are incomplete")
     for name in (
-        "uq_master_projections_source_type",
         "uq_master_projections_message",
         "uq_master_projections_event",
     ):
@@ -395,6 +418,55 @@ def assert_master_projection_ledger(conn: sqlite3.Connection) -> None:
             raise RuntimeError("Master projection ledger source link is incomplete")
 
 
+def assert_task_projection_outbox(conn: sqlite3.Connection) -> None:
+    table = conn.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'task_projection_outbox'"
+    ).fetchone()
+    if table is None:
+        raise RuntimeError("Task projection outbox is missing")
+    schema_sql = " ".join(str(table["sql"] or "").lower().split())
+    required_schema = (
+        "state in ('pending', 'projected', 'failed_attribution')",
+        "references jobs(id) on delete cascade",
+        "references events(id) on delete cascade",
+        "references master_projections(id) on delete set null",
+        "unique(task_event_id)",
+        "state = 'projected' and projection_id is not null",
+    )
+    if any(token not in schema_sql for token in required_schema):
+        raise RuntimeError("Task projection outbox schema is incomplete")
+    expected_foreign_keys = {
+        "job_id": ("jobs", "CASCADE"),
+        "task_event_id": ("events", "CASCADE"),
+        "projection_id": ("master_projections", "SET NULL"),
+    }
+    foreign_keys = {
+        str(row[3]): (str(row[2]), str(row[6]).upper())
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(task_projection_outbox)"
+        ).fetchall()
+    }
+    if foreign_keys != expected_foreign_keys:
+        raise RuntimeError("Task projection outbox foreign keys are incomplete")
+    indexes = {
+        str(row[1]): bool(row[2])
+        for row in conn.execute(
+            "PRAGMA index_list(task_projection_outbox)"
+        ).fetchall()
+    }
+    if indexes.get("idx_task_projection_outbox_state") is not False:
+        raise RuntimeError("Task projection outbox indexes are incomplete")
+    projection_indexes = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA index_list(master_projections)"
+        ).fetchall()
+    }
+    if "uq_master_projections_source_type" in projection_indexes:
+        raise RuntimeError("Task projection lifecycle history is unavailable")
+
+
 class MasterProjectionService:
     """One projection boundary for Task and supervision state."""
 
@@ -406,6 +478,19 @@ class MasterProjectionService:
             return self.project_task(job_id)
         except Exception:
             log.exception("Master Task projection failed for Task %s", job_id)
+            return None
+
+    def safe_process_task_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.process_task_outbox(outbox_id)
+        except Exception:
+            log.exception(
+                "Master Task projection outbox failed for row %s",
+                outbox_id,
+            )
             return None
 
     def safe_project_attention(
@@ -442,6 +527,85 @@ class MasterProjectionService:
     @property
     def conn(self) -> sqlite3.Connection:
         return self.app.state.worker_db
+
+    def _record_outbox_attempt(
+        self,
+        outbox_id: int,
+        *,
+        state: str,
+        projection_id: int | None,
+        failure_code: str | None,
+    ) -> None:
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "UPDATE task_projection_outbox SET state = ?, "
+                    "projection_id = ?, failure_code = ?, "
+                    "attempt_count = attempt_count + 1, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        state,
+                        projection_id,
+                        failure_code,
+                        outbox_id,
+                    ),
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
+    def process_task_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM task_projection_outbox WHERE id = ?",
+            (outbox_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["state"] == "projected" and row["projection_id"] is not None:
+            projection = self.conn.execute(
+                "SELECT * FROM master_projections WHERE id = ?",
+                (row["projection_id"],),
+            ).fetchone()
+            return dict(projection) if projection else None
+        try:
+            projection = self.project_task(
+                _as_int(row["job_id"]),
+                status_override=str(row["task_status"]),
+                projection_epoch_override=_as_int(row["projection_epoch"]),
+            )
+            if projection is None:
+                raise ProjectionAttributionError(
+                    "projection_scope_unavailable"
+                )
+        except ProjectionAttributionError as exc:
+            self._record_outbox_attempt(
+                outbox_id,
+                state="failed_attribution",
+                projection_id=None,
+                failure_code=exc.code,
+            )
+            return None
+        except Exception:
+            self._record_outbox_attempt(
+                outbox_id,
+                state="pending",
+                projection_id=None,
+                failure_code="projection_failed",
+            )
+            raise
+        self._record_outbox_attempt(
+            outbox_id,
+            state="projected",
+            projection_id=_as_int(projection["id"]),
+            failure_code=None,
+        )
+        return projection
 
     def _insert(
         self,
@@ -573,8 +737,8 @@ class MasterProjectionService:
                             and source["epoch_session_id"] != master_session_id
                         )
                     ):
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     subject_container_id = source["container_id"]
                     focus_epoch_id = source["origin_focus_epoch_id"]
@@ -589,8 +753,8 @@ class MasterProjectionService:
                         (origin_message_id, master_session_id),
                     ).fetchone()
                     if captured is None:
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     focus_epoch_id = captured["focus_epoch_id"]
                 # Notifications retain originating Focus while their subject
@@ -608,8 +772,8 @@ class MasterProjectionService:
                         (focus_epoch_id,),
                     ).fetchone()
                     if epoch is None:
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     focus_container_id = _as_int(epoch["container_id"])
                 event_payload = {
@@ -715,17 +879,42 @@ class MasterProjectionService:
         *,
         connection: sqlite3.Connection | None = None,
         notify_sessions: set[int] | None = None,
+        status_override: str | None = None,
+        projection_epoch_override: int | None = None,
     ) -> dict[str, Any] | None:
         conn = connection or self.conn
         job = self._task(job_id, connection=conn)
         if job is None:
             return None
-        status = str(
-            canonical_job_payload(
-                dict(job),
-                connection=conn,
-            )["run_projection"]["status"]
+        status = (
+            str(status_override)
+            if status_override is not None
+            else str(
+                canonical_job_payload(
+                    dict(job),
+                    connection=conn,
+                )["run_projection"]["status"]
+            )
         )
+        if status not in {
+            "queued",
+            "running",
+            "review",
+            "done",
+            "failed",
+            "cancelled",
+        }:
+            raise ValueError("Task projection status is invalid")
+        projection_epoch = (
+            _as_int(projection_epoch_override)
+            if projection_epoch_override is not None
+            else task_projection_epoch(
+                conn,
+                job_id=job_id,
+            )
+        )
+        if projection_epoch < 0:
+            raise ValueError("Task projection epoch is invalid")
         reason = str(job["blocked_reason"] or "").strip()
         projection_type: str
         verb: str
@@ -772,6 +961,11 @@ class MasterProjectionService:
         elif status == "queued":
             content = f"Task #{job_id} is blocked by a prerequisite."
 
+        projection_key = _task_projection_key(
+            job_id,
+            key_suffix,
+            projection_epoch,
+        )
         payload = {
             "task_id": job_id,
             "task_status": status,
@@ -781,12 +975,12 @@ class MasterProjectionService:
             "area_kind": job["area_kind"],
             "checkpoint_id": checkpoint["id"] if checkpoint else None,
             "attention_required": status == "review" or bool(reason),
-            "toast_key": f"task:{job_id}:{key_suffix}",
+            "toast_key": projection_key,
         }
         return self._insert(
             owner_user_id=_as_int(job["master_owner_user_id"]),
             master_session_id=_as_int(job["origin_master_session_id"]),
-            projection_key=f"task:{job_id}:{key_suffix}",
+            projection_key=projection_key,
             projection_type=projection_type,
             source_table="jobs",
             source_id=job_id,
@@ -1054,15 +1248,36 @@ class MasterProjectionService:
         before = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
+        outbox_rows = self.conn.execute(
+            "SELECT outbox.id FROM task_projection_outbox AS outbox "
+            "LEFT JOIN task_delegations AS delegation "
+            "ON delegation.job_id = outbox.job_id "
+            "WHERE outbox.state = 'pending' OR ("
+            "outbox.state = 'failed_attribution' "
+            "AND outbox.failure_code = 'focus_attribution_unavailable' "
+            "AND delegation.origin_focus_captured = 1"
+            ") ORDER BY outbox.id"
+        ).fetchall()
+        for row in outbox_rows:
+            self.safe_process_task_outbox(_as_int(row["id"]))
         effective_status = effective_job_status_sql("j")
         jobs = self.conn.execute(
             "WITH effective AS ("
             "  SELECT j.*, "
-            f"    {effective_status} AS effective_status "
+            f"    {effective_status} AS effective_status, "
+            "    COALESCE(("
+            "      SELECT MAX(event.id) FROM events AS event "
+            "      WHERE event.session_id = j.session_id "
+            "      AND event.type = 'job.update' "
+            "      AND json_extract(event.payload, '$.job_id') = j.id "
+            "      AND json_extract(event.payload, '$.mutation') "
+            "        = 'checkpoint_restored'"
+            "    ), 0) AS projection_epoch "
             "  FROM jobs j"
             "), candidate AS ("
             "  SELECT j.id AS source_id, "
             "    COALESCE(j.updated_at, j.created_at) AS ordering, "
+            "    j.projection_epoch, "
             "    CASE "
             "      WHEN j.effective_status = 'running' "
             "        THEN 'master.task.started' "
@@ -1078,7 +1293,18 @@ class MasterProjectionService:
             "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
             "        THEN 'master.task.blocked' "
             "      ELSE NULL "
-            "    END AS expected_type "
+            "    END AS expected_type, "
+            "    CASE "
+            "      WHEN j.effective_status = 'running' THEN 'started' "
+            "      WHEN j.effective_status = 'done' THEN 'completed' "
+            "      WHEN j.effective_status = 'failed' THEN 'failed' "
+            "      WHEN j.effective_status = 'cancelled' THEN 'cancelled' "
+            "      WHEN j.effective_status = 'review' THEN 'review' "
+            "      WHEN j.effective_status = 'queued' "
+            "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
+            "        THEN 'blocked' "
+            "      ELSE NULL "
+            "    END AS expected_suffix "
             "  FROM effective j JOIN sessions ms "
             "    ON ms.id = j.origin_master_session_id "
             "  WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id"
@@ -1089,7 +1315,12 @@ class MasterProjectionService:
             "  SELECT 1 FROM master_projections mp "
             "  WHERE mp.source_table = 'jobs' "
             "  AND mp.source_id = c.source_id "
-            "  AND mp.projection_type = c.expected_type"
+            "  AND mp.projection_key = CASE "
+            "    WHEN c.projection_epoch > 0 THEN "
+            "      'task:' || c.source_id || ':epoch:' "
+            "      || c.projection_epoch || ':' || c.expected_suffix "
+            "    ELSE 'task:' || c.source_id || ':' || c.expected_suffix "
+            "  END"
             ") "
             "ORDER BY c.ordering, c.source_id"
         ).fetchall()
@@ -1157,6 +1388,11 @@ class MasterProjectionService:
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
         return {
-            "observed": len(jobs) + len(interventions) + len(attentions),
+            "observed": (
+                len(outbox_rows)
+                + len(jobs)
+                + len(interventions)
+                + len(attentions)
+            ),
             "created": _as_int(after) - _as_int(before),
         }

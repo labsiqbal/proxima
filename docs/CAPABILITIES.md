@@ -559,8 +559,10 @@ and a durable human-readable Master recovery entry together. The entry identifie
 owner, checkpoint, prior/restored state, discarded progress, and conflicting progress
 without copying worktree paths, Task titles, or arbitrary graph identifiers. Recovery
 events use the same 16 KiB durable-event encoder as Master projections. All fallible
-database writes and worktree checks finish before reset; a failure after reset restores
-the original worktree commit before the database rollback is returned.
+Git checks finish before the immediate write transaction; conflict, job, run, and node
+state are then reread under that lock before any restore write. All fallible database
+writes and worktree checks finish before reset; a failure after reset restores the
+original worktree commit before the database rollback is returned.
 Normal project Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
@@ -611,16 +613,21 @@ permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
-second message or event and isolates failures per authoritative source row. SSE
+second message or event and isolates failures per authoritative source row. Task
+projection keys include the latest checkpoint-recovery event, so restored reruns
+emit each lifecycle status exactly once without colliding with earlier history. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 Owner mutations that happen outside a worker run append a transaction-coupled
-`job.update` to the Task session. Review completion/failure also writes its durable
-Master projection in that same transaction and defers Task and Master stream
-notifications until commit. A mounted Task workspace consumes this one shared
-invalidation path for review verdicts and checkpoint restore instead of waiting for
-running-only polling.
+`job.update` to the Task session. Review completion/failure also enqueues a durable
+Master projection outbox row in that same transaction. Projection delivery and Task
+or Master stream notifications happen only after commit. Delivery failure leaves a
+replayable pending row; unavailable legacy Focus becomes explicit failed attribution
+without rolling the Task verdict back or weakening attribution. A mounted Task
+workspace consumes this one shared invalidation path for review verdicts and
+checkpoint restore instead of waiting for running-only polling. Fleet grouping and
+labels consume the same canonical effective status as its run projection.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
 with five chapters when Master is enabled and four when it is disabled. Completion

@@ -44,12 +44,13 @@ dependency readiness before accepting a queued legacy run.
 ## Projection boundary
 
 `MasterProjectionService` is the only writer for asynchronous Task and supervision
-messages in the durable Master thread. Review verdict routes can lend it their open
-transaction so the Task state, invalidation, Master message/event/ledger, and
-deferred notifications share one commit boundary. A confirmed checkpoint restore
-uses the mutation-coupled `task_state_events.py` boundary to append its bounded
-recovery message and event inside the restore transaction. Both boundaries read
-existing authoritative rows:
+messages in the durable Master thread. Review verdict routes write Task state,
+`job.update`, and `task_projection_outbox` through one open transaction. The service
+processes that durable delivery intent only after commit, so projection failure
+cannot roll back the Task verdict and Task or Master notifications cannot expose
+uncommitted state. A confirmed checkpoint restore uses the same mutation-coupled
+`task_state_events.py` boundary to append its bounded recovery message and event
+inside the restore transaction. Both boundaries read existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
 - `attention_items`
@@ -66,23 +67,26 @@ It writes:
 - one `master_projections` idempotency/link row
 
 `master_projections` is not lifecycle truth. Its unique owner and projection key
-links a message and event to a source table and row. Source table and event type
-must match, links are owner-scoped, and committed rows must have both their message
-and event. Message, event, and ledger creation is one transaction, so rollback
-cannot leave partial projection state. Message and event deletion is restricted;
-Task deletion clears the optional Task link while preserving the historical source
-identity.
+links a message and event to a source table and row. Task keys include the latest
+checkpoint-recovery event id, so a restored rerun has a new idempotency generation.
+Source table and event type must match, links are owner-scoped, and committed rows
+must have both their message and event. Message, event, and ledger creation is one
+transaction, so rollback cannot leave partial projection state. Message and event
+deletion is restricted; Task deletion clears the optional Task link while preserving
+the historical source identity.
 
-Startup validates the projection table schema, indexes, foreign keys, Master
-session ownership, source links, and bounded payload equality. Reconciliation after
-restart can safely retry because an existing key produces no second message or
-event. Each reconciliation candidate has its own failure boundary, so one invalid
-legacy source remains unprojected without starving later Task, Satpam, or Attention
-repair. A reused key with different ownership or source binding fails closed. Raw
-token, reasoning, and tool delta events are never projected, and payloads are
-limited to 16 KiB. Projection messages are also server-owned summaries: Task
-titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
-and credentials are not copied into the Master conversation or event payload.
+Startup validates the projection and outbox table schemas, indexes, foreign keys,
+Master session ownership, source links, and bounded payload equality. Reconciliation
+after restart processes pending outbox rows and safely retries missing current-state
+projections because an existing generation key produces no second message or event.
+Unavailable legacy Focus is recorded as failed attribution and can be replayed only
+after attribution becomes provable. Each reconciliation candidate has its own
+failure boundary, so one invalid legacy source does not starve later Task, Satpam, or
+Attention repair. A reused key with different ownership or source binding fails
+closed. Raw token, reasoning, and tool delta events are never projected, and
+payloads are limited to 16 KiB. Projection messages are also server-owned summaries:
+Task titles, runner errors, permission commands, Attention text, Satpam reasons,
+paths, and credentials are not copied into the Master conversation or event payload.
 
 Review-ready payloads include the stable Task, Container, Area, and latest
 checkpoint ids. Attention and Satpam payloads include their source row ids and a

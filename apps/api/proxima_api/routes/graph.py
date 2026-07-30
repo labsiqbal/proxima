@@ -149,6 +149,12 @@ def register(app, deps):
     _can_access = deps["_can_access"]
     _member_project_id = deps["_member_project_id"]
 
+    def _process_task_projection(task_event: dict[str, int]) -> None:
+        outbox_id = task_event.get("projection_outbox_id")
+        projection = getattr(app.state, "master_projection", None)
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
+
     def require_graph() -> None:
         features.require(cfg, features.WORKFLOW_GRAPH)
 
@@ -1158,17 +1164,6 @@ def register(app, deps):
                     mutation="review_approved",
                 )
                 notify_sessions.add(task_event["session_id"])
-                projection = getattr(
-                    app.state,
-                    "master_projection",
-                    None,
-                )
-                if projection is not None:
-                    projection.project_task(
-                        job_id,
-                        connection=conn,
-                        notify_sessions=notify_sessions,
-                    )
                 conn.execute("COMMIT")
             except Exception:
                 if conn.in_transaction:
@@ -1176,6 +1171,7 @@ def register(app, deps):
                 raise
         for session_id in notify_sessions:
             app.state.hub.notify(session_id)
+        _process_task_projection(task_event)
         app.state.task_delegation.prerequisite_changed(
             job_id, connection=conn
         )

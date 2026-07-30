@@ -108,20 +108,29 @@ and its Task is promoted to running in the same transaction as the run claim.
 `jobs` remains lifecycle truth, but owner actions can change it while no worker run
 is active. Review approval/rejection and checkpoint restore append a durable
 `job.update` to the Task session inside the same database transaction as the state
-change. Review completion/failure writes the corresponding Master message, event,
-and projection ledger in that transaction as well. Task and Master stream
-notifications fire only after commit. Mounted Task detail subscribes to the shared
-invalidation event; running polling is not the authority for externally mutable
-states.
+change. Projectable review transitions also enqueue `task_projection_outbox` from
+that shared event boundary. The Task verdict and durable Master delivery intent
+therefore commit together, while projection message/event/ledger delivery and all
+stream notifications happen only after commit. A failed delivery remains replayable.
+Legacy Tasks without safe Focus attribution keep their Task verdict and retain an
+explicit failed-attribution outbox state instead of publishing an unattributed
+Master message. Mounted Task detail subscribes to the shared invalidation event;
+running polling is not the authority for externally mutable states.
+
+Projection idempotency includes the latest durable checkpoint-restore event. A Task
+restored and run again can therefore emit Started, Review, and Completed once for
+the new lifecycle without colliding with the earlier lifecycle's projection keys.
 
 Checkpoint restore also appends its audit record and, for a Master-origin Task, one
 human-readable `master.task.recovered` history message/event in the restore
 transaction. It records actor, checkpoint, prior/new status, discarded progress,
 and conflicts through bounded server-owned summaries rather than arbitrary graph
-identifiers. All validation and durable writes complete before a job worktree reset.
-A post-reset failure compensates to the original worktree commit and rolls back the
-database transaction, so Task, Fleet, history, and the worktree cannot commit
-contradictory states.
+identifiers. Git preflight completes before the immediate write transaction, then
+the restore rereads checkpoint, conflict, job, run, and node state under that lock.
+All validation and durable writes complete before a job worktree reset. A post-reset
+failure compensates to the original worktree commit and rolls back the database
+transaction, so Task, Fleet, history, and the worktree cannot commit contradictory
+states.
 
 `scripts/verify_task_reconciliation_browser.py` exercises mounted review approval,
 mounted checkpoint restore, and durable recovery history in Chromium. Its three

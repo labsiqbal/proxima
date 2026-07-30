@@ -640,15 +640,18 @@ steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 Satpam rows into the same durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
-retry, reconnect, and restart reconciliation idempotent. Projection message, event,
-and ledger rows commit together. Startup validates their strict owner, source/type,
-foreign-key, index, complete-link, and bounded payload contract. Raw streaming deltas
-are never projected. Each named event carries the same captured Focus and subject
-attribution committed with its message, so the live projection cannot drift before
-canonical reconciliation. Server-owned summaries omit Task titles, runner errors,
-permission commands, Attention text, Satpam reasons, paths, and credentials. The
-existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
-[master-supervision.md](../master-supervision.md).
+retry, reconnect, and restart reconciliation idempotent. Task keys include the latest
+checkpoint recovery event as a lifecycle generation. Review verdict transactions
+write the Task invalidation and `task_projection_outbox` intent together; projection
+delivery happens only after commit and remains replayable if it fails. Projection
+message, event, and ledger rows then commit together. Startup validates their strict
+owner, source/type, foreign-key, index, complete-link, and bounded payload contract.
+Raw streaming deltas are never projected. Each named event carries the same captured
+Focus and subject attribution committed with its message, so the live projection
+cannot drift before canonical reconciliation. Server-owned summaries omit Task
+titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
+and credentials. The existing session SSE cursor accepts both `after_id` and
+`Last-Event-ID`. See [master-supervision.md](../master-supervision.md).
 
 The authenticated application mounts exactly one `MasterStateProvider` above
 `AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
@@ -979,10 +982,12 @@ evicts the oldest unpinned row; pinned
 rows are excluded. Restore has a separate impact-preview route, requires explicit
 confirmation, refuses while a job in the project is running or a later project job
 could depend on the current refs, and preflights a restorable worktree for dirt and a
-valid commit before changing database state. It removes only post-checkpoint runs and
-restores the one job/node set transactionally. Main-checkout SHAs are reference-only;
-only an existing job-owned worktree can be hard-reset, so unrelated project work is
-never rewound. It never VACUUMs SQLite and never archives a project tree.
+valid commit before changing database state. After preflight it acquires an immediate
+write transaction and rereads the checkpoint, conflicts, current job, runs, and node
+state before any mutation. It removes only post-checkpoint runs and restores the one
+job/node set transactionally. Main-checkout SHAs are reference-only; only an existing
+job-owned worktree can be hard-reset, so unrelated project work is never rewound. It
+never VACUUMs SQLite and never archives a project tree.
 
 ### 6b. Repo job: worktree → diff review → local merge (slices 2+4, live)
 

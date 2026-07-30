@@ -60,6 +60,7 @@ from .master_supervisor import MasterSupervisor
 from .master_projection import (
     MasterProjectionService,
     assert_master_projection_ledger,
+    assert_task_projection_outbox,
 )
 from . import master_focus
 from .task_delegation import TaskDelegationService
@@ -390,6 +391,7 @@ def _create_app(
         )  # versioned migrations (backs up before applying)
         assert_master_persistence(app.state.db)
         assert_master_projection_ledger(app.state.db)
+        assert_task_projection_outbox(app.state.db)
         migrate_legacy_ops_containers(app.state.db)
     app.state.worker_db = connect(
         cfg["database_path"],
