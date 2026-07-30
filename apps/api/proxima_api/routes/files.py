@@ -14,7 +14,7 @@ import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from .. import container_registry, fsapi
+from .. import apprunner, container_registry, fsapi
 from .. import app_settings
 from .. import auth_health
 from .. import higgsfield
@@ -511,6 +511,9 @@ def register(app, deps):
                 int(payload.port or 5180),
                 effect_lease=effect_lease,
             )
+        except apprunner.PortInUseError as exc:
+            effect_lease.release()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except BaseException:
             effect_lease.release()
             raise

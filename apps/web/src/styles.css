@@ -109,6 +109,7 @@
 	--ui-spinner-size: 1rem;
 	--ui-spinner-stroke: 0.125rem;
 	--focus-ring-width: 3px;
+	--ui-letter-wide: 0.08em;
 	--moodboard-card-min-width: 13rem;
 	--moodboard-popover-width: 23rem;
 	--moodboard-dialog-width: 30rem;
@@ -260,6 +261,12 @@ button:disabled {
 	grid-column: 3;
 	grid-row: 2;
 }
+.app-shell.delegate-mode {
+	grid-template-columns: minmax(0, 1fr);
+}
+.app-shell.delegate-mode > .main-pane {
+	grid-column: 1;
+}
 .sidebar {
 	min-width: 0;
 	border-right: 1px solid var(--ui-stroke-secondary);
@@ -285,6 +292,23 @@ button:disabled {
 .composer-footer {
 	justify-content: space-between;
 }
+.sidebar-work-context {
+	display: grid;
+	gap: var(--space-1);
+	padding: var(--space-2);
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface-subtle);
+}
+.sidebar-work-context > span {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-2xs);
+	font-weight: 700;
+	letter-spacing: var(--ui-letter-wide);
+	text-transform: uppercase;
+}
+.sidebar-work-context .project-switcher { max-width: none; }
+.sidebar-work-context .project-switcher-btn { width: 100%; justify-content: space-between; }
 .brand-row {
 	gap: 10px;
 }
@@ -3246,6 +3270,37 @@ button:disabled {
 }
 .top-bar-spacer {
 	flex: 1;
+}
+.shell-mode-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: var(--space-1);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface-subtle);
+}
+.shell-mode-switch button {
+	min-height: var(--shell-control-height);
+	border: 0;
+	border-radius: var(--radius-sm);
+	padding-inline: var(--space-3);
+	background: transparent;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	font-weight: 700;
+	cursor: pointer;
+	transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.shell-mode-switch button:hover { color: var(--ui-text-primary); }
+.shell-mode-switch button.active {
+	background: var(--ui-surface);
+	box-shadow: var(--shadow-composer);
+	color: var(--ui-accent);
+}
+.shell-mode-switch button:focus-visible {
+	outline: var(--focus-ring-width) solid var(--ui-focus-ring);
+	outline-offset: var(--space-1);
 }
 /* Global active-project chip: text + chevron, immediately right of Search. */
 .project-switcher {
@@ -14763,6 +14818,9 @@ button.moodboard-add-method:hover {
 	.mobile-context .project-switcher-name {
 		color: var(--ui-text-secondary);
 	}
+	.mobile-context .shell-mode-switch { max-width: 100%; }
+	.delegate-mobile-topbar { justify-content: center; }
+	.app-shell.delegate-mode .main-pane { padding-right: 0; }
 	.master-body { padding: var(--space-3); }
 	.master-head.master-head {
 		position: relative;

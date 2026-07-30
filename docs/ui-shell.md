@@ -4,13 +4,22 @@ This is the durable contract for Proxima's application shell. It describes produ
 
 ## Information architecture
 
-There is **one workspace**. The old Ops/Code split is gone — no workspace switcher exists anywhere. The desktop shell has three regions:
+There is **one workspace** with two intentional modes. **Work** is the ordinary
+workspace; **Delegate** is the focused Master desk. The old Ops/Code split is gone.
+The desktop Work shell has three regions:
 
 - a persisted, collapsible **left navigation** ordered by the flow,
 - the **destination work surface** in the center,
 - a slim **right tool rail** whose tools open as overlay panels above the current screen.
 
-The left navigation is flow-ordered: **Chat** (hands-on), **Master** (delegate and monitor), **Tasks** (watch it run), **Workflows** (keep what worked), then **Archive** (where deliverables live), plus feature-gated **Design**. The **active project** is switched from a text control in the shell top bar (immediately right of Search). Project **management** (list / link / create / remove / container settings) lives under **Settings → Projects**, not primary nav. Agents and Settings stay in the account menu. The default landing view is Chat.
+The header-level **Work / Delegate** control is URL durable (`?mode=work` or
+`?mode=delegate`) and uses pressed-button semantics. Work navigation is flow-ordered:
+**Chat** (hands-on), **Tasks** (watch it run), **Workflows** (keep what worked), then
+**Archive** (where deliverables live), plus feature-gated **Design**. The active-project
+switcher belongs to the Work sidebar, not global chrome or Master. Project management
+(list / link / create / remove / container settings) lives under **Settings → Projects**,
+not primary nav. Agents and Settings stay in the Work account menu. The default landing
+mode and surface are Work and Chat.
 
 ## Chat — the front door
 
@@ -30,7 +39,10 @@ until the
 [documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
 pass. Stale local view state cannot bypass this gate.
 
-Master is a first-class destination, not a Chat tab or Tasks filter. Its header identifies
+Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It removes
+the Work sidebar, project selector, search, tool rail, ordinary destinations, popup, and
+account surfaces, leaving only the Master conversation and its necessary desk status.
+Switching back restores the prior Work surface. Its header identifies
 the built-in system orchestrator and lets the owner choose a server-qualified backing runner; the desk
 itself keeps the counterpart label **Master** and does not expose a fake worker profile.
 A compact capacity strip always states running/free out of three, queued count, and the
@@ -192,9 +204,9 @@ header). The popover lists de-duplicated tasks and chat sessions with deep-links
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
 Attention stays a separate `!` control and remains hidden when empty.
 
-Agents and Settings live in the profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The **top bar** owns the brand mark (far left), the sidebar collapse toggle, search, the **active project** text switcher (immediately right of Search), Running + Attention (status cluster), and the account menu; the mobile topbar carries the same project switcher in the center context slot, and the drawer keeps its own brand copy since the desktop top bar hides below the tablet breakpoint. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across the app (shell `activeProject`). Surfaces that already filter / default-attach / list by active project (Chat, Master, Workflows library, Archive, Design) keep that contract. The header project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the header switch does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (global switcher only; open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project.
+Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, Design) keep that contract. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector; Master Focus and explicit target controls remain its own bounded context.
 
 ## Projects
 
@@ -226,12 +238,12 @@ Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell 
 ## Feature gates
 
 Routes, sidebar destinations, session eligibility, search, and deep links must all honor the server feature configuration. A hidden destination must not become reachable through stale state. Gating must not reorder the remaining navigation.
-The Master gate suppresses its settings section, help chapter, and delegation
-step in the general core tour.
+The Master gate suppresses the Delegate control, its settings section, help chapter, and
+delegation step in the general core tour. A stale `?mode=delegate` URL falls back to Work.
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics. Escape dismisses transient shell overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
+The left Work navigation width persists locally. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths Work navigation uses a drawer, the tool rail pins to the right edge, and the Task Composer and Master controls stack without changing semantics; Delegate keeps only the mode switch and Master desk. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 ## Extension points
 

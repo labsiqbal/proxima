@@ -5,24 +5,27 @@ import { describe, expect, it, vi } from 'vitest'
 import { MobileTopbar } from './MobileTopbar'
 
 describe('MobileTopbar', () => {
-  it('exposes Menu, Search, New chat, and a project switcher', async () => {
+  it('exposes Menu, Search, New chat, and the Work/Delegate switch', async () => {
     const user = userEvent.setup()
     const onMenu = vi.fn()
     const onSearch = vi.fn()
     const onNewChat = vi.fn()
-    const onSelectProject = vi.fn()
+    const onModeChange = vi.fn()
     const project = { id: 1, name: 'gnhf-e2e-projects', slug: 'gnhf-e2e-projects' } as never
     render(
       <MobileTopbar
         activeProject={project}
         projects={[project]}
-        onSelectProject={onSelectProject}
         onMenu={onMenu}
         onSearch={onSearch}
         onNewChat={onNewChat}
+        delegateEnabled
+        onModeChange={onModeChange}
       />,
     )
-    expect(screen.getByRole('button', { name: 'Active project: gnhf-e2e-projects' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Work' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'Delegate' }))
+    expect(onModeChange).toHaveBeenCalledWith('delegate')
     // Chrome Back is always present; disabled without a deep stack.
     expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Menu' }))

@@ -2,6 +2,7 @@ import type { Ref } from 'react'
 import type { Project } from '../../types'
 import { IconChevronLeft, IconMenu, IconNewChat, IconSearch } from './icons'
 import { ProjectSwitcher } from './ProjectSwitcher'
+import { ShellModeSwitch, type ShellMode } from './ShellModeSwitch'
 
 export function MobileTopbar({
   activeProject,
@@ -19,6 +20,10 @@ export function MobileTopbar({
   onSearch,
   onNewChat,
   menuButtonRef,
+  mode = 'work',
+  delegateEnabled = false,
+  onModeChange,
+  showProject = false,
 }: {
   activeProject: Project | null
   projects?: Project[]
@@ -35,6 +40,10 @@ export function MobileTopbar({
   onSearch: () => void
   onNewChat: () => void
   menuButtonRef?: Ref<HTMLButtonElement>
+  mode?: ShellMode
+  delegateEnabled?: boolean
+  onModeChange?: (mode: ShellMode) => void
+  showProject?: boolean
 }) {
   return <header className="mobile-topbar">
     <button
@@ -58,7 +67,7 @@ export function MobileTopbar({
       <IconChevronLeft size={18} />
     </button>
     <div className="mobile-context">
-      {onSelectProject ? (
+      {showProject && onSelectProject ? (
         <ProjectSwitcher
           projects={projects}
           activeProject={activeProject}
@@ -70,7 +79,7 @@ export function MobileTopbar({
           compact
         />
       ) : (
-        <strong>{activeProject?.name || 'Proxima'}</strong>
+        onModeChange ? <ShellModeSwitch mode={mode} delegateEnabled={delegateEnabled} onChange={onModeChange} /> : <strong>Work</strong>
       )}
     </div>
     <div className="mobile-actions">

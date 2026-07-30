@@ -1088,7 +1088,10 @@ an owner-facing reason instead of running unisolated.
 ### 8. Run & Preview app
 
 `POST /api/projects/{slug}/app/start` → `AppManager` launches one owner-confirmed dev
-process for the project with a filtered environment. A preview only works served
+process for the project with a filtered environment. If an unrelated process already owns
+the requested port, start returns a conflict and never signals or terminates that process.
+On Linux, readiness maps the listening socket back to the managed process group, closing
+the race where a foreign listener could otherwise appear as this app's preview. A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
 origin), so the transport depends on the vantage. Locally the iframe uses the other
 loopback hostname, avoiding host-cookie reuse across ports. Remotely,

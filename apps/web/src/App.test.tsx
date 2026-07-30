@@ -4,6 +4,7 @@ import {
 	projectSelectNavigatesToChat,
 	recentSessionForProject,
 	resolveArtifactReviewSession,
+	shellModeFromSearch,
 } from "./App";
 import type { ChatSession } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
@@ -78,6 +79,12 @@ describe("Shell project selection", () => {
 	it("header shell-only mode does not navigate to chat; open-chat mode does", () => {
 		expect(projectSelectNavigatesToChat("shell-only")).toBe(false);
 		expect(projectSelectNavigatesToChat("open-chat")).toBe(true);
+	});
+
+	it("restores the durable mode from the URL and defaults stale values to Work", () => {
+		expect(shellModeFromSearch("?mode=delegate")).toBe("delegate");
+		expect(shellModeFromSearch("?mode=work")).toBe("work");
+		expect(shellModeFromSearch("?mode=obsolete")).toBe("work");
 	});
 });
 

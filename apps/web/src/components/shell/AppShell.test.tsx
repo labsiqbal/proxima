@@ -90,7 +90,7 @@ describe('AppShell mobile drawer + search', () => {
     expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
   })
 
-  it('places a text project switcher next to Search in the top bar', () => {
+  it('places the project switcher in the Work sidebar, not global chrome', () => {
     render(
       <AppShell
         {...base}
@@ -99,12 +99,12 @@ describe('AppShell mobile drawer + search', () => {
         <div>main</div>
       </AppShell>,
     )
-    const topBar = document.querySelector('.top-bar') as HTMLElement
-    expect(within(topBar).getByRole('button', { name: 'Active project: Demo' })).toBeInTheDocument()
-    expect(within(topBar).getByRole('button', { name: 'Search' })).toBeInTheDocument()
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    expect(within(sidebar).getByRole('button', { name: 'Active project: Demo' })).toBeInTheDocument()
+    expect(within(document.querySelector('.top-bar') as HTMLElement).getByRole('button', { name: 'Search' })).toBeInTheDocument()
   })
 
-  it('routes header project picks to onSelectProject (shell filter), not onOpenProject', async () => {
+  it('routes Work-sidebar project picks to onSelectProject (shell filter), not onOpenProject', async () => {
     const user = userEvent.setup()
     const onSelectProject = vi.fn()
     const onOpenProject = vi.fn()
@@ -123,8 +123,8 @@ describe('AppShell mobile drawer + search', () => {
         <div>main</div>
       </AppShell>,
     )
-    const topBar = document.querySelector('.top-bar') as HTMLElement
-    await user.click(within(topBar).getByRole('button', { name: 'Active project: Demo' }))
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    await user.click(within(sidebar).getByRole('button', { name: 'Active project: Demo' }))
     await user.click(screen.getByRole('option', { name: /Other/ }))
     expect(onSelectProject).toHaveBeenCalledWith(projects[1])
     expect(onOpenProject).not.toHaveBeenCalled()
@@ -176,9 +176,27 @@ describe('AppShell mobile drawer + search', () => {
         <div>main</div>
       </AppShell>,
     )
-    const topBar = document.querySelector('.top-bar') as HTMLElement
-    const switcher = within(topBar).getByRole('button', { name: /Active project: Demo \(locked\)/ })
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    const switcher = within(sidebar).getByRole('button', { name: /Active project: Demo \(locked\)/ })
     expect(switcher).toBeDisabled()
     expect(switcher).toHaveAttribute('title', 'Project is locked while this view is open')
+  })
+
+  it('keeps Delegate to Master-only chrome with an accessible Work return', async () => {
+    const user = userEvent.setup()
+    const onModeChange = vi.fn()
+    render(<AppShell {...base} mode="delegate" onModeChange={onModeChange} features={{ ...base.features, masterOrchestrator: true }}><div>Master desk</div></AppShell>)
+    expect(screen.getAllByRole('button', { name: 'Delegate' })[0]).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('navigation', { name: 'Navigation' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Tools')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Active project:/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Account actions' })).not.toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Work' })[0])
+    expect(onModeChange).toHaveBeenCalledWith('work')
+  })
+
+  it('does not expose Delegate while Master is disabled', () => {
+    render(<AppShell {...base} features={{ ...base.features, masterOrchestrator: false }}><div>main</div></AppShell>)
+    expect(screen.queryByRole('button', { name: 'Delegate' })).not.toBeInTheDocument()
   })
 })
