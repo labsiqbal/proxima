@@ -1,4 +1,4 @@
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import type { Project } from '../../types'
 import { IconChevronLeft, IconMenu, IconNewChat, IconSearch } from './icons'
 import { ProjectSwitcher } from './ProjectSwitcher'
@@ -24,6 +24,7 @@ export function MobileTopbar({
   delegateEnabled = false,
   onModeChange,
   showProject = false,
+  statusControls,
 }: {
   activeProject: Project | null
   projects?: Project[]
@@ -44,11 +45,12 @@ export function MobileTopbar({
   delegateEnabled?: boolean
   onModeChange?: (mode: ShellMode) => void
   showProject?: boolean
+  statusControls?: ReactNode
 }) {
   return <header className="mobile-topbar">
     <button
       ref={menuButtonRef}
-      className="icon-button"
+      className="icon-button mobile-menu-btn"
       onClick={onMenu}
       aria-label="Menu"
       aria-expanded={drawerOpen}
@@ -83,6 +85,7 @@ export function MobileTopbar({
       )}
     </div>
     <div className="mobile-actions">
+      {statusControls}
       <button className="icon-button" onClick={onSearch} aria-label="Search" title="Search"><IconSearch size={18} /></button>
       {/* Compact blank-session control: desktop nav has no New chat row; Chat
           header still has one, but this stays reachable from any mobile view. */}

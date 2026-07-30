@@ -35,6 +35,7 @@ logs/
 *.log
 .cache/
 graphify-out/
+/artifacts/
 
 # Local dev runtime (DB, seeded credentials, scratch projects)
 apps/api/.dev/

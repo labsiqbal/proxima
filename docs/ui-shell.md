@@ -121,6 +121,10 @@ Normal authenticated surfaces show a labeled floating Master trigger with the
 `Ctrl`/`Command` + `Shift` + `M` shortcut. The popup persists at the bottom-left or
 bottom-right, avoids shell tools and safe areas, and becomes a sheet on narrow
 screens. It traps focus, closes with Escape, and returns focus to its trigger.
+Work Chat reserves one stable bottom shell lane whenever Master is enabled, so the
+trigger never shares pixels with the composer, Send, attachments, prompt modes, or
+the right tool rail. That lane remains reserved while the popup is open, preserving
+the Chat draft and composer geometry.
 Auth, onboarding, the full Master home, update application, drawers, search,
 account menus, and ToolDock panels suppress it. Durable conversation messages stay
 the completion/failure/review/Attention/Satpam truth; named durable transitions may
@@ -255,7 +259,13 @@ and shows only while work is in flight (`1 task running` / `N tasks running`; mo
 shorten to `N running`). When the count is zero the control is hidden entirely (quiet
 header). The popover lists de-duplicated tasks and chat sessions with deep-links (task
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
-Attention stays a separate `!` control and remains hidden when empty.
+Attention stays a separate `!` control and remains hidden when empty. On mobile,
+Menu, Back, Work / Delegate, Running, Attention, Search, and New chat live in normal
+header layout slots rather than fixed overlays. Compact Work widths use a second
+action row; the empty Attention slot remains reserved, so an item appearing cannot
+move Search or New chat under the pointer. Each control keeps the shared minimum hit
+target and tokenized focus ring. Shared shell labels use the higher-contrast label
+and accent-text tokens, including Work, Work project, and Recent chats.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 

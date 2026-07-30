@@ -36,7 +36,8 @@
 	--space-6: 24px;
 	--space-8: 32px;
 	--topbar-h: 52px;
-	--mobile-topbar-h: 58px;
+	--mobile-topbar-single-row-h: 58px;
+	--mobile-topbar-h: var(--mobile-topbar-single-row-h);
 	--toolrail-w: 46px;
 	--toolpanel-w: 480px;
 	--graph-inspector-width: 21rem;
@@ -96,6 +97,7 @@
 	--master-popup-edge: var(--space-4);
 	--master-popup-tool-clearance: calc(var(--toolrail-w) + var(--space-4));
 	--master-popup-bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
+	--shell-floating-bottom-lane: calc(var(--master-popup-trigger-size) + var(--space-6) + env(safe-area-inset-bottom));
 	--master-toast-width: 24rem;
 	--master-toast-top: calc(var(--topbar-h) + var(--space-4) + env(safe-area-inset-top));
 	--z-master-popup-scrim: 58;
@@ -103,7 +105,7 @@
 	--z-master-toast: 60;
 	--attention-width: 24rem;
 	--attention-max-height: 38rem;
-	--attention-trigger-size: 2rem;
+	--attention-trigger-size: var(--shell-control-height);
 	--tour-width: 34rem;
 	--tour-progress-height: 0.2rem;
 	--ui-spinner-size: 1rem;
@@ -141,6 +143,7 @@
 	--ui-text-primary: #111827;
 	--ui-text-secondary: #4b5563;
 	--ui-text-tertiary: #8a94a6;
+	--ui-shell-label: var(--ui-text-secondary);
 	--shadow-composer: 0 22px 50px rgba(15, 23, 42, 0.12);
 	--ui-surface: #ffffff;
 	--ui-surface-subtle: #f8fafc;
@@ -307,7 +310,7 @@ button:disabled {
 	background: var(--ui-surface-subtle);
 }
 .sidebar-work-context > span {
-	color: var(--ui-text-tertiary);
+	color: var(--ui-shell-label);
 	font-size: var(--text-2xs);
 	font-weight: 700;
 	letter-spacing: var(--ui-letter-wide);
@@ -386,7 +389,7 @@ button:disabled {
 	border: 0;
 	border-radius: var(--radius-sm);
 	background: transparent;
-	color: var(--ui-text-tertiary);
+	color: var(--ui-shell-label);
 	font-size: var(--text-2xs);
 	font-weight: 600;
 	letter-spacing: 0.08em;
@@ -1806,6 +1809,7 @@ button:disabled {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: var(--space-2);
 		min-height: var(--mobile-topbar-h);
 		border-bottom: 1px solid var(--ui-stroke-secondary);
 		background: var(--ui-surface-translucent, var(--ui-surface));
@@ -1821,6 +1825,27 @@ button:disabled {
 		flex: 1;
 		min-width: 0;
 		text-align: center;
+	}
+	.mobile-actions,
+	.shell-status-controls {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.mobile-actions {
+		flex: 0 0 auto;
+		justify-content: flex-end;
+	}
+	.attention-control-slot {
+		display: grid;
+		place-items: center;
+		flex: 0 0 var(--attention-trigger-size);
+		width: var(--attention-trigger-size);
+		height: var(--attention-trigger-size);
+	}
+	.mobile-topbar button:focus-visible {
+		outline: var(--focus-ring-width) solid var(--ui-focus-ring);
+		outline-offset: var(--ui-spinner-stroke);
 	}
 	.mobile-context strong,
 	.mobile-context span {
@@ -3316,7 +3341,7 @@ button:disabled {
 .shell-mode-switch button.active {
 	background: var(--ui-surface);
 	box-shadow: var(--shadow-composer);
-	color: var(--ui-accent);
+	color: var(--ui-accent-text);
 }
 .shell-mode-switch button:focus-visible {
 	outline: var(--focus-ring-width) solid var(--ui-focus-ring);
@@ -3512,6 +3537,41 @@ button:disabled {
 @media (max-width: 767px) {
 	.top-bar {
 		display: none;
+	}
+}
+@media (max-width: 480px) {
+	.app-shell.work-mode {
+		--mobile-topbar-h: calc((2 * var(--shell-control-height)) + (3 * var(--space-2)));
+	}
+	.app-shell.work-mode .mobile-topbar {
+		display: grid;
+		grid-template-columns: auto auto minmax(0, 1fr);
+		grid-template-areas:
+			"menu back context"
+			"actions actions actions";
+		align-content: center;
+	}
+	.app-shell.work-mode .mobile-menu-btn { grid-area: menu; }
+	.app-shell.work-mode .chrome-back-btn { grid-area: back; }
+	.app-shell.work-mode .mobile-context { grid-area: context; }
+	.app-shell.work-mode .mobile-actions {
+		grid-area: actions;
+		width: 100%;
+	}
+}
+@media (max-width: 359px) {
+	.composer-footer {
+		flex-wrap: wrap;
+	}
+	.composer-footer > .primary-button {
+		order: 1;
+		margin-left: auto;
+	}
+	.composer-footer > .composer-modes {
+		order: 2;
+		justify-content: center;
+		flex: 1 0 100%;
+		margin-right: 0;
 	}
 }
 
@@ -3987,6 +4047,9 @@ button:disabled {
 	width: 100%;
 	margin: 0 0 16px;
 }
+.app-shell.master-enabled.work-mode .chat-dock {
+	padding-bottom: var(--shell-floating-bottom-lane);
+}
 .chat-controls {
 	display: flex;
 	flex-wrap: wrap;
@@ -4155,7 +4218,7 @@ button:disabled {
 .mobile-actions {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 /* Bottom chat controls: text labels + clear separators */
@@ -13896,7 +13959,7 @@ button.moodboard-add-method:hover {
 
 /* ── Compact Ops / Code shell ───────────────────────────────────── */
 :root {
-  --shell-control-height: 2.25rem;
+  --shell-control-height: max(2.25rem, 34px);
   --shell-content-max: 68rem;
   --shell-dot-size: 1.25rem;
   --shadow-shell-card: 0 0.75rem 2.5rem color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
@@ -14985,9 +15048,16 @@ button.moodboard-add-method:hover {
 	top: calc((var(--topbar-h) - var(--attention-trigger-size)) / 2);
 	right: calc(var(--space-4) + var(--master-control-height));
 	z-index: 90;
+	display: block;
+}
+.shell-status-controls {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+}
+.attention-control-slot {
+	display: grid;
+	place-items: center;
 }
 .attention-inbox,
 .running-tasks { position: relative; }
@@ -15128,13 +15198,6 @@ button.moodboard-add-method:hover {
 		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));
 		right: var(--master-popup-tool-clearance);
 		width: calc(100vw - var(--toolrail-w) - var(--space-8));
-	}
-	.header-status-cluster {
-		position: fixed;
-		top: calc((var(--mobile-topbar-h) - var(--attention-trigger-size)) / 2);
-		right: calc(var(--space-4) + var(--master-control-height));
-		/* Leave room for New chat + Search on the mobile topbar. */
-		max-width: min(42vw, 11rem);
 	}
 	.running-pill-full { display: none; }
 	.running-pill-short { display: inline; }

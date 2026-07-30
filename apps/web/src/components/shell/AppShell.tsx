@@ -14,7 +14,11 @@ import { MasterPopup } from '../master/MasterPopup'
 import { MasterToastRegion } from '../master/MasterToastRegion'
 import { ShellModeSwitch, type ShellMode } from './ShellModeSwitch'
 
-const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
+const matches = (query: string) =>
+  typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia(query).matches
+const MOBILE_SHELL_QUERY = '(max-width: 767px)'
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 const stored = (key: string, fallback: number) => {
   const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
@@ -23,6 +27,19 @@ const stored = (key: string, fallback: number) => {
 }
 
 const LEFT_MIN = 200, LEFT_MAX = 480
+
+function useMobileShell(): boolean {
+  const [mobile, setMobile] = React.useState(() => matches(MOBILE_SHELL_QUERY))
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(MOBILE_SHELL_QUERY)
+    const update = () => setMobile(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return mobile
+}
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 function focusableIn(root: HTMLElement | null): HTMLElement[] {
@@ -87,6 +104,7 @@ export function AppShell(props: {
   const [toolOpen, setToolOpen] = React.useState(false)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
+  const mobileShell = useMobileShell()
   const sidebarRef = React.useRef<HTMLElement>(null)
   const menuBtnRef = React.useRef<HTMLButtonElement>(null)
   const drawerWasOpen = React.useRef(false)
@@ -197,6 +215,20 @@ export function AppShell(props: {
   // collapse its navigation never hides this bounded navigation surface.
   const effectiveLeftCollapsed = !delegateMode && leftCollapsed
   const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
+  const statusControls = (
+    <div className="shell-status-controls">
+      <RunningTasks
+        token={props.token}
+        sessions={props.sessions}
+        onOpenJob={props.onOpenRunningJob}
+        onOpenSession={props.onOpenRunningSession}
+        onOpenTasks={() => props.onSelectView('activity')}
+      />
+      <span className="attention-control-slot">
+        <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
+      </span>
+    </div>
+  )
 
   // Account menu "Projects" opens Settings → Projects manage (not a primary nav destination).
   const openProjectsManage = () => {
@@ -205,7 +237,7 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
+    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''} ${props.features.masterOrchestrator ? 'master-enabled' : ''}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
@@ -249,16 +281,7 @@ export function AppShell(props: {
           </>}
         </div>}
       </header>
-      {!delegateMode && <div className="header-status-cluster">
-        <RunningTasks
-          token={props.token}
-          sessions={props.sessions}
-          onOpenJob={props.onOpenRunningJob}
-          onOpenSession={props.onOpenRunningSession}
-          onOpenTasks={() => props.onSelectView('activity')}
-        />
-        <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
-      </div>}
+      {!delegateMode && !mobileShell && <div className="header-status-cluster">{statusControls}</div>}
       {!delegateMode ? <MobileTopbar
         activeProject={props.activeProject}
         projects={props.projects}
@@ -278,6 +301,7 @@ export function AppShell(props: {
         mode="work"
         delegateEnabled={props.features.masterOrchestrator}
         onModeChange={props.onModeChange}
+        statusControls={mobileShell ? statusControls : undefined}
       /> : <header className="mobile-topbar delegate-mobile-topbar">
         <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconPanelLeft size={18} /></button>
         <div className="mobile-context"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></div>
