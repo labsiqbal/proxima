@@ -445,10 +445,13 @@ class FileWriteRequest(BaseModel):
 
 class FsPathRequest(BaseModel):
     path: str = Field(min_length=1)
+    target: dict[str, Any] | None = None
 
 
 class FsRenameRequest(BaseModel):
     from_: str = Field(min_length=1, alias="from")
     to: str = Field(min_length=1)
+    from_target: dict[str, Any] | None = None
+    to_target: dict[str, Any] | None = None
 
     model_config = {"populate_by_name": True}

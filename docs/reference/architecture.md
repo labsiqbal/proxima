@@ -250,6 +250,15 @@ the projection immediately when it writes `container.md`; a five-second backgrou
 cycle catches direct owner edits without adding filesystem work to Fleet requests.
 `container_ops_migrations` stores the versioned, hash-bound, resumable migration
 marker for legacy root-level Ops data.
+`file_targets.py` defines the public file identity used after an entry has crossed the
+API boundary: `(project slug, authoritative Area kind/id, Area-relative path)`. The
+server constructs these targets for merged tree entries, artifact scan results, run
+outputs, and Archive records. File tree traversal, read/write, mutation, raw/preview,
+Archive presence refresh, and ArtifactViewer use the same resolver, which revalidates
+the project/Area relationship before applying `fsapi` realpath jailing. Display names
+never select a physical root. Path-only callers remain a compatibility input, with
+historical virtual Ops names and physical `ops/...` support; legacy Ops-at-dot keeps a
+literal `ops/...` child literal rather than treating the prefix as virtual.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -319,7 +328,9 @@ superseded`) both approval doors write, an automatic version chain
 (new producer at the same identity ⇒ v(n+1), prior versions superseded), and a
 permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
-via `file_missing`. Fed at the one seam every run's outputs pass through
+via `file_missing`. Archive presence follows each record's canonical Ops target, so
+a same-name Container file cannot hide a missing deliverable. Workspace discovery
+does not itself create registry rows. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Migration 26 introduced the original orchestrator foundation. Migration 31
 converts that durable identity in place to Master: `profiles.system_kind='alpha'`
@@ -521,6 +532,9 @@ image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-an
 layer and review panel. Unsaved review notes live browser-side per `(project, path)`;
 unknown, binary, and directory-like paths bypass text loading and render the download
 fallback immediately.
+Every renderer uses an artifact's canonical file target when present. Markdown text,
+image/video media, PDF/HTML frames, and download links therefore resolve the same Area
+identity returned by the server instead of re-deriving a root from a display path.
 
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with

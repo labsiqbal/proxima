@@ -54,6 +54,7 @@ const rec = (over: Partial<ArchiveRecord> = {}): ArchiveRecord => ({
   project_id: 1,
   project_slug: 'wingoh',
   project_name: 'wingoh',
+  target: null,
   session_title: 'Growth chat',
   job_title: 'Draft Q3 article',
   job_engine: 'linear',
@@ -86,6 +87,21 @@ beforeEach(() => {
 })
 
 describe('ArtifactsScreen (Archive registry)', () => {
+  it('uses the Archive record target when previewing a direct Ops-root Markdown file', async () => {
+    const target = {
+      project: 'wingoh',
+      area: { kind: 'ops', id: 8 },
+      path: 'report.md',
+    }
+    vi.mocked(listArchive).mockResolvedValue(listResponse([
+      rec({ path: 'report.md', target } as Partial<ArchiveRecord>),
+    ]))
+    render(<ArtifactsScreen {...base} />)
+
+    await userEvent.click(await screen.findByText('report.md'))
+    await waitFor(() => expect(fsRead).toHaveBeenCalledWith(target))
+  })
+
   it('renders registry records with status, lineage, and facet counts', async () => {
     vi.mocked(listArchive).mockResolvedValue(listResponse([
       rec(),

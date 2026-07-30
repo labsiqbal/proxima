@@ -185,9 +185,9 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     setReview(loadArtifactReview(slug, path))
     if (!['markdown', 'mermaid', 'csv', 'json', 'text'].includes(kind)) return
     const seq = ++loadSeq.current
-    fs.read(path).then(body => { if (seq === loadSeq.current) setText(body.content) })
+    fs.read(item?.target || path).then(body => { if (seq === loadSeq.current) setText(body.content) })
       .catch(() => { if (seq === loadSeq.current) setError('Could not read this file.') })
-  }, [fs, path, kind, slug])
+  }, [fs, path, kind, slug, item?.target])
 
   React.useEffect(() => {
     if (pendingPoint) noteRef.current?.focus()
@@ -201,11 +201,11 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   }
 
   const stage = () => {
-    if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
-    if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path)} controls autoPlay playsInline />
-    if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} />
-    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path)} sandbox="allow-scripts" />
-    if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path)} download={name}>Download</a> to open it.</div>
+    if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+    if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
+    if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
+    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} sandbox="allow-scripts" />
+    if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
     if (error) return <div className="av-msg muted">{error}</div>
     if (text == null) return <div className="av-msg muted">Loading...</div>
     if (kind === 'markdown') return <div className="av-doc">{splitMermaidSections(text).map((section, sectionIndex) => section.type === 'mermaid'
@@ -323,7 +323,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
             <div className="av-actions">
               <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
               {EDITABLE.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
-              <a className="ghost-button" href={previewUrl(slug, path)} download={name}>Download</a>
+              <a className="ghost-button" href={previewUrl(slug, path, item.target)} download={name}>Download</a>
               <button type="button" className="ghost-button" ref={closeRef} onClick={onClose} title="Close (Esc)" aria-label="Close artifact review">✕</button>
             </div>
           </header>

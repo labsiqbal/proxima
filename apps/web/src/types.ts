@@ -131,6 +131,15 @@ export type ChatSession = {
 	mode?: "chat" | "design" | string;
 };
 export type ActivityItem = { title: string; status: string; subagent: boolean };
+export type FileAreaTarget = {
+	kind: "container" | "ops" | "code";
+	id: number | null;
+};
+export type FileTarget = {
+	project: string;
+	area: FileAreaTarget;
+	path: string;
+};
 export type OutputLink = {
 	type:
 		| "design"
@@ -147,6 +156,7 @@ export type OutputLink = {
 	dir?: string;
 	command?: string;
 	project_slug?: string | null;
+	target?: FileTarget;
 };
 export type MessageReview = {
 	id: number;
@@ -558,4 +568,9 @@ export type View =
 	| "profiles"
 	| "runners"
 	| "settings";
-export type FileEntry = { name: string; type: "dir" | "file"; size: number };
+export type FileEntry = {
+	name: string;
+	type: "dir" | "file";
+	size: number;
+	target?: FileTarget;
+};

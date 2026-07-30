@@ -15,7 +15,7 @@ from urllib.parse import quote
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from .. import apprunner, container_registry, fsapi
+from .. import apprunner, container_registry, file_targets, fsapi
 from .. import app_settings
 from .. import auth_health
 from .. import higgsfield
@@ -50,6 +50,27 @@ def register(app, deps):
     _ops_root = deps["_ops_root"]
     _virtual_root = deps["_virtual_root"]
 
+    def _resolved_file(
+        slug: str,
+        user: dict[str, Any],
+        *,
+        path: str = "",
+        target: str | dict[str, Any] = "",
+    ) -> file_targets.ResolvedFile:
+        project = visible_project(slug, user)
+        try:
+            return file_targets.resolve_request(
+                db(),
+                project,
+                path=path,
+                target=target,
+            )
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         """Project-scoped path audit (file writes, app starts, tree ops)."""
         _audit(user, action, "project", slug, {"path": path})
@@ -69,23 +90,59 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}/tree")
     def project_tree(
-        slug: str, path: str = "", user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        path: str = "",
+        target: str = "",
+        user: dict[str, Any] = Depends(current_user),
     ):
         try:
-            root = _virtual_root(slug, path, user)
-            if path:
-                return {"path": path, "entries": fsapi.list_tree(root, path)}
-            container = _project_root(slug, user)
-            ops = _ops_root(slug, user)
-            if container.resolve() == ops.resolve():
-                return {"path": path, "entries": fsapi.list_tree(container, path)}
+            project = visible_project(slug, user)
+            if path or target:
+                resolved = _resolved_file(
+                    slug,
+                    user,
+                    path=path,
+                    target=target,
+                )
+                return {
+                    "path": path or resolved.locator.path,
+                    "target": resolved.locator.payload(),
+                    "entries": file_targets.add_targets(
+                        fsapi.list_tree(resolved.root, resolved.locator.path),
+                        resolved.locator,
+                    ),
+                }
+            container_target = file_targets.container_locator(project)
+            ops_target = file_targets.ops_locator(db(), project)
+            container = file_targets.resolve_locator(
+                db(), project, container_target
+            )
+            ops = file_targets.resolve_locator(db(), project, ops_target)
+            if container.root == ops.root:
+                return {
+                    "path": path,
+                    "target": ops_target.payload(),
+                    "entries": file_targets.add_targets(
+                        fsapi.list_tree(ops.root, ""),
+                        ops_target,
+                    ),
+                }
             entries = {
                 entry["name"]: entry
-                for entry in fsapi.list_tree(container, path)
+                for entry in file_targets.add_targets(
+                    fsapi.list_tree(container.root, ""),
+                    container_target,
+                )
                 if entry["name"] != "ops"
             }
-            for entry in fsapi.list_tree(ops, path):
-                entries.setdefault(entry["name"], entry)
+            for entry in file_targets.add_targets(
+                fsapi.list_tree(ops.root, ""),
+                ops_target,
+            ):
+                if entry["name"] in container_registry.OPS_VIRTUAL_NAMES:
+                    entries[entry["name"]] = entry
+                else:
+                    entries.setdefault(entry["name"], entry)
             return {
                 "path": path,
                 "entries": sorted(
@@ -93,7 +150,11 @@ def register(app, deps):
                     key=lambda entry: (entry["type"] != "dir", entry["name"].lower()),
                 ),
             }
-        except fsapi.FsError as exc:
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+            fsapi.FsError,
+        ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/projects/{slug}/reference-files")
@@ -126,37 +187,59 @@ def register(app, deps):
 
     @app.get("/api/projects/{slug}/file")
     def project_read_file(
-        slug: str, path: str, user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        path: str = "",
+        target: str = "",
+        user: dict[str, Any] = Depends(current_user),
     ):
-        root = _virtual_root(slug, path, user)
+        resolved = _resolved_file(slug, user, path=path, target=target)
+        if not resolved.locator.path:
+            raise HTTPException(status_code=400, detail="file path is required")
         try:
-            return {"path": path, "content": fsapi.read_file(root, path)}
+            return {
+                "path": path or resolved.locator.path,
+                "target": resolved.locator.payload(),
+                "content": fsapi.read_file(
+                    resolved.root,
+                    resolved.locator.path,
+                ),
+            }
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.put("/api/projects/{slug}/file")
     def project_write_file(
         slug: str,
-        path: str,
         payload: FileWriteRequest,
+        path: str = "",
+        target: str = "",
         user: dict[str, Any] = Depends(current_user),
     ):
-        root = _virtual_root(slug, path, user)
+        resolved = _resolved_file(slug, user, path=path, target=target)
+        if not resolved.locator.path:
+            raise HTTPException(status_code=400, detail="file path is required")
         try:
-            fsapi.write_file(root, path, payload.content)
+            fsapi.write_file(
+                resolved.root,
+                resolved.locator.path,
+                payload.content,
+            )
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        normalized = path.replace("\\", "/").strip("/")
-        if normalized in {
-            container_registry.CONTAINER_DOC,
-            f"{container_registry.OPS_RELPATH}/{container_registry.CONTAINER_DOC}",
-        }:
+        if (
+            resolved.locator.area.kind == "ops"
+            and resolved.locator.path == container_registry.CONTAINER_DOC
+        ):
             container_registry.refresh_registry_projection(
                 db(),
                 visible_project(slug, user),
             )
-        _audit_fs(user, "file.write", slug, path)
-        return {"ok": True, "path": path}
+        _audit_fs(user, "file.write", slug, resolved.locator.path)
+        return {
+            "ok": True,
+            "path": path or resolved.locator.path,
+            "target": resolved.locator.payload(),
+        }
 
     @app.post("/api/projects/{slug}/upload")
     async def project_upload(
@@ -504,7 +587,14 @@ def register(app, deps):
         if not p.get("path"):
             return {"artifacts": []}
         start = time.time() - max(1, since_minutes) * 60
-        return {"artifacts": scan_project_artifacts(_ops_root(slug, user), start)}
+        items = scan_project_artifacts(_ops_root(slug, user), start)
+        return {
+            "artifacts": file_targets.add_ops_targets(
+                db(),
+                p,
+                items,
+            )
+        }
 
     @app.get("/api/sessions/{session_id}/artifacts")
     def session_artifacts(
@@ -512,7 +602,7 @@ def register(app, deps):
     ):
         """Artifacts produced BY this session's runs (accumulated) — scopes the iterate
         Result to the iteration's own output instead of the whole project."""
-        session_for_user(session_id, user)
+        session = session_for_user(session_id, user)
         row = (
             db()
             .execute(
@@ -520,11 +610,15 @@ def register(app, deps):
             )
             .fetchone()
         )
-        return {
-            "artifacts": json.loads(
-                (row["produced_artifacts"] if row else None) or "[]"
-            )
-        }
+        items = json.loads((row["produced_artifacts"] if row else None) or "[]")
+        if session.get("project_id"):
+            project = db().execute(
+                "SELECT id, slug, path FROM projects WHERE id = ?",
+                (session["project_id"],),
+            ).fetchone()
+            if project is not None:
+                items = file_targets.add_ops_targets(db(), project, items)
+        return {"artifacts": items}
 
     @app.delete("/api/sessions/{session_id}/artifacts")
     def delete_session_artifact(
@@ -866,13 +960,22 @@ def register(app, deps):
     def project_mkdir(
         slug: str, payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)
     ):
-        root = _virtual_root(slug, payload.path, user)
+        resolved = _resolved_file(
+            slug,
+            user,
+            path=payload.path,
+            target=payload.target or "",
+        )
         try:
-            fsapi.mkdir(root, payload.path)
+            fsapi.mkdir(resolved.root, resolved.locator.path)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "fs.mkdir", slug, payload.path)
-        return {"ok": True, "path": payload.path}
+        _audit_fs(user, "fs.mkdir", slug, resolved.locator.path)
+        return {
+            "ok": True,
+            "path": payload.path,
+            "target": resolved.locator.payload(),
+        }
 
     @app.post("/api/projects/{slug}/fs/rename")
     def project_rename(
@@ -880,55 +983,93 @@ def register(app, deps):
         payload: FsRenameRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        source_root = _virtual_root(slug, payload.from_, user)
-        destination_root = _virtual_root(slug, payload.to, user)
-        if source_root.resolve() != destination_root.resolve():
+        source = _resolved_file(
+            slug,
+            user,
+            path=payload.from_,
+            target=payload.from_target or "",
+        )
+        destination = _resolved_file(
+            slug,
+            user,
+            path=payload.to,
+            target=payload.to_target or "",
+        )
+        if source.root != destination.root:
             raise HTTPException(
                 status_code=400,
                 detail="cannot move a file across Container Area boundaries",
             )
         try:
-            fsapi.rename(source_root, payload.from_, payload.to)
+            fsapi.rename(
+                source.root,
+                source.locator.path,
+                destination.locator.path,
+            )
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "fs.rename", slug, f"{payload.from_} -> {payload.to}")
+        _audit_fs(
+            user,
+            "fs.rename",
+            slug,
+            f"{source.locator.path} -> {destination.locator.path}",
+        )
         return {"ok": True}
 
     @app.delete("/api/projects/{slug}/fs")
     def project_delete(
-        slug: str, path: str, user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        path: str = "",
+        target: str = "",
+        user: dict[str, Any] = Depends(current_user),
     ):
-        root = _virtual_root(slug, path, user)
+        resolved = _resolved_file(slug, user, path=path, target=target)
         try:
-            fsapi.delete(root, path)
+            fsapi.delete(resolved.root, resolved.locator.path)
         except fsapi.FsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "fs.delete", slug, path)
-        return {"ok": True, "path": path}
+        _audit_fs(user, "fs.delete", slug, resolved.locator.path)
+        return {
+            "ok": True,
+            "path": path or resolved.locator.path,
+            "target": resolved.locator.payload(),
+        }
 
     @app.get("/api/projects/{slug}/raw")
-    def project_raw(slug: str, path: str, user: dict[str, Any] = Depends(current_user)):
-        root = _virtual_root(slug, path, user)
-        try:
-            target = fsapi.resolve_in_project(root, path)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not target.is_file():
+    def project_raw(
+        slug: str,
+        path: str = "",
+        target: str = "",
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        resolved = _resolved_file(slug, user, path=path, target=target)
+        if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        return FileResponse(str(target), filename=target.name)
+        return FileResponse(str(resolved.path), filename=resolved.path.name)
 
     @app.get("/api/preview/{slug}/{file_path:path}")
     def project_preview(
-        slug: str, file_path: str, user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        file_path: str,
+        target: str = "",
+        user: dict[str, Any] = Depends(current_user),
     ):
         # Serve a project file inline for live preview (rendering a built site in an
         # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
         # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
-        root = _virtual_root(slug, file_path, user)
-        try:
-            target = fsapi.resolve_in_project(root, file_path)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not target.is_file():
+        resolved = _resolved_file(
+            slug,
+            user,
+            path=file_path,
+            target=target,
+        )
+        if target and resolved.locator.path != file_targets.normalize_relative_path(
+            file_path
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="preview path does not match file target",
+            )
+        if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        return FileResponse(str(target))  # inline (no attachment) so HTML/CSS/JS render
+        return FileResponse(str(resolved.path))  # inline (no attachment) so HTML/CSS/JS render

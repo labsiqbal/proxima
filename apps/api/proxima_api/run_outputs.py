@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from . import artifact_registry
+from . import artifact_registry, file_targets
 from . import master_focus
 from .container_registry import ops_root
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
@@ -32,7 +32,8 @@ class RunOutputs:
             if not prow:
                 return []
             fresh = scan_project_artifacts(ops_root(db, prow), run_start_ts - 5)
-            return artifacts_for_output_links(fresh, prow["slug"])
+            links = artifacts_for_output_links(fresh, prow["slug"])
+            return file_targets.add_ops_targets(db, prow, links)
         except Exception:
             logging.getLogger("proxima.worker").exception("chat artifact scan failed (non-fatal)")
             return []

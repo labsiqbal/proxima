@@ -1,6 +1,6 @@
 import React from 'react'
 import type { ArchiveRecord, ArchiveStatus } from '../../api/archive'
-import { previewUrl, fetchRawBlob, fileUrl } from '../../api/files'
+import { previewUrl, fetchRawBlob, fileUrl, retargetFile } from '../../api/files'
 import { projectFs } from '../../api/fsAdapter'
 import { MessageContent } from '../chat/MessageContent'
 import { MiniPreview } from '../design/MiniPreview'
@@ -91,7 +91,7 @@ export const designScenePath = (path: string) => {
 // broken preview - the record outlives its file.
 export function RecordPreview({ token, record, compact = false }: {
   token: string
-  record: Pick<ArchiveRecord, 'type' | 'path' | 'project_slug' | 'file_missing' | 'name' | 'size'>
+  record: Pick<ArchiveRecord, 'type' | 'path' | 'project_slug' | 'file_missing' | 'name' | 'size' | 'target'>
   compact?: boolean
 }) {
   const { type, path, project_slug: slug } = record
@@ -109,17 +109,21 @@ export function RecordPreview({ token, record, compact = false }: {
     setMedia(null); setMd(null); setDesignArt(undefined)
     if (record.file_missing) return
     if (isImg || isVideo) {
-      fetchRawBlob(token, slug, path).then(u => {
+      fetchRawBlob(token, slug, path, record.target || undefined).then(u => {
         if (!alive) { URL.revokeObjectURL(u); return }
         objectUrl = u
         setMedia(u)
       }).catch(() => {})
     } else if (isMd) {
-      projectFs(token, slug).read(path).then(f => { if (alive) setMd(f.content) }).catch(() => { if (alive) setMd('') })
+      projectFs(token, slug).read(record.target || path).then(f => { if (alive) setMd(f.content) }).catch(() => { if (alive) setMd('') })
     } else if (isDesign) {
       // Same first-artboard thumbnail the Design gallery uses - Archive used to
       // show only "use Open to view it" with no visual of the deliverable.
-      projectFs(token, slug).read(designScenePath(path)).then(f => {
+      const scenePath = designScenePath(path)
+      const sceneRef = record.target
+        ? retargetFile(record.target, designScenePath(record.target.path))
+        : scenePath
+      projectFs(token, slug).read(sceneRef).then(f => {
         if (!alive) return
         try {
           const scene = JSON.parse(f.content) as { artboards?: Artboard[] }
@@ -130,7 +134,7 @@ export function RecordPreview({ token, record, compact = false }: {
       }).catch(() => { if (alive) setDesignArt(null) })
     }
     return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [token, slug, path, record.file_missing, isImg, isVideo, isMd, isDesign])
+  }, [token, slug, path, record.file_missing, record.target, isImg, isVideo, isMd, isDesign])
 
   if (record.file_missing) {
     return <div className="archive-preview-box empty">
@@ -139,7 +143,7 @@ export function RecordPreview({ token, record, compact = false }: {
   }
   if (isImg) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <img src={media} alt={record.name} />}</div>
   if (isVideo) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <video src={media} controls={!compact} muted={compact} playsInline preload="metadata" />}</div>
-  if (isHtml) return <div className={`archive-preview-box frame ${compact ? 'compact' : ''}`}><iframe title={record.name} src={previewUrl(slug, path)} sandbox="allow-scripts" /></div>
+  if (isHtml) return <div className={`archive-preview-box frame ${compact ? 'compact' : ''}`}><iframe title={record.name} src={previewUrl(slug, path, record.target || undefined)} sandbox="allow-scripts" /></div>
   if (isMd) return <div className={`archive-preview-box doc ${compact ? 'compact' : ''}`}><div className="md">{md != null ? <MessageContent content={md} /> : <p className="muted">Loading…</p>}</div></div>
   if (isDesign) {
     if (designArt === undefined) {

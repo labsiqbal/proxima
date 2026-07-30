@@ -25,11 +25,12 @@ const DATE_CHOICES = [
   { days: 90, label: 'Last 90 days' },
 ]
 
-const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'>): Artifact => ({
+const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'>): Artifact => ({
   type: (r.type === 'script-output' ? 'file' : r.type) as Artifact['type'],
   title: r.name,
   path: r.path,
   project_slug: r.project_slug,
+  target: r.target || undefined,
 })
 
 export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
@@ -114,9 +115,9 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
       if (!mountedRef.current) return
       const hit = res.items[0]
       if (hit) onOpenRecord?.(hit.project_slug, hit.slug)
-      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug, sessionId: reviewSessionId })
+      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }], slug, sessionId: reviewSessionId })
     }).catch(() => {
-      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug }], slug, sessionId: reviewSessionId })
+      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }], slug, sessionId: reviewSessionId })
     })
   }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, reviewSessionId])
 
@@ -144,7 +145,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     }
   }
 
-  const openViewer = (record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug'> & { session_id?: number | null }) =>
+  const openViewer = (record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) =>
     setViewer({ items: [recordAsArtifact(record)], slug: record.project_slug, sessionId: record.session_id ?? reviewSessionId })
 
   // Design opens in its studio, an app runs on its full record page, everything
@@ -159,12 +160,12 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     }
   }
 
-  const revealInFiles = (r: Pick<ArchiveRecord, 'path' | 'project_slug'>) => {
+  const revealInFiles = (r: Pick<ArchiveRecord, 'path' | 'project_slug' | 'target'>) => {
     const p = projects.find(x => x.slug === r.project_slug)
     if (p) onActiveProject?.(p)
     // The right tool rail owns the Files panel; this event asks it to open on
     // this record's file (see ToolDock).
-    window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: r.path } }))
+    window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: r.path, target: r.target || undefined } }))
   }
 
   if (projects.length === 0) return <section className="placeholder-view"><div className="assistant-bubble compact"><h1>Archive</h1><p>No projects yet.</p></div></section>
