@@ -178,16 +178,22 @@ describe('GraphScreen editor autosave actions', () => {
     await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
   })
 
-  it('flushes a pending canvas edit before Run without a manual-save gate', async () => {
+  it('blocks Run while autosave is pending, then uses the validated Run dialog', async () => {
     render(<GraphScreen {...props} />)
     await screen.findByRole('heading', { name: 'Untitled plan' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Move node' }))
     const run = screen.getByRole('button', { name: '▶ Run' })
+    expect(run).toBeDisabled()
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
     expect(run).toBeEnabled()
     fireEvent.click(run)
 
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42))
+    expect(await screen.findByRole('dialog', { name: 'Run Untitled plan' })).toBeInTheDocument()
+    expect(startGraphJob).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42, undefined))
     expect(updateGraphPlan).toHaveBeenCalledWith('t', 42, {
       title: 'Untitled plan',
       graph: {
@@ -261,10 +267,15 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.getByRole('group', { name: 'Trigger mode' })).toBeInTheDocument()
     expect(screen.getByText('Intake form')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '+ Add field' }))
+    expect(screen.getByRole('textbox', { name: 'Input 1 ID' })).toHaveValue('field')
     fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 label' }), {
       target: { value: 'Topic' },
     })
-    expect(screen.getByRole('textbox', { name: 'Input 1 ID' })).toHaveValue('topic')
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Input 1 label' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 ID' }), {
+      target: { value: 'topic' },
+    })
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Input 1 ID' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Input 1 required' }))
 
     await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
@@ -287,6 +298,118 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.getByText('Schedule settings')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Cron' })).toHaveValue('0 9 * * *')
     expect(screen.getByText(/without asking for manual input/i)).toBeInTheDocument()
+  })
+
+  it('keeps save false and Run blocked after persistence rejection until Retry succeeds', async () => {
+    vi.mocked(updateGraphPlan).mockRejectedValueOnce(new Error('network unavailable'))
+    render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move node' }))
+
+    expect(await screen.findByText('Not saved')).toBeInTheDocument()
+    expect(screen.getByText(/network unavailable/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '▶ Run' })).toBeDisabled()
+    const retry = screen.getByRole('button', { name: 'Retry save' })
+
+    vi.mocked(updateGraphPlan).mockResolvedValue({
+      ...structuredClone(queuedJob),
+      graph: {
+        ...graph,
+        nodes: [{ ...graph.nodes[0], x: 120, y: 80 }],
+      },
+    })
+    fireEvent.click(retry)
+
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '▶ Run' })).toBeEnabled()
+  })
+
+  it('keeps duplicate intake ID edits local, marks them unsaved, and blocks Run', async () => {
+    const triggerGraph: WorkflowGraph = {
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          instruction: '',
+          output_kind: 'json',
+          inputs: [
+            { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+            { id: 'audience', label: 'Audience', kind: 'text', required: false },
+          ],
+        },
+      ],
+      edges: [],
+    }
+    vi.mocked(getGraphJob).mockResolvedValue({
+      ...structuredClone(queuedJob),
+      graph: triggerGraph,
+      node_states: [{
+        id: 2,
+        job_id: 42,
+        node_id: 'trigger',
+        status: 'pending',
+        output_kind: 'json',
+        version: 0,
+      }],
+    })
+    render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+    fireEvent.click(screen.getByRole('button', { name: 'Select trigger' }))
+
+    const audienceId = screen.getByRole('textbox', { name: 'Input 2 ID' })
+    fireEvent.change(audienceId, { target: { value: 'campaign' } })
+    fireEvent.blur(audienceId)
+
+    expect(screen.getByText('ID must be unique.')).toBeInTheDocument()
+    expect(screen.getByText('Not saved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '▶ Run' })).toBeDisabled()
+    expect(updateGraphPlan).not.toHaveBeenCalled()
+  })
+
+  it('collects required and default intake values before starting a draft', async () => {
+    const triggerGraph: WorkflowGraph = {
+      nodes: [{
+        id: 'trigger',
+        type: 'trigger',
+        trigger_kind: 'manual',
+        name: 'When I run it',
+        instruction: '',
+        output_kind: 'json',
+        inputs: [
+          { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+          { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+        ],
+      }],
+      edges: [],
+    }
+    vi.mocked(getGraphJob).mockResolvedValue({
+      ...structuredClone(queuedJob),
+      graph: triggerGraph,
+      node_states: [{
+        id: 2,
+        job_id: 42,
+        node_id: 'trigger',
+        status: 'pending',
+        output_kind: 'json',
+        version: 0,
+      }],
+    })
+    render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+
+    fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42, {
+      campaign: 'Launch week',
+      channel: 'email',
+    }))
   })
 
   it('flushes the outgoing draft edit when switching drafts inside the debounce window', async () => {

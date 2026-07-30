@@ -40,8 +40,15 @@ export const updateGraphPlan = (
     body: JSON.stringify(body),
   })
 
-export const startGraphJob = (token: string, jobId: number) =>
-  api<GraphJob>(`/api/graph/jobs/${jobId}/start`, token, { method: 'POST' })
+export const startGraphJob = (
+  token: string,
+  jobId: number,
+  input?: Record<string, string>,
+) =>
+  api<GraphJob>(`/api/graph/jobs/${jobId}/start`, token, {
+    method: 'POST',
+    ...(input === undefined ? {} : { body: JSON.stringify({ input }) }),
+  })
 
 export const editGraphNodeOutput = (token: string, jobId: number, nodeId: string, value: unknown) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/nodes/${encodeURIComponent(nodeId)}/output`, token, {

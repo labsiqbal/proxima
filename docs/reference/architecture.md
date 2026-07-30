@@ -141,7 +141,10 @@ node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at mo
 trigger, no incoming edges), and validates each node's `text` / `json` / `artifact-ref`
 output contract (including JSON Schema definitions). Trigger normalization also owns
 the manual intake field declaration or the scheduled cron, overlap, and enabled
-settings. It performs no DB, runner, or HTTP
+settings. Manual intake IDs use a stable identifier grammar and may declare typed
+defaults. The same pure boundary resolves a start payload by validating required,
+number, and URL values, applying defaults, omitting blank optional fields, and
+preserving job-owned values. It performs no DB, runner, or HTTP
 work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a node's
 `target` names ONE container area (a code area's rel_path or `ops`), `touches_repo` is
 always derived from it (an authored value is never trusted), and an ambiguous binding
@@ -151,7 +154,10 @@ area); plan start refuses an unresolved target question (409 carrying the questi
 the shared `bind_graph_job_repo_worktree` path, which checks ambiguity before the
 `feature_repo_worktrees` gate and the project binding — so a project-less ambiguous plan
 cannot start silently and the scheduler cannot skip the refuse. The target is pinned at
-slice time precisely so it cannot be discovered at runtime. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+slice time precisely so it cannot be discovered at runtime. The start route performs
+manual intake resolution before the worktree cut and commits the resolved JSON in the
+same guarded update that claims `running`; a rejected value leaves the queued job and
+its original input unchanged. The gated `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
@@ -989,6 +995,13 @@ reports a real bounding box because the canvas is infinite and positions may be
 negative. Node positions are part of the graph and are persisted by the same explicit
 autosave as every other queued plan edit. Pending debounce work is flushed on editor
 exit so switching views cannot restore a stale graph.
+The intake editor stages incomplete row edits locally under the last accepted stable
+ID and reports dirty/valid state to `GraphScreen`. Polling cannot overwrite or bless a
+local graph while an autosave is queued or in flight. The header therefore shows Not
+saved after validation or network rejection, offers Retry for a rejected request, and
+keeps both Run and Save as Workflow disabled until the accepted graph matches the
+screen. Drafts and reusable manual templates share one `RunModal`; only its validated
+payload reaches `POST /api/graph/jobs/{id}/start`.
 Drag-to-connect is pointer-only, so the inspector's dependency checkboxes remain the
 keyboard path to the same edges. The screen allows node/dependency/layout edits only
 while queued, and exposes the correction and approval protocol once execution begins.
@@ -1465,7 +1478,7 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes intake fields and feeds the Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node.
+`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes atomic intake fields and sends both draft and template execution through one validated Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no manual intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node. Start requests resolve manual values at the API boundary and persist them in the same queued-to-running claim, while scheduled jobs retain their source-owned payload.
 
 When Master is enabled, Tasks → `+ New task` opens the full Master home through the
 compatibility `home` view and seeds the shared Master composer. The explicit

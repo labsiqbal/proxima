@@ -5812,6 +5812,17 @@ div.result-media {
 	top: var(--space-1);
 	right: var(--space-1);
 }
+.wf-field-error {
+	color: var(--ui-danger);
+	font-size: var(--text-xs);
+	font-weight: 600;
+	letter-spacing: normal;
+	text-transform: none;
+}
+.wf-input-cell[aria-invalid="true"],
+.wf-input-id:has(.wf-input-cell[aria-invalid="true"]) {
+	border-color: var(--ui-danger);
+}
 @media (max-width: 640px) {
 	.wf-input-row {
 		grid-template-columns: 1fr;

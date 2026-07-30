@@ -129,6 +129,10 @@ class GraphDefinitionUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
+class GraphJobStartRequest(BaseModel):
+    input: dict[str, Any] | None = None
+
+
 class GraphTemplateSaveRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     description: str = ""

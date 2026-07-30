@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createGraphJob, startGraphJob } from '../api/graph'
 import { GraphScreen } from './GraphScreen'
 import { getGraphJob, listGraphJobs } from '../api/graph'
 import { FRESH_FAILED_REVIEW_RUN } from '../testFixtures/failedReviewRun'
@@ -13,7 +14,26 @@ vi.mock('../api/graph', () => ({
   listGraphJobs: vi.fn(),
   listGraphTemplates: vi.fn().mockResolvedValue({
     items: [
-      { id: 10, name: 'Manual report', category: 'research', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
+      {
+        id: 10,
+        name: 'Manual report',
+        category: 'research',
+        status: 'active',
+        graph: {
+          nodes: [{
+            id: 'trigger',
+            type: 'trigger',
+            trigger_kind: 'manual',
+            name: 'When I run it',
+            inputs: [
+              { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+              { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+            ],
+          }],
+          edges: [],
+        },
+        inputs: [],
+      },
       { id: 11, name: 'Daily report', category: 'content', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
     ],
   }),
@@ -164,7 +184,7 @@ describe('GraphScreen workflow home tabs', () => {
     expect(screen.getByRole('table', { name: 'Draft plans' })).toBeInTheDocument()
   })
 
-  it('refreshes keep-alive home Runs after checkpoint restore job.update', async () => {
+it('refreshes keep-alive home Runs after checkpoint restore job.update', async () => {
     localStorage.setItem('proxima.graph.homeTab', 'runs')
     const view = render(<GraphScreen {...props} pendingJobId={41} onPendingConsumed={vi.fn()} />)
 
@@ -226,5 +246,63 @@ describe('GraphScreen workflow home tabs', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Drafts/ }))
     const drafts = screen.getByRole('table', { name: 'Draft plans' })
     expect(within(drafts).getByText('Launch readiness review')).toBeInTheDocument()
+  })
+
+  it('validates reusable manual workflow intake before creating and starting a run', async () => {
+    vi.mocked(createGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          inputs: [
+            { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+            { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+          ],
+        }],
+        edges: [],
+      },
+      node_states: [],
+    })
+    vi.mocked(startGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'review',
+      engine: 'graph',
+      graph: { nodes: [], edges: [] },
+      node_states: [],
+    })
+    render(<GraphScreen {...props} />)
+
+    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
+    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+
+    expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
+    expect(createGraphJob).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Campaign')
+    expect(createGraphJob).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => {
+      expect(createGraphJob).toHaveBeenCalledWith('t', expect.objectContaining({
+        workflow_id: 10,
+        input: { campaign: 'Launch week', channel: 'email' },
+      }))
+      expect(startGraphJob).toHaveBeenCalledWith(
+        't',
+        21,
+        { campaign: 'Launch week', channel: 'email' },
+      )
+    })
   })
 })

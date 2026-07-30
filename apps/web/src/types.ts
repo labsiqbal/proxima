@@ -231,6 +231,7 @@ export type WorkflowInput = {
 	label: string;
 	kind: "text" | "url" | "number" | "file";
 	required: boolean;
+	default?: string;
 };
 // A reusable recipe step. When creating a workflow only {name, instruction,
 // expected_output?, type?} need to be sent; the server fills in the rest.

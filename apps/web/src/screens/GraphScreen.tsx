@@ -77,6 +77,10 @@ type DraftTemplateMeta = {
   category?: string
 }
 
+type RunTarget =
+  | { kind: 'job'; job: GraphJob }
+  | { kind: 'template'; template: GraphTemplate }
+
 function readDraftMeta(jobId: number): DraftTemplateMeta {
   try {
     const raw = localStorage.getItem(`${DRAFT_META_KEY_PREFIX}${jobId}`)
@@ -267,8 +271,8 @@ export function GraphScreen({
       .catch(() => { skillFetches.current.delete(runnerId) })
   }, [token])
   const [savingTemplate, setSavingTemplate] = React.useState(false)
-  // A template whose declared inputs must be answered before its run is created.
-  const [runningTemplate, setRunningTemplate] = React.useState<GraphTemplate | null>(null)
+  // Drafts and reusable workflows share one execution intake boundary.
+  const [runTarget, setRunTarget] = React.useState<RunTarget | null>(null)
   // Template metadata the authoring chat proposed. It stays secondary to the canvas,
   // and one-click promotion carries it into the reusable workflow record.
   const [draftMeta, setDraftMeta] = React.useState<DraftTemplateMeta>({})
@@ -276,6 +280,7 @@ export function GraphScreen({
   const [draftTitle, setDraftTitle] = React.useState('Untitled plan')
   const [renamingTitle, setRenamingTitle] = React.useState(false)
   const [saveState, setSaveState] = React.useState<'saved' | 'saving' | 'error'>('saved')
+  const [intakeEditState, setIntakeEditState] = React.useState({ dirty: false, valid: true })
   const [outputEdit, setOutputEdit] = React.useState('')
   const [answerText, setAnswerText] = React.useState('')
   const [error, setError] = React.useState('')
@@ -398,6 +403,17 @@ export function GraphScreen({
     }
   }, [drainAutosave, queueLatestAutosave])
 
+  const retryAutosave = React.useCallback(async () => {
+    setSaveState('saving')
+    setError('')
+    queueLatestAutosave()
+    try {
+      await drainAutosave()
+    } catch {
+      // drainAutosave owns the actionable error and preserves the pending snapshot.
+    }
+  }, [drainAutosave, queueLatestAutosave])
+
   React.useEffect(() => {
     mounted.current = true
     return () => {
@@ -455,6 +471,18 @@ export function GraphScreen({
       const titleHasLocalEdit = autosaveJobId.current === next.id
         && latest?.jobId === next.id
         && latest.title !== lastSavedTitle.current
+      const graphHasLocalEdit = autosaveJobId.current === next.id
+        && latest?.jobId === next.id
+        && JSON.stringify(latest.graph) !== lastSavedGraph.current
+      if (
+        autosaveJobId.current === next.id
+        && next.status === 'queued'
+        && (titleHasLocalEdit || graphHasLocalEdit || pendingSave.current || saveInFlight.current)
+      ) {
+        // Polling may refresh a clean draft, but it must never overwrite or bless
+        // local state whose PATCH has not been accepted.
+        return
+      }
       if (autosaveJobId.current === next.id && ['running', 'review'].includes(next.status)) {
         // Live execution polling refreshes node state, but an in-progress inline
         // rename still belongs to the owner. Do not let a GET erase it before its
@@ -1024,28 +1052,6 @@ export function GraphScreen({
     })
   }
 
-  async function runCurrentPlan() {
-    if (!job || busy) return
-    setBusy('start')
-    setError('')
-    setNotice('')
-    try {
-      await flushAutosave()
-      const next = await startGraphJob(token, job.id)
-      if (!mounted.current) return
-      await primeAutosave(next)
-      if (!mounted.current) return
-      setJob(next)
-      setPlan(next.graph)
-      setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
-      setNotice('Execution started.')
-    } catch (cause) {
-      if (mounted.current) setError(String(cause))
-    } finally {
-      if (mounted.current) setBusy(null)
-    }
-  }
-
   async function createFromTemplate(template: GraphTemplate, input?: Record<string, string>) {
     if (busy) return
     setBusy('use-template')
@@ -1062,21 +1068,24 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      await primeAutosave(created, {
+      const next = await startGraphJob(token, created.id, input)
+      if (!mounted.current) return
+      await primeAutosave(next, {
         name: template.name,
         description: template.description,
         category: template.category,
       })
       if (!mounted.current) return
-      setRunningTemplate(null)
+      setRunTarget(null)
       setStage('editor')
-      setJob(created)
-      setPlan(created.graph)
+      setJob(next)
+      setPlan(next.graph)
       setSelectedId(null)
-      setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
-      setNotice(`Created a queued run from “${template.name}”. Review the frozen plan before starting.`)
+      setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
+      setNotice(`Execution started from “${template.name}”.`)
     } catch (cause) {
       if (mounted.current) setError(String(cause))
+      throw cause
     } finally {
       if (mounted.current) setBusy(null)
     }
@@ -1114,13 +1123,13 @@ export function GraphScreen({
     }
   }
 
-  async function runDraft(item: GraphJob) {
+  async function runDraft(item: GraphJob, input?: Record<string, string>) {
     if (busy) return
     setBusy('start')
     setError('')
     try {
       await flushAutosave()
-      const next = await startGraphJob(token, item.id)
+      const next = await startGraphJob(token, item.id, input)
       if (!mounted.current) return
       await primeAutosave(next)
       if (!mounted.current) return
@@ -1129,9 +1138,11 @@ export function GraphScreen({
       setPlan(next.graph)
       setSelectedId(null)
       setJobs(current => current.map(row => row.id === next.id ? next : row))
+      setRunTarget(null)
       setNotice('Execution started.')
     } catch (cause) {
       if (mounted.current) setError(String(cause))
+      throw cause
     } finally {
       if (mounted.current) setBusy(null)
     }
@@ -1162,6 +1173,20 @@ export function GraphScreen({
   }, [token, job?.id, job?.status, job?.worktree?.status, allDone])
 
   const doneCount = job?.node_states.filter(state => state.status === 'done').length ?? 0
+  const hasLocalGraphEdit = !!job && job.status === 'queued' && !!plan && (
+    JSON.stringify(plan) !== lastSavedGraph.current
+    || normalizedPlanTitle(draftTitle) !== lastSavedTitle.current
+  )
+  const intakeEditBlocked = intakeEditState.dirty || !intakeEditState.valid
+  const effectiveSaveState = intakeEditBlocked || saveState === 'error'
+    ? 'error'
+    : hasLocalGraphEdit || saveState === 'saving' || !!pendingSave.current || !!saveInFlight.current
+      ? 'saving'
+      : 'saved'
+  const runBlocked = effectiveSaveState !== 'saved'
+  React.useEffect(() => {
+    setIntakeEditState({ dirty: false, valid: true })
+  }, [job?.id, selectedId])
   const archivedTemplates = templates.filter(item => item.status === 'archived')
   const activeTemplates = templates.filter(item => item.status !== 'archived')
 
@@ -1187,10 +1212,10 @@ export function GraphScreen({
     }
     const runTemplate = (template: GraphTemplate) => {
       const inputs = triggerInputs(template.graph)
-      if (inputs.length || template.inputs?.length) {
-        setRunningTemplate({ ...template, inputs: inputs.length ? inputs : template.inputs })
-      }
-      else void createFromTemplate(template)
+      setRunTarget({
+        kind: 'template',
+        template: { ...template, inputs: inputs.length ? inputs : template.inputs },
+      })
     }
     const category = (template: GraphTemplate) => template.category?.trim() || 'other'
     const scheduleLabel = (template: GraphTemplate) => {
@@ -1312,7 +1337,7 @@ export function GraphScreen({
                     <div role="cell" data-label="Status"><span className="workflow-home-chip workflow-home-draft-chip">Draft</span></div>
                     <div className="workflow-home-actions" role="cell" data-label="Actions">
                       <button className="ghost-button" disabled={!!busy} onClick={() => openJob(item.id)}>Edit</button>
-                      <button className="primary-button" disabled={!!busy} onClick={() => void runDraft(item)}>Run</button>
+                      <button className="primary-button" disabled={!!busy} onClick={() => setRunTarget({ kind: 'job', job: item })}>Run</button>
                       <button className="ghost-button workflow-home-star" disabled={!!busy} onClick={() => void prepareDraftTemplate(item)}>★ Save as template</button>
                       <button className="row-action danger" title="Delete draft" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
                     </div>
@@ -1401,12 +1426,16 @@ export function GraphScreen({
         onCancel={() => setSavingTemplate(false)}
         onSave={meta => void saveTemplate(meta)}
       />}
-      {runningTemplate && <RunModal
-        title={runningTemplate.name}
-        inputs={runningTemplate.inputs}
-        confirmLabel="Create run"
-        onCancel={() => setRunningTemplate(null)}
-        onRun={async input => { await createFromTemplate(runningTemplate, input) }}
+      {runTarget && <RunModal
+        title={runTarget.kind === 'template' ? runTarget.template.name : runTarget.job.title}
+        inputs={runTarget.kind === 'template'
+          ? runTarget.template.inputs
+          : triggerInputs(runTarget.job.graph)}
+        onCancel={() => setRunTarget(null)}
+        onRun={async input => {
+          if (runTarget.kind === 'template') await createFromTemplate(runTarget.template, input)
+          else await runDraft(runTarget.job, input)
+        }}
       />}
       {schedulingTemplate && <div className="modal-scrim" onClick={() => setSchedulingTemplate(null)}>
         <div
@@ -1497,12 +1526,17 @@ export function GraphScreen({
         <span className="graph-node-count">{doneCount}/{job.node_states.length} nodes</span>
       </>}
       {job?.status === 'queued' && <span
-        className={`graph-save-status is-${saveState}`}
+        className={`graph-save-status is-${effectiveSaveState}`}
         role="status"
         aria-live="polite"
       >
-        {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Not saved' : 'Saved ✓'}
+        {effectiveSaveState === 'saving' ? 'Saving…' : effectiveSaveState === 'error' ? 'Not saved' : 'Saved ✓'}
       </span>}
+      {job?.status === 'queued' && saveState === 'error' && !intakeEditBlocked && <button
+        className="ghost-button graph-save-retry"
+        onClick={() => void retryAutosave()}
+        disabled={!!busy}
+      >Retry save</button>}
       <div className="graph-header-actions">
         {job && plan && job.status !== 'queued' && <>
           <button className="ghost-button" onClick={promotePlan} disabled={!!busy || !!job.workflow_id}>
@@ -1691,6 +1725,7 @@ export function GraphScreen({
                   <WorkflowInputsEditor
                     inputs={definition.inputs ?? []}
                     onChange={inputs => updateSelected({ inputs })}
+                    onEditStateChange={setIntakeEditState}
                   />
                   <p className="muted graph-field-note">
                     These are the questions each manual run asks. Nodes reference them with <code>{'{{id}}'}</code>.
@@ -1915,21 +1950,30 @@ export function GraphScreen({
       <button
         className="ghost-button graph-promote-button"
         onClick={promotePlan}
-        disabled={!!busy || !!job.workflow_id}
+        disabled={!!busy || !!job.workflow_id || runBlocked}
         title={job.workflow_id ? 'This plan is already a reusable workflow' : 'Create a reusable workflow from this plan'}
       >
         {busy === 'save-template' ? 'Saving…' : '★ Save as Workflow'}
       </button>
-      <button className="primary-button" onClick={() => void runCurrentPlan()} disabled={!!busy}>
+      <button
+        className="primary-button"
+        onClick={() => setRunTarget({ kind: 'job', job: { ...job, graph: plan ?? job.graph } })}
+        disabled={!!busy || runBlocked}
+        title={runBlocked ? 'Wait for a valid saved workflow before running' : undefined}
+      >
         {busy === 'start' ? 'Starting…' : '▶ Run'}
       </button>
     </footer>}
-    {runningTemplate && <RunModal
-      title={runningTemplate.name}
-      inputs={runningTemplate.inputs}
-      confirmLabel="Create run"
-      onCancel={() => setRunningTemplate(null)}
-      onRun={async input => { await createFromTemplate(runningTemplate, input) }}
+    {runTarget && <RunModal
+      title={runTarget.kind === 'template' ? runTarget.template.name : runTarget.job.title}
+      inputs={runTarget.kind === 'template'
+        ? runTarget.template.inputs
+        : triggerInputs(runTarget.job.graph)}
+      onCancel={() => setRunTarget(null)}
+      onRun={async input => {
+        if (runTarget.kind === 'template') await createFromTemplate(runTarget.template, input)
+        else await runDraft(runTarget.job, input)
+      }}
     />}
   </section>
 }
