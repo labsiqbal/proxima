@@ -340,7 +340,11 @@ by the database in the same transaction that completes an Ops Task;
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
 and cascades with the session; `attention_items` stores durable Master, budget, and
-permission needs-you items while review/satpam items are projected into the same API.
+permission needs-you items while review/satpam items are projected into the same API;
+`master_decisions` stores each non-approval owner question, bounded response contract,
+pending/deferred/resolved state, response attribution, and exact links to its
+Attention row, requesting Task, origin Master message, Task response message, and
+single continuation run.
 Settings under `master.*` hold unattended state, turn/wall/optional-token budgets, and
 core-tour completion. Startup asserts one project-unbound Master identity per owner
 and refuses ambiguous dual identities or conflicting old/new origin columns. The
@@ -596,6 +600,12 @@ owner message -> queued Master chat-only run
       -> Master home + popup share thread, composer, Focus, target, active run, and scroll
       -> named durable transitions may coalesce into one focus-neutral shell toast
       -> global Attention deep-links owner decisions
+      -> non-approval create_attention writes one durable Master decision
+      -> Master Decisions and global Attention render the full question and response contract
+      -> defer persists the decision but removes it from the global needs-you badge
+      -> versioned resolution validates the response and atomically queues one Task continuation
+      -> the requesting Task rejects generic approval while its decision remains unresolved
+      -> decision projection appends one human-readable defer or resolution event
 ```
 
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
@@ -658,7 +668,8 @@ Authority is singular: **Master dispatches and prioritizes; satpam alone detects
 steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 
 `MasterProjectionService` projects important Task status, checkpoint, Attention, and
-Satpam rows into the same durable Master conversation. One
+Satpam rows, plus Master decision defer and resolution transitions, into the same
+durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
 retry, reconnect, and restart reconciliation idempotent. Cross-surface Task mutation,

@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from . import app_settings
 from . import master_focus
-from .auth import iso_now
 from .job_checkpoints import create_checkpoint
 from .master_persistence import master_identity_rows
 from .master_tool_broker import MasterToolBroker, validate_master_tool_call
@@ -755,21 +754,6 @@ def _execute_legacy_tool(conn, app, user: dict[str, Any], origin_master_session_
                 "VALUES (?, 'master.settings.change', 'settings', 'master.budgets', ?)",
                 (user["id"], json.dumps({"turns": data["budget_turns"], "wall_seconds": data["budget_wall_seconds"], "tokens": data["budget_tokens"]})),
             )
-        elif name == "create_attention":
-            title = str(args.get("title") or "").strip()
-            message = str(args.get("message") or "").strip()
-            if not title or not message:
-                raise MasterToolError("invalid_attention", "Attention needs a title and message")
-            cur = conn.execute(
-                "INSERT INTO attention_items(kind, title, target_json, inline_ok, status, source_key) "
-                "VALUES ('master_decision', ?, ?, 0, 'open', ?)",
-                (title[:200], json.dumps({"view": "master", "message": message}), f"master:{origin_master_session_id}:{iso_now()}"),
-            )
-            attention_id = _as_int(cur.lastrowid)
-            projection = getattr(app.state, "master_projection", None)
-            if projection is not None:
-                projection.safe_project_attention(attention_id)
-            data = {"attention_id": attention_id}
         else:
             raise MasterToolError("tool_not_allowed", f"Master tool {name!r} is not allowed")
         return {"ok": True, "tool": name, "result": data}
@@ -809,7 +793,6 @@ def execute_tool(
         "start_plan",
         "set_unattended",
         "set_budgets",
-        "create_attention",
     }:
         return _execute_legacy_tool(
             conn,
@@ -819,11 +802,19 @@ def execute_tool(
             name,
             args,
         )
+    origin_message = conn.execute(
+        "SELECT id FROM messages WHERE session_id = ? AND role = 'user' "
+        "ORDER BY id DESC LIMIT 1",
+        (origin_master_session_id,),
+    ).fetchone()
     return MasterToolBroker(
         conn,
         app,
         user,
         origin_master_session_id,
+        origin_message_id=(
+            _as_int(origin_message["id"]) if origin_message is not None else None
+        ),
     ).execute(name, args)
 
 

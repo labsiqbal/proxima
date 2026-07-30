@@ -7,7 +7,14 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import app_settings, features, master_focus, satpam, turn_restore
+from .. import (
+    app_settings,
+    features,
+    master_decisions,
+    master_focus,
+    satpam,
+    turn_restore,
+)
 from ..master_runtime import (
     MasterToolError,
     master_capacity,
@@ -189,6 +196,14 @@ def register(app, deps):
             detail={"code": exc.code, "message": str(exc)},
         )
 
+    def _decision_http_error(
+        exc: master_decisions.MasterDecisionError,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        )
+
     def _master_job_payload(row) -> dict[str, Any]:
         data = dict(row)
         data["input"] = _json(data.get("input"), {})
@@ -241,6 +256,11 @@ def register(app, deps):
                 max_parallel=master_parallel_limit(app.state.config),
             ),
             "attention": attention,
+            "decisions": master_decisions.list_decisions(
+                db(),
+                owner_user_id=_as_int(user["id"]),
+                master_session_id=_as_int(session["id"]),
+            ),
             "checkpoints": list_checkpoints(db(), origin_master_session_id=session["id"]),
             "focus": master_focus.state_payload(db(), session["id"]),
         })
@@ -711,15 +731,32 @@ def register(app, deps):
             "SELECT * FROM attention_items WHERE status = 'open' ORDER BY created_at DESC, id DESC"
         ).fetchall():
             data = dict(row)
+            attention_id = _as_int(data["id"])
             data["inline_ok"] = bool(data["inline_ok"])
             data["target"] = _json(data.pop("target_json"), {})
             data["actions"] = _json(data.pop("actions_json"), [])
-            data["id"] = f"attention:{data['id']}"
+            if data["kind"] == "master_decision":
+                decision = db().execute(
+                    "SELECT * FROM master_decisions "
+                    "WHERE attention_item_id = ? AND owner_user_id = ?",
+                    (attention_id, user["id"]),
+                ).fetchone()
+                if decision is None:
+                    continue
+                data["decision"] = master_decisions.decision_payload(
+                    db(), decision
+                )
+            data["id"] = f"attention:{attention_id}"
             items.append(data)
         for row in db().execute(
             "SELECT j.*, EXISTS(SELECT 1 FROM job_worktrees wt WHERE wt.job_id = j.id) AS has_worktree "
             "FROM jobs j WHERE j.status = 'review' AND (j.created_by = ? OR j.project_id IN "
-            "(SELECT id FROM projects WHERE owner_user_id = ?)) ORDER BY j.updated_at DESC",
+            "(SELECT id FROM projects WHERE owner_user_id = ?)) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM master_decisions decision "
+            "  WHERE decision.requesting_job_id = j.id "
+            "  AND decision.state IN ('pending', 'deferred')"
+            ") ORDER BY j.updated_at DESC",
             (user["id"], user["id"]),
         ).fetchall():
             steps = _json(row["steps_state"], [])
@@ -783,6 +820,57 @@ def register(app, deps):
     def get_attention(user: dict[str, Any] = Depends(current_user)):
         items = _attention_items(user)
         return {"items": items, "count": len(items)}
+
+    @app.get("/api/master/decisions/{decision_id}")
+    def get_master_decision(
+        decision_id: int,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        _require_master()
+        try:
+            row = master_decisions.get_decision(
+                db(), decision_id, _as_int(user["id"])
+            )
+        except master_decisions.MasterDecisionError as exc:
+            raise _decision_http_error(exc) from exc
+        return master_decisions.decision_payload(db(), row)
+
+    @app.post("/api/master/decisions/{decision_id}/defer")
+    def defer_master_decision(
+        decision_id: int,
+        payload: dict[str, Any],
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        _require_master()
+        try:
+            return master_decisions.defer_decision(
+                db(),
+                app,
+                user,
+                decision_id,
+                _as_int(payload.get("expected_version")),
+            )
+        except master_decisions.MasterDecisionError as exc:
+            raise _decision_http_error(exc) from exc
+
+    @app.post("/api/master/decisions/{decision_id}/resolve")
+    def resolve_master_decision(
+        decision_id: int,
+        payload: dict[str, Any],
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        _require_master()
+        try:
+            return master_decisions.resolve_decision(
+                db(),
+                app,
+                user,
+                decision_id,
+                _as_int(payload.get("expected_version")),
+                payload.get("response"),
+            )
+        except master_decisions.MasterDecisionError as exc:
+            raise _decision_http_error(exc) from exc
 
     @app.post("/api/attention/{item_id:path}/act")
     def act_attention(item_id: str, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):

@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import app_settings, master_focus, satpam, worktrees
+from proxima_api import (
+    app_settings,
+    master_decisions,
+    master_focus,
+    satpam,
+    worktrees,
+)
 from proxima_api.db import connect
 from proxima_api.graph import normalize_graph
 from proxima_api.job_checkpoints import create_checkpoint
@@ -2562,12 +2568,40 @@ def test_retried_attention_tool_projects_one_action_required_message(
     tmp_path: Path,
 ):
     app, client, project = _app_and_client(tmp_path)
-    desk = client.get("/api/master/desk").json()
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="decision-task",
+        tasks=[
+            {
+                "title": "Prepare rollout",
+                "brief": "Prepare a rollout plan",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+        "steps_state = ? WHERE id = ?",
+        (
+            json.dumps(
+                [
+                    {
+                        "title": "Prepare rollout",
+                        "status": "done",
+                        "output_summary": "A rollout window is still needed.",
+                    }
+                ]
+            ),
+            job_id,
+        ),
+    )
     project_id = app.state.db.execute(
         "SELECT id FROM projects WHERE slug = ?",
         (project["slug"],),
     ).fetchone()["id"]
-    focus = master_focus.change_focus(
+    current_focus = master_focus.change_focus(
         app.state.db,
         master_session_id=desk["session"]["id"],
         container_id=project_id,
@@ -2581,7 +2615,7 @@ def test_retried_attention_tool_projects_one_action_required_message(
     master_focus.stamp_message(
         app.state.db,
         message_id=origin.lastrowid,
-        focus_epoch_id=focus["current_epoch_id"],
+        focus_epoch_id=current_focus["current_epoch_id"],
     )
     broker = MasterToolBroker(
         app.state.db,
@@ -2592,7 +2626,16 @@ def test_retried_attention_tool_projects_one_action_required_message(
     )
     args = {
         "title": "Choose a direction",
-        "message": "Pick option A or B.",
+        "prompt": "Pick option A or B.",
+        "context": "The rollout is ready once the owner chooses.",
+        "response": {
+            "type": "choice",
+            "choices": [
+                {"id": "a", "label": "Option A"},
+                {"id": "b", "label": "Option B"},
+            ],
+        },
+        "task_id": job_id,
         "idempotency_key": "attention-choice",
     }
 
@@ -2600,6 +2643,7 @@ def test_retried_attention_tool_projects_one_action_required_message(
     second = broker.execute("create_attention", args)
 
     assert first["result"]["attention_id"] == second["result"]["attention_id"]
+    assert first["result"]["decision_id"] == second["result"]["decision_id"]
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM master_projections "
         "WHERE projection_type = 'master.attention.required'"
@@ -2620,9 +2664,9 @@ def test_retried_attention_tool_projects_one_action_required_message(
             "subject_container_id",
         )
     } == {
-        "focus_epoch_id": focus["current_epoch_id"],
-        "focus_container_id": project_id,
-        "subject_container_id": None,
+        "focus_epoch_id": None,
+        "focus_container_id": None,
+        "subject_container_id": project_id,
     }
     projection_message_id = attention_events[0]["payload"]["message_id"]
     attribution = app.state.db.execute(
@@ -2631,9 +2675,255 @@ def test_retried_attention_tool_projects_one_action_required_message(
         (projection_message_id,),
     ).fetchone()
     assert dict(attribution) == {
-        "focus_epoch_id": focus["current_epoch_id"],
-        "focus_container_id": project_id,
+        "focus_epoch_id": None,
+        "focus_container_id": None,
     }
+
+
+def test_master_decision_defer_resolve_and_stale_response_are_exactly_once(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="decision-resolution-task",
+        tasks=[
+            {
+                "title": "Prepare production rollout",
+                "brief": "Prepare the release and wait for a rollout window",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+        "steps_state = ? WHERE id = ?",
+        (
+            json.dumps(
+                [
+                    {
+                        "title": "Prepare release",
+                        "status": "done",
+                        "output_summary": "The rollout window needs a decision.",
+                    }
+                ]
+            ),
+            job_id,
+        ),
+    )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Prepare the rollout', 'owner')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=None,
+    )
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1, "username": "owner"},
+        desk["session"]["id"],
+        origin_message_id=origin.lastrowid,
+    )
+    created = broker.execute(
+        "create_attention",
+        {
+            "title": "Choose rollout window",
+            "prompt": "Which rollout window should the release use?",
+            "context": "Both windows include two hours of planned downtime.",
+            "response": {
+                "type": "choice",
+                "choices": [
+                    {
+                        "id": "saturday",
+                        "label": "Saturday 02:00 UTC",
+                    },
+                    {
+                        "id": "sunday",
+                        "label": "Sunday 02:00 UTC",
+                    },
+                ],
+            },
+            "task_id": job_id,
+            "idempotency_key": "rollout-window",
+        },
+    )
+    assert created["ok"] is True
+    decision_id = created["result"]["decision_id"]
+
+    attention = client.get("/api/attention").json()["items"]
+    decision_item = next(
+        item for item in attention if item["kind"] == "master_decision"
+    )
+    assert decision_item["decision"]["prompt"] == (
+        "Which rollout window should the release use?"
+    )
+    assert decision_item["decision"]["context"].startswith("Both windows")
+    assert decision_item["decision"]["task"]["id"] == job_id
+    assert not any(item["id"] == f"job:{job_id}" for item in attention)
+    assert client.get("/api/master/desk").json()["decisions"][0][
+        "origin_message_id"
+    ] == origin.lastrowid
+    task_payload = client.get(f"/api/jobs/{job_id}").json()
+    assert task_payload["master_decision"]["id"] == decision_id
+    assert task_payload["master_decision"]["prompt"] == (
+        "Which rollout window should the release use?"
+    )
+    generic_approval = client.post(f"/api/jobs/{job_id}/approve")
+    assert generic_approval.status_code == 409
+    assert generic_approval.json()["detail"]["code"] == (
+        "master_decision_pending"
+    )
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+
+    invalid = client.post(
+        f"/api/master/decisions/{decision_id}/resolve",
+        json={"expected_version": 1, "response": "weekday"},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_decision_response"
+    assert app.state.db.execute(
+        "SELECT state FROM master_decisions WHERE id = ?", (decision_id,)
+    ).fetchone()["state"] == "pending"
+
+    stale_defer = client.post(
+        f"/api/master/decisions/{decision_id}/defer",
+        json={"expected_version": 99},
+    )
+    assert stale_defer.status_code == 409
+    assert stale_defer.json()["detail"]["code"] == "decision_stale"
+
+    deferred = client.post(
+        f"/api/master/decisions/{decision_id}/defer",
+        json={"expected_version": 1},
+    )
+    assert deferred.status_code == 200
+    assert deferred.json()["state"] == "deferred"
+    assert deferred.json()["version"] == 2
+    assert not any(
+        item["kind"] == "master_decision"
+        for item in client.get("/api/attention").json()["items"]
+    )
+    reloaded = client.get("/api/master/desk").json()["decisions"]
+    assert reloaded[0]["state"] == "deferred"
+    assert reloaded[0]["version"] == 2
+
+    resolved = client.post(
+        f"/api/master/decisions/{decision_id}/resolve",
+        json={"expected_version": 2, "response": "sunday"},
+    )
+    assert resolved.status_code == 200
+    payload = resolved.json()
+    assert payload["state"] == "resolved"
+    assert payload["response"] == {
+        "value": "sunday",
+        "label": "Sunday 02:00 UTC",
+    }
+    assert payload["resolved_by_user_id"] == 1
+    assert payload["resolved_at"]
+
+    job = app.state.db.execute(
+        "SELECT session_id, status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert job["status"] == "running"
+    run_rows = app.state.db.execute(
+        "SELECT id, prompt FROM runs WHERE session_id = ? ORDER BY id",
+        (job["session_id"],),
+    ).fetchall()
+    assert len(run_rows) == 1
+    assert "Sunday 02:00 UTC" in run_rows[0]["prompt"]
+    task_messages = app.state.db.execute(
+        "SELECT content FROM messages WHERE session_id = ? AND role = 'user'",
+        (job["session_id"],),
+    ).fetchall()
+    assert len(task_messages) == 1
+    assert "Sunday 02:00 UTC" in task_messages[0]["content"]
+    task_events = app.state.db.execute(
+        "SELECT type, payload FROM events WHERE run_id = ? ORDER BY seq",
+        (run_rows[0]["id"],),
+    ).fetchall()
+    assert [event["type"] for event in task_events] == [
+        "master.decision.resolved",
+        "run.queued",
+    ]
+    assert json.loads(task_events[0]["payload"])["actor_user_id"] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM audit_log "
+        "WHERE action = 'master.decision.resolve' "
+        "AND target_id = ?",
+        (str(decision_id),),
+    ).fetchone()[0] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE projection_type IN ("
+        "'master.decision.deferred', 'master.decision.resolved'"
+        ") AND source_id = ?",
+        (created["result"]["attention_id"],),
+    ).fetchone()[0] == 2
+    projection_messages = [
+        row["content"]
+        for row in app.state.db.execute(
+            "SELECT message.content FROM master_projections projection "
+            "JOIN messages message ON message.id = projection.message_id "
+            "WHERE projection.source_id = ? "
+            "AND projection.projection_type LIKE 'master.decision.%' "
+            "ORDER BY projection.id",
+            (created["result"]["attention_id"],),
+        ).fetchall()
+    ]
+    assert projection_messages == [
+        f"Owner deferred decision #{decision_id} for Task #{job_id}.",
+        (
+            f"Owner resolved decision #{decision_id} for Task #{job_id}. "
+            "The Task is continuing."
+        ),
+    ]
+
+    repeated = client.post(
+        f"/api/master/decisions/{decision_id}/resolve",
+        json={"expected_version": 2, "response": "sunday"},
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"]["code"] == "decision_stale"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = ?", (job["session_id"],)
+    ).fetchone()[0] == 1
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM messages "
+        "WHERE session_id = ? AND role = 'user'",
+        (job["session_id"],),
+    ).fetchone()[0] == 1
+    assert client.get(
+        f"/api/master/decisions/{decision_id}"
+    ).json()["response"]["label"] == "Sunday 02:00 UTC"
+
+
+def test_master_decision_free_text_shape_is_bounded_and_owner_readable():
+    assert master_decisions.normalize_response_shape(
+        {
+            "type": "text",
+            "max_length": 320,
+            "placeholder": "Describe the rollout constraint",
+        }
+    ) == {
+        "type": "text",
+        "max_length": 320,
+        "placeholder": "Describe the rollout constraint",
+    }
+    with pytest.raises(
+        master_decisions.MasterDecisionError,
+        match="1 to 4000 characters",
+    ):
+        master_decisions.normalize_response_shape(
+            {"type": "text", "max_length": 5000}
+        )
 
 
 def test_projection_summaries_exclude_untrusted_paths_commands_and_secrets(
@@ -2685,7 +2975,16 @@ def test_projection_summaries_exclude_untrusted_paths_commands_and_secrets(
         "create_attention",
         {
             "title": "Read /private/worktree",
-            "message": "token=TOP_SECRET",
+            "prompt": "Choose whether to read /private/worktree",
+            "context": "token=TOP_SECRET",
+            "response": {
+                "type": "choice",
+                "choices": [
+                    {"id": "read", "label": "Read it"},
+                    {"id": "skip", "label": "Skip it"},
+                ],
+            },
+            "task_id": job_id,
             "idempotency_key": "safe-summary-attention",
         },
     )

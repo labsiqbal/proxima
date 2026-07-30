@@ -167,6 +167,54 @@ describe("TaskWorkspace", () => {
 		},
 	);
 
+	it("shows the full Master decision instead of generic approval", async () => {
+		vi.mocked(getJob).mockResolvedValue({
+			...job,
+			master_decision: {
+				id: 7,
+				attention_item_id: 11,
+				master_session_id: 3,
+				origin_message_id: 19,
+				requesting_job_id: 42,
+				title: "Choose rollout window",
+				prompt: "Which rollout window should the release use?",
+				context: "Both options include two hours of planned downtime.",
+				response_shape: {
+					type: "choice",
+					choices: [
+						{ id: "saturday", label: "Saturday 02:00 UTC" },
+						{ id: "sunday", label: "Sunday 02:00 UTC" },
+					],
+				},
+				state: "pending",
+				response: null,
+				version: 1,
+				created_at: "2026-01-01",
+				updated_at: "2026-01-01",
+				legacy_without_task: false,
+				task: {
+					id: 42,
+					title: "Audit release",
+					status: "review",
+					engine: "linear",
+				},
+			},
+		} as never);
+
+		render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+
+		expect(
+			await screen.findByText("Which rollout window should the release use?"),
+		).toBeInTheDocument();
+		expect(screen.getByText(/two hours of planned downtime/)).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Approve.*Done/ }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Send decision" }),
+		).toBeDisabled();
+	});
+
 	it("shows the durable prerequisite reason for a blocked queued task", async () => {
 		vi.mocked(getJob).mockResolvedValue({
 			...job,

@@ -586,9 +586,22 @@ job reviews, complex diff reviews, pending satpam restarts, durable tool permiss
 and Master decision/budget items. Every row deep-links to its owning Task/plan/Master/
 Settings surface. Only rows marked `inline_ok` render actions: simple non-repo final
 review, hash-visible script trust, pending satpam restart, and live permission choices.
-Diff and open-text Master items navigate only. Errors persist inside the inbox until
-retried/dismissed. Job-linked rows include the same canonical run projection used by
-Workflows and Tasks, so a review-parked failed graph node reads Failed everywhere.
+Diff and Master budget items navigate only. Job-linked rows include the same
+canonical run projection used by Workflows and Tasks, so a review-parked failed
+graph node reads Failed everywhere. A non-approval Master decision is a dedicated
+`master_decisions` record linked to its Attention row, requesting Task, originating
+Master message, and canonical Master session. It preserves the full owner prompt and
+context, a bounded choice set or bounded free-text contract, pending/deferred/resolved
+state, optimistic version, response, actor/time, and the Task message and continuation
+run created by resolution. The full form appears both in the Master Decisions
+accordion and directly in global Attention. Deferring closes the global badge without
+losing the decision from Master, and survives reload or restart. Resolving validates
+the current version and response, records the response, queues exactly one Task
+continuation, closes Attention, and appends a concise human-readable Master event in
+one transaction. A Task with an unresolved Master decision shows that same question
+in its workspace and rejects the generic approval endpoint, while ordinary approvals
+keep their existing specialized path. Errors persist inside the inbox until retried
+or dismissed.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
 and running jobs, badges a count when work is in flight, and deep-links each row to
@@ -612,8 +625,9 @@ Satpam remains the sole steer/restart authority.
 
 **Durable Task and supervision projection:** `MasterProjectionService` appends
 concise Task start, review-ready, completion, failure, cancellation, stable
-prerequisite-block, Attention, supervisor-outcome, and Satpam messages to the one
-Master thread. `master_projections` is an owner-scoped idempotency/link ledger, not a
+prerequisite-block, Attention, decision-deferred, decision-resolved,
+supervisor-outcome, and Satpam messages to the one Master thread.
+`master_projections` is an owner-scoped idempotency/link ledger, not a
 second lifecycle ledger: jobs, runs, checkpoints, Attention, node state, and Satpam
 rows remain authoritative. Each projection also emits one named event on the
 existing session SSE stream with stable source, Task, Container, Area, checkpoint,

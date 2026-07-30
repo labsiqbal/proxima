@@ -42,6 +42,45 @@ export type MasterJob = Job & {
   project_slug?: string | null
   project_name?: string | null
 }
+export type MasterDecisionChoice = {
+  id: string
+  label: string
+  description?: string
+}
+export type MasterDecision = {
+  id: number
+  attention_item_id: number
+  master_session_id: number
+  origin_message_id: number | null
+  requesting_job_id: number | null
+  title: string
+  prompt: string
+  context: string
+  response_shape:
+    | { type: 'choice'; choices: MasterDecisionChoice[] }
+    | { type: 'text'; max_length: number; placeholder: string }
+  state: 'pending' | 'deferred' | 'resolved'
+  response: { value: string; label: string } | null
+  version: number
+  deferred_by_user_id?: number | null
+  deferred_at?: string | null
+  resolved_by_user_id?: number | null
+  resolved_at?: string | null
+  task_message_id?: number | null
+  continuation_run_id?: number | null
+  created_at: string
+  updated_at: string
+  legacy_without_task: boolean
+  task: {
+    id: number
+    title: string
+    status: string
+    engine: string
+    project_id?: number | null
+    project_name?: string | null
+    project_slug?: string | null
+  } | null
+}
 export type AttentionItem = {
   id: string
   kind: string
@@ -52,6 +91,7 @@ export type AttentionItem = {
   status: string
   created_at?: string
   run_projection?: RunProjection
+  decision?: MasterDecision
 }
 export type MasterDesk = {
   session: ChatSession
@@ -63,6 +103,7 @@ export type MasterDesk = {
   budgets: MasterBudgets
   capacity: MasterCapacity
   attention: AttentionItem[]
+  decisions: MasterDecision[]
   checkpoints: MasterCheckpoint[]
   focus: MasterFocusSnapshot
 }
@@ -78,12 +119,13 @@ export type MasterSettings = MasterBudgets & {
   graph_policy?: GraphPolicy
 }
 
-type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs' | 'focus'> & {
+type LegacyMasterDesk = Omit<MasterDesk, 'master_run' | 'event_cursor' | 'jobs' | 'focus' | 'decisions'> & {
   master_run?: MasterDesk['master_run']
   alpha_run?: MasterDesk['master_run']
   event_cursor?: number
   focus?: MasterFocusSnapshot
   jobs: (MasterJob & { alpha_session_id?: number | null })[]
+  decisions?: MasterDecision[]
 }
 
 export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
@@ -131,6 +173,7 @@ export function normalizeMasterDesk(payload: LegacyMasterDesk): MasterDesk {
         target,
       }
     }),
+    decisions: payload.decisions ?? [],
   }
 }
 
@@ -182,6 +225,27 @@ export const saveMasterSettings = (
 export const getAttention = (token: string) => api<{ items: AttentionItem[]; count: number }>('/api/attention', token)
 export const actAttention = (token: string, id: string, action: string) =>
   api<{ ok: boolean; id: string; action: string }>(`/api/attention/${encodeURIComponent(id)}/act`, token, { method: 'POST', body: JSON.stringify({ action }) })
+export const getMasterDecision = (token: string, decisionId: number) =>
+  api<MasterDecision>(`/api/master/decisions/${decisionId}`, token)
+export const deferMasterDecision = (
+  token: string,
+  decisionId: number,
+  expectedVersion: number,
+) =>
+  api<MasterDecision>(`/api/master/decisions/${decisionId}/defer`, token, {
+    method: 'POST',
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  })
+export const resolveMasterDecision = (
+  token: string,
+  decisionId: number,
+  expectedVersion: number,
+  response: string,
+) =>
+  api<MasterDecision>(`/api/master/decisions/${decisionId}/resolve`, token, {
+    method: 'POST',
+    body: JSON.stringify({ expected_version: expectedVersion, response }),
+  })
 export const previewCheckpointRestore = (token: string, jobId: number, checkpointId: number) =>
   api<{ checkpoint_id: number; job_id: number; job_title: string; database_scope: string[]; git_refs: MasterCheckpoint['git_refs']; conflicts: { id: number; title: string }[]; can_restore: boolean }>(`/api/jobs/${jobId}/checkpoint/${checkpointId}/restore`, token)
 export const restoreCheckpoint = (token: string, jobId: number, checkpointId: number) =>

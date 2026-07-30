@@ -8,6 +8,7 @@ import {
 } from '../../api/master'
 import { confirmDialog } from '../ui/Dialog'
 import { useMasterState } from '../../master/MasterStateProvider'
+import { MasterDecisionCard } from './MasterDecisionCard'
 
 const WORK_STATES: {
   status: MasterJob['status']
@@ -190,8 +191,12 @@ export function MasterWorkPanel({
   token: string
   onOpenJob: (id: number, engine?: string) => void
 }) {
-  const { desk } = useMasterState()
+  const { desk, actions } = useMasterState()
   if (!desk) return null
+  const decisions = desk.decisions || []
+  const otherAttention = desk.attention.filter(
+    item => item.kind !== 'master_decision',
+  )
   const visibleJobs = desk.jobs.filter(job =>
     WORK_STATES.some(state => state.status === job.desk_status),
   )
@@ -254,33 +259,69 @@ export function MasterWorkPanel({
         )}
       </MasterPanel>
 
-      <MasterPanel eyebrow="Decisions" title="Needs your attention" count={desk.attention.length}>
-        {!desk.attention.length ? (
+      <MasterPanel
+        eyebrow="Decisions"
+        title="Needs your attention"
+        count={decisions.length + otherAttention.length}
+      >
+        {!decisions.length && !otherAttention.length ? (
           <div className="master-zero">
             <strong>Nothing needs a decision</strong>
             <p>Review, permission, and Satpam escalations will appear here.</p>
           </div>
         ) : (
-          <ul className="master-needs-list">
-            {desk.attention.map(item => (
-              <li key={item.id}>
-                {item.target.job_id != null ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenJob(item.target.job_id!, item.target.engine)}
-                  >
-                    <strong>{item.title}</strong>
-                    <small>Open linked Task</small>
-                  </button>
-                ) : (
-                  <div>
-                    <strong>{item.title}</strong>
-                    <small>Open the global Attention inbox for details.</small>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+          <>
+            {!!decisions.length && (
+              <div className="master-decision-list">
+                {decisions.map(decision => (
+                  <MasterDecisionCard
+                    key={decision.id}
+                    token={token}
+                    decision={decision}
+                    compact
+                    onChanged={() => actions.refresh()}
+                    onOpenJob={onOpenJob}
+                    onOpenMaster={originMessageId => {
+                      actions.setHistory({ kind: 'roving' })
+                      window.requestAnimationFrame(() => {
+                        const target = originMessageId == null
+                          ? null
+                          : document.querySelector(
+                            `[data-message-id="${originMessageId}"]`,
+                          )
+                        target?.scrollIntoView({
+                          block: 'center',
+                          behavior: 'smooth',
+                        })
+                      })
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            {!!otherAttention.length && (
+              <ul className="master-needs-list">
+                {otherAttention.map(item => (
+                  <li key={item.id}>
+                    {item.target.job_id != null ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenJob(item.target.job_id!, item.target.engine)}
+                      >
+                        <strong>{item.title}</strong>
+                        <small>Open linked Task</small>
+                      </button>
+                    ) : (
+                      <div>
+                        <strong>{item.title}</strong>
+                        <small>Open the global Attention inbox for details.</small>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </MasterPanel>
 

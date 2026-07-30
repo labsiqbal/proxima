@@ -17,6 +17,7 @@ from fastapi import Depends, Header, HTTPException
 from ..auth import iso_now
 from .. import artifact_registry
 from .. import features
+from .. import master_decisions
 from .. import repo_remote
 from .. import schedule_policy
 from .. import satpam
@@ -262,6 +263,15 @@ def register(app, deps):
         ).fetchall()
         if dependencies:
             d["dependencies"] = [dict(row) for row in dependencies]
+        decision = db().execute(
+            "SELECT * FROM master_decisions WHERE requesting_job_id = ? "
+            "AND state IN ('pending', 'deferred') ORDER BY id DESC LIMIT 1",
+            (d["id"],),
+        ).fetchone()
+        if decision:
+            d["master_decision"] = master_decisions.decision_payload(
+                db(), decision
+            )
         return canonical_job_payload(d, connection=db())
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
@@ -551,6 +561,22 @@ def register(app, deps):
     @app.post("/api/jobs/{job_id}/approve")
     def approve_job(job_id: int, payload: JobApproveRequest | None = None, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
+        pending_decision = db().execute(
+            "SELECT id FROM master_decisions WHERE requesting_job_id = ? "
+            "AND state IN ('pending', 'deferred') ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        if pending_decision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "master_decision_pending",
+                    "message": (
+                        f"Resolve Master decision #{pending_decision['id']} "
+                        "instead of approving this Task"
+                    ),
+                },
+            )
         if job["status"] != "review":
             return _job_payload(job)  # nothing to approve; idempotent
         if not job["session_id"]:

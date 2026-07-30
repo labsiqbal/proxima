@@ -640,6 +640,8 @@ CREATE TABLE IF NOT EXISTS master_projections (
     'master.task.cancelled',
     'master.task.blocked',
     'master.attention.required',
+    'master.decision.deferred',
+    'master.decision.resolved',
     'master.supervisor.outcome',
     'master.satpam.steered',
     'master.satpam.restart_queued',
@@ -667,6 +669,8 @@ CREATE TABLE IF NOT EXISTS master_projections (
     OR
     (projection_type IN (
       'master.attention.required',
+      'master.decision.deferred',
+      'master.decision.resolved',
       'master.supervisor.outcome',
       'master.satpam.recovery_failed'
     ) AND source_table = 'attention_items')
@@ -1403,6 +1407,35 @@ CREATE TABLE IF NOT EXISTS attention_items (
   resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC);
+CREATE TABLE IF NOT EXISTS master_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attention_item_id INTEGER NOT NULL UNIQUE REFERENCES attention_items(id) ON DELETE CASCADE,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  master_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  origin_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  requesting_job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  context TEXT NOT NULL,
+  response_shape_json TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (state IN ('pending', 'deferred', 'resolved')),
+  response_json TEXT,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  deferred_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  deferred_at TEXT,
+  resolved_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TEXT,
+  task_message_id INTEGER UNIQUE REFERENCES messages(id) ON DELETE SET NULL,
+  continuation_run_id INTEGER UNIQUE REFERENCES runs(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_master_decisions_owner_state
+  ON master_decisions(owner_user_id, state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_master_decisions_task
+  ON master_decisions(requesting_job_id, created_at DESC);
 -- An ACP session belongs to the agent HOME that created it, so a shared thread
 -- needs one ACP session PER home (per collaborator), not a single shared id.
 CREATE TABLE IF NOT EXISTS agent_sessions (

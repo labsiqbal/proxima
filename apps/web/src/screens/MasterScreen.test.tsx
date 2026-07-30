@@ -467,6 +467,67 @@ describe('MasterScreen', () => {
     expect(screen.queryByRole('button', { name: /work panel/i })).not.toBeInTheDocument()
   })
 
+  it('restores durable decision context with Task and conversation cross-links', async () => {
+    const onOpenJob = vi.fn()
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: {
+        ...state.desk,
+        decisions: [
+          {
+            id: 8,
+            attention_item_id: 11,
+            master_session_id: 9,
+            origin_message_id: 21,
+            requesting_job_id: 3,
+            title: 'Choose rollout window',
+            prompt: 'Which rollout window should the release use?',
+            context: 'Both choices include two hours of planned downtime.',
+            response_shape: {
+              type: 'choice',
+              choices: [
+                { id: 'saturday', label: 'Saturday 02:00 UTC' },
+                { id: 'sunday', label: 'Sunday 02:00 UTC' },
+              ],
+            },
+            state: 'deferred',
+            response: null,
+            version: 2,
+            created_at: '2026-01-01 00:00:00',
+            updated_at: '2026-01-01 00:01:00',
+            legacy_without_task: false,
+            task: {
+              id: 3,
+              title: 'Review Task',
+              status: 'review',
+              engine: 'legacy',
+            },
+          },
+        ],
+      },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={onOpenJob}
+      />,
+    )
+
+    expect(
+      screen.getByText('Which rollout window should the release use?'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Deferred')).toBeInTheDocument()
+    await userEvent.setup().click(
+      screen.getByRole('button', { name: 'Open Task #3' }),
+    )
+    expect(onOpenJob).toHaveBeenCalledWith(3, 'legacy')
+    await userEvent.setup().click(
+      screen.getByRole('button', { name: 'Open Master conversation' }),
+    )
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'roving' })
+  })
+
   it('keeps Fleet Work, Decisions, and Safety as independent accordions with bounded lists', async () => {
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     const panels = document.querySelectorAll<HTMLDetailsElement>('.master-side-section')

@@ -89,6 +89,18 @@ Execution and landing policies are separate:
 Historical project-less Work jobs keep their old scratch behavior and do not receive
 a scoped delegation audit.
 
+## Master decision continuation
+
+When a Master-owned Task needs a product choice rather than an ordinary approval,
+it remains in review and links to one unresolved `master_decisions` row. The
+decision record carries the full question, owner context, response contract, and
+Master origin. Generic Task approval is refused while that row is pending or
+deferred. A valid versioned response atomically records the owner response, appends
+one user message to the Task session, queues one continuation run, promotes the
+current step and Task to running, closes Attention, and records its audit and
+Master-projection links. Retrying the same or a stale response cannot enqueue a
+second continuation.
+
 ## Restart recovery
 
 Startup scans committed delegation rows with requested but unreconciled starts.

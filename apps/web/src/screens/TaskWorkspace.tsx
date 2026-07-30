@@ -9,6 +9,7 @@ import type {
 } from '../types'
 import { getJob, approveJob, deleteJob } from '../api/jobs'
 import { ChangesReview } from '../components/tasks/ChangesReview'
+import { MasterDecisionCard } from '../components/master/MasterDecisionCard'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
@@ -237,7 +238,18 @@ export function TaskWorkspace({
       <StatusPill status={projectedStatus} />
       <button className="row-action danger jfd-delete" title="Delete task" aria-label="Delete task" onClick={() => void remove()} disabled={!!busyAction}><IconTrash size={15} /></button>
     </div>
-    {isReview && (isMidGate
+    {isReview && job.master_decision
+      ? <div className="task-master-decision">
+          <MasterDecisionCard
+            token={token}
+            decision={job.master_decision}
+            onChanged={() => {
+              void load()
+              onChanged?.()
+            }}
+          />
+        </div>
+      : isReview && (isMidGate
       ? <div className="task-review-bar wf-review-mid">
           <span>⏸ Paused for your review — step {job.current_step_idx + 1}{reviewStep ? `: ${reviewStep.name}` : ''}.</span>
           <button className="primary-button" onClick={() => void approve(reviewStep && edited.trim() !== (reviewStep.output_summary || '') ? { edited_output: edited } : undefined)} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve & continue'}</button>
