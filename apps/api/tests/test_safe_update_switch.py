@@ -1312,7 +1312,11 @@ def test_appview_request_drains_before_fence_activation(
             headers=auth,
             json={"slug": "demo", "name": "Demo"},
         ).status_code == 201
-        monkeypatch.setattr(app.state.app_manager, "port", lambda _slug: 4567)
+        monkeypatch.setattr(
+            app.state.app_manager,
+            "preview_target",
+            lambda _slug: 4567,
+        )
         responses: list[object] = []
         request_errors: list[BaseException] = []
 

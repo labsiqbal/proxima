@@ -7,6 +7,7 @@ relative assets resolve and no port is exposed directly.
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 import os
 import re
 import signal
@@ -17,6 +18,8 @@ from typing import Any, Protocol
 
 from .process_containment import pid_namespace_argv
 from .runners import subprocess_env
+
+PROLONGED_START_SECONDS = 15
 
 
 def _port_open(port: int) -> bool:
@@ -56,45 +59,107 @@ def _listening_socket_inodes(port: int) -> set[str] | None:
     return inodes if checked else None
 
 
-def _process_group_owns_port(leader_pid: int, port: int) -> bool | None:
-    """Whether a POSIX process group owns a listener for ``port``.
+class PortOwnership(str, Enum):
+    NO_LISTENER = "no_listener"
+    VERIFIED = "verified"
+    FOREIGN = "foreign"
+    DETACHED = "detached"
+    UNKNOWN = "unknown"
 
-    App commands run in a fresh session, so the shell and all ordinary dev-server
-    descendants share a process group.  Mapping LISTEN socket inodes back through
-    /proc lets readiness reject a foreign listener that happens to use the same
-    port.  Platforms without procfs return None and retain the conservative
-    preflight protection in ``start``.
-    """
-    inodes = _listening_socket_inodes(port)
-    if inodes is None:
-        return None
+
+def _process_table(
+    listener_inodes: set[str],
+) -> dict[int, tuple[int, int, set[str]]] | None:
+    """Return pid -> (ppid, pgrp, matching socket inodes) from procfs."""
     try:
-        group_id = os.getpgid(leader_pid)
-    except OSError:
-        return False
-    proc_root = "/proc"
-    try:
-        pids = [name for name in os.listdir(proc_root) if name.isdigit()]
+        raw_pids = [name for name in os.listdir("/proc") if name.isdigit()]
     except OSError:
         return None
-    for raw_pid in pids:
+    processes: dict[int, tuple[int, int, set[str]]] = {}
+    for raw_pid in raw_pids:
         try:
-            stat = open(f"{proc_root}/{raw_pid}/stat", encoding="utf-8").read()
+            pid = int(raw_pid)
+            with open(f"/proc/{raw_pid}/stat", encoding="utf-8") as fh:
+                stat = fh.read()
             # comm may contain spaces/parens; fields after the final ') ' start
             # with state, ppid, pgrp.
             fields = stat.rsplit(") ", 1)[1].split()
-            if len(fields) < 3 or int(fields[2]) != group_id:
+            if len(fields) < 3:
                 continue
-            for fd in os.listdir(f"{proc_root}/{raw_pid}/fd"):
+            ppid = int(fields[1])
+            pgrp = int(fields[2])
+            sockets: set[str] = set()
+            for fd in os.listdir(f"/proc/{raw_pid}/fd"):
                 try:
-                    target = os.readlink(f"{proc_root}/{raw_pid}/fd/{fd}")
+                    target = os.readlink(f"/proc/{raw_pid}/fd/{fd}")
                 except OSError:
                     continue
-                if target.startswith("socket:[") and target[8:-1] in inodes:
-                    return True
+                if target.startswith("socket:["):
+                    inode = target[8:-1]
+                    if inode in listener_inodes:
+                        sockets.add(inode)
+            processes[pid] = (ppid, pgrp, sockets)
         except (OSError, ValueError, IndexError):
             continue
-    return False
+    return processes
+
+
+def _is_descendant(
+    pid: int,
+    leader_pid: int,
+    processes: dict[int, tuple[int, int, set[str]]],
+) -> bool:
+    seen: set[int] = set()
+    current = pid
+    while current > 1 and current not in seen:
+        if current == leader_pid:
+            return True
+        seen.add(current)
+        row = processes.get(current)
+        if row is None:
+            return False
+        current = row[0]
+    return current == leader_pid
+
+
+def _listener_ownership(
+    leader_pid: int,
+    port: int,
+    *,
+    contained: bool,
+) -> PortOwnership:
+    """Classify a listener without equating reachability with ownership.
+
+    A normal app server stays in the fresh process group created for the command.
+    A detached descendant is accepted only inside Proxima's PID namespace, where
+    namespace teardown owns its full lifetime. On non-procfs hosts, inaccessible
+    procfs, or incomplete socket-to-process evidence, preview fails closed.
+    """
+    inodes = _listening_socket_inodes(port)
+    if inodes is None:
+        return PortOwnership.UNKNOWN
+    if not inodes:
+        return PortOwnership.NO_LISTENER
+    try:
+        group_id = os.getpgid(leader_pid)
+    except OSError:
+        return PortOwnership.UNKNOWN
+    processes = _process_table(inodes)
+    if processes is None:
+        return PortOwnership.UNKNOWN
+    owners: dict[str, set[int]] = {inode: set() for inode in inodes}
+    for pid, (_ppid, _pgrp, sockets) in processes.items():
+        for inode in sockets:
+            owners[inode].add(pid)
+    # hidepid, permissions, or a disappearing owner leave an incomplete proof.
+    if any(not pids for pids in owners.values()):
+        return PortOwnership.UNKNOWN
+    owner_pids = {pid for pids in owners.values() for pid in pids}
+    if all(processes[pid][1] == group_id for pid in owner_pids):
+        return PortOwnership.VERIFIED
+    if all(_is_descendant(pid, leader_pid, processes) for pid in owner_pids):
+        return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
+    return PortOwnership.FOREIGN
 
 
 def _hex_addr_is_loopback(hex_addr: str) -> bool:
@@ -145,8 +210,9 @@ class AppManager:
     def __init__(self, *, contained: bool = False) -> None:
         self.contained = contained
         self._apps: dict[str, dict[str, Any]] = {}
-        # Last self-exit payload per slug, kept until the next start so the UI
-        # can show failure logs after the process is reaped (status polls every 2s).
+        # Last terminal/stopped payload per slug, kept until the next start so
+        # status polling can recover the bounded command buffer after page reload
+        # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
         self._retained_effects: list[EffectLease] = []
 
@@ -173,10 +239,15 @@ class AppManager:
         *,
         effect_lease: EffectLease | None = None,
     ) -> None:
-        await self.stop(slug)
+        await self.stop(slug, preserve_status=False)
         # Fail before spawning when a user-owned preview has this port.  In
         # particular, never "fix" a collision by killing a process we do not own.
         if _port_open(port):
+            self._last_exit[slug] = self._port_conflict_status(
+                command=command,
+                requested_port=port,
+                log=[],
+            )
             raise PortInUseError(port)
         self._last_exit.pop(slug, None)
         env = subprocess_env(
@@ -253,9 +324,30 @@ class AppManager:
                     terminated=proc.returncode is not None,
                 )
 
-    async def stop(self, slug: str) -> None:
-        app = self._apps.pop(slug, None)
+    @staticmethod
+    def _stopped_status(previous: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "state": "stopped",
+            "running": False,
+            "ready": False,
+        }
+        for key in ("requested_port", "command", "exit_code"):
+            if key in previous:
+                result[key] = previous[key]
+        result["log"] = list(previous.get("log") or [])[-40:]
+        return result
+
+    async def stop(
+        self,
+        slug: str,
+        *,
+        preserve_status: bool = True,
+    ) -> None:
+        previous = self._last_exit.pop(slug, None)
+        app = self._apps.get(slug)
         if not app:
+            if preserve_status and previous:
+                self._last_exit[slug] = self._stopped_status(previous)
             return
         proc = app["proc"]
         if proc.returncode is None:
@@ -283,22 +375,104 @@ class AppManager:
                     await asyncio.wait_for(proc.wait(), timeout=2)
                 except Exception:
                     pass
+        if self._apps.get(slug) is app:
+            self._apps.pop(slug, None)
         self._finish_effect(
             app,
             terminated=proc.returncode is not None,
         )
+        if preserve_status:
+            stopped = {
+                "requested_port": app["port"],
+                "command": app["command"],
+                "log": app["log"],
+            }
+            if proc.returncode is not None:
+                stopped["exit_code"] = int(proc.returncode)
+            self._last_exit[slug] = self._stopped_status(stopped)
+
+    @staticmethod
+    def _port_conflict_status(
+        *,
+        command: str,
+        requested_port: int,
+        log: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "state": "port_conflict",
+            "running": False,
+            "ready": False,
+            "requested_port": requested_port,
+            "command": command,
+            "log": log[-40:],
+            "message": (
+                f"Port {requested_port} belongs to another process. "
+                "Proxima did not open, proxy, or stop it."
+            ),
+        }
+
+    @staticmethod
+    def _signal_managed_process(app: dict[str, Any]) -> None:
+        """Signal only the process identity Proxima spawned, never a port owner."""
+        if app.get("termination_sent"):
+            return
+        app["termination_sent"] = True
+        proc = app["proc"]
+        if proc.returncode is not None:
+            return
+        try:
+            if IS_WINDOWS:
+                proc.terminate()
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
+
+    @staticmethod
+    def _starting_status(
+        app: dict[str, Any],
+        *,
+        prolonged: bool,
+    ) -> dict[str, Any]:
+        return {
+            "state": "starting",
+            "running": True,
+            "ready": False,
+            "requested_port": app["port"],
+            "command": app["command"],
+            "log": app["log"][-40:],
+            "prolonged_start": prolonged,
+        }
 
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
-            return self._last_exit.get(slug) or {"running": False}
+            return self._last_exit.get(slug) or {
+                "state": "stopped",
+                "running": False,
+                "ready": False,
+            }
+        if app.get("terminal_state") == "port_conflict":
+            result = self._port_conflict_status(
+                command=app["command"],
+                requested_port=app["port"],
+                log=app["log"],
+            )
+            if app["proc"].returncode is not None:
+                self._apps.pop(slug, None)
+                self._finish_effect(app, terminated=True)
+                self._last_exit[slug] = result
+            return result
         if app["proc"].returncode is not None:  # exited on its own
             self._apps.pop(slug, None)
             self._finish_effect(app, terminated=True)
             # exit_code + exited stay sticky across 2s polls so the UI can say
             # "Finished" vs "Failed" instead of a bare log dump after a short run.
             result = {
+                "state": "exited",
                 "running": False,
+                "ready": False,
+                "requested_port": app["port"],
                 "command": app["command"],
                 "log": app["log"][-40:],
                 "exited": True,
@@ -306,31 +480,76 @@ class AppManager:
             }
             self._last_exit[slug] = result
             return result
-        # "ready" = the effective port actually accepts connections. Do not mark a
-        # long-running but non-listening process as ready; that opens a blank preview
-        # and hides the real startup failure from the user.
-        eff_port = app.get("detected_port") or app["port"]
-        port_owner = _process_group_owns_port(app["proc"].pid, eff_port)
-        # A listener is only a preview when it belongs to this app's process
-        # group.  This closes the check-to-bind race left by start's preflight.
-        ready = _port_open(eff_port) and port_owner is not False
-        out = {"running": True, "ready": ready, "port": eff_port, "command": app["command"], "log": app["log"][-40:]}
-        if port_owner is False and _port_open(eff_port):
-            out["port_conflict"] = True
+        candidate_port = app.get("detected_port") or app["port"]
+        if not _port_open(candidate_port):
+            return self._starting_status(
+                app,
+                prolonged=(
+                    time.time() - app["started_at"]
+                    >= PROLONGED_START_SECONDS
+                ),
+            )
+        ownership = _listener_ownership(
+            app["proc"].pid,
+            candidate_port,
+            contained=self.contained,
+        )
+        if ownership == PortOwnership.FOREIGN:
+            app["terminal_state"] = "port_conflict"
+            self._signal_managed_process(app)
+            return self._port_conflict_status(
+                command=app["command"],
+                requested_port=app["port"],
+                log=app["log"],
+            )
+        if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
+            reason = (
+                "The listener detached from Proxima's managed process group, "
+                "so its lifetime cannot be verified."
+                if ownership == PortOwnership.DETACHED
+                else "Proxima cannot verify who owns the listener on this host."
+            )
+            return {
+                "state": "ownership_unknown",
+                "running": True,
+                "ready": False,
+                "requested_port": app["port"],
+                "command": app["command"],
+                "log": app["log"][-40:],
+                "message": reason,
+            }
+        if ownership == PortOwnership.NO_LISTENER:
+            return self._starting_status(
+                app,
+                prolonged=(
+                    time.time() - app["started_at"]
+                    >= PROLONGED_START_SECONDS
+                ),
+            )
+        out = {
+            "state": "ready",
+            "running": True,
+            "ready": True,
+            "requested_port": app["port"],
+            "port": candidate_port,
+            "command": app["command"],
+            "log": app["log"][-40:],
+        }
         # A dev server listening beyond loopback is directly reachable by other
         # LAN/tailnet devices with no auth - the gated relay does not protect a
         # broadly-bound origin. Surface it so the UI can warn the owner.
-        if ready and port_bound_non_loopback(eff_port):
+        if port_bound_non_loopback(candidate_port):
             out["broad_bind"] = True
         return out
 
-    def port(self, slug: str) -> int | None:
-        app = self._apps.get(slug)
-        if not app or app["proc"].returncode is not None:
+    def preview_target(self, slug: str) -> int | None:
+        """Return only a currently ownership-verified ready endpoint."""
+        status = self.status(slug)
+        if status.get("state") != "ready" or status.get("ready") is not True:
             return None
-        # Prefer the port the server actually printed; fall back to the requested one.
-        return app.get("detected_port") or app["port"]
+        port = status.get("port")
+        return int(port) if isinstance(port, int) else None
 
     async def shutdown(self) -> None:
         for slug in list(self._apps):
-            await self.stop(slug)
+            await self.stop(slug, preserve_status=False)

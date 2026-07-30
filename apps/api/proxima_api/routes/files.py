@@ -23,7 +23,8 @@ from .. import media_settings
 from .. import cf_hostnames
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..schemas import (
-    AppStartRequest, FileWriteRequest, FsPathRequest, FsRenameRequest,
+    AppStartRequest, AppStatusResponse, FileWriteRequest, FsPathRequest,
+    FsRenameRequest,
 )
 
 logger = logging.getLogger("proxima.api")
@@ -513,7 +514,14 @@ def register(app, deps):
             )
         except apprunner.PortInUseError as exc:
             effect_lease.release()
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": "port_conflict",
+                    "port": exc.port,
+                    "message": str(exc),
+                },
+            ) from exc
         except BaseException:
             effect_lease.release()
             raise
@@ -545,17 +553,24 @@ def register(app, deps):
             )
         return {"ok": True}
 
-    @app.get("/api/projects/{slug}/app/status")
+    @app.get(
+        "/api/projects/{slug}/app/status",
+        response_model=AppStatusResponse,
+        response_model_exclude_none=True,
+    )
     async def app_status(slug: str, user: dict[str, Any] = Depends(current_user)):
         _project_root(slug, user)
         status = app.state.app_manager.status(slug)
-        if status.get("running"):
+        if status.get("state") in {
+            "starting",
+            "ready",
+            "port_conflict",
+            "ownership_unknown",
+            "exited",
+        }:
             relay_port = app.state.preview_relays.port(slug)
             if relay_port:
                 status["preview_port"] = relay_port
-        elif not maintenance.fenced():
-            # The app exited on its own — reap its relay so the port is released.
-            await app.state.preview_relays.stop(slug)
         return status
 
     # Project code is owner-triggered but still untrusted. Never pass Proxima/API
@@ -572,9 +587,19 @@ def register(app, deps):
         # Proxy to the project's running app. Proxima authenticates the inbound request,
         # then strips its session/auth headers before forwarding to project code.
         _project_root(slug, user)  # access check
-        port = app.state.app_manager.port(slug)
+        status = app.state.app_manager.status(slug)
+        port = app.state.app_manager.preview_target(slug)
         if not port:
-            raise HTTPException(status_code=503, detail="app not running")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "state": status.get("state", "stopped"),
+                    "message": (
+                        "Preview is unavailable until Proxima verifies a ready "
+                        "managed endpoint."
+                    ),
+                },
+            )
         url = f"http://127.0.0.1:{port}/{path}"
         fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
         try:

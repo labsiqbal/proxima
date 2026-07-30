@@ -27,6 +27,7 @@ from apps.safe_updater.write_fence import (
     prepare_ingress_lock,
     write as write_fence,
 )
+from proxima_api import apprunner
 from proxima_api.main import create_app
 from proxima_api.maintenance_status import MaintenanceBoundary
 from proxima_api.preview_proxy import PreviewRelayManager
@@ -87,7 +88,13 @@ async def _start_upstream(asgi) -> tuple[uvicorn.Server, asyncio.Task, socket.so
     sock.bind(("127.0.0.1", 0))
     sock.listen(128)
     port = int(sock.getsockname()[1])
-    server = _TestServer(uvicorn.Config(asgi, lifespan="off", access_log=False, log_level="warning"))
+    server = _TestServer(uvicorn.Config(
+        asgi,
+        lifespan="off",
+        access_log=False,
+        log_level="warning",
+        ws="websockets-sansio",
+    ))
     task = asyncio.create_task(server.serve(sockets=[sock]))
     for _ in range(200):
         if server.started:
@@ -324,12 +331,231 @@ def test_app_start_refuses_an_existing_preview_port_without_stopping_it(tmp_path
                 "dir": "",
             })
             assert response.status_code == 409
-            assert "already in use" in response.json()["detail"]
+            detail = response.json()["detail"]
+            assert detail["state"] == "port_conflict"
+            assert detail["port"] == app_port
+            assert "already in use" in detail["message"]
             assert foreign.poll() is None
-            assert client.get("/api/projects/demo/app/status", headers=auth).json() == {"running": False}
+            status = client.get("/api/projects/demo/app/status", headers=auth).json()
+            assert status["state"] == "port_conflict"
+            assert status["running"] is False
     finally:
         foreign.terminate()
         foreign.wait(timeout=5)
+
+
+def test_post_preflight_port_theft_never_reaches_the_foreign_listener(
+    tmp_path,
+    monkeypatch,
+):
+    """Deterministically take the candidate after preflight. Both preview front
+    doors must fail closed, status must become terminal, and Stop may signal only
+    the managed process group."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        app_port = int(probe.getsockname()[1])
+    foreign_log = tmp_path / "foreign-http.log"
+    foreign_output = foreign_log.open("wb")
+    foreign: subprocess.Popen | None = None
+    original_port_open = apprunner._port_open
+
+    def steal_after_preflight(port: int) -> bool:
+        nonlocal foreign
+        if port == app_port and foreign is None:
+            foreign = subprocess.Popen(
+                [
+                    "python3",
+                    "-m",
+                    "http.server",
+                    str(app_port),
+                    "--bind",
+                    "127.0.0.1",
+                ],
+                cwd=tmp_path,
+                stdout=subprocess.DEVNULL,
+                stderr=foreign_output,
+                start_new_session=True,
+            )
+            for _ in range(80):
+                if original_port_open(app_port):
+                    break
+                import time
+                time.sleep(0.025)
+            else:
+                pytest.fail("foreign listener did not claim the candidate port")
+            return False
+        return original_port_open(port)
+
+    monkeypatch.setattr(apprunner, "_port_open", steal_after_preflight)
+    try:
+        with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
+            token = client.post("/auth/auto").json()["token"]
+            auth = {"Authorization": f"Bearer {token}"}
+            assert client.post(
+                "/api/projects",
+                json={"slug": "demo", "name": "Demo"},
+                headers=auth,
+            ).status_code == 201
+
+            started = client.post(
+                "/api/projects/demo/app/start",
+                headers=auth,
+                json={"command": "sleep 60", "port": app_port, "dir": ""},
+            )
+            assert started.status_code == 200
+
+            status = {}
+            for _ in range(80):
+                status = client.get(
+                    "/api/projects/demo/app/status",
+                    headers=auth,
+                ).json()
+                if status.get("state") == "port_conflict":
+                    break
+                import time
+                time.sleep(0.025)
+
+            assert status["state"] == "port_conflict"
+            assert status["running"] is False
+            assert status["ready"] is False
+            assert status["requested_port"] == app_port
+            assert "port" not in status
+            assert foreign is not None and foreign.poll() is None
+
+            appview = client.get("/api/appview/demo/", headers=auth)
+            assert appview.status_code == 503
+            assert appview.json()["detail"]["state"] == "port_conflict"
+
+            preview_cookie = client.post(
+                "/api/preview-auth",
+                headers=auth,
+            ).cookies["proxima_preview"]
+            relay = httpx.get(
+                f"http://127.0.0.1:{status['preview_port']}/",
+                cookies={"proxima_preview": preview_cookie},
+                timeout=5,
+            )
+            assert relay.status_code == 503
+
+            assert client.post(
+                "/api/projects/demo/app/stop",
+                headers=auth,
+            ).json()["ok"]
+            assert foreign.poll() is None
+            foreign_output.flush()
+            assert foreign_log.read_text() == ""
+    finally:
+        foreign_output.close()
+        if foreign is not None:
+            foreign.terminate()
+            foreign.wait(timeout=5)
+
+
+def test_appview_returns_non_proxy_responses_for_starting_unknown_and_exited(
+    tmp_path,
+    monkeypatch,
+):
+    with TestClient(_app(tmp_path, preview_bind_host="127.0.0.1")) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post(
+            "/api/projects",
+            json={"slug": "demo", "name": "Demo"},
+            headers=auth,
+        ).status_code == 201
+        preview_cookie = client.post(
+            "/api/preview-auth",
+            headers=auth,
+        ).cookies["proxima_preview"]
+
+        def assert_relay_unavailable(port: int) -> None:
+            response = httpx.get(
+                f"http://127.0.0.1:{port}/",
+                cookies={"proxima_preview": preview_cookie},
+                timeout=5,
+            )
+            assert response.status_code == 503
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            candidate = int(probe.getsockname()[1])
+        assert client.post(
+            "/api/projects/demo/app/start",
+            headers=auth,
+            json={"command": "sleep 60", "port": candidate, "dir": ""},
+        ).status_code == 200
+        starting_status = client.get(
+            "/api/projects/demo/app/status",
+            headers=auth,
+        ).json()
+        assert starting_status["state"] == "starting"
+        assert_relay_unavailable(starting_status["preview_port"])
+        starting = client.get("/api/appview/demo/", headers=auth)
+        assert starting.status_code == 503
+        assert starting.json()["detail"]["state"] == "starting"
+
+        monkeypatch.setattr(
+            apprunner,
+            "_port_open",
+            lambda port: port == candidate,
+        )
+        monkeypatch.setattr(
+            apprunner,
+            "_listener_ownership",
+            lambda _pid, _port, *, contained: apprunner.PortOwnership.UNKNOWN,
+        )
+        unknown = client.get("/api/appview/demo/", headers=auth)
+        assert unknown.status_code == 503
+        assert unknown.json()["detail"]["state"] == "ownership_unknown"
+        unknown_status = client.get(
+            "/api/projects/demo/app/status",
+            headers=auth,
+        ).json()
+        assert unknown_status["state"] == "ownership_unknown"
+        assert_relay_unavailable(unknown_status["preview_port"])
+        assert client.post(
+            "/api/projects/demo/app/stop",
+            headers=auth,
+        ).status_code == 200
+
+        monkeypatch.undo()
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            exit_candidate = int(probe.getsockname()[1])
+        assert client.post(
+            "/api/projects/demo/app/start",
+            headers=auth,
+            json={"command": "exit 0", "port": exit_candidate, "dir": ""},
+        ).status_code == 200
+        status = {}
+        for _ in range(80):
+            status = client.get(
+                "/api/projects/demo/app/status",
+                headers=auth,
+            ).json()
+            if status.get("state") == "exited":
+                break
+            import time
+            time.sleep(0.025)
+        assert status["state"] == "exited"
+        exited = client.get("/api/appview/demo/", headers=auth)
+        assert exited.status_code == 503
+        assert exited.json()["detail"]["state"] == "exited"
+        assert_relay_unavailable(status["preview_port"])
+        assert client.post(
+            "/api/projects/demo/app/stop",
+            headers=auth,
+        ).status_code == 200
+        stopped_status = client.get(
+            "/api/projects/demo/app/status",
+            headers=auth,
+        ).json()
+        assert stopped_status["state"] == "stopped"
+        assert stopped_status["command"] == status["command"]
+        assert stopped_status["log"] == status["log"]
+        stopped = client.get("/api/appview/demo/", headers=auth)
+        assert stopped.status_code == 503
+        assert stopped.json()["detail"]["state"] == "stopped"
 
 
 def test_detect_apps_suggested_commands_bind_loopback(tmp_path):

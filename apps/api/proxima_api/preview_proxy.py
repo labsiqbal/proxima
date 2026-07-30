@@ -356,7 +356,7 @@ class PreviewProxyMiddleware:
         if scope["type"] in ("http", "websocket"):
             slug = self._slug_for(scope)
             if slug is not None:
-                port = self.fastapi_app.state.app_manager.port(slug)
+                port = self.fastapi_app.state.app_manager.preview_target(slug)
                 return await _serve_preview(
                     scope,
                     receive,
@@ -435,7 +435,11 @@ class PreviewRelayManager:
         sock.listen(128)
         port = int(sock.getsockname()[1])
         server = _RelayServer(uvicorn.Config(
-            self._asgi_for(slug), lifespan="off", access_log=False, log_level="warning",
+            self._asgi_for(slug),
+            lifespan="off",
+            access_log=False,
+            log_level="warning",
+            ws="websockets-sansio",
         ))
         task = asyncio.create_task(server.serve(sockets=[sock]))
         self._relays[slug] = {"server": server, "task": task, "socket": sock, "port": port}

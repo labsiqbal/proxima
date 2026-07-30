@@ -1101,10 +1101,25 @@ an owner-facing reason instead of running unisolated.
 ### 8. Run & Preview app
 
 `POST /api/projects/{slug}/app/start` → `AppManager` launches one owner-confirmed dev
-process for the project with a filtered environment. If an unrelated process already owns
-the requested port, start returns a conflict and never signals or terminates that process.
-On Linux, readiness maps the listening socket back to the managed process group, closing
-the race where a foreign listener could otherwise appear as this app's preview. A preview only works served
+process for the project with a filtered environment. The requested port is only a
+candidate. Status is a discriminated state:
+`stopped | starting | ready | port_conflict | ownership_unknown | exited`.
+Only `ready` carries a proxy target, and readiness requires Linux procfs evidence that
+every listener socket belongs to the managed process group. This ownership check runs
+again when appview, a relay, or a preview subdomain asks for its target. Starting,
+conflict, ownership-unknown, and exited states return a non-proxy response. An
+existing relay remains available to return that safe response until Stop releases it.
+
+If an unrelated process owns the candidate before start, start returns a structured
+HTTP 409 conflict. If it claims the port after preflight but before the managed app
+binds, status becomes the sticky terminal `port_conflict` state and Proxima signals
+only its own managed process group. It never reaches, signals, or terminates the
+foreign listener. Missing or incomplete procfs evidence fails closed as
+`ownership_unknown`. An uncontained child that detaches into another process group is
+also ownership-unknown; a detached descendant is accepted only inside the configured
+PID namespace, whose teardown owns the full descendant lifetime.
+
+A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
 origin), so the transport depends on the vantage. Locally the iframe uses the other
 loopback hostname, avoiding host-cookie reuse across ports. Remotely,
@@ -1117,7 +1132,14 @@ onto loopback (suggested commands bind `127.0.0.1`, `HOST=127.0.0.1` in the chil
 and app status flags `broad_bind` when its port is found listening beyond loopback,
 because that listener is LAN/tailnet-reachable with no auth. A self-exit is reaped into
 a sticky `{exited, exit_code, log, command}` status (kept until the next start) so the
-UI can distinguish Finished vs Failed after short-lived commands. When
+UI can distinguish Finished vs Failed after short-lived commands; its relay returns
+HTTP 503 until Stop or the next start. A start that has no listener after 15 seconds
+becomes a prolonged-start warning with Stop and log controls instead of spinning
+forever. The bounded 40-line status buffer and Logs toggle remain available while
+starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
+the log panel, and explicit Stop retains the most recent buffer for the stopped/retry
+state. Conflict feedback keeps the candidate port visible with Stop, retry, and
+change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
 `preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to

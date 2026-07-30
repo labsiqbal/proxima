@@ -1217,12 +1217,25 @@ as the Proxima service user. The relay only guards its own port: detected-app
 suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
 and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
-If another process already owns the selected port, start returns a clear conflict without
-stopping or signaling that process. Linux readiness also verifies that a listening port is
-owned by the managed process group, so an unrelated preview cannot win a bind race and be
-shown in Proxima. When a command self-exits (short script, crash, or non-server entry point), status keeps
+The selected port is only a candidate. App status uses the structured
+`stopped | starting | ready | port_conflict | ownership_unknown | exited` contract,
+and appview, relay, and preview-subdomain targets exist only for an
+ownership-verified `ready` endpoint. A pre-existing listener returns a structured
+conflict without stopping or signaling it. Linux procfs verification also closes the
+post-preflight bind race: if an unrelated listener wins, the managed command is
+signaled by its recorded process group, the foreign listener remains untouched, and
+the conflict stays visible with logs, Stop, retry, and change-port actions. Unavailable
+procfs evidence and uncontained detached descendants fail closed as
+`ownership_unknown`; detached descendants qualify only under PID-namespace containment.
+A start with no listener after 15 seconds shows an actionable prolonged-start warning
+with Stop and logs instead of an infinite spinner. When a command self-exits (short
+script, crash, or non-server entry point), status keeps
 a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
-vs Failed with the log and a next-step hint instead of a silent bare dump.
+vs Failed with the log and a next-step hint instead of a silent bare dump. Logs remain
+toggleable in stopped, starting, ready, conflict, ownership-unknown, and exited states.
+The existing bounded 40-line status buffer survives preview Reload and explicit Stop,
+so stopped/retry feedback shows the most recent command output. The exited relay
+returns HTTP 503 until Stop or the next start releases or replaces that listener.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

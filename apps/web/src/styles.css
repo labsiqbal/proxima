@@ -117,6 +117,8 @@
 	--moodboard-favicon-size: 1rem;
 	--moodboard-shot-min-height: 8rem;
 	--moodboard-shot-max-height: 24rem;
+	--app-log-max-height: 15rem;
+	--app-state-card-width: 35rem;
 
 	color-scheme: light;
 	--font-sans:
@@ -8180,23 +8182,35 @@ div.result-media {
 	padding: 16px;
 	background: var(--ui-surface-subtle);
 }
+.app-ready-logs {
+	flex: 0 1 var(--app-log-max-height);
+	min-height: 0;
+	padding: var(--space-3) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-secondary);
+	background: var(--ui-surface);
+}
+.app-ready-logs .app-log {
+	height: 100%;
+	margin: 0;
+	overflow: auto;
+}
 .app-viewport {
 	height: 100%;
 	border-radius: var(--radius-md);
 	overflow: hidden;
-	background: #fff;
-	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
-	transition: width 0.2s ease;
+	background: var(--ui-surface);
+	box-shadow: var(--shadow-composer);
+	transition: width var(--t) var(--ease);
 }
 .app-viewport .app-frame {
 	width: 100%;
 	height: 100%;
 	border: 0;
-	background: #fff;
+	background: var(--ui-surface);
 	display: block;
 }
 .ghost-button.sm.danger {
-	color: #cf222e;
+	color: var(--ui-danger);
 }
 
 /* Run-app readiness indicator + booting state */
@@ -8207,20 +8221,20 @@ div.result-media {
 	border-radius: var(--radius-full);
 }
 .app-ready-badge.ready {
-	color: #1a7f37;
-	background: color-mix(in srgb, #22c55e 16%, transparent);
+	color: var(--ui-success-strong);
+	background: var(--ui-success-bg);
 }
 .app-ready-badge.starting {
-	color: #9a6700;
-	background: color-mix(in srgb, #f59e0b 16%, transparent);
+	color: var(--ui-warning-text);
+	background: var(--ui-warning-bg);
 }
 .app-ready-badge.finished {
 	color: var(--ui-text-secondary);
 	background: color-mix(in srgb, var(--ui-text-secondary) 12%, transparent);
 }
 .app-ready-badge.failed {
-	color: #cf222e;
-	background: color-mix(in srgb, #cf222e 14%, transparent);
+	color: var(--ui-danger);
+	background: var(--ui-danger-bg);
 }
 .app-exit-note {
 	display: grid;
@@ -8242,14 +8256,57 @@ div.result-media {
 	line-height: 1.45;
 }
 .app-exit-note.fail {
-	border-color: color-mix(in srgb, #cf222e 35%, var(--ui-stroke-secondary));
-	background: color-mix(in srgb, #cf222e 8%, var(--ui-surface));
+	border-color: color-mix(in srgb, var(--ui-danger) 35%, var(--ui-stroke-secondary));
+	background: var(--ui-danger-bg);
 }
 .app-exit-note.fail strong {
-	color: #cf222e;
+	color: var(--ui-danger);
 }
 .app-exit-note.ok strong {
 	color: var(--ui-text-primary);
+}
+.app-state-card {
+	width: min(100%, var(--app-state-card-width));
+	display: grid;
+	gap: var(--space-2);
+	padding: var(--space-4);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-lg);
+	background: var(--ui-surface);
+	text-align: left;
+}
+.app-state-card h3 {
+	margin: 0;
+	color: var(--ui-text-primary);
+	font-size: var(--text-md);
+}
+.app-state-card p {
+	margin: 0;
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	line-height: 1.5;
+}
+.app-state-card.danger {
+	border-color: color-mix(in srgb, var(--ui-danger) 40%, var(--ui-stroke-secondary));
+	background: var(--ui-danger-bg);
+}
+.app-state-card.danger h3 {
+	color: var(--ui-danger);
+}
+.app-state-card.warning {
+	border-color: color-mix(in srgb, var(--ui-warning) 45%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+}
+.app-state-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+.app-state-card .app-log {
+	margin: var(--space-2) 0 0;
+	max-height: var(--app-log-max-height);
+	overflow: auto;
 }
 .app-booting {
 	flex: 1;
@@ -8271,7 +8328,7 @@ div.result-media {
 .app-booting-inner .app-log {
 	width: 100%;
 	text-align: left;
-	max-height: 240px;
+	max-height: var(--app-log-max-height);
 	overflow: auto;
 }
 .app-spinner {

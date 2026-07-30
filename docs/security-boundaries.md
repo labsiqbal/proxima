@@ -399,12 +399,31 @@ preview switches between `localhost` and `127.0.0.1`, remote preview uses a shor
 preview-only capability, reverse proxies strip Cookie/Authorization and upstream
 `Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
 
+The requested dev-server port is never a preview authority. It is a candidate until
+procfs maps every listening socket back to the managed process group. Appview, relay,
+and subdomain paths resolve a target only through this ownership-verified ready state.
+A pre-existing listener produces a structured port conflict before spawn. A listener
+that wins after preflight produces the same sticky terminal conflict and only the
+managed process group is signaled. Starting, conflict, ownership-unknown, and exited
+states have no proxy target, so requests receive a non-proxy response and foreign
+content is never sampled. Existing relays remain safe HTTP 503 responders through
+terminal states until Stop releases them.
+
+This proof deliberately fails closed. Hosts without usable procfs, incomplete
+socket-owner visibility, and uncontained descendants that detach into another process
+group report `ownership_unknown`; their command and logs remain stoppable, but their
+listener is not previewed. A detached descendant can qualify only when PID-namespace
+containment is active, because namespace teardown owns that descendant lifetime. This
+policy preserves the ownership boundary instead of treating successful TCP connection
+as evidence.
+
 Remote preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
 interface when the host is on a tailnet, otherwise loopback - never `0.0.0.0`. Tailnet
 devices can reach previews out of the box; untrusted plain-LAN devices cannot. The
-listener answers 403 without the preview capability and closes with the app; what it
-exposes when authorized is the previewed dev server, never the Proxima API or owner
+listener answers 403 without the preview capability and 503 without an
+ownership-verified ready target; what it exposes when authorized and ready is the
+previewed dev server, never the Proxima API or owner
 session. Operators may set an explicit interface instead - including `0.0.0.0`, which
 deliberately exposes the relay ports to every device on the LAN - or `127.0.0.1`/`off`
 for strict loopback-only installs. If no tailnet address is found, `auto` falls back to

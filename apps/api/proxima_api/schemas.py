@@ -5,7 +5,7 @@ the request contracts live in separate, smaller files.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,6 +25,29 @@ class AppStartRequest(BaseModel):
     command: str = Field(min_length=1)
     port: int = 5180
     dir: str = ""
+
+
+class AppStatusResponse(BaseModel):
+    state: Literal[
+        "stopped",
+        "starting",
+        "ready",
+        "port_conflict",
+        "ownership_unknown",
+        "exited",
+    ]
+    running: bool
+    ready: bool
+    requested_port: int | None = None
+    port: int | None = None
+    preview_port: int | None = None
+    command: str | None = None
+    log: list[str] = Field(default_factory=list)
+    message: str | None = None
+    prolonged_start: bool | None = None
+    exited: bool | None = None
+    exit_code: int | None = None
+    broad_bind: bool | None = None
 
 
 class PermissionResponse(BaseModel):

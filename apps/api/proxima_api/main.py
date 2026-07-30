@@ -580,7 +580,7 @@ def _create_app(
     # each running app gets its own credential-stripping listener; see preview_proxy.py.
     app.state.preview_relays = PreviewRelayManager(
         cfg.get("preview_bind_host"),
-        port_for=lambda slug: app.state.app_manager.port(slug),
+        port_for=lambda slug: app.state.app_manager.preview_target(slug),
         validate_token=_valid_preview_token,
         maintenance=maintenance,
     )
