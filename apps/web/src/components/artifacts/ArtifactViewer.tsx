@@ -210,7 +210,14 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (text == null) return <div className="av-msg muted">Loading...</div>
     if (kind === 'markdown') return <div className="av-doc">{splitMermaidSections(text).map((section, sectionIndex) => section.type === 'mermaid'
       ? <MermaidDiagram key={`mermaid-${section.diagramIndex}`} source={section.content} onEdit={() => openDiagram(section.content, section.diagramIndex)} />
-      : <MessageContent key={`markdown-${sectionIndex}`} content={section.content} token={token} slug={slug} />)}</div>
+      : <MessageContent
+          key={`markdown-${sectionIndex}`}
+          content={section.content}
+          token={token}
+          slug={slug}
+          sourcePath={item.target?.path || path}
+          fileTarget={item.target}
+        />)}</div>
     if (kind === 'mermaid') return <div className="av-doc av-diagram-doc"><MermaidDiagram source={text} onEdit={() => openDiagram(text, 0)} /></div>
     if (kind === 'json') {
       try { return <div className="av-json"><JsonNode value={JSON.parse(text)} depth={0} /></div> }

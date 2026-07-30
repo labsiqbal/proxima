@@ -467,7 +467,7 @@ function ResultCards({
 	const projectOf = (link: OutputLink) => link.project_slug || slug;
 	const mediaSrc = (link: OutputLink): string => {
 		const project = projectOf(link);
-		return token && project ? previewUrl(project, link.path) : "";
+		return token && project ? previewUrl(project, link.path, link.target) : "";
 	};
 	// Bridge a generated image into a fresh Design Studio scene (full-bleed layer).
 	const toDesignStudio = async (link: OutputLink) => {
@@ -476,7 +476,13 @@ function ResultCards({
 		setBusy(`design:${link.path}`);
 		setActionError("");
 		try {
-			const d = await designFromImage(token, project, link.path, link.title);
+				const d = await designFromImage(
+					token,
+					project,
+					link.path,
+					link.title,
+					link.target,
+				);
 			onOpen?.({ type: "design", id: d.id, title: d.title, path: d.path, project_slug: project });
 		} catch (e) {
 			setActionError(String(e));

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatThread } from "./ChatThread";
 import type { ChatMessage } from "../../types";
 import { applyThreadScrollFollow } from "./threadScroll";
+import { previewUrl } from "../../api/files";
 
 const stylesSource = readFileSync(
 	join(dirname(fileURLToPath(import.meta.url)), "../../styles.css"),
@@ -22,7 +23,7 @@ vi.mock("../../api/runs", () => ({
 }));
 vi.mock("../../api/files", () => ({
 	designFromImage: vi.fn(),
-	previewUrl: vi.fn(() => ""),
+	previewUrl: vi.fn(() => "/stable-preview"),
 }));
 vi.mock("../ui/Dialog", () => ({
 	confirmDialog: vi.fn(async () => true),
@@ -84,6 +85,45 @@ describe("ChatThread top-anchor layout", () => {
 			expect.anything(),
 		);
 		consoleError.mockRestore();
+	});
+
+	it("uses a result image's canonical target for inline media", () => {
+		const target = {
+			project: "demo",
+			area: { kind: "ops" as const, id: 12 },
+			path: "artifacts/image.png",
+		};
+		const { container } = render(
+			<ChatThread
+				messages={[
+					{
+						id: 3,
+						role: "assistant",
+						content: "Created an image",
+						output_links: [{
+							type: "image",
+							title: "image.png",
+							path: "artifacts/image.png",
+							target,
+						}],
+					},
+				]}
+				events={[]}
+				token="token"
+				slug="demo"
+				onOpenOutput={() => undefined}
+			/>,
+		);
+
+		expect(previewUrl).toHaveBeenCalledWith(
+			"demo",
+			"artifacts/image.png",
+			target,
+		);
+		expect(container.querySelector(".result-media img")).toHaveAttribute(
+			"src",
+			"/stable-preview",
+		);
 	});
 
 	it("CSS packs .thread from the top and does not pin .chat-log to the end", () => {

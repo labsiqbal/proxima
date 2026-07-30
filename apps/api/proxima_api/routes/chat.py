@@ -32,6 +32,7 @@ from .. import app_settings
 from .. import auth_health as auth_health_mod
 from .. import container_registry
 from .. import design_scenes
+from .. import file_targets
 from .. import features
 from .. import kinds
 from .. import scripts_library
@@ -133,6 +134,27 @@ def register(app, deps):
     feature_cfg = cfg
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
+
+    def _ops_output_links(
+        conn: sqlite3.Connection,
+        project_id: int | None,
+        links: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not project_id or not links:
+            return links
+        project = conn.execute(
+            "SELECT id, slug, path FROM projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        if project is None:
+            return links
+        try:
+            return file_targets.add_ops_targets(conn, project, links)
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ):
+            return links
     session_for_user = deps["session_for_user"]
     require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
@@ -307,7 +329,7 @@ def register(app, deps):
 
     @app.get("/api/sessions/{session_id}/messages")
     def list_messages(session_id: int, user: dict[str, Any] = Depends(current_user)):
-        session_for_user(session_id, user)
+        session = session_for_user(session_id, user)
         rows = db().execute(
             "SELECT m.id, m.role, m.content, m.author, m.run_id, "
             "m.output_links, m.created_at, "
@@ -408,7 +430,11 @@ def register(app, deps):
             except Exception:
                 links = []
             if links:
-                m["output_links"] = links
+                m["output_links"] = _ops_output_links(
+                    db(),
+                    session.get("project_id"),
+                    links,
+                )
             if m.get("role") == "assistant" and m.get("run_id"):
                 if m.get("id") in journal_by_message:
                     m["turn_restore"] = {
@@ -760,6 +786,11 @@ def register(app, deps):
         return cfg
 
     def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
+        artifact = _ops_output_links(
+            db(),
+            session["project_id"],
+            [artifact],
+        )[0]
         profile = profile_for_user(payload.profile_id, user)
         cur = db().execute(
             """
@@ -908,6 +939,7 @@ def register(app, deps):
                     worker._advance_job(dict(run_row), f"BLOCKED: {text}")
                 return
             artifact, text = box["result"]
+            artifact = _ops_output_links(conn, project_id, [artifact])[0]
             with app.state.db_lock:
                 updated = conn.execute(
                     "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP "

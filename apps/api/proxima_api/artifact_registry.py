@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import iso_now
-from . import file_targets
+from . import file_targets, fsapi
 from .container_registry import ops_root
 
 log = logging.getLogger("proxima.archive")
@@ -217,6 +217,7 @@ def refresh_file_presence(
     called for one page of rows at a time."""
     now = iso_now()
     projects: dict[int, sqlite3.Row | None] = {}
+    roots: dict[int, file_targets.ResolvedFile | None] = {}
     for row in rows:
         project_id = int(row["project_id"])
         if project_id not in projects:
@@ -227,19 +228,41 @@ def refresh_file_presence(
         project = projects[project_id]
         if project is None:
             continue
-        try:
-            locator = file_targets.ops_locator(
-                conn,
-                project,
-                str(row["path"]),
-            )
-            resolved = file_targets.resolve_locator(conn, project, locator)
-        except (
-            file_targets.FileTargetError,
-            ValueError,
-        ):
-            continue
-        missing = 0 if resolved.path.exists() else 1
+        row["target"] = None
+        if project_id not in roots:
+            try:
+                roots[project_id] = file_targets.resolve_locator(
+                    conn,
+                    project,
+                    file_targets.ops_locator(conn, project),
+                )
+            except (
+                file_targets.FileTargetError,
+                ValueError,
+            ):
+                roots[project_id] = None
+        root = roots[project_id]
+        missing = 1
+        if root is not None:
+            try:
+                relative = file_targets.normalize_relative_path(
+                    str(row["path"]),
+                    allow_empty=False,
+                )
+                resolved_path = fsapi.resolve_in_project(root.root, relative)
+            except (
+                file_targets.FileTargetError,
+                fsapi.FsError,
+                ValueError,
+            ):
+                pass
+            else:
+                row["target"] = file_targets.FileLocator(
+                    project=root.locator.project,
+                    area=root.locator.area,
+                    path=relative,
+                ).payload()
+                missing = 0 if resolved_path.exists() else 1
         if missing != int(row["file_missing"] or 0):
             conn.execute(
                 "UPDATE artifact_records SET file_missing = ?, updated_at = ? WHERE id = ?",

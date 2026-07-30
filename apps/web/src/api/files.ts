@@ -13,6 +13,8 @@ export const retargetFile = (target: FileTarget, path: string): FileTarget => ({
   path,
 })
 
+const encodedPath = (path: string) => path.split('/').filter(Boolean).map(q).join('/')
+
 async function responseError(res: Response, fallback: string): Promise<Error> {
   let detail = ''
   try {
@@ -27,11 +29,44 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
 // Raw-file URL usable directly as <img>/<video> src. Auth via the proxima_session
 // cookie (sent same-origin) — no token in the URL.
 export const previewUrl = (slug: string, path: string, target?: FileTarget) =>
-  `/api/preview/${q(slug)}/${path.split('/').map(q).join('/')}${target ? `?target=${targetParam(target)}` : ''}`
+  target
+    ? `/api/preview/${q(slug)}/area/${q(target.area.kind)}/${target.area.id ?? 'root'}/${encodedPath(target.path)}`
+    : `/api/preview/${q(slug)}/${encodedPath(path)}`
+
+export function relativeFileUrl(
+  slug: string,
+  reference: string,
+  sourcePath: string,
+  target?: FileTarget,
+): string {
+  const suffixIndex = reference.search(/[?#]/)
+  const relative = suffixIndex >= 0 ? reference.slice(0, suffixIndex) : reference
+  const suffix = suffixIndex >= 0 ? reference.slice(suffixIndex) : ''
+  const parts = sourcePath.split('/').filter(Boolean)
+  if (relative) {
+    parts.pop()
+    for (const part of relative.replaceAll('\\', '/').split('/')) {
+      if (!part || part === '.') continue
+      if (part === '..') {
+        if (!parts.length) return ''
+        parts.pop()
+      } else {
+        parts.push(part)
+      }
+    }
+  }
+  const resolvedPath = parts.join('/')
+  if (!resolvedPath) return ''
+  return `${previewUrl(
+    slug,
+    resolvedPath,
+    target ? retargetFile(target, resolvedPath) : undefined,
+  )}${suffix}`
+}
 
 // Seed a new Design Studio scene containing an existing project image (full-bleed).
-export const designFromImage = (token: string, slug: string, path: string, title?: string) =>
-  api<{ ok: boolean; id: string; title: string; path: string }>(`/api/projects/${q(slug)}/designs/from-image`, token, { method: 'POST', body: JSON.stringify({ path, title }) })
+export const designFromImage = (token: string, slug: string, path: string, title?: string, target?: FileTarget) =>
+  api<{ ok: boolean; id: string; title: string; path: string }>(`/api/projects/${q(slug)}/designs/from-image`, token, { method: 'POST', body: JSON.stringify({ path, title, ...(target ? { target } : {}) }) })
 
 export const listTree = (token: string, slug: string, ref: FileRef = '') =>
   api<{ path: string; target?: FileTarget; entries: FileEntry[] }>(`/api/projects/${slug}/tree?${refQuery(ref)}`, token)
@@ -194,8 +229,8 @@ export const listArtifacts = (token: string, slug: string, sinceMinutes = 1440) 
 export const listSessionArtifacts = (token: string, sessionId: number) =>
   api<{ artifacts: Artifact[] }>(`/api/sessions/${sessionId}/artifacts`, token)
 
-export const deleteSessionArtifact = (token: string, sessionId: number, path: string) =>
-  api<{ ok: boolean; path: string }>(`/api/sessions/${sessionId}/artifacts?path=${q(path)}`, token, { method: 'DELETE' })
+export const deleteSessionArtifact = (token: string, sessionId: number, ref: FileRef) =>
+  api<{ ok: boolean; path: string; target?: FileTarget | null }>(`/api/sessions/${sessionId}/artifacts?${refQuery(ref)}`, token, { method: 'DELETE' })
 
 export const readFile = (token: string, slug: string, ref: FileRef) =>
   api<{ path: string; target?: FileTarget; content: string }>(`/api/projects/${slug}/file?${refQuery(ref)}`, token)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api import artifact_registry
+from proxima_api import artifact_registry, file_targets
 from proxima_api.main import create_app
 
 
@@ -66,6 +66,20 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     (ops / "ops-only.md").write_text("# Ops only", encoding="utf-8")
     (ops / "visual.png").write_bytes(PNG_1X1)
     (ops / "handout.pdf").write_bytes(PDF)
+    (root / "site").mkdir()
+    (root / "site" / "theme.css").write_text(
+        "body { color: wrong-container; }",
+        encoding="utf-8",
+    )
+    (ops / "site").mkdir()
+    (ops / "site" / "index.html").write_text(
+        '<link rel="stylesheet" href="theme.css"><main>Ops page</main>',
+        encoding="utf-8",
+    )
+    (ops / "site" / "theme.css").write_text(
+        "body { color: canonical-ops; }",
+        encoding="utf-8",
+    )
 
     entries = _by_name(api, headers)
     ops_only = entries["ops-only.md"]["target"]
@@ -135,12 +149,48 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         assert raw.status_code == 200, raw.text
         assert raw.content == expected
         preview = api.get(
-            f"/api/preview/identity/{name}",
+            f"/api/preview/identity/area/ops/{ops_area_id}/{name}",
             headers=headers,
-            params=_target_params(target),
         )
         assert preview.status_code == 200, preview.text
         assert preview.content == expected
+
+    image_target = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": ops_area_id},
+        "path": "visual.png",
+    }
+    design = api.post(
+        "/api/projects/identity/designs/from-image",
+        headers=headers,
+        json={
+            "path": "visual.png",
+            "target": image_target,
+            "title": "Canonical visual",
+        },
+    )
+    assert design.status_code == 200, design.text
+    scene = json.loads(
+        (
+            ops
+            / design.json()["path"]
+            / "scene.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert scene["artboards"][0]["layers"][0]["src"] == "visual.png"
+
+    page = api.get(
+        f"/api/preview/identity/area/ops/{ops_area_id}/site/index.html",
+        headers=headers,
+    )
+    assert page.status_code == 200, page.text
+    assert "Ops page" in page.text
+    nested_asset = api.get(
+        f"/api/preview/identity/area/ops/{ops_area_id}/site/theme.css",
+        headers=headers,
+    )
+    assert nested_asset.status_code == 200, nested_asset.text
+    assert nested_asset.text == "body { color: canonical-ops; }"
 
     # Documented path-only callers remain compatible, including an explicit
     # physical ops/ path. Their response is upgraded to the canonical target.
@@ -156,6 +206,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
 
 def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_scan(
     tmp_path: Path,
+    monkeypatch,
 ):
     api, headers, root = _api(tmp_path)
     ops = root / "ops"
@@ -184,8 +235,18 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
         ],
     )
 
+    resolve_calls = 0
+    original_resolve = file_targets.resolve_locator
+
+    def counted_resolve(*args, **kwargs):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(file_targets, "resolve_locator", counted_resolve)
     archive = api.get("/api/archive?project=identity", headers=headers).json()
     assert archive["total"] == 3
+    assert resolve_calls == 1
     assert all(item["target"]["area"]["kind"] == "ops" for item in archive["items"])
     assert all(item["target"]["project"] == "identity" for item in archive["items"])
     assert all(item["file_missing"] is False for item in archive["items"])
@@ -201,9 +262,157 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
     # Presence must follow the record's Ops identity, not a same-name Container
     # shadow that still exists.
     (ops / "visual.png").unlink()
+    calls_before_refresh = resolve_calls
     refreshed = api.get("/api/archive?project=identity", headers=headers).json()
+    assert resolve_calls == calls_before_refresh + 1
     visual = next(item for item in refreshed["items"] if item["path"] == "visual.png")
     assert visual["file_missing"] is True
+
+
+def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    repo = root / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Code Area", encoding="utf-8")
+    project = api.app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = 'identity'"
+    ).fetchone()
+    cursor = api.app.state.db.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'code', 'repo', 'manual')",
+        (project["id"],),
+    )
+    code_area_id = cursor.lastrowid
+
+    root_entries = _by_name(api, headers)
+    repo_target = root_entries["repo"]["target"]
+    assert repo_target == {
+        "project": "identity",
+        "area": {"kind": "code", "id": code_area_id},
+        "path": "",
+    }
+    repo_tree = api.get(
+        "/api/projects/identity/tree",
+        headers=headers,
+        params=_target_params(repo_target),
+    )
+    assert repo_tree.status_code == 200, repo_tree.text
+    readme_target = repo_tree.json()["entries"][0]["target"]
+    assert readme_target == {
+        "project": "identity",
+        "area": {"kind": "code", "id": code_area_id},
+        "path": "README.md",
+    }
+
+    forged_code_alias = {
+        "project": "identity",
+        "area": {"kind": "container", "id": None},
+        "path": "repo/README.md",
+    }
+    assert api.get(
+        "/api/projects/identity/file",
+        headers=headers,
+        params=_target_params(forged_code_alias),
+    ).status_code == 400
+
+    ops_area_id = api.app.state.db.execute(
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+        (project["id"],),
+    ).fetchone()["id"]
+    forged_ops_alias = {
+        "project": "identity",
+        "area": {"kind": "container", "id": None},
+        "path": "ops/container.md",
+    }
+    assert api.get(
+        "/api/projects/identity/file",
+        headers=headers,
+        params=_target_params(forged_ops_alias),
+    ).status_code == 400
+    canonical_ops = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": ops_area_id},
+        "path": "container.md",
+    }
+    assert api.get(
+        "/api/projects/identity/file",
+        headers=headers,
+        params=_target_params(canonical_ops),
+    ).status_code == 200
+
+    legacy_code = api.get(
+        "/api/projects/identity/file",
+        headers=headers,
+        params={"path": "repo/README.md"},
+    )
+    assert legacy_code.status_code == 200, legacy_code.text
+    assert legacy_code.json()["target"] == readme_target
+
+
+def test_session_artifact_reads_and_deletion_keep_ops_target(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    (root / "brief.md").write_text("# Container shadow", encoding="utf-8")
+    (root / "ops" / "brief.md").write_text("# Ops artifact", encoding="utf-8")
+    session = api.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "Artifact session", "project_slug": "identity"},
+    ).json()
+    artifact = {"type": "doc", "title": "brief.md", "path": "brief.md"}
+    api.app.state.db.execute(
+        "UPDATE sessions SET produced_artifacts = ? WHERE id = ?",
+        (json.dumps([artifact]), session["id"]),
+    )
+    message = api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, output_links) "
+        "VALUES (?, 'assistant', 'Done', ?)",
+        (session["id"], json.dumps([artifact])),
+    )
+
+    session_items = api.get(
+        f"/api/sessions/{session['id']}/artifacts",
+        headers=headers,
+    ).json()["artifacts"]
+    target = session_items[0]["target"]
+    assert target["area"]["kind"] == "ops"
+    messages = api.get(
+        f"/api/sessions/{session['id']}/messages",
+        headers=headers,
+    ).json()["messages"]
+    assert messages[0]["output_links"][0]["target"] == target
+
+    forged = {
+        "project": "identity",
+        "area": {"kind": "container", "id": None},
+        "path": "brief.md",
+    }
+    rejected = api.delete(
+        f"/api/sessions/{session['id']}/artifacts",
+        headers=headers,
+        params=_target_params(forged),
+    )
+    assert rejected.status_code == 400
+    assert (root / "brief.md").is_file()
+    assert (root / "ops" / "brief.md").is_file()
+
+    deleted = api.delete(
+        f"/api/sessions/{session['id']}/artifacts",
+        headers=headers,
+        params=_target_params(target),
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["target"] == target
+    assert (root / "brief.md").read_text(encoding="utf-8") == "# Container shadow"
+    assert not (root / "ops" / "brief.md").exists()
+    stored = api.app.state.db.execute(
+        "SELECT output_links FROM messages WHERE id = ?",
+        (message.lastrowid,),
+    ).fetchone()
+    assert json.loads(stored["output_links"]) == []
 
 
 def test_locator_validation_rejects_cross_container_area_and_symlink_escape(

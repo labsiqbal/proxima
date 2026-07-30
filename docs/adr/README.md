@@ -86,3 +86,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0026](0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md) | Preview supervision upgrades require a drained legacy generation | Accepted |
 | [0027](0027-durable-task-reconciliation-protocol.md) | Durable Task reconciliation protocol | Accepted |
 | [0028](0028-linux-first-daily-driver-support.md) | Linux-first daily-driver support | Accepted |
+| [0010](0010-canonical-file-targets.md) | Canonical file targets preserve Area identity | Accepted |

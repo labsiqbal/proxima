@@ -116,22 +116,38 @@ def _write_fixture_files(container: Path) -> None:
         encoding="utf-8",
     )
     (container / "visual.png").write_bytes(b"not an image")
+    (container / "brief-image.png").write_bytes(b"not an image")
     (container / "handout.pdf").write_bytes(b"not a pdf")
     (ops / "brief.md").write_text(
-        "# Ops direct Markdown\n\nOPS DIRECT MARKDOWN\n",
+        "# Ops direct Markdown\n\nOPS DIRECT MARKDOWN\n\n"
+        "![Ops inline](brief-image.png)\n",
         encoding="utf-8",
     )
     (ops / "ops-only.md").write_text(
         "# Ops only\n\nOPS ROOT FILE\n",
         encoding="utf-8",
     )
-    (ops / "visual.png").write_bytes(
-        base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8AARMA"
-            "gYGBgAAARAAH+VLfGAAAAAElFTkSuQmCC"
-        )
+    image = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8AARMA"
+        "gYGBgAAARAAH+VLfGAAAAAElFTkSuQmCC"
     )
+    (ops / "visual.png").write_bytes(image)
+    (ops / "brief-image.png").write_bytes(image)
     (ops / "handout.pdf").write_bytes(_pdf_fixture())
+    (container / "site").mkdir()
+    (container / "site" / "theme.css").write_text(
+        "body { color: wrong-container; }",
+        encoding="utf-8",
+    )
+    (ops / "site").mkdir()
+    (ops / "site" / "index.html").write_text(
+        '<link rel="stylesheet" href="theme.css"><main>OPS NESTED HTML</main>',
+        encoding="utf-8",
+    )
+    (ops / "site" / "theme.css").write_text(
+        "body { color: canonical-ops; }",
+        encoding="utf-8",
+    )
 
 
 def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
@@ -162,6 +178,7 @@ def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
                 {"type": "doc", "path": "brief.md", "title": "brief.md"},
                 {"type": "image", "path": "visual.png", "title": "visual.png"},
                 {"type": "pdf", "path": "handout.pdf", "title": "handout.pdf"},
+                {"type": "page", "path": "site/index.html", "title": "index.html"},
             ],
         )
         connection.commit()
@@ -209,6 +226,10 @@ def _browser_expression() -> str:
   const queryFor = (path, target) => {
     const query = new URLSearchParams({path, target: JSON.stringify(target)});
     return query.toString();
+  };
+  const previewFor = target => {
+    const encodePath = path => path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+    return `/api/preview/${encodeURIComponent(target.project)}/area/${encodeURIComponent(target.area.kind)}/${target.area.id ?? "root"}/${encodePath(target.path)}`;
   };
   const checks = [];
 
@@ -264,7 +285,7 @@ def _browser_expression() -> str:
     throw new Error("image target resolved to the Container shadow");
   }
   const pdfBytes = await bytesFetch(
-    `/api/preview/canonical-browser/handout.pdf?${queryFor("handout.pdf", archivedByName["handout.pdf"].target)}`
+    previewFor(archivedByName["handout.pdf"].target)
   );
   if (String.fromCharCode(...pdfBytes.slice(0, 5)) !== "%PDF-") {
     throw new Error("PDF target resolved to the Container shadow");
@@ -291,7 +312,7 @@ def _browser_expression() -> str:
   document.querySelector('[aria-label="Close tool panel"]')?.click();
   const archive = await until("Archive navigation", () => exactButton("Archive"));
   archive.click();
-  await until("Archive records", () => document.querySelectorAll(".archive-row").length === 3);
+  await until("Archive records", () => document.querySelectorAll(".archive-row").length === 4);
 
   const openRecord = async (name, kind, close = true) => {
     const row = await until(`${name} Archive row`, () =>
@@ -311,15 +332,33 @@ def _browser_expression() -> str:
       await until(`${name} Markdown preview`, () =>
         (overlay.querySelector(".av-doc")?.textContent || "").includes("OPS DIRECT MARKDOWN")
       );
+      await until(`${name} nested Markdown image`, () => {
+        const image = overlay.querySelector("img.md-img");
+        return image?.src.includes("/area/ops/")
+          && !image.src.includes("target=")
+          && image.complete
+          && image.naturalWidth === 2;
+      });
     } else if (kind === "image") {
       await until(`${name} image preview`, () => {
         const image = overlay.querySelector("img.av-img");
-        return image?.src.includes("target=") && image.complete && image.naturalWidth === 2;
+        return image?.src.includes("/area/ops/")
+          && !image.src.includes("target=")
+          && image.complete
+          && image.naturalWidth === 2;
+      });
+    } else if (kind === "html") {
+      await until(`${name} nested HTML asset`, async () => {
+        const frame = overlay.querySelector("iframe.av-frame");
+        if (!frame?.src.includes("/area/ops/")) return false;
+        const html = await (await fetch(frame.src)).text();
+        const css = await (await fetch(new URL("theme.css", frame.src))).text();
+        return html.includes("OPS NESTED HTML") && css.includes("canonical-ops");
       });
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
-        return frame?.src.includes("target=");
+        return frame?.src.includes("/area/ops/") && !frame.src.includes("target=");
       });
     }
     if (close) {
@@ -330,8 +369,9 @@ def _browser_expression() -> str:
 
   await openRecord("brief.md", "markdown");
   await openRecord("visual.png", "image");
+  await openRecord("index.html", "html");
   await openRecord("handout.pdf", "pdf", false);
-  checks.push("archive-to-viewer-markdown-image-pdf");
+  checks.push("archive-to-viewer-markdown-image-html-pdf");
 
   return {ok: true, checks};
 })()

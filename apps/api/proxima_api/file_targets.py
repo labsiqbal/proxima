@@ -55,6 +55,12 @@ class ResolvedFile:
     path: Path
 
 
+@dataclass(frozen=True)
+class _AreaBinding:
+    area: FileArea
+    root: Path
+
+
 def normalize_relative_path(raw: str, *, allow_empty: bool = True) -> str:
     text = str(raw or "").strip().replace("\\", "/")
     if "\x00" in text:
@@ -165,6 +171,90 @@ def child_locator(parent: FileLocator, name: str) -> FileLocator:
     return FileLocator(project=parent.project, area=parent.area, path=child)
 
 
+def _area_bindings(
+    conn: sqlite3.Connection,
+    container: sqlite3.Row | Mapping[str, Any],
+) -> list[_AreaBinding]:
+    data = container_registry.get_container(conn, container)
+    rows = conn.execute(
+        "SELECT id, kind FROM project_areas "
+        "WHERE project_id = ? AND source != 'excluded' ORDER BY id",
+        (data["id"],),
+    ).fetchall()
+    roots = container_registry.validated_area_roots(conn, data)
+    return [
+        _AreaBinding(
+            area=FileArea(kind=str(row["kind"]), id=int(row["id"])),
+            root=roots[int(row["id"])],
+        )
+        for row in rows
+        if row["kind"] in ("ops", "code")
+    ]
+
+
+def _authoritative_binding(
+    bindings: list[_AreaBinding],
+    absolute: Path,
+) -> _AreaBinding | None:
+    matches = [
+        binding
+        for binding in bindings
+        if absolute == binding.root or binding.root in absolute.parents
+    ]
+    if not matches:
+        return None
+    return max(
+        matches,
+        key=lambda binding: (
+            len(binding.root.parts),
+            binding.area.kind == "ops",
+        ),
+    )
+
+
+def _locator_for_absolute(
+    data: Mapping[str, Any],
+    container_root: Path,
+    bindings: list[_AreaBinding],
+    absolute: Path,
+) -> FileLocator:
+    if absolute != container_root and container_root not in absolute.parents:
+        raise FileTargetError("path escapes Container")
+    binding = _authoritative_binding(bindings, absolute)
+    if binding is None:
+        area = FileArea(kind="container", id=None)
+        root = container_root
+    else:
+        area = binding.area
+        root = binding.root
+    relative = "" if absolute == root else absolute.relative_to(root).as_posix()
+    return FileLocator(
+        project=str(data["slug"]),
+        area=area,
+        path=normalize_relative_path(relative),
+    )
+
+
+def canonical_locator(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+    path: str = "",
+) -> FileLocator:
+    data = container_registry.get_container(conn, container)
+    root = container_registry.container_root(data)
+    normalized = normalize_relative_path(path)
+    try:
+        absolute = fsapi.resolve_in_project(root, normalized)
+    except fsapi.FsError as exc:
+        raise FileTargetError(str(exc)) from exc
+    return _locator_for_absolute(
+        data,
+        root,
+        _area_bindings(conn, data),
+        absolute,
+    )
+
+
 def resolve_locator(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
@@ -174,22 +264,36 @@ def resolve_locator(
     target = parse_locator(locator)
     if target.project != data.get("slug"):
         raise FileTargetError("file target belongs to another Container")
+    container_root = container_registry.container_root(data)
+    bindings = _area_bindings(conn, data)
     if target.area.kind == "container":
-        root = container_registry.container_root(data)
+        root = container_root
     else:
         assert target.area.id is not None
-        row = conn.execute(
-            "SELECT kind FROM project_areas "
-            "WHERE id = ? AND project_id = ? AND source != 'excluded'",
-            (target.area.id, data["id"]),
-        ).fetchone()
-        if row is None or row["kind"] != target.area.kind:
+        binding = next(
+            (
+                item
+                for item in bindings
+                if item.area.id == target.area.id
+                and item.area.kind == target.area.kind
+            ),
+            None,
+        )
+        if binding is None:
             raise FileTargetError("Area is not active in this Container")
-        root = container_registry.resolve_area_root(conn, data, target.area.id)
+        root = binding.root
     try:
         absolute = fsapi.resolve_in_project(root, target.path)
     except fsapi.FsError as exc:
         raise FileTargetError(str(exc)) from exc
+    authoritative = _authoritative_binding(bindings, absolute)
+    authoritative_area = (
+        authoritative.area
+        if authoritative is not None
+        else FileArea(kind="container", id=None)
+    )
+    if target.area != authoritative_area:
+        raise FileTargetError("file target does not match the authoritative Area")
     return ResolvedFile(locator=target, root=root, path=absolute)
 
 
@@ -202,9 +306,8 @@ def legacy_locator(
 
     Reserved virtual Ops roots retain their historical mapping. An explicit
     ``ops/`` path upgrades to the Ops Area only for the physical ``ops`` layout.
-    When the active legacy Ops Area is ``.``, the prefix remains a real
-    Container child so a migration-collision folder cannot be mistaken for the
-    legacy root.
+    When the active legacy Ops Area is ``.``, the prefix remains literal
+    Area-relative input so it cannot be stripped to a same-name root file.
     """
     data = container_registry.get_container(conn, container)
     normalized = normalize_relative_path(path)
@@ -220,7 +323,7 @@ def legacy_locator(
             return area_locator(conn, data, int(row["id"]), relative)
     if first in container_registry.OPS_VIRTUAL_NAMES:
         return ops_locator(conn, data, normalized)
-    return container_locator(data, normalized)
+    return canonical_locator(conn, data, normalized)
 
 
 def resolve_request(
@@ -235,10 +338,26 @@ def resolve_request(
 
 
 def add_targets(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
     entries: list[dict[str, Any]],
-    parent: FileLocator,
+    directory: Path,
 ) -> list[dict[str, Any]]:
-    return [{**entry, "target": child_locator(parent, str(entry["name"])).payload()} for entry in entries]
+    data = container_registry.get_container(conn, container)
+    root = container_registry.container_root(data)
+    bindings = _area_bindings(conn, data)
+    return [
+        {
+            **entry,
+            "target": _locator_for_absolute(
+                data,
+                root,
+                bindings,
+                directory / str(entry["name"]),
+            ).payload(),
+        }
+        for entry in entries
+    ]
 
 
 def add_ops_targets(

@@ -2,7 +2,8 @@ import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { IconCopy, IconCheck, IconFile } from '../shell/icons'
-import { fileUrl } from '../../api/files'
+import { fileUrl, relativeFileUrl } from '../../api/files'
+import type { FileTarget } from '../../types'
 
 // A project-relative path (e.g. artifacts/x.png) vs an absolute/external URL.
 const isRel = (u?: string) => !!u && !/^(https?:|data:|blob:|mailto:|#|\/)/i.test(u)
@@ -45,20 +46,29 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 // Renders assistant/streaming text as GitHub-flavored markdown. react-markdown
 // tolerates partial markdown during streaming (an unclosed code fence renders
 // progressively as a code block), so it is safe to feed in-flight deltas.
-function MessageContentInner({ content, token, slug }: { content: string; token?: string; slug?: string }) {
+function MessageContentInner({ content, token, slug, sourcePath, fileTarget }: {
+  content: string
+  token?: string
+  slug?: string
+  sourcePath?: string
+  fileTarget?: FileTarget
+}) {
   const canResolve = !!token && !!slug
+  const resourceUrl = (reference: string) => sourcePath
+    ? relativeFileUrl(slug!, reference, sourcePath, fileTarget)
+    : fileUrl(slug!, reference)
   const components: React.ComponentProps<typeof ReactMarkdown>['components'] = {
     pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
     // Inline images stored in the project (e.g. an attachment or generated chart).
     img: ({ src, alt }) => {
       const s = typeof src === 'string' ? src : ''
-      if (canResolve && isRel(s)) return <img className="md-img" src={fileUrl(slug!, s)} alt={alt || ''} />
+      if (canResolve && isRel(s)) return <img className="md-img" src={resourceUrl(s)} alt={alt || ''} />
       return <img className="md-img" src={s} alt={alt || ''} />
     },
     // Links to project files become download chips; external links stay normal.
     a: ({ href, children }) => {
       const h = typeof href === 'string' ? href : ''
-      if (canResolve && isRel(h)) return <a className="file-chip" href={fileUrl(slug!, h)} download={fileName(h)} target="_blank" rel="noreferrer"><IconFile size={15} /><span>{fileName(h)}</span></a>
+      if (canResolve && isRel(h)) return <a className="file-chip" href={resourceUrl(h)} download={fileName(h)} target="_blank" rel="noreferrer"><IconFile size={15} /><span>{fileName(h)}</span></a>
       return <a href={h} target="_blank" rel="noreferrer">{children}</a>
     }
   }
