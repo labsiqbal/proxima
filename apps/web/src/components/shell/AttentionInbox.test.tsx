@@ -120,6 +120,35 @@ describe('AttentionInbox', () => {
     expect(openTarget).toHaveBeenCalledWith({ view: 'task', job_id: 4 })
   })
 
+  it('shows the stored Ops migration reason and a specific recovery destination', async () => {
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [{
+        id: 'container-ops-migration:9',
+        kind: 'container_ops_migration',
+        title: 'Container Ops migration needs attention',
+        target: {
+          container_id: 9,
+          container_slug: 'legacy-collision',
+          reason: 'physical Ops root is not empty',
+        },
+        inline_ok: false,
+        actions: [],
+        status: 'open',
+      }],
+      count: 1,
+    })
+    const user = userEvent.setup()
+    const openTarget = vi.fn()
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+
+    await user.click(await screen.findByRole('button', { name: '1 attention item' }))
+    expect(screen.getByText('physical Ops root is not empty')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Inspect Ops migration/ }))
+    expect(openTarget).toHaveBeenCalledWith(expect.objectContaining({
+      container_slug: 'legacy-collision',
+    }))
+  })
+
   it('runs a safe inline action once and refreshes the inbox', async () => {
     const user = userEvent.setup()
     render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)

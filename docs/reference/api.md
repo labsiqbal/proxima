@@ -19,7 +19,7 @@
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
-- [`routes/projects.py`](#routes-projects-py) - 12 endpoints
+- [`routes/projects.py`](#routes-projects-py) - 15 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
 - [`routes/self_updates.py`](#routes-self-updates-py) - 5 endpoints
 - [`routes/update.py`](#routes-update-py) - 3 endpoints
@@ -236,13 +236,16 @@
 | POST | `/api/projects` | `create_project` |  |
 | POST | `/api/projects/link` | `link_project` | Register a folder as a project (no scaffold under the data dir). The |
 | DELETE | `/api/projects/{slug}` | `delete_project` |  |
-| GET | `/api/projects/{slug}` | `get_project` |  |
+| GET | `/api/projects/{slug}` | `get_project` | Inspect one Project's physical Ops migration without changing its files. |
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
 | GET | `/api/projects/{slug}/areas` | `list_project_areas` | The project's container areas: code areas (git-repo subfolders, |
 | POST | `/api/projects/{slug}/areas` | `add_project_area` | Manually register (or correct) a code area - T1's hybrid override. |
 | POST | `/api/projects/{slug}/areas/detect` | `detect_project_areas` | Re-run code-area auto-detection on demand. Only auto rows follow the |
 | DELETE | `/api/projects/{slug}/areas/{area_id}` | `remove_project_area` | Remove a code area. The row becomes an 'excluded' tombstone (not a |
 | PATCH | `/api/projects/{slug}/areas/{area_id}` | `update_project_area` | Per-area settings - today that is the T9 push-after-merge toggle |
+| GET | `/api/projects/{slug}/ops-migration` | `get_ops_migration` | Inspect one Project's physical Ops migration without changing its files. |
+| POST | `/api/projects/{slug}/ops-migration/retry` | `retry_ops_migration` | Retry only a currently safe layout using the durable migration marker. |
+| POST | `/api/projects/{slug}/ops-migration/validate` | `validate_ops_migration` | Refresh the read-only collision and retry-safety projection. |
 
 
 ## routes/reviews.py

@@ -349,6 +349,13 @@ filesystem. A durable `moving` marker supports restart after any completed renam
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
+`container_registry.inspect_ops_migration` projects the durable marker, exact stored
+Attention reason, `lstat`-based path states, conflicts, active-layout usability, and
+retry safety without changing the filesystem or following symlinks. The Project
+routes expose that projection for inspection and refresh. The retry route first
+requires a safe current projection, then delegates to the same hash-bound,
+same-filesystem migration routine used at startup. It does not add merge, overwrite,
+delete, cross-device move, symlink-following, or content-authority behavior.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
 file API all resolve through the active Ops row.
 

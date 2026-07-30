@@ -343,6 +343,62 @@ def register(app, deps):
     def get_project(slug: str, user: dict[str, Any] = Depends(current_user)):
         return project_payload(visible_project(slug, user))
 
+    @app.get("/api/projects/{slug}/ops-migration")
+    def get_ops_migration(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Inspect one Project's physical Ops migration without changing its files."""
+        project = visible_project(slug, user)
+        try:
+            return container_registry.inspect_ops_migration(db(), project)
+        except (container_registry.ContainerBoundaryError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/projects/{slug}/ops-migration/validate")
+    def validate_ops_migration(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Refresh the read-only collision and retry-safety projection."""
+        project = visible_project(slug, user)
+        try:
+            return container_registry.inspect_ops_migration(db(), project)
+        except (container_registry.ContainerBoundaryError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/projects/{slug}/ops-migration/retry")
+    def retry_ops_migration(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Retry only a currently safe layout using the durable migration marker."""
+        project = visible_project(slug, user)
+        try:
+            before = container_registry.inspect_ops_migration(db(), project)
+        except (container_registry.ContainerBoundaryError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not before["retry_safe"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Ops migration retry is disabled until validation is safe.",
+                    "migration": before,
+                },
+            )
+        if not container_registry.migrate_container_ops(db(), project):
+            after = container_registry.inspect_ops_migration(db(), project)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "The layout changed or migration could not complete safely.",
+                    "migration": after,
+                },
+            )
+        db().execute(
+            """
+            INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata)
+            VALUES (?, 'container.ops_migration.retry', 'project', ?, ?)
+            """,
+            (
+                user["id"],
+                slug,
+                json.dumps({"migration_version": container_registry.OPS_MIGRATION_VERSION}),
+            ),
+        )
+        return container_registry.inspect_ops_migration(db(), project)
+
     @app.patch("/api/projects/{slug}")
     def update_project(slug: str, payload: ProjectUpdateRequest, user: dict[str, Any] = Depends(current_user)):
         project = visible_project(slug, user)

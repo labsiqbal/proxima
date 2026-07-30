@@ -144,6 +144,57 @@ def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
     assert rerun == before
 
 
+def test_collision_recovery_detail_is_exact_and_read_only(tmp_path: Path):
+    root = tmp_path / "collision-detail"
+    (root / "wiki").mkdir(parents=True)
+    (root / "wiki" / "legacy.md").write_text("legacy", encoding="utf-8")
+    (root / "ops" / "wiki").mkdir(parents=True)
+    (root / "ops" / "wiki" / "physical.md").write_text("physical", encoding="utf-8")
+    api, headers = _api(tmp_path)
+
+    linked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={"path": str(root), "name": "Collision detail", "slug": "collision-detail"},
+    )
+    assert linked.status_code == 201, linked.text
+    before = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    response = api.get(
+        "/api/projects/collision-detail/ops-migration",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["project"] == {
+        "id": body["project"]["id"],
+        "slug": "collision-detail",
+        "name": "Collision detail",
+    }
+    assert body["stored_reason"] == "physical Ops root is not empty"
+    assert body["phase"] == "attention"
+    assert body["active_ops_path"] == "."
+    assert body["physical_ops"]["state"] == "populated"
+    assert body["retry_safe"] is False
+    assert body["what_remains_usable"]["legacy_ops_active"] is True
+    assert {
+        item["path"]: item["layout"]
+        for item in body["legacy_owned_paths"]
+        if item["path"] == "wiki"
+    } == {"wiki": "both"}
+
+    after = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
 def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch):
     conn = _database(tmp_path)
     root = tmp_path / "partial"
@@ -312,6 +363,180 @@ def _api(tmp_path: Path, database_path: Path | None = None) -> tuple[TestClient,
     api = TestClient(app)
     token = api.post("/auth/auto").json()["token"]
     return api, {"Authorization": f"Bearer {token}"}
+
+
+def _owned_api_legacy(api: TestClient, root: Path, slug: str) -> int:
+    root.mkdir(parents=True, exist_ok=True)
+    conn = api.app.state.db
+    owner_id = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
+        (slug, slug.replace("-", " ").title(), str(root), owner_id),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'ops', '.', 'auto')",
+        (container_id,),
+    )
+    return int(container_id)
+
+
+def test_ops_migration_detail_rejects_symlink_without_following_it(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "symlink-layout"
+    outside = tmp_path / "outside-owned-layout"
+    outside.mkdir()
+    (outside / "do-not-read.md").write_text("outside bytes", encoding="utf-8")
+    container_id = _owned_api_legacy(api, root, "symlink-layout")
+    (root / "wiki").symlink_to(outside, target_is_directory=True)
+
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    before = (outside / "do-not-read.md").read_bytes()
+    detail = api.get(
+        "/api/projects/symlink-layout/ops-migration",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["retry_safe"] is False
+    assert "symlink" in body["stored_reason"]
+    assert next(
+        item for item in body["legacy_owned_paths"] if item["path"] == "wiki"
+    )["legacy_state"] == "symlink"
+    retry = api.post(
+        "/api/projects/symlink-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (outside / "do-not-read.md").read_bytes() == before
+
+
+def test_ops_migration_detail_reports_repo_overlap_and_keeps_legacy_active(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "overlap-layout"
+    container_id = _owned_api_legacy(api, root, "overlap-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "repo-note.md").write_text("repo", encoding="utf-8")
+    api.app.state.db.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'code', 'wiki', 'manual')",
+        (container_id,),
+    )
+
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    detail = api.post(
+        "/api/projects/overlap-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["retry_safe"] is False
+    assert body["active_ops_path"] == "."
+    assert body["stored_reason"] == "legacy Ops path overlaps a repo Area: wiki"
+    assert (root / "wiki" / "repo-note.md").read_text(encoding="utf-8") == "repo"
+
+
+def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "interrupted-layout"
+    container_id = _owned_api_legacy(api, root, "interrupted-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry.os.replace
+    moves = 0
+
+    def interrupt_second_move(source, destination):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+
+    detail = api.get(
+        "/api/projects/interrupted-layout/ops-migration",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["phase"] == "moving"
+    assert body["retry_safe"] is True
+    assert body["attention"]["status"] == "open"
+    assert body["what_remains_usable"]["unavailable_paths"]
+    assert {item["layout"] for item in body["legacy_owned_paths"]} == {
+        "legacy",
+        "physical",
+    }
+
+    retried = api.post(
+        "/api/projects/interrupted-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retried.status_code == 200, retried.text
+    resolved = retried.json()
+    assert resolved["phase"] == "complete"
+    assert resolved["active_ops_path"] == "ops"
+    assert resolved["attention"]["status"] == "resolved"
+    assert resolved["retry_safe"] is False
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+    assert (
+        root / "ops" / "artifacts" / "data.txt"
+    ).read_text(encoding="utf-8") == "artifact"
+
+
+def test_validation_blocks_cross_filesystem_retry_before_any_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "cross-device-layout"
+    container_id = _owned_api_legacy(api, root, "cross-device-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+
+    # Restore a legacy marker-free layout so validation, not migration, owns the check.
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    shutil.rmtree(root / "ops")
+    api.app.state.db.execute(
+        "UPDATE project_areas SET rel_path = '.' WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    )
+    api.app.state.db.execute(
+        "DELETE FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    )
+    real_device = container_registry._path_device
+
+    def different_device(path: Path) -> int:
+        device = real_device(path)
+        return device + 1 if path == root / "wiki" else device
+
+    monkeypatch.setattr(container_registry, "_path_device", different_device)
+    detail = api.post(
+        "/api/projects/cross-device-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "different filesystems" in detail.json()["validation_reason"]
+    retry = api.post(
+        "/api/projects/cross-device-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "keep"
+    assert not (root / "ops").exists()
 
 
 def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):

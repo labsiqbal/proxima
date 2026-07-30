@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sqlite3
+import stat
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
@@ -996,6 +997,360 @@ def list_compatibility_projects(
         )
         for container in containers
     ]
+
+
+def _path_state(path: Path) -> str:
+    """Classify one path without following it."""
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unavailable"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "file"
+    return "other"
+
+
+def _path_device(path: Path) -> int:
+    return int(path.lstat().st_dev)
+
+
+def _physical_ops_state(path: Path) -> dict[str, Any]:
+    state = _path_state(path)
+    entries: list[dict[str, str]] = []
+    if state == "directory":
+        try:
+            with os.scandir(path) as children:
+                for child in sorted(children, key=lambda item: item.name.casefold()):
+                    if child.is_symlink():
+                        kind = "symlink"
+                    elif child.is_dir(follow_symlinks=False):
+                        kind = "directory"
+                    elif child.is_file(follow_symlinks=False):
+                        kind = "file"
+                    else:
+                        kind = "other"
+                    entries.append({"path": f"{OPS_RELPATH}/{child.name}", "kind": kind})
+        except OSError:
+            state = "unavailable"
+            entries = []
+        else:
+            state = "populated" if entries else "empty"
+    return {"path": OPS_RELPATH, "state": state, "entries": entries}
+
+
+def _validated_retry_manifest(
+    conn: sqlite3.Connection,
+    container: Mapping[str, Any],
+    marker: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build or verify a retry manifest without moving or creating anything."""
+    root = container_root(container)
+    physical = root / OPS_RELPATH
+    manifest: dict[str, Any]
+    if marker and marker.get("status") == "moving" and marker.get("manifest_json"):
+        try:
+            manifest = json.loads(str(marker["manifest_json"]))
+        except (TypeError, ValueError) as exc:
+            raise OpsMigrationCollision("stored Ops migration manifest is invalid") from exc
+        if _manifest_digest(manifest) != marker.get("manifest_hash"):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest failed its integrity check"
+            )
+        if (
+            manifest.get("container_root") != str(root)
+            or manifest.get("ops_root") != str(physical)
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest no longer matches this Container"
+            )
+    else:
+        manifest = _build_manifest(conn, container)
+
+    physical_state = _path_state(physical)
+    if physical_state == "symlink":
+        raise OpsMigrationCollision("physical Ops root is a symlink")
+    if physical_state not in {"missing", "directory"}:
+        raise OpsMigrationCollision("physical Ops root collides with a non-directory")
+
+    allowed_physical = {
+        str(entry.get("name") or "")
+        for entry in manifest.get("entries") or []
+    } | {CONTAINER_DOC}
+    if physical_state == "directory":
+        try:
+            with os.scandir(physical) as children:
+                unexpected = sorted(
+                    child.name
+                    for child in children
+                    if child.name not in allowed_physical
+                )
+        except OSError as exc:
+            raise OpsMigrationCollision(
+                f"physical Ops root cannot be inspected: {exc}"
+            ) from exc
+        if unexpected:
+            raise OpsMigrationCollision(
+                f"physical Ops root contains unplanned content: {unexpected[0]}"
+            )
+
+    destination_device = (
+        _path_device(physical) if physical_state == "directory" else _path_device(root)
+    )
+    for entry in manifest.get("entries") or []:
+        name = str(entry.get("name") or "")
+        if not name or "/" in name or "\\" in name or name in {".", ".."}:
+            raise OpsMigrationCollision("stored Ops migration manifest has an unsafe path")
+        source = root / name
+        destination = physical / name
+        source_state = _path_state(source)
+        destination_state = _path_state(destination)
+        source_exists = source_state != "missing"
+        destination_exists = destination_state != "missing"
+        if source_exists and destination_exists:
+            raise OpsMigrationCollision(f"both source and destination exist for {name}")
+        if not source_exists and not destination_exists:
+            raise OpsMigrationCollision(
+                f"both source and destination are missing for {name}"
+            )
+        current = source if source_exists else destination
+        expected_kind = "directory" if entry.get("kind") == "directory" else "file"
+        current_state = source_state if source_exists else destination_state
+        if current_state == "symlink":
+            raise OpsMigrationCollision(f"Ops migration path is a symlink: {name}")
+        if current_state != expected_kind:
+            raise OpsMigrationCollision(
+                f"Ops migration path has an unexpected type: {name}"
+            )
+        digest, _ = _hash_entry(current)
+        if digest != entry.get("sha256"):
+            raise OpsMigrationCollision(
+                f"content changed after migration planning: {name}"
+            )
+        if source_exists and _path_device(source) != destination_device:
+            raise OpsMigrationCollision(
+                f"source and destination are on different filesystems: {name}"
+            )
+    return manifest
+
+
+def inspect_ops_migration(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return an owner-facing, non-mutating view of one Ops migration."""
+    data = get_container(conn, container)
+    area_rows = conn.execute(
+        """
+        SELECT id, rel_path
+        FROM project_areas
+        WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'
+        ORDER BY id
+        """,
+        (data["id"],),
+    ).fetchall()
+    active_ops_path = (
+        str(area_rows[0]["rel_path"]) if len(area_rows) == 1 else None
+    )
+    marker_row = conn.execute(
+        """
+        SELECT migration_version, status, manifest_json, manifest_hash, last_error,
+               started_at, completed_at, updated_at
+        FROM container_ops_migrations
+        WHERE container_id = ?
+        """,
+        (data["id"],),
+    ).fetchone()
+    marker = dict(marker_row) if marker_row is not None else None
+    attention_row = conn.execute(
+        """
+        SELECT target_json, status, created_at, resolved_at
+        FROM attention_items
+        WHERE source_key = ?
+        """,
+        (f"container-ops-migration:{data['id']}",),
+    ).fetchone()
+    attention_target: dict[str, Any] = {}
+    if attention_row is not None:
+        try:
+            parsed = json.loads(str(attention_row["target_json"]))
+            if isinstance(parsed, dict):
+                attention_target = parsed
+        except (TypeError, ValueError):
+            pass
+    stored_reason = (
+        str(marker.get("last_error"))
+        if marker and marker.get("last_error")
+        else str(attention_target.get("reason") or "")
+    ) or None
+
+    root: Path | None
+    root_error: str | None = None
+    try:
+        root = container_root(data)
+    except ContainerBoundaryError as exc:
+        root = None
+        root_error = str(exc)
+    physical = root / OPS_RELPATH if root is not None else None
+    physical_ops = (
+        _physical_ops_state(physical)
+        if physical is not None
+        else {"path": OPS_RELPATH, "state": "unavailable", "entries": []}
+    )
+    manifest_names: set[str] = set()
+    if marker and marker.get("manifest_json"):
+        try:
+            stored_manifest = json.loads(str(marker["manifest_json"]))
+            manifest_names = {
+                str(entry.get("name") or "")
+                for entry in stored_manifest.get("entries") or []
+                if isinstance(entry, dict)
+            }
+        except (TypeError, ValueError):
+            pass
+    owned_paths: list[dict[str, Any]] = []
+    conflicts: list[dict[str, str]] = []
+    available: list[str] = []
+    unavailable: list[str] = []
+    for name in (*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES):
+        if root is None or physical is None:
+            if name not in manifest_names:
+                continue
+            source_state = "unavailable"
+            destination_state = "unavailable"
+        else:
+            source_state = _path_state(root / name)
+            destination_state = _path_state(physical / name)
+        if source_state == "missing" and destination_state == "missing":
+            continue
+        if root is None:
+            layout = "unavailable"
+        elif source_state != "missing" and destination_state != "missing":
+            layout = "both"
+            conflicts.append(
+                {
+                    "path": name,
+                    "reason": f"Both {name} and {OPS_RELPATH}/{name} exist.",
+                }
+            )
+        elif source_state != "missing":
+            layout = "legacy"
+        else:
+            layout = "physical"
+        expected = "directory" if name in KNOWN_OPS_DIRS else "file"
+        active_state = source_state if active_ops_path == "." else destination_state
+        if active_state == expected:
+            available.append(name)
+        else:
+            unavailable.append(name)
+        if source_state == "symlink" or destination_state == "symlink":
+            conflicts.append(
+                {
+                    "path": name,
+                    "reason": f"{name} includes a symlink and will not be followed.",
+                }
+            )
+        owned_paths.append(
+            {
+                "path": name,
+                "destination": f"{OPS_RELPATH}/{name}",
+                "expected_kind": expected,
+                "legacy_state": source_state,
+                "physical_state": destination_state,
+                "layout": layout,
+                "usable_from_active_ops": active_state == expected,
+            }
+        )
+
+    retry_safe = False
+    validation_reason: str | None = None
+    if root_error:
+        validation_reason = root_error
+    elif active_ops_path == ".":
+        try:
+            _validated_retry_manifest(conn, data, marker)
+        except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+            validation_reason = str(exc)
+        else:
+            retry_safe = True
+    elif active_ops_path == OPS_RELPATH:
+        try:
+            validated_area_roots(conn, data, deep_ops_scan=True)
+        except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+            validation_reason = str(exc)
+        else:
+            validation_reason = "Migration is already complete; no retry is needed."
+    elif active_ops_path is None:
+        validation_reason = "Container must have exactly one active Ops Area."
+    else:
+        validation_reason = f"unsupported legacy Ops Area path: {active_ops_path}"
+    if validation_reason and active_ops_path != OPS_RELPATH and not any(
+        item["reason"] == validation_reason for item in conflicts
+    ):
+        conflicts.append({"path": OPS_RELPATH, "reason": validation_reason})
+
+    if marker is not None:
+        phase = str(marker["status"])
+    elif active_ops_path == OPS_RELPATH:
+        phase = "not_required"
+    else:
+        phase = "unplanned"
+    legacy_active = active_ops_path == "."
+    physical_active = active_ops_path == OPS_RELPATH
+    if physical_active:
+        usability_summary = "Physical ops/ is active and Ops features remain usable."
+    elif legacy_active and not unavailable:
+        usability_summary = (
+            "The legacy Ops layout remains active. Existing Ops features continue "
+            "to use the legacy paths until a safe retry completes."
+        )
+    elif legacy_active:
+        usability_summary = (
+            "The legacy Ops layout is still active, but paths already moved to ops/ "
+            "are unavailable through normal Ops features until recovery completes."
+        )
+    else:
+        usability_summary = "Ops features are unavailable until the Area layout is repaired."
+    return {
+        "project": {
+            "id": int(data["id"]),
+            "slug": data.get("slug"),
+            "name": data.get("name"),
+        },
+        "phase": phase,
+        "migration_version": (
+            int(marker["migration_version"]) if marker is not None else OPS_MIGRATION_VERSION
+        ),
+        "stored_reason": stored_reason,
+        "active_ops_path": active_ops_path,
+        "legacy_owned_paths": owned_paths,
+        "physical_ops": physical_ops,
+        "conflicts": conflicts,
+        "retry_safe": retry_safe,
+        "validation_reason": validation_reason,
+        "what_remains_usable": {
+            "legacy_ops_active": legacy_active,
+            "physical_ops_active": physical_active,
+            "available_paths": available,
+            "unavailable_paths": unavailable,
+            "summary": usability_summary,
+        },
+        "attention": {
+            "status": attention_row["status"] if attention_row is not None else "none",
+            "created_at": attention_row["created_at"] if attention_row is not None else None,
+            "resolved_at": attention_row["resolved_at"] if attention_row is not None else None,
+        },
+        "timestamps": {
+            "started_at": marker.get("started_at") if marker else None,
+            "completed_at": marker.get("completed_at") if marker else None,
+            "updated_at": marker.get("updated_at") if marker else None,
+        },
+    }
 
 
 def migrate_container_ops(

@@ -6,7 +6,21 @@ import { MasterDecisionCard } from '../master/MasterDecisionCard'
 const labelForKind = (kind: string) => ({
   job_review: 'Review', job_diff: 'Changes', satpam_restart: 'Watchdog', script_trust: 'Script',
   permission_job: 'Permission', master_decision: 'Master', master_budget: 'Master budget', settings_confirm: 'Settings',
+  container_ops_migration: 'Ops migration',
 }[kind] || 'Attention')
+
+const helperForItem = (item: AttentionItem) => {
+  if (item.kind === 'container_ops_migration') return 'Inspect Ops migration'
+  if (item.run_projection) {
+    return `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}`
+  }
+  return 'Open linked workspace'
+}
+
+const reasonForItem = (item: AttentionItem) =>
+  item.kind === 'container_ops_migration' && typeof item.target.reason === 'string'
+    ? item.target.reason
+    : null
 
 export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenTarget: (target: AttentionItem['target']) => void }) {
   const [items, setItems] = React.useState<AttentionItem[]>([])
@@ -75,7 +89,7 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
               />
             ) : (
               <>
-                <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong><small>{item.run_projection ? `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}` : 'Open linked workspace'}</small></button>
+                <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong>{reasonForItem(item) && <small className="attention-reason">{reasonForItem(item)}</small>}<small>{helperForItem(item)}</small></button>
                 {item.inline_ok && item.actions.length > 0 && <div className="attention-actions">{item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}</div>}
               </>
             )}

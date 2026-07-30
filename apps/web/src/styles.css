@@ -104,6 +104,9 @@
 	--attention-width: 24rem;
 	--attention-max-height: 38rem;
 	--attention-trigger-size: 2rem;
+	--ops-migration-content-width: 64rem;
+	--ops-migration-path-min-width: 12rem;
+	--ops-migration-border-width: 1px;
 	--tour-width: 34rem;
 	--tour-progress-height: 0.2rem;
 	--ui-spinner-size: 1rem;
@@ -951,6 +954,184 @@ button:disabled {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-2);
+}
+/* Project Ops migration recovery is a durable Settings detail surface. */
+.ops-migration-detail {
+	display: grid;
+	gap: var(--space-4);
+	width: min(100%, var(--ops-migration-content-width));
+	margin-inline: auto;
+}
+.ops-migration-head {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: start;
+	gap: var(--space-4);
+}
+.ops-migration-head h2,
+.ops-migration-head p {
+	margin: 0;
+}
+.ops-migration-head .eyebrow {
+	margin-bottom: var(--space-1);
+}
+.ops-migration-phase {
+	border: var(--ops-migration-border-width) solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-full);
+	padding: var(--space-1) var(--space-3);
+	background: var(--ui-surface-subtle);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
+	font-weight: 700;
+	text-transform: capitalize;
+}
+.ops-migration-phase.needs-attention {
+	border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+	color: var(--ui-warning-text);
+}
+.ops-migration-phase.is-safe,
+.ops-migration-phase.is-complete {
+	border-color: color-mix(in srgb, var(--ui-success) 42%, var(--ui-stroke-secondary));
+	background: var(--ui-success-bg);
+	color: var(--ui-success-strong);
+}
+.ops-migration-summary {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-4);
+}
+.ops-migration-summary .panel,
+.ops-migration-summary .panel p {
+	min-width: 0;
+	margin-block: 0;
+}
+.ops-migration-reason {
+	border-color: color-mix(in srgb, var(--ui-warning) 38%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+}
+.ops-migration-reason > p {
+	color: var(--ui-warning-text);
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+.ops-migration-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-3);
+	margin: 0;
+}
+.ops-migration-facts div {
+	display: grid;
+	gap: var(--space-1);
+}
+.ops-migration-facts dt {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+}
+.ops-migration-facts dd {
+	margin: 0;
+	font-weight: 650;
+	text-transform: capitalize;
+}
+.ops-migration-validation,
+.ops-migration-message {
+	border: var(--ops-migration-border-width) solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-lg);
+	padding: var(--space-4);
+	background: var(--ui-surface);
+}
+.ops-migration-validation.needs-attention {
+	border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-stroke-secondary));
+}
+.ops-migration-validation.is-safe,
+.ops-migration-message.is-success {
+	border-color: color-mix(in srgb, var(--ui-success) 42%, var(--ui-stroke-secondary));
+	background: var(--ui-success-bg);
+}
+.ops-migration-validation p,
+.ops-migration-message {
+	margin-block: 0;
+}
+.ops-migration-validation > div:first-child {
+	display: grid;
+	gap: var(--space-1);
+}
+.ops-migration-validation > .muted {
+	margin-top: var(--space-3);
+	font-size: var(--text-xs);
+}
+.ops-migration-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-4);
+}
+.ops-migration-message {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+.ops-migration-message.is-error {
+	border-color: var(--ui-danger-border);
+	background: var(--ui-danger-bg);
+	color: var(--ui-danger-text);
+}
+.ops-migration-message span {
+	flex: 1;
+}
+.ops-migration-table-wrap {
+	overflow-x: auto;
+}
+.ops-migration-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: var(--text-sm);
+}
+.ops-migration-table caption {
+	padding-bottom: var(--space-3);
+	color: var(--ui-text-secondary);
+	text-align: left;
+}
+.ops-migration-table th,
+.ops-migration-table td {
+	border-top: var(--ops-migration-border-width) solid var(--ui-stroke-tertiary);
+	padding: var(--space-2) var(--space-3);
+	text-align: left;
+	vertical-align: middle;
+}
+.ops-migration-table thead th {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+}
+.ops-migration-table tbody th {
+	min-width: var(--ops-migration-path-min-width);
+}
+.ops-migration-table td small {
+	display: block;
+	margin-top: var(--space-1);
+	color: var(--ui-text-tertiary);
+}
+.ops-migration-row-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+.ops-migration-list {
+	display: grid;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.ops-migration-list li {
+	display: grid;
+	grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+	gap: var(--space-2);
+	align-items: start;
+}
+.ops-migration-list span {
+	overflow-wrap: anywhere;
 }
 .panel {
 	border: 1px solid var(--ui-stroke-secondary);
@@ -15094,6 +15275,24 @@ button.moodboard-add-method:hover {
 	.master-controls .ui-select { min-width: 0; max-width: none; }
 }
 @media (max-width: 767px) {
+	.ops-migration-head {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.ops-migration-head > .ghost-button {
+		grid-column: 1 / -1;
+		justify-self: start;
+	}
+	.ops-migration-summary,
+	.ops-migration-facts {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.ops-migration-actions > button {
+		flex: 1 1 var(--ops-migration-path-min-width);
+	}
+	.ops-migration-message {
+		align-items: flex-start;
+		flex-wrap: wrap;
+	}
 	.master-popup-root.corner-left,
 	.master-popup-root.corner-right {
 		inset: var(--mobile-topbar-h) var(--toolrail-w) 0 0;

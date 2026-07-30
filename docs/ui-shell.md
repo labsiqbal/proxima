@@ -319,6 +319,16 @@ Removal copy must distinguish the two cases, because the API does: a folder outs
 workspace root is only *unlinked* and its real files survive, while a project Proxima
 created is deleted from disk. Chats and tasks go in both cases.
 
+An open `container_ops_migration` Attention item routes to
+`#settings/projects/<slug>/ops-migration`, switches the active Project when needed,
+and preserves that detail route across reload. The same surface is available from
+each Project card in Settings. It presents the stored reason, phase, both physical
+layouts, conflicts, and remaining usable paths. Reveal actions open Files on the
+chosen side. Validation refresh is read-only, and guarded retry remains disabled
+until the backend confirms the layout is safe. The detail heading receives focus on
+entry; status changes use live regions, errors use alerts, and retry exposes its
+safety rule through `aria-describedby`.
+
 ## Archive and Design
 
 Archive is the durable deliverable registry (T4): every agent output lands as a record with lineage, ONE approval status (synced with the job-review approve), and a version chain; the combo detail is an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address - no right panel, no popup. Records survive file moves and deletion. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available.
@@ -358,7 +368,7 @@ For shell changes, run `npm --prefix apps/web test`,
 `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover
 navigation order and feature-off gating, tool-rail open/close with Terminal
 persistence, asynchronous task success/failure, declared schedule inputs, cron
-grammar, and keyboard resizing.
+grammar, keyboard resizing, and durable detail routes reached from Attention.
 
 `npm --prefix apps/web run test:accessibility` first runs focused project-link API
 regressions for corrective ownership, filesystem component-byte limits, encoding

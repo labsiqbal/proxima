@@ -10,6 +10,7 @@ import {
 	shellModeFromSearch,
 	shouldPushFocusedItemHistory,
 	isDelegateDestination,
+	opsMigrationSlugFromHash,
 	workRouteDesignOpenSync,
 	workRouteFocusedItemIds,
 	workRouteSessionId,
@@ -1199,6 +1200,14 @@ describe("Shell project selection", () => {
 			pendingMasterMessageId: null,
 		});
 		expect(planOpenMasterConversation(21, false)).toBeNull();
+	});
+
+	it("restores the exact Project Ops migration route after reload", () => {
+		expect(
+			opsMigrationSlugFromHash("#settings/projects/legacy%20collision/ops-migration"),
+		).toBe("legacy collision");
+		expect(opsMigrationSlugFromHash("#settings/projects/legacy-collision")).toBeNull();
+		expect(opsMigrationSlugFromHash("#settings/projects/%E0%A4%A/ops-migration")).toBeNull();
 	});
 });
 

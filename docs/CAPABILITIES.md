@@ -1286,6 +1286,14 @@ builds and hashes a dry-run manifest, then uses atomic same-filesystem moves for
 known Ops-owned paths. Its durable marker resumes safely after interruption. Any
 collision, changed content, unsupported file type, or ambiguity stops only that
 Container, opens an owner-visible Attention item, and leaves the legacy row active.
+The Attention item links to a durable Project settings detail route. That surface
+shows the affected Project, exact stored owner-safe reason, migration phase, legacy
+and physical path states, conflicts, and which Ops paths remain usable. Owners can
+reveal either side and refresh read-only validation. Retry stays disabled until the
+current layout passes the existing collision, type, hash, symlink, overlap, and
+same-filesystem checks; retry then requires confirmation and resumes through the
+durable marker. Proxima never auto-merges, overwrites, deletes, follows symlinks,
+moves across filesystems, or decides which conflicting content is authoritative.
 All Ops consumers resolve through the row, so Archive, Wiki, artifacts, Designs,
 scripts, reports, exports, and uploads continue to use root-level legacy paths until
 that Container migrates cleanly. `container_registry` caches the bounded identity and
@@ -1317,7 +1325,10 @@ use Container terminology.
 **Endpoints:** `GET /api/containers`, `GET /api/containers/{slug}`,
 `GET /api/containers/{slug}/areas`, compatibility `GET /api/projects` and
 `GET /api/projects/{slug}`, plus `GET/POST /api/projects/{slug}/areas`,
-`DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
+`DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`,
+and `GET /api/projects/{slug}/ops-migration`,
+`POST /api/projects/{slug}/ops-migration/validate`, and
+`POST /api/projects/{slug}/ops-migration/retry`.
 
 ## 11. Files & uploads (APIs)
 

@@ -732,7 +732,7 @@ function HelpToursPanel({ token, features }: { token: string; features: AppFeatu
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, opsMigrationSlug, onActiveProject, onOpenOpsMigration, onCloseOpsMigration, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; opsMigrationSlug?: string | null; onActiveProject: (project: Project) => void; onOpenOpsMigration?: (project: Project) => void; onCloseOpsMigration?: () => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>(initialSection)
   React.useEffect(() => { setActiveSection(initialSection) }, [initialSection])
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
@@ -823,7 +823,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const content = effectiveSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : effectiveSection === 'projects'
-      ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} onRefresh={onRefresh} /></div>
+      ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={onActiveProject} onOpenOpsMigration={onOpenOpsMigration} onCloseOpsMigration={onCloseOpsMigration} onRefresh={onRefresh} /></div>
     : effectiveSection === 'master'
       ? <MasterSettingsPanel token={token} />
     : effectiveSection === 'agents'
