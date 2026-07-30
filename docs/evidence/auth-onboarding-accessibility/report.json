@@ -4,7 +4,7 @@
     "height": 1000
   },
   "runtime": {
-    "node": "v20.20.2"
+    "node": "v22.23.1"
   },
   "fixture": "disposable production bundle and owner database",
   "isolation": {
@@ -19,6 +19,12 @@
         "type": "focus",
         "name": "password-confirmation"
       },
+      {
+        "type": "alert",
+        "name": "Passwords don’t match."
+      }
+    ],
+    "setupMismatchRepeat": [
       {
         "type": "alert",
         "name": "Passwords don’t match."
@@ -59,6 +65,53 @@
   },
   "accessibilityTrees": {
     "setupMismatch": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "Passwords don’t match."
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "textbox",
+          "name": "Confirm password",
+          "description": "Passwords don’t match.",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Set password & enter",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        }
+      ],
+      "tabs": []
+    },
+    "setupMismatchRepeat": {
       "mains": [
         {
           "role": "main",
@@ -226,82 +279,189 @@
   "themes": [
     {
       "theme": "light",
-      "subtitleContrast": 7.557378129674007,
-      "errorContrast": 6.4700447145121895,
-      "buttonContrast": 5.744497230939534,
+      "textContrast": {
+        "title": 17.73971700407407,
+        "subtitle": 7.557378129674007,
+        "inputValue": 17.73971700407407,
+        "placeholder": 7.557378129674007,
+        "error": 6.4700447145121895,
+        "button": 5.744497230939534
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(0, 83, 253)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(0, 83, 253)",
+          "contrast": 5.744497230939534
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(0, 83, 253)",
+          "contrast": 5.744497230939534
+        }
       }
     },
     {
       "theme": "dark",
-      "subtitleContrast": 7.61992057670097,
-      "errorContrast": 6.344486619180806,
-      "buttonContrast": 4.631017848592519,
+      "textContrast": {
+        "title": 12.436765911461743,
+        "subtitle": 7.61992057670097,
+        "inputValue": 12.436765911461743,
+        "placeholder": 7.61992057670097,
+        "error": 6.344486619180806,
+        "button": 4.631017848592519
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(95, 146, 230)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(95, 146, 230)",
+          "contrast": 4.549339176134637
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(95, 146, 230)",
+          "contrast": 4.549339176134637
+        }
       }
     },
     {
       "theme": "ocean",
-      "subtitleContrast": 7.557378129674007,
-      "errorContrast": 6.4700447145121895,
-      "buttonContrast": 5.3577549124490425,
+      "textContrast": {
+        "title": 17.73971700407407,
+        "subtitle": 7.557378129674007,
+        "inputValue": 17.73971700407407,
+        "placeholder": 7.557378129674007,
+        "error": 6.4700447145121895,
+        "button": 5.3577549124490425
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(14, 116, 144)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(14, 116, 144)",
+          "contrast": 5.3577549124490425
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(14, 116, 144)",
+          "contrast": 5.3577549124490425
+        }
       }
     },
     {
       "theme": "violet",
-      "subtitleContrast": 7.557378129674007,
-      "errorContrast": 6.4700447145121895,
-      "buttonContrast": 5.698586217871195,
+      "textContrast": {
+        "title": 17.73971700407407,
+        "subtitle": 7.557378129674007,
+        "inputValue": 17.73971700407407,
+        "placeholder": 7.557378129674007,
+        "error": 6.4700447145121895,
+        "button": 5.698586217871195
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(124, 58, 237)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(124, 58, 237)",
+          "contrast": 5.698586217871195
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(124, 58, 237)",
+          "contrast": 5.698586217871195
+        }
       }
     },
     {
       "theme": "sunset",
-      "subtitleContrast": 7.557378129674007,
-      "errorContrast": 6.4700447145121895,
-      "buttonContrast": 7.3070519776298735,
+      "textContrast": {
+        "title": 17.73971700407407,
+        "subtitle": 7.557378129674007,
+        "inputValue": 17.73971700407407,
+        "placeholder": 7.557378129674007,
+        "error": 6.4700447145121895,
+        "button": 7.3070519776298735
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(234, 88, 12)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(234, 88, 12)",
+          "contrast": 3.5595130905908228
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(234, 88, 12)",
+          "contrast": 3.5595130905908228
+        }
       }
     },
     {
       "theme": "forest",
-      "subtitleContrast": 7.557378129674007,
-      "errorContrast": 6.4700447145121895,
-      "buttonContrast": 5.0155974781114745,
+      "textContrast": {
+        "title": 17.73971700407407,
+        "subtitle": 7.557378129674007,
+        "inputValue": 17.73971700407407,
+        "placeholder": 7.557378129674007,
+        "error": 6.4700447145121895,
+        "button": 5.0155974781114745
+      },
       "focus": {
-        "style": "solid",
-        "width": 3,
-        "color": "rgb(21, 128, 61)"
+        "input": {
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(21, 128, 61)",
+          "contrast": 5.0155974781114745
+        },
+        "button": {
+          "focused": true,
+          "style": "solid",
+          "width": 3,
+          "color": "rgb(21, 128, 61)",
+          "contrast": 5.0155974781114745
+        }
       }
     }
   ],
   "tailnetFixture": {
     "origin": "isolated Tailnet-host fixture",
-    "status": "pass"
+    "status": "pass",
+    "network": {
+      "forwarded": "same-origin static shell GET only",
+      "bootstrap": "fulfilled in browser fixture",
+      "liveDataRequests": "blocked",
+      "blockedRequestCount": 4
+    }
   },
   "tailscaleEntry": {
     "origin": "private Tailscale origin (redacted)",
-    "status": "pass"
+    "status": "pass",
+    "provenance": {
+      "device": "current Tailscale device (redacted)",
+      "serve": "root handler for configured local Proxima service",
+      "origin": "private Tailscale origin (redacted)"
+    },
+    "network": {
+      "forwarded": "same-origin static shell GET only",
+      "bootstrap": "fulfilled in browser fixture",
+      "liveDataRequests": "blocked",
+      "blockedRequestCount": 1
+    }
   },
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:39083/"
+    "url": "http://127.0.0.1:36301/"
   }
 }

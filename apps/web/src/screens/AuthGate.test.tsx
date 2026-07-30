@@ -47,6 +47,14 @@ describe('AuthGate', () => {
     expect(confirmation).toHaveAttribute('aria-invalid', 'true')
     expect(confirmation).toHaveAttribute('aria-describedby', alert.id)
     expect(setPassword).not.toHaveBeenCalled()
+
+    await user.keyboard('{Enter}')
+    const repeatedAlert = screen.getByRole('alert')
+    expect(repeatedAlert).not.toBe(alert)
+    expect(repeatedAlert).toHaveTextContent(/don.t match/i)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(confirmation).toHaveFocus()
+    expect(setPassword).not.toHaveBeenCalled()
   })
 
   it('login: surfaces an error on the wrong password', async () => {

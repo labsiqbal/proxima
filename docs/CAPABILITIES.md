@@ -1076,10 +1076,12 @@ and its real files stay; a Proxima-scaffolded project is deleted from disk. On
 or skip (starter project under the data dir). The two folder choices are mutually
 exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
 Validation exposes one assertive alert, marks and describes the corrective field, and
-returns focus there before the alert is published. Display names are checked against
-the API's 120-character limit before submission. The project-link error contract also
-identifies `path`, `name`, or `slug`; the client maps path failures to the folder field
-and name/slug failures to the display-name field instead of guessing from the mode.
+returns focus there before the alert is published. Every invalid submission mounts a
+fresh single alert, including an unchanged repeat while the field remains focused.
+Display names are checked against the API's 120-character limit before submission. The
+project-link error contract also identifies `path`, `name`, or `slug`; the client maps
+path failures to the folder field and name/slug failures to the display-name field
+instead of guessing from the mode.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 
@@ -1533,4 +1535,4 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
-Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.
+Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

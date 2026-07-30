@@ -1727,8 +1727,12 @@ button:disabled {
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-md);
 	background: var(--ui-surface-sunken, var(--ui-surface));
-	color: var(--ui-text);
+	color: var(--ui-text-primary);
 	font-size: var(--text-md);
+}
+.auth-input::placeholder {
+	color: var(--ui-text-secondary);
+	opacity: 1;
 }
 .auth-input:focus {
 	outline: var(--focus-ring-width) solid var(--ui-accent);

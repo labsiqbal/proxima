@@ -10,6 +10,12 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  GATE_TEXT_STYLES,
+  privateEntryUrl,
+  remoteRequestPolicy,
+  resolvePrivateTailscaleEntry,
+} from './accessibility-audit-policy.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const webRoot = path.join(repoRoot, 'apps', 'web')
@@ -417,12 +423,78 @@ async function auditTheme(cdp, theme) {
     function parseColor(value) {
       const rgb = value.match(/^rgba?\\(([^)]+)\\)$/)
       if (rgb) {
-        const parts = rgb[1].split(/[ ,/]+/).filter(Boolean).slice(0, 3).map(Number)
-        return parts.map(part => part / 255)
+        const parts = rgb[1].split(/[ ,/]+/).filter(Boolean)
+        const channels = parts.slice(0, 3).map(part => part.endsWith('%') ? parseFloat(part) / 100 : Number(part) / 255)
+        const alpha = parts[3] == null ? 1 : parts[3].endsWith('%') ? parseFloat(parts[3]) / 100 : Number(parts[3])
+        return [...channels, alpha]
       }
-      const srgb = value.match(/^color\\(srgb\\s+([^\\s]+)\\s+([^\\s]+)\\s+([^\\s/)]+)/)
-      if (srgb) return srgb.slice(1, 4).map(Number)
+      const srgb = value.match(/^color\\(srgb\\s+([^\\s]+)\\s+([^\\s]+)\\s+([^\\s/)]+)(?:\\s*\\/\\s*([^\\s)]+))?\\)$/)
+      if (srgb) return [...srgb.slice(1, 4).map(Number), srgb[4] == null ? 1 : Number(srgb[4])]
       throw new Error('Unsupported computed color: ' + value)
+    }
+    function composite(top, bottom) {
+      return [
+        (top[0] * top[3]) + (bottom[0] * (1 - top[3])),
+        (top[1] * top[3]) + (bottom[1] * (1 - top[3])),
+        (top[2] * top[3]) + (bottom[2] * (1 - top[3])),
+        1,
+      ]
+    }
+    function luminance(color) {
+      const [red, green, blue] = color.slice(0, 3).map(channel)
+      return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+    }
+    function contrast(foreground, background, backdrop = background) {
+      const base = composite(parseColor(background), parseColor(backdrop))
+      const text = composite(parseColor(foreground), base)
+      const a = luminance(text)
+      const b = luminance(base)
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+    }
+    const card = document.querySelector('.auth-card')
+    const title = document.querySelector('.auth-title')
+    const subtitle = document.querySelector('.auth-sub')
+    const error = document.querySelector('.auth-error')
+    const button = document.querySelector('.auth-submit')
+    const password = document.querySelector('input[name=password]')
+    const cardStyle = getComputedStyle(card)
+    const titleStyle = getComputedStyle(title)
+    const subtitleStyle = getComputedStyle(subtitle)
+    const errorStyle = getComputedStyle(error)
+    const buttonStyle = getComputedStyle(button)
+    const inputStyle = getComputedStyle(password)
+    const placeholderStyle = getComputedStyle(password, '::placeholder')
+    const inputFocusStyle = getComputedStyle(password)
+    return {
+      theme: document.documentElement.dataset.theme,
+      textContrast: {
+        title: contrast(titleStyle.color, cardStyle.backgroundColor),
+        subtitle: contrast(subtitleStyle.color, cardStyle.backgroundColor),
+        inputValue: contrast(inputStyle.color, inputStyle.backgroundColor, cardStyle.backgroundColor),
+        placeholder: contrast(placeholderStyle.color, inputStyle.backgroundColor, cardStyle.backgroundColor),
+        error: contrast(errorStyle.color, cardStyle.backgroundColor),
+        button: contrast(buttonStyle.color, buttonStyle.backgroundColor, cardStyle.backgroundColor),
+      },
+      focus: {
+        input: {
+          style: inputFocusStyle.outlineStyle,
+          width: parseFloat(inputFocusStyle.outlineWidth),
+          color: inputFocusStyle.outlineColor,
+          contrast: contrast(inputFocusStyle.outlineColor, cardStyle.backgroundColor),
+        },
+      },
+    }
+  })()`)
+  await pressKey(cdp, 'Tab', 'Tab', 9)
+  result.focus.button = await evaluate(cdp, `(() => {
+    function channel(value) {
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    }
+    function parseColor(value) {
+      const rgb = value.match(/^rgba?\\(([^)]+)\\)$/)
+      if (!rgb) throw new Error('Unsupported computed color: ' + value)
+      const parts = rgb[1].split(/[ ,/]+/).filter(Boolean)
+      return parts.slice(0, 3).map(part => part.endsWith('%') ? parseFloat(part) / 100 : Number(part) / 255)
     }
     function luminance(value) {
       const [red, green, blue] = parseColor(value).map(channel)
@@ -433,100 +505,55 @@ async function auditTheme(cdp, theme) {
       const b = luminance(background)
       return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
     }
-    const card = document.querySelector('.auth-card')
-    const subtitle = document.querySelector('.auth-sub')
-    const error = document.querySelector('.auth-error')
     const button = document.querySelector('.auth-submit')
-    const password = document.querySelector('input[name=password]')
-    password.focus()
-    const cardStyle = getComputedStyle(card)
-    const subtitleStyle = getComputedStyle(subtitle)
-    const errorStyle = getComputedStyle(error)
-    const buttonStyle = getComputedStyle(button)
-    const focusStyle = getComputedStyle(password)
+    const card = document.querySelector('.auth-card')
+    const style = getComputedStyle(button)
     return {
-      theme: document.documentElement.dataset.theme,
-      subtitleContrast: contrast(subtitleStyle.color, cardStyle.backgroundColor),
-      errorContrast: contrast(errorStyle.color, cardStyle.backgroundColor),
-      buttonContrast: contrast(buttonStyle.color, buttonStyle.backgroundColor),
-      focus: {
-        style: focusStyle.outlineStyle,
-        width: parseFloat(focusStyle.outlineWidth),
-        color: focusStyle.outlineColor,
-      },
+      focused: document.activeElement === button,
+      style: style.outlineStyle,
+      width: parseFloat(style.outlineWidth),
+      color: style.outlineColor,
+      contrast: contrast(style.outlineColor, getComputedStyle(card).backgroundColor),
     }
   })()`)
   assert.equal(result.theme, theme)
-  assert(result.subtitleContrast >= 4.5, `${theme} subtitle contrast is ${result.subtitleContrast}`)
-  assert(result.errorContrast >= 4.5, `${theme} error contrast is ${result.errorContrast}`)
-  assert(result.buttonContrast >= 4.5, `${theme} button contrast is ${result.buttonContrast}`)
-  assert.notEqual(result.focus.style, 'none', `${theme} password focus is invisible`)
-  assert(result.focus.width >= 2, `${theme} password focus width is ${result.focus.width}`)
-  return result
-}
-
-function privateEntryUrl(value) {
-  let url
-  try {
-    url = new URL(value)
-  } catch {
-    throw new Error('Private Tailscale entry must be an absolute URL')
+  assert.deepEqual(Object.keys(result.textContrast), GATE_TEXT_STYLES)
+  for (const [style, ratio] of Object.entries(result.textContrast)) {
+    assert(ratio >= 4.5, `${theme} ${style} contrast is ${ratio}`)
   }
-  assert(['http:', 'https:'].includes(url.protocol), 'Private Tailscale entry must use HTTP or HTTPS')
-  assert(!url.username && !url.password, 'Private Tailscale entry must not contain credentials')
-  url.pathname = '/'
-  url.search = ''
-  url.hash = ''
-  return url.toString()
+  for (const [control, focus] of Object.entries(result.focus)) {
+    assert.notEqual(focus.style, 'none', `${theme} ${control} focus is invisible`)
+    assert(focus.width >= 2, `${theme} ${control} focus width is ${focus.width}`)
+    assert(focus.contrast >= 3, `${theme} ${control} focus contrast is ${focus.contrast}`)
+  }
+  assert.equal(result.focus.button.focused, true, `${theme} button did not receive keyboard focus`)
+  return result
 }
 
 function discoverPrivateTailscaleEntry(environment) {
   const configured = process.env.PROXIMA_A11Y_REMOTE_BASE?.trim()
   const configuredAddress = process.env.PROXIMA_A11Y_REMOTE_ADDRESS?.trim()
-  if (configured) {
-    assert(!configuredAddress || net.isIP(configuredAddress), 'PROXIMA_A11Y_REMOTE_ADDRESS must be an IP address')
-    return { url: privateEntryUrl(configured), address: configuredAddress || null }
-  }
   const proxyPort = process.env.PROXIMA_A11Y_REMOTE_PROXY_PORT?.trim() || '8765'
-  assert(/^\d+$/.test(proxyPort), 'PROXIMA_A11Y_REMOTE_PROXY_PORT must be a port number')
   const command = process.env.PROXIMA_A11Y_TAILSCALE_BIN?.trim() || 'tailscale'
-  const result = spawnSync(command, ['serve', 'status', '--json'], {
+  const serveResult = spawnSync(command, ['serve', 'status', '--json'], {
     env: environment,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   })
-  assert.equal(result.status, 0, 'Could not read the current Tailscale Serve configuration')
-  const status = JSON.parse(result.stdout)
-  const candidates = Object.entries(status.Web || {}).filter(([, config]) => {
-    const proxy = config?.Handlers?.['/']?.Proxy
-    if (typeof proxy !== 'string') return false
-    try {
-      const target = new URL(proxy)
-      return ['127.0.0.1', 'localhost', '::1'].includes(target.hostname)
-        && (target.port || (target.protocol === 'https:' ? '443' : '80')) === proxyPort
-    } catch {
-      return false
-    }
-  })
-  assert.equal(candidates.length, 1, 'Expected one Tailscale root entry for the current Proxima service')
-  const origin = candidates[0][0]
-  const servedPort = origin.match(/:(\d+)$/)?.[1] || '443'
-  const protocol = status.TCP?.[servedPort]?.HTTPS ? 'https' : 'http'
-  const device = spawnSync(command, ['status', '--json'], {
+  assert.equal(serveResult.status, 0, 'Could not read the current Tailscale Serve configuration')
+  const deviceResult = spawnSync(command, ['status', '--json'], {
     env: environment,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   })
-  assert.equal(device.status, 0, 'Could not read the current Tailscale device address')
-  const deviceStatus = JSON.parse(device.stdout)
-  const hostname = String(deviceStatus.Self?.DNSName || '').replace(/\.$/, '')
-  assert(hostname, 'Current Tailscale device has no DNS name')
-  const address = deviceStatus.Self?.TailscaleIPs?.find(candidate => net.isIP(candidate) === 4)
-  assert(address, 'Current Tailscale device has no IPv4 address')
-  const defaultPort = protocol === 'https' ? '443' : '80'
-  const authority = servedPort === defaultPort ? hostname : `${hostname}:${servedPort}`
-  const url = privateEntryUrl(`${protocol}://${authority}`)
-  return { url, address }
+  assert.equal(deviceResult.status, 0, 'Could not read the current Tailscale device address')
+  return resolvePrivateTailscaleEntry({
+    serveStatus: JSON.parse(serveResult.stdout),
+    deviceStatus: JSON.parse(deviceResult.stdout),
+    proxyPort,
+    configuredBase: configured || '',
+    configuredAddress: configuredAddress || '',
+  })
 }
 
 function readOnlyGet(url, address = null) {
@@ -558,52 +585,43 @@ async function auditRemoteEntry(cdp, url, {
   screenshotName = null,
   getUrl = url,
   address = null,
+  provenance = null,
   assertAccessibilityContract = true,
 }) {
   const target = privateEntryUrl(url)
+  const targetOrigin = new URL(target).origin
   const response = await readOnlyGet(getUrl, address)
   assert(response.status >= 200 && response.status < 300, `${origin} did not accept an unauthenticated GET`)
   assert.match(response.body, /<title>Proxima<\/title>/i)
 
   const forwarded = []
+  const fulfilled = []
   const blocked = []
   const errors = []
   const pending = new Set()
   const listener = event => {
     const task = (async () => {
       const request = event.request
-      let requestUrl
-      try {
-        requestUrl = new URL(request.url)
-      } catch {
-        errors.push(new Error('Browser requested an invalid URL'))
-        await cdp.send('Fetch.failRequest', {
-          requestId: event.requestId,
-          errorReason: 'BlockedByClient',
-        })
-        return
-      }
-      if (request.method === 'POST'
-        && requestUrl.origin === new URL(target).origin
-        && requestUrl.pathname === '/auth/resume') {
-        blocked.push('POST /auth/resume')
+      const decision = remoteRequestPolicy(request, targetOrigin)
+      if (decision.action === 'fulfill') {
+        fulfilled.push(decision.label)
         await cdp.send('Fetch.fulfillRequest', {
           requestId: event.requestId,
-          responseCode: 401,
+          responseCode: decision.response.status,
           responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
-          body: Buffer.from(JSON.stringify({ detail: 'Not authenticated' })).toString('base64'),
+          body: Buffer.from(JSON.stringify(decision.response.body)).toString('base64'),
         })
         return
       }
-      if (request.method !== 'GET') {
-        errors.push(new Error(`Browser attempted forbidden ${request.method} request`))
+      if (decision.action === 'block') {
+        blocked.push(decision.label)
         await cdp.send('Fetch.failRequest', {
           requestId: event.requestId,
           errorReason: 'BlockedByClient',
         })
         return
       }
-      forwarded.push('GET')
+      forwarded.push(decision.label)
       await cdp.send('Fetch.continueRequest', { requestId: event.requestId })
     })().catch(error => {
       errors.push(error instanceof Error ? error : new Error(String(error)))
@@ -618,17 +636,44 @@ async function auditRemoteEntry(cdp, url, {
   await cdp.send('Fetch.enable', {
     patterns: [{ urlPattern: '*', requestStage: 'Request' }],
   })
+  let navigationError = null
   try {
-    await navigate(cdp, target, 'Welcome back')
+    try {
+      await navigate(cdp, target, 'Welcome back')
+    } catch (error) {
+      navigationError = error
+    }
     await Promise.all([...pending])
   } finally {
     await cdp.send('Fetch.disable')
     cdp.off('Fetch.requestPaused', listener)
   }
+  if (navigationError) {
+    const state = await evaluate(cdp, `(() => ({
+      title: document.title,
+      heading: document.querySelector('h1')?.textContent || '',
+      text: document.body?.innerText?.slice(0, 240) || '',
+      scripts: document.scripts.length,
+    }))()`).catch(() => null)
+    throw new Error(
+      `${origin} static shell did not render the login gate: `
+      + `${JSON.stringify({
+        state,
+        forwarded: [...new Set(forwarded)].sort(),
+        fulfilled: [...new Set(fulfilled)].sort(),
+        blocked: [...new Set(blocked)].sort(),
+      })}; ${navigationError}`,
+    )
+  }
   assert.deepEqual(errors, [])
-  assert(forwarded.length > 0, `${origin} did not receive browser GET requests`)
-  assert(blocked.length > 0, `${origin} did not exercise unauthenticated session resume`)
-  assert(blocked.every(request => request === 'POST /auth/resume'))
+  assert(forwarded.length > 0, `${origin} did not receive static shell GET requests`)
+  assert(forwarded.every(
+    request => !request.startsWith('GET /api/') && !request.startsWith('GET /auth/'),
+  ))
+  assert.deepEqual(
+    [...new Set(fulfilled)].sort(),
+    ['GET /api/config', 'GET /api/setup/status', 'POST /auth/resume'],
+  )
   const state = await evaluate(cdp, `(() => ({
     title: document.title,
     mainCount: document.querySelectorAll('main').length,
@@ -646,7 +691,17 @@ async function auditRemoteEntry(cdp, url, {
     assert.equal(state.owner, 'owner')
   }
   if (screenshotName) await screenshot(cdp, screenshotName)
-  return { origin, status: 'pass' }
+  return {
+    origin,
+    status: 'pass',
+    ...(provenance ? { provenance } : {}),
+    network: {
+      forwarded: 'same-origin static shell GET only',
+      bootstrap: 'fulfilled in browser fixture',
+      liveDataRequests: 'blocked',
+      blockedRequestCount: blocked.length,
+    },
+  }
 }
 
 function runLighthouse(baseUrl, environment) {
@@ -682,23 +737,26 @@ function writeEvidence(report) {
     path.join(evidenceDir, 'report.json'),
     `${JSON.stringify(report, null, 2)}\n`,
   )
-  const remote = `${report.tailscaleEntry.status} - ${report.tailscaleEntry.origin}`
+  const remote = `${report.tailscaleEntry.status} - ${report.tailscaleEntry.origin}; current device Serve mapping verified (redacted)`
   const markdown = `# Auth and onboarding accessibility evidence
 
 This pass uses the production web bundle, a disposable owner database, and headless
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
-The separate private-entry check sends unauthenticated GET requests only.
+The private-entry check sends one unauthenticated shell GET, verifies the current
+device Serve mapping, and blocks every live API or data request in the browser.
 
 | Check | Result |
 | --- | --- |
 | First-run mismatch focus and single announcement | pass |
+| Repeated mismatch gets one fresh announcement | pass |
 | Unsafe folder focus and single announcement | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
 | Pressed-button Tab and Space behavior | pass |
 | Returning login failure and success | pass |
 | Accessibility trees and one main landmark | pass |
-| Every supported theme meets WCAG AA text contrast | pass |
+| Every gate text style in every supported theme meets WCAG AA contrast | pass |
+| Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | ${report.lighthouse.score} |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
 | Private Tailscale unauthenticated entry | ${remote} |
@@ -713,7 +771,7 @@ The separate private-entry check sends unauthenticated GET requests only.
 
 Machine-readable details are in [report.json](report.json), with the full
 [Lighthouse report](lighthouse.json). The private Tailscale origin is deliberately
-redacted; only its label and passing state are retained.
+redacted; only its passing state and redacted current-device Serve provenance are retained.
 `
   fs.writeFileSync(path.join(evidenceDir, 'README.md'), markdown)
 }
@@ -845,11 +903,36 @@ async function main() {
     assert.equal(mismatchAx.alerts.length, 1)
     assert.match(mismatchAx.alerts[0].text, /Passwords.*match/)
     assert(mismatchAx.focused.some(node => node.name === 'Confirm password' && node.invalid))
+
+    const repeatedMismatchFocusedBeforeError = await startAnnouncementTrace(cdp)
+    await pressKey(cdp, 'Enter', 'Enter', 13, '\r')
+    await waitForPage(
+      cdp,
+      `(window.__proximaA11yEvents || []).filter(event => event.type === 'alert').length === 1`,
+      'Repeated mismatch announcement',
+    )
+    const repeatedMismatchTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      repeatedMismatchTrace,
+      'password-confirmation',
+      /Passwords.*match/,
+      repeatedMismatchFocusedBeforeError === 'password-confirmation',
+    )
+    const repeatedMismatchAx = await accessibilitySummary(cdp)
+    assert.equal(repeatedMismatchAx.alerts.length, 1)
+    assert.match(repeatedMismatchAx.alerts[0].text, /Passwords.*match/)
+    assert(repeatedMismatchAx.focused.some(node => node.name === 'Confirm password' && node.invalid))
     await screenshot(cdp, 'auth-setup-mismatch-after.png')
 
     await setInput(cdp, 'password-confirmation', 'longenough1')
     await clickButton(cdp, 'Set password & enter')
-    await waitForPage(cdp, `document.querySelector('h1')?.textContent === 'Pick your working folder'`, 'Onboarding')
+    await waitForPage(
+      cdp,
+      `document.querySelector('h1')?.textContent === 'Pick your working folder'
+        && [...document.querySelectorAll('button')]
+          .some(button => button.textContent.trim() === 'Link existing')`,
+      'Onboarding controls',
+    )
     assert.equal(await evaluate(cdp, `document.querySelectorAll('main').length`), 1)
 
     await focusButton(cdp, 'Link existing')
@@ -956,6 +1039,7 @@ async function main() {
       {
         origin: 'private Tailscale origin (redacted)',
         address: privateTailscale.address,
+        provenance: privateTailscale.provenance,
         assertAccessibilityContract: false,
       },
     )
@@ -972,6 +1056,7 @@ async function main() {
       },
       announcements: {
         setupMismatch: mismatchTrace,
+        setupMismatchRepeat: repeatedMismatchTrace,
         unsafeFolder: folderTrace,
         overlongDisplayName: displayTrace,
         derivedSlugCollision: collisionTrace,
@@ -979,6 +1064,7 @@ async function main() {
       },
       accessibilityTrees: {
         setupMismatch: mismatchAx,
+        setupMismatchRepeat: repeatedMismatchAx,
         unsafeFolder: folderAx,
         returningLogin: loginAx,
       },

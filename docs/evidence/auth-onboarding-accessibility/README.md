@@ -2,21 +2,24 @@
 
 This pass uses the production web bundle, a disposable owner database, and headless
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
-The separate private-entry check sends unauthenticated GET requests only.
+The private-entry check sends one unauthenticated shell GET, verifies the current
+device Serve mapping, and blocks every live API or data request in the browser.
 
 | Check | Result |
 | --- | --- |
 | First-run mismatch focus and single announcement | pass |
+| Repeated mismatch gets one fresh announcement | pass |
 | Unsafe folder focus and single announcement | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
 | Pressed-button Tab and Space behavior | pass |
 | Returning login failure and success | pass |
 | Accessibility trees and one main landmark | pass |
-| Every supported theme meets WCAG AA text contrast | pass |
+| Every gate text style in every supported theme meets WCAG AA contrast | pass |
+| Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | 100 |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
-| Private Tailscale unauthenticated entry | pass - private Tailscale origin (redacted) |
+| Private Tailscale unauthenticated entry | pass - private Tailscale origin (redacted); current device Serve mapping verified (redacted) |
 
 ## Before and after
 
@@ -28,4 +31,4 @@ The separate private-entry check sends unauthenticated GET requests only.
 
 Machine-readable details are in [report.json](report.json), with the full
 [Lighthouse report](lighthouse.json). The private Tailscale origin is deliberately
-redacted; only its label and passing state are retained.
+redacted; only its passing state and redacted current-device Serve provenance are retained.
