@@ -262,10 +262,10 @@ button:disabled {
 	grid-row: 2;
 }
 .app-shell.delegate-mode {
-	grid-template-columns: minmax(0, 1fr);
+	grid-template-columns: var(--left-w, 294px) minmax(0, 1fr);
 }
 .app-shell.delegate-mode > .main-pane {
-	grid-column: 1;
+	grid-column: 2;
 }
 .sidebar {
 	min-width: 0;

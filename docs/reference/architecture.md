@@ -645,6 +645,12 @@ draft/selection, Focus, target, Fleet data, popup state, transient toasts, and s
 scroll/panel state. `MasterScreen` and `MasterPopup` are view-only consumers and
 never mount their own stream, store, polling loop, or draft owner. The hidden home
 does not render a composer while another surface is active.
+When the Master feature is enabled, Delegate keeps the shared AppShell sidebar and
+its keyboard-resizable desktop / focus-managed mobile drawer behavior. Its distinct
+global navigation is Master, Tasks, and Archive only. Delegate passes no Work active
+project into the Master desk and suppresses project filtering and Work-only escape
+paths from its Tasks and Archive views, while preserving task and archive-record deep
+links in the same mode.
 Owner-keyed session storage restores draft, selection, and scroll after browser
 refresh; the target remains an owner-keyed local preference. Neither store restores
 server-owned Focus.

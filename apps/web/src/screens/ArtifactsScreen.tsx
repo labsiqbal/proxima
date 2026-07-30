@@ -32,10 +32,12 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   project_slug: r.project_slug,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
   token: string
   projects: Project[]
   activeProject: Project | null
+  /** Delegate's Archive is global and intentionally has no project filter menu. */
+  globalScope?: boolean
   archiveRecord?: { project: string; slug: string } | null
   pendingFile?: { slug: string; path: string } | null
   pendingArtifact?: OutputLink | null
@@ -176,7 +178,7 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
         slug={archiveRecord.slug}
         onBack={() => onCloseRecord?.()}
         onOpenRecord={(p, s) => onOpenRecord?.(p, s)}
-        onOpenSession={onOpenSession}
+        onOpenSession={globalScope ? undefined : onOpenSession}
         onOpenTask={onOpenTask}
         onOpenViewer={openViewer}
         onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
@@ -240,7 +242,7 @@ export function ArtifactsScreen({ token, projects, activeProject, archiveRecord,
         <p className="muted">Every deliverable of record, with lineage and approval - across all projects.</p>
       </div>
       <div className="archive-head-controls">
-        <Dropdown value={project} onChange={pickProject} minWidth={180} options={[{ value: '', label: 'All projects' }, ...projects.map(p => ({ value: p.slug, label: clean(p.name) }))]} />
+        {!globalScope && <Dropdown value={project} onChange={pickProject} minWidth={180} options={[{ value: '', label: 'All projects' }, ...projects.map(p => ({ value: p.slug, label: clean(p.name) }))]} />}
         <input className="archive-search" type="search" placeholder="Search deliverables…" aria-label="Search deliverables" value={q} onChange={e => setQ(e.target.value)} />
         <button className="ghost-button" onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
       </div>

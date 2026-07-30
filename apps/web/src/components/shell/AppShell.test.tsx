@@ -182,17 +182,32 @@ describe('AppShell mobile drawer + search', () => {
     expect(switcher).toHaveAttribute('title', 'Project is locked while this view is open')
   })
 
-  it('keeps Delegate to Master-only chrome with an accessible Work return', async () => {
+  it('keeps Delegate global while retaining the accessible shell sidebar', async () => {
     const user = userEvent.setup()
     const onModeChange = vi.fn()
     render(<AppShell {...base} mode="delegate" onModeChange={onModeChange} features={{ ...base.features, masterOrchestrator: true }}><div>Master desk</div></AppShell>)
     expect(screen.getAllByRole('button', { name: 'Delegate' })[0]).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByRole('navigation', { name: 'Navigation' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
+    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Master' })).toBeInTheDocument()
+    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Tasks' })).toBeInTheDocument()
+    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Archive' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Tools')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Active project:/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Account actions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Toggle sidebar' })).toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Work' })[0])
     expect(onModeChange).toHaveBeenCalledWith('work')
+  })
+
+  it('opens the same focus-managed drawer for Delegate on small screens', async () => {
+    const user = userEvent.setup()
+    render(<AppShell {...base} mode="delegate" features={{ ...base.features, masterOrchestrator: true }}><div>Master desk</div></AppShell>)
+    const mobile = document.querySelector('.delegate-mobile-topbar') as HTMLElement
+    await user.click(within(mobile).getByRole('button', { name: 'Menu' }))
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('aria-label', 'Close menu'))
+    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(document.activeElement).toBe(within(mobile).getByRole('button', { name: 'Menu' })))
   })
 
   it('does not expose Delegate while Master is disabled', () => {
