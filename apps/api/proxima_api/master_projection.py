@@ -13,10 +13,16 @@ import sqlite3
 from typing import Any, Mapping
 
 from .event_types import MASTER_PROJECTION_EVENT_TYPES
+from .event_payloads import (
+    MAX_DURABLE_EVENT_PAYLOAD_BYTES,
+    encode_bounded_event_payload,
+)
+from .master_persistence import canonical_job_payload
+from .run_projection import effective_job_status_sql
 from . import master_focus
 
 log = logging.getLogger("proxima.master_projection")
-MAX_PROJECTION_PAYLOAD_BYTES = 16 * 1024
+MAX_PROJECTION_PAYLOAD_BYTES = MAX_DURABLE_EVENT_PAYLOAD_BYTES
 _SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
 _BASE_PAYLOAD_FIELDS = {
     "event_id",
@@ -450,6 +456,8 @@ class MasterProjectionService:
         payload: dict[str, Any],
         task_id: int | None = None,
         origin_message_id: int | None = None,
+        connection: sqlite3.Connection | None = None,
+        notify_sessions: set[int] | None = None,
     ) -> dict[str, Any]:
         if projection_type not in MASTER_PROJECTION_EVENT_TYPES:
             raise ValueError(f"unknown Master projection type {projection_type!r}")
@@ -457,11 +465,17 @@ class MasterProjectionService:
             raise ValueError(
                 f"{projection_type!r} cannot project {source_table!r}"
             )
-        conn = self.conn
+        conn = connection or self.conn
+        owns_transaction = not conn.in_transaction
+        if not owns_transaction and notify_sessions is None:
+            raise ValueError(
+                "transactional Master projection requires deferred notifications"
+            )
         created = False
         event_id: int | None = None
         with self.app.state.db_lock:
-            conn.execute("BEGIN IMMEDIATE")
+            if owns_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             try:
                 session = conn.execute(
                     "SELECT owner_user_id, mode, project_id FROM sessions "
@@ -483,13 +497,10 @@ class MasterProjectionService:
                     raise ValueError(
                         "Master projection message is not canonical"
                     )
-                encoded_payload = json.dumps(
+                encode_bounded_event_payload(
                     payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                if len(encoded_payload) > MAX_PROJECTION_PAYLOAD_BYTES:
-                    raise ValueError("Master projection payload is too large")
+                    max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
+                )
                 try:
                     cursor = conn.execute(
                         "INSERT INTO master_projections("
@@ -529,7 +540,8 @@ class MasterProjectionService:
                         raise ValueError(
                             "existing Master projection is incomplete"
                         )
-                    conn.execute("COMMIT")
+                    if owns_transaction:
+                        conn.execute("COMMIT")
                     return dict(row)
 
                 projection_id = _as_int(cursor.lastrowid)
@@ -621,25 +633,18 @@ class MasterProjectionService:
                         payload.get("container_id"),
                         projection_id,
                         projection_type,
-                        json.dumps(
+                        encode_bounded_event_payload(
                             event_payload,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
+                            max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
                         ),
                     ),
                 )
                 event_id = _as_int(event_cursor.lastrowid)
                 event_payload["event_id"] = event_id
-                final_payload_json = json.dumps(
+                final_payload_json = encode_bounded_event_payload(
                     event_payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                    max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
                 )
-                if (
-                    len(final_payload_json.encode("utf-8"))
-                    > MAX_PROJECTION_PAYLOAD_BYTES
-                ):
-                    raise ValueError("Master projection event payload is too large")
                 conn.execute(
                     "UPDATE events SET payload = ? WHERE id = ?",
                     (final_payload_json, event_id),
@@ -658,14 +663,19 @@ class MasterProjectionService:
                     "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (master_session_id,),
                 )
-                conn.execute("COMMIT")
+                if owns_transaction:
+                    conn.execute("COMMIT")
                 created = True
             except Exception:
-                if conn.in_transaction:
+                if owns_transaction and conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
         if created and event_id is not None:
-            self.app.state.hub.notify(master_session_id)
+            if owns_transaction:
+                self.app.state.hub.notify(master_session_id)
+            else:
+                assert notify_sessions is not None
+                notify_sessions.add(master_session_id)
         row = conn.execute(
             "SELECT * FROM master_projections WHERE owner_user_id = ? "
             "AND projection_key = ?",
@@ -673,8 +683,14 @@ class MasterProjectionService:
         ).fetchone()
         return dict(row) if row else {}
 
-    def _task(self, job_id: int) -> sqlite3.Row | None:
-        return self.conn.execute(
+    def _task(
+        self,
+        job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> sqlite3.Row | None:
+        conn = connection or self.conn
+        return conn.execute(
             "SELECT j.*, ms.owner_user_id AS master_owner_user_id, "
             "ms.mode AS master_mode, p.name AS container_name, "
             "p.slug AS container_slug, pa.kind AS area_kind, "
@@ -693,11 +709,23 @@ class MasterProjectionService:
             (job_id,),
         ).fetchone()
 
-    def project_task(self, job_id: int) -> dict[str, Any] | None:
-        job = self._task(job_id)
+    def project_task(
+        self,
+        job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
+        notify_sessions: set[int] | None = None,
+    ) -> dict[str, Any] | None:
+        conn = connection or self.conn
+        job = self._task(job_id, connection=conn)
         if job is None:
             return None
-        status = str(job["status"])
+        status = str(
+            canonical_job_payload(
+                dict(job),
+                connection=conn,
+            )["run_projection"]["status"]
+        )
         reason = str(job["blocked_reason"] or "").strip()
         projection_type: str
         verb: str
@@ -731,7 +759,7 @@ class MasterProjectionService:
 
         checkpoint = None
         if status == "review":
-            checkpoint = self.conn.execute(
+            checkpoint = conn.execute(
                 "SELECT id FROM job_checkpoints WHERE job_id = ? "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
                 (job_id,),
@@ -765,6 +793,8 @@ class MasterProjectionService:
             task_id=job_id,
             content=content,
             payload=payload,
+            connection=conn,
+            notify_sessions=notify_sessions,
         )
 
     def project_satpam(self, intervention_id: int) -> dict[str, Any] | None:
@@ -1024,22 +1054,32 @@ class MasterProjectionService:
         before = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
+        effective_status = effective_job_status_sql("j")
         jobs = self.conn.execute(
-            "WITH candidate AS ("
+            "WITH effective AS ("
+            "  SELECT j.*, "
+            f"    {effective_status} AS effective_status "
+            "  FROM jobs j"
+            "), candidate AS ("
             "  SELECT j.id AS source_id, "
             "    COALESCE(j.updated_at, j.created_at) AS ordering, "
             "    CASE "
-            "      WHEN j.status = 'running' THEN 'master.task.started' "
-            "      WHEN j.status = 'done' THEN 'master.task.completed' "
-            "      WHEN j.status = 'failed' THEN 'master.task.failed' "
-            "      WHEN j.status = 'cancelled' THEN 'master.task.cancelled' "
-            "      WHEN j.status = 'review' THEN 'master.task.review_ready' "
-            "      WHEN j.status = 'queued' "
+            "      WHEN j.effective_status = 'running' "
+            "        THEN 'master.task.started' "
+            "      WHEN j.effective_status = 'done' "
+            "        THEN 'master.task.completed' "
+            "      WHEN j.effective_status = 'failed' "
+            "        THEN 'master.task.failed' "
+            "      WHEN j.effective_status = 'cancelled' "
+            "        THEN 'master.task.cancelled' "
+            "      WHEN j.effective_status = 'review' "
+            "        THEN 'master.task.review_ready' "
+            "      WHEN j.effective_status = 'queued' "
             "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
             "        THEN 'master.task.blocked' "
             "      ELSE NULL "
             "    END AS expected_type "
-            "  FROM jobs j JOIN sessions ms "
+            "  FROM effective j JOIN sessions ms "
             "    ON ms.id = j.origin_master_session_id "
             "  WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id"
             ") "

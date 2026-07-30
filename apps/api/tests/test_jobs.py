@@ -111,6 +111,30 @@ def test_jobs_list_filter_and_approve(tmp_path):
     assert approved["status"] == "done"
 
 
+def test_jobs_list_filters_by_effective_status(tmp_path):
+    app = _app(tmp_path)
+    client = _client(app)
+    job = client.post(
+        "/api/jobs",
+        json={"input": {"brief": "surface the failed step"}},
+    ).json()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', "
+        "steps_state = json_set(steps_state, '$[0].status', 'failed') "
+        "WHERE id = ?",
+        (job["id"],),
+    )
+
+    failed = client.get("/api/jobs?status=failed").json()
+    review = client.get("/api/jobs?status=review").json()
+
+    assert [item["id"] for item in failed["items"]] == [job["id"]]
+    assert failed["items"][0]["run_projection"]["status"] == "failed"
+    assert failed["total"] == 1
+    assert review["items"] == []
+    assert review["total"] == 0
+
+
 def test_final_approval_rolls_back_when_task_invalidation_cannot_commit(
     tmp_path, monkeypatch
 ):

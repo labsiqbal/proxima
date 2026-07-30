@@ -108,15 +108,27 @@ and its Task is promoted to running in the same transaction as the run claim.
 `jobs` remains lifecycle truth, but owner actions can change it while no worker run
 is active. Review approval/rejection and checkpoint restore append a durable
 `job.update` to the Task session inside the same database transaction as the state
-change. Mounted Task detail subscribes to that shared invalidation event; running
-polling is not the authority for externally mutable states.
+change. Review completion/failure writes the corresponding Master message, event,
+and projection ledger in that transaction as well. Task and Master stream
+notifications fire only after commit. Mounted Task detail subscribes to the shared
+invalidation event; running polling is not the authority for externally mutable
+states.
 
 Checkpoint restore also appends its audit record and, for a Master-origin Task, one
 human-readable `master.task.recovered` history message/event in the restore
 transaction. It records actor, checkpoint, prior/new status, discarded progress,
-and conflicts. A failure to append the invalidation or recovery history rolls back
-the database state transition, so Task, Fleet, and history cannot commit
+and conflicts through bounded server-owned summaries rather than arbitrary graph
+identifiers. All validation and durable writes complete before a job worktree reset.
+A post-reset failure compensates to the original worktree commit and rolls back the
+database transaction, so Task, Fleet, history, and the worktree cannot commit
 contradictory states.
+
+`scripts/verify_task_reconciliation_browser.py` exercises mounted review approval,
+mounted checkpoint restore, and durable recovery history in Chromium. Its three
+after screenshots are mandatory and retained under
+`/tmp/no-mistakes-evidence/task-reconciliation` unless an explicit evidence
+directory is configured. Database, workspace, runner profile, and browser profile
+state use a system temporary directory that is removed on interruption.
 
 ## Adding another caller
 

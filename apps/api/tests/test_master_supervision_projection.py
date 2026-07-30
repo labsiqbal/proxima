@@ -400,6 +400,61 @@ def test_task_lifecycle_review_checkpoint_and_sse_replay_are_exactly_once(
     )
 
 
+def test_final_approval_rolls_back_task_and_projection_together(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="approval-rollback",
+        tasks=[
+            {
+                "key": "task",
+                "title": "Atomic approval",
+                "brief": "Complete atomically",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', "
+        "steps_state = json_set(steps_state, '$[0].status', 'done') "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    app.state.db.execute(
+        "CREATE TRIGGER reject_atomic_completion "
+        "BEFORE INSERT ON events "
+        "WHEN NEW.type = 'master.task.completed' "
+        "BEGIN SELECT RAISE(ABORT, 'completion projection rejected'); END"
+    )
+    notifications: list[int] = []
+    monkeypatch.setattr(app.state.hub, "notify", notifications.append)
+
+    with pytest.raises(sqlite3.IntegrityError, match="projection rejected"):
+        client.post(f"/api/jobs/{job_id}/approve")
+
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["status"] == "review"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
+        "AND json_extract(payload, '$.job_id') = ? "
+        "AND json_extract(payload, '$.mutation') = 'review_approved'",
+        (job_id,),
+    ).fetchone()[0] == 0
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE task_id = ? AND projection_type = 'master.task.completed'",
+        (job_id,),
+    ).fetchone()[0] == 0
+    assert notifications == []
+
+
 def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
     tmp_path: Path,
 ):
@@ -425,7 +480,7 @@ def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
     profile = app.state.db.execute(
         "SELECT id, runner_id FROM profiles WHERE is_default = 1"
     ).fetchone()
-    discarded_run_id = app.state.db.execute(
+    app.state.db.execute(
         "INSERT INTO runs("
         "session_id, project_id, user_id, profile_id, runner_id, status, prompt, kind"
         ") VALUES (?, ?, 1, ?, ?, 'failed', 'discarded recovery progress', 'job')",
@@ -443,6 +498,12 @@ def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
         "WHERE id = ?",
         (job_id,),
     )
+    oversized_node_id = "untrusted-node-" + ("x" * 20_000)
+    app.state.db.execute(
+        "INSERT INTO node_states(job_id, node_id, status) "
+        "VALUES (?, ?, 'failed')",
+        (job_id, oversized_node_id),
+    )
     app.state.master_projection.project_task(job_id)
 
     response = client.post(
@@ -456,7 +517,14 @@ def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
     assert recovery["checkpoint_id"] == checkpoint["id"]
     assert recovery["prior_status"] == "failed"
     assert recovery["restored_status"] == "queued"
-    assert any(str(discarded_run_id) in item for item in recovery["discarded_progress"])
+    assert any(
+        item.startswith("1 run created")
+        for item in recovery["discarded_progress"]
+    )
+    assert any(
+        item.startswith("1 Recipe node progress record changed")
+        for item in recovery["discarded_progress"]
+    )
     assert recovery["conflicting_progress"] == []
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "queued"
     fleet_job = next(
@@ -494,6 +562,8 @@ def test_checkpoint_restore_atomically_reconciles_task_fleet_and_history(
     assert recovery_event["payload"]["discarded_progress"] == recovery[
         "discarded_progress"
     ]
+    assert oversized_node_id not in json.dumps(recovery_event)
+    assert len(json.dumps(recovery_event["payload"]).encode("utf-8")) < 16 * 1024
     messages = client.get(
         f"/api/sessions/{desk['session']['id']}/messages"
     ).json()["messages"]

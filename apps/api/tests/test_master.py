@@ -10,7 +10,11 @@ from fastapi.testclient import TestClient
 
 from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
 from proxima_api.run_prompting import RunPrompting
-from proxima_api.job_checkpoints import create_checkpoint, restore_checkpoint
+from proxima_api.job_checkpoints import (
+    CheckpointError,
+    create_checkpoint,
+    restore_checkpoint,
+)
 from proxima_api.main import create_app
 from proxima_api import app_settings, turn_restore
 from proxima_api import master_focus
@@ -782,6 +786,22 @@ def test_master_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path
     assert job["engine"] == "graph"
     assert job["origin_master_session_id"] == desk["session"]["id"]
     assert app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints WHERE job_id = ?", (job["id"],)).fetchone()[0] == 1
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review' WHERE id = ?",
+        (job["id"],),
+    )
+    app.state.db.execute(
+        "UPDATE node_states SET status = 'failed' WHERE job_id = ?",
+        (job["id"],),
+    )
+    fleet_job = next(
+        item
+        for item in client.get("/api/master/desk").json()["jobs"]
+        if item["id"] == job["id"]
+    )
+    assert fleet_job["run_projection"]["status"] == "failed"
+    projection = app.state.master_projection.project_task(job["id"])
+    assert projection["projection_type"] == "master.task.failed"
 
 
 def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: Path):
@@ -867,6 +887,165 @@ def test_master_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path:
 
     assert restored["git_restored"] == [str(worktree)]
     assert (worktree / "state.txt").read_text() == "before\n"
+
+
+def test_checkpoint_restore_compensates_after_post_reset_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from proxima_api import job_checkpoints
+
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    root = Path(project["path"])
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "owner@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.name", "Owner"],
+        check=True,
+    )
+    (root / "state.txt").write_text("before\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "before"], check=True)
+    areas = client.post(f"/api/projects/{project['slug']}/areas/detect").json()
+    job = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        {
+            "tasks": [{
+                "title": "Compensated repo work",
+                "brief": "Change the repo",
+                "project_slug": project["slug"],
+                "target_area_id": areas["code_areas"][0]["id"],
+            }],
+        },
+    )["result"]["jobs"][0]
+    checkpoint = app.state.db.execute(
+        "SELECT id, git_refs_json FROM job_checkpoints WHERE job_id = ?",
+        (job["id"],),
+    ).fetchone()
+    worktree = Path(json.loads(checkpoint["git_refs_json"])[0]["worktree_path"])
+    (worktree / "state.txt").write_text("after\n")
+    subprocess.run(["git", "-C", str(worktree), "add", "state.txt"], check=True)
+    subprocess.run(["git", "-C", str(worktree), "commit", "-qm", "after"], check=True)
+    after_head = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed' WHERE id = ?",
+        (job["id"],),
+    )
+    reset = job_checkpoints._reset_git
+
+    def fail_after_reset(plan):
+        reset(plan)
+        raise CheckpointError("injected post-reset failure")
+
+    monkeypatch.setattr(job_checkpoints, "_reset_git", fail_after_reset)
+
+    with pytest.raises(CheckpointError, match="injected post-reset failure"):
+        restore_checkpoint(
+            app.state.db,
+            checkpoint["id"],
+            confirmed=True,
+        )
+
+    assert subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip() == after_head
+    assert (worktree / "state.txt").read_text() == "after\n"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job["id"],),
+    ).fetchone()["status"] == "failed"
+
+
+def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from proxima_api import job_checkpoints
+
+    app, client = _client(tmp_path)
+    desk = client.get("/api/master/desk").json()
+    project = client.get("/api/projects").json()["projects"][0]
+    job = execute_tool(
+        app.state.db,
+        app,
+        {"id": 1},
+        desk["session"]["id"],
+        "dispatch_jobs",
+        {
+            "start": False,
+            "tasks": [{
+                "title": "Validate before reset",
+                "brief": "Keep destructive restore safe",
+                "project_slug": project["slug"],
+            }],
+        },
+    )["result"]["jobs"][0]
+    checkpoint = create_checkpoint(app.state.db, job["id"])
+    fake_worktree = tmp_path / "fake-worktree"
+    fake_worktree.mkdir()
+    app.state.db.execute(
+        "UPDATE job_checkpoints SET git_refs_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                [{
+                    "restore_strategy": "worktree_reset",
+                    "worktree_path": str(fake_worktree),
+                    "sha": "checkpoint",
+                }]
+            ),
+            checkpoint["id"],
+        ),
+    )
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed' WHERE id = ?",
+        (job["id"],),
+    )
+    reset_called = False
+    monkeypatch.setattr(
+        job_checkpoints,
+        "_preflight_git",
+        lambda _ref: (fake_worktree, "checkpoint", "current"),
+    )
+
+    def reset(_plan):
+        nonlocal reset_called
+        reset_called = True
+
+    monkeypatch.setattr(job_checkpoints, "_reset_git", reset)
+
+    def reject_recovery(_conn, _recovery):
+        raise RuntimeError("recovery projection rejected")
+
+    with pytest.raises(RuntimeError, match="projection rejected"):
+        restore_checkpoint(
+            app.state.db,
+            checkpoint["id"],
+            confirmed=True,
+            on_restore=reject_recovery,
+        )
+
+    assert reset_called is False
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?",
+        (job["id"],),
+    ).fetchone()["status"] == "failed"
 
 
 def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):

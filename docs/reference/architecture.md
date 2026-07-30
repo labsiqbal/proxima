@@ -346,7 +346,9 @@ Job API payloads also normalize stored `*_at` values to UTC-aware ISO and attach
 `run_projection` containing effective status, start, finish, and duration. A failed
 child overrides a nonterminal review parent for presentation without rewriting the
 durable recovery state. Workflows, Tasks, Attention, Task detail, and expanded nodes
-therefore read one lifecycle contract.
+therefore read one lifecycle contract. The canonical payload boundary hydrates
+linear steps or graph node state directly from the database, and Activity status
+filters use the same effective-state rule as the returned badges.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the

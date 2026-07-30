@@ -8,6 +8,25 @@ from typing import Any
 _TERMINAL_STATUSES = {"done", "failed", "cancelled"}
 
 
+def effective_job_status_sql(table_alias: str = "jobs") -> str:
+    if not table_alias.replace("_", "").isalnum():
+        raise ValueError("invalid jobs table alias")
+    return (
+        "CASE WHEN "
+        f"{table_alias}.status NOT IN ('done', 'failed', 'cancelled') "
+        "AND ("
+        "EXISTS(SELECT 1 FROM node_states "
+        f"WHERE node_states.job_id = {table_alias}.id "
+        "AND node_states.status = 'failed') "
+        "OR EXISTS(SELECT 1 FROM json_each("
+        "CASE WHEN json_valid("
+        f"COALESCE({table_alias}.steps_state, '[]')) "
+        f"THEN COALESCE({table_alias}.steps_state, '[]') ELSE '[]' END"
+        ") WHERE json_extract(json_each.value, '$.status') = 'failed')"
+        f") THEN 'failed' ELSE {table_alias}.status END"
+    )
+
+
 def api_timestamp(value: Any) -> Any:
     """Return a valid stored timestamp as a timezone-aware UTC ISO string."""
     if not isinstance(value, str) or not value.strip():

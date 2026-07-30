@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
-import json
+import re
 import sqlite3
 from typing import Any
 
 from . import master_focus
+from .event_payloads import encode_bounded_event_payload
+
+
+_ACTOR_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+_DISCARDED_LABELS = (
+    re.compile(r"^[1-9][0-9]* runs? created after the checkpoint$"),
+    re.compile(r"^Task step progress changed after the checkpoint$"),
+    re.compile(
+        r"^[1-9][0-9]* Recipe node progress records? changed after the checkpoint$"
+    ),
+    re.compile(r"^[1-9][0-9]* Task worktrees? reset to the checkpoint$"),
+)
+_CONFLICT_LABEL = re.compile(
+    r"^Task #[1-9][0-9]* \((queued|running|review|done|failed|cancelled)\)$"
+)
+_JOB_STATUSES = {"queued", "running", "review", "done", "failed", "cancelled"}
+_MAX_RECOVERY_ITEMS = 4
 
 
 def _as_int(value: Any) -> int:
@@ -53,10 +70,68 @@ def append_task_update(
             session_id,
             job["project_id"],
             _next_session_seq(conn, session_id),
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encode_bounded_event_payload(payload),
         ),
     )
     return {"session_id": session_id, "event_id": _as_int(cursor.lastrowid)}
+
+
+def _safe_recovery_items(
+    value: Any,
+    *,
+    patterns: tuple[re.Pattern[str], ...],
+    fallback: str,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    rejected = 0
+    for item in value[:_MAX_RECOVERY_ITEMS]:
+        text = str(item)
+        if len(text) <= 160 and any(pattern.fullmatch(text) for pattern in patterns):
+            result.append(text)
+        else:
+            rejected += 1
+    omitted = max(0, len(value) - _MAX_RECOVERY_ITEMS)
+    if rejected:
+        result.append(f"{rejected} {fallback}")
+    if omitted:
+        result.append(f"{omitted} additional recovery records omitted")
+    return result
+
+
+def _bounded_recovery(recovery: dict[str, Any]) -> dict[str, Any]:
+    actor = recovery.get("actor")
+    actor_id = actor.get("id") if isinstance(actor, dict) else None
+    try:
+        actor_id = _as_int(actor_id) if actor_id is not None else None
+    except (TypeError, ValueError, OverflowError):
+        actor_id = None
+    username = str(actor.get("username") or "") if isinstance(actor, dict) else ""
+    if not _ACTOR_LABEL.fullmatch(username):
+        username = "local-owner"
+
+    prior_status = str(recovery.get("prior_status") or "").lower()
+    restored_status = str(recovery.get("restored_status") or "").lower()
+    if prior_status not in _JOB_STATUSES or restored_status not in _JOB_STATUSES:
+        raise ValueError("checkpoint recovery status is invalid")
+    return {
+        "job_id": _as_int(recovery["job_id"]),
+        "checkpoint_id": _as_int(recovery["checkpoint_id"]),
+        "actor": {"id": actor_id, "username": username},
+        "prior_status": prior_status,
+        "restored_status": restored_status,
+        "discarded_progress": _safe_recovery_items(
+            recovery.get("discarded_progress"),
+            patterns=_DISCARDED_LABELS,
+            fallback="additional discarded progress records",
+        ),
+        "conflicting_progress": _safe_recovery_items(
+            recovery.get("conflicting_progress"),
+            patterns=(_CONFLICT_LABEL,),
+            fallback="additional conflicting progress records",
+        ),
+    }
 
 
 def _recovery_content(recovery: dict[str, Any]) -> str:
@@ -91,7 +166,8 @@ def append_master_recovery(
     recovery: dict[str, Any],
 ) -> dict[str, int] | None:
     """Append one human-readable Master recovery message and SSE event."""
-    job_id = _as_int(recovery["job_id"])
+    safe_recovery = _bounded_recovery(recovery)
+    job_id = _as_int(safe_recovery["job_id"])
     row = conn.execute(
         "SELECT j.origin_master_session_id, j.project_id, j.target_area_id, "
         "p.slug AS container_slug, d.origin_focus_epoch_id, "
@@ -115,7 +191,7 @@ def append_master_recovery(
     ):
         raise ValueError("recovery Master Focus origin is unavailable")
 
-    content = _recovery_content(recovery)
+    content = _recovery_content(safe_recovery)
     message = conn.execute(
         "INSERT INTO messages(session_id, role, content, author) "
         "VALUES (?, 'assistant', ?, 'Master')",
@@ -140,16 +216,16 @@ def append_master_recovery(
     payload = {
         "message_id": message_id,
         "task_id": job_id,
-        "task_status": recovery["restored_status"],
+        "task_status": safe_recovery["restored_status"],
         "container_id": row["project_id"],
         "container_slug": row["container_slug"],
         "area_id": row["target_area_id"],
-        "checkpoint_id": recovery["checkpoint_id"],
-        "actor": recovery["actor"],
-        "prior_status": recovery["prior_status"],
-        "restored_status": recovery["restored_status"],
-        "discarded_progress": recovery["discarded_progress"],
-        "conflicting_progress": recovery["conflicting_progress"],
+        "checkpoint_id": safe_recovery["checkpoint_id"],
+        "actor": safe_recovery["actor"],
+        "prior_status": safe_recovery["prior_status"],
+        "restored_status": safe_recovery["restored_status"],
+        "discarded_progress": safe_recovery["discarded_progress"],
+        "conflicting_progress": safe_recovery["conflicting_progress"],
         "focus_epoch_id": row["origin_focus_epoch_id"],
         "focus_container_id": focus_container_id,
         "subject_container_id": row["project_id"],
@@ -161,7 +237,7 @@ def append_master_recovery(
             master_session_id,
             row["project_id"],
             _next_session_seq(conn, master_session_id),
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encode_bounded_event_payload(payload),
         ),
     )
     event_id = _as_int(event.lastrowid)

@@ -663,7 +663,45 @@ def master_identity_rows(
     return profile, session
 
 
-def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _authoritative_run_payload(
+    conn: sqlite3.Connection,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        job_id = int(payload.get("id"))
+    except (TypeError, ValueError, OverflowError):
+        return dict(payload)
+    row = conn.execute(
+        "SELECT status, created_at, started_at, finished_at, steps_state, engine "
+        "FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        return dict(payload)
+    authoritative = {**payload, **dict(row)}
+    try:
+        authoritative["steps_state"] = json.loads(
+            authoritative.get("steps_state") or "[]"
+        )
+    except (TypeError, json.JSONDecodeError):
+        authoritative["steps_state"] = []
+    if authoritative.get("engine") == "graph":
+        authoritative["node_states"] = [
+            dict(state)
+            for state in conn.execute(
+                "SELECT status, started_at, finished_at FROM node_states "
+                "WHERE job_id = ? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+        ]
+    return canonicalize_api_timestamps(authoritative)
+
+
+def canonical_job_payload(
+    payload: Mapping[str, Any],
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
     """Normalize the ownership, timestamp, and run projection of one job payload.
 
     Job input is user-extensible domain data. Its legacy ownership keys are
@@ -686,5 +724,10 @@ def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if master_origin is not None and isinstance(normalized.get("input"), dict):
         normalized["input"] = canonicalize_master_payload(normalized["input"])
     normalized = canonicalize_api_timestamps(normalized)
-    normalized["run_projection"] = project_job_run(normalized)
+    projection_payload = (
+        _authoritative_run_payload(connection, normalized)
+        if connection is not None
+        else normalized
+    )
+    normalized["run_projection"] = project_job_run(projection_payload)
     return normalized

@@ -219,10 +219,12 @@ def _worktree_restore_target(ref: dict[str, Any]) -> tuple[Path, str] | None:
     return (path, sha) if path.is_dir() and sha else None
 
 
-def _preflight_git(ref: dict[str, Any]) -> None:
+def _preflight_git(
+    ref: dict[str, Any],
+) -> tuple[Path, str, str] | None:
     target = _worktree_restore_target(ref)
     if not target:
-        return
+        return None
     path, sha = target
     try:
         dirty = subprocess.run(
@@ -241,17 +243,51 @@ def _preflight_git(ref: dict[str, Any]) -> None:
             capture_output=True,
             timeout=10,
         )
+        original_sha = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout.strip()
+        if not original_sha:
+            raise CheckpointError(f"repository has no restorable HEAD: {path}")
+        return path, sha, original_sha
     except CheckpointError:
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         raise CheckpointError(f"could not validate git ref for {path}: {exc}") from exc
 
 
-def _reset_git(ref: dict[str, Any]) -> str | None:
-    target = _worktree_restore_target(ref)
-    if not target:
-        return None
-    path, sha = target
+def _verify_git_restore_plan(plan: tuple[Path, str, str]) -> None:
+    path, _sha, original_sha = plan
+    try:
+        dirty = subprocess.run(
+            ["git", "-C", str(path), "status", "--porcelain"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout.strip()
+        current_sha = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout.strip()
+        if dirty or current_sha != original_sha:
+            raise CheckpointError(
+                f"repository changed during checkpoint restore: {path}"
+            )
+    except CheckpointError:
+        raise
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CheckpointError(f"could not revalidate git ref for {path}: {exc}") from exc
+
+
+def _reset_git(plan: tuple[Path, str, str]) -> str:
+    path, sha, _original_sha = plan
     try:
         subprocess.run(
             ["git", "-C", str(path), "reset", "--hard", sha],
@@ -263,6 +299,22 @@ def _reset_git(ref: dict[str, Any]) -> str | None:
         return str(path)
     except (OSError, subprocess.SubprocessError) as exc:
         raise CheckpointError(f"could not restore git ref for {path}: {exc}") from exc
+
+
+def _compensate_git(plan: tuple[Path, str, str]) -> None:
+    path, _sha, original_sha = plan
+    try:
+        subprocess.run(
+            ["git", "-C", str(path), "reset", "--hard", original_sha],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CheckpointError(
+            f"could not compensate checkpoint restore for {path}: {exc}"
+        ) from exc
 
 
 def restore_checkpoint(
@@ -299,11 +351,15 @@ def restore_checkpoint(
         str(item.get("node_id")): item
         for item in snapshot.get("node_states") or []
     }
-    for ref in checkpoint["git_refs"]:
-        _preflight_git(ref)
+    git_restore_plans = [
+        plan
+        for ref in checkpoint["git_refs"]
+        if (plan := _preflight_git(ref)) is not None
+    ]
     job = snapshot.get("job") or {}
     values = [job.get(field) for field in RESTORABLE_JOB_FIELDS]
     assignments = ", ".join(f"{field} = ?" for field in RESTORABLE_JOB_FIELDS)
+    attempted_plans: list[tuple[Path, str, str]] = []
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute(
@@ -317,21 +373,26 @@ def restore_checkpoint(
         ).fetchall()]
         current_run_ids = [item["id"] for item in current_runs]
         remove_ids = [run_id for run_id in current_run_ids if run_id not in checkpoint_run_ids]
-        discarded_progress = [
-            f"Run #{item['id']} ({item['status']}) created after the checkpoint"
-            for item in current_runs
-            if item["id"] in remove_ids
-        ]
+        discarded_progress = []
+        if remove_ids:
+            label = "run" if len(remove_ids) == 1 else "runs"
+            discarded_progress.append(
+                f"{len(remove_ids)} {label} created after the checkpoint"
+            )
         if current_job.get("steps_state") != job.get("steps_state"):
             discarded_progress.append("Task step progress changed after the checkpoint")
+        changed_nodes = 0
         for node_id in sorted(set(current_nodes) | set(checkpoint_nodes)):
             current_status = (current_nodes.get(node_id) or {}).get("status")
             checkpoint_status = (checkpoint_nodes.get(node_id) or {}).get("status")
             if current_status != checkpoint_status:
-                discarded_progress.append(
-                    f"Node {node_id} progress {current_status or 'absent'} "
-                    f"replaced by {checkpoint_status or 'absent'}"
-                )
+                changed_nodes += 1
+        if changed_nodes:
+            label = "record" if changed_nodes == 1 else "records"
+            discarded_progress.append(
+                f"{changed_nodes} Recipe node progress {label} "
+                "changed after the checkpoint"
+            )
         if remove_ids:
             conn.executemany("DELETE FROM runs WHERE id = ?", ((run_id,) for run_id in remove_ids))
         conn.execute("DELETE FROM node_states WHERE job_id = ?", (checkpoint["job_id"],))
@@ -345,11 +406,12 @@ def restore_checkpoint(
                 f"INSERT INTO node_states({','.join(node_fields)}) VALUES ({','.join('?' for _ in node_fields)})",
                 tuple(node.get(field) for field in node_fields),
             )
-        git_restored = [path for ref in checkpoint["git_refs"] if (path := _reset_git(ref))]
-        discarded_progress.extend(
-            "Task worktree progress was reset to the checkpoint"
-            for _path in git_restored
-        )
+        git_restored = [str(plan[0]) for plan in git_restore_plans]
+        if git_restored:
+            label = "worktree" if len(git_restored) == 1 else "worktrees"
+            discarded_progress.append(
+                f"{len(git_restored)} Task {label} reset to the checkpoint"
+            )
         recovery = {
             "job_id": checkpoint["job_id"],
             "checkpoint_id": checkpoint_id,
@@ -364,10 +426,34 @@ def restore_checkpoint(
         }
         if on_restore is not None:
             on_restore(conn, recovery)
+        for plan in git_restore_plans:
+            _verify_git_restore_plan(plan)
+        for plan in git_restore_plans:
+            attempted_plans.append(plan)
+            _reset_git(plan)
         conn.execute("COMMIT")
-    except Exception:
+    except Exception as exc:
+        rollback_error: Exception | None = None
         if conn.in_transaction:
-            conn.execute("ROLLBACK")
+            try:
+                conn.execute("ROLLBACK")
+            except Exception as error:
+                rollback_error = error
+        compensation_errors: list[str] = []
+        for plan in reversed(attempted_plans):
+            try:
+                _compensate_git(plan)
+            except CheckpointError as compensation_error:
+                compensation_errors.append(str(compensation_error))
+        if compensation_errors:
+            raise CheckpointError(
+                "checkpoint restore failed and worktree compensation failed: "
+                + "; ".join(compensation_errors)
+            ) from exc
+        if rollback_error is not None:
+            raise CheckpointError(
+                f"checkpoint restore database rollback failed: {rollback_error}"
+            ) from exc
         raise
     return {
         "restored": impact["database_scope"],

@@ -9,6 +9,8 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -20,6 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = ROOT / "apps" / "api"
 WEB_ROOT = ROOT / "apps" / "web"
 PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+DEFAULT_SCREENSHOT_ROOT = Path(
+    "/tmp/no-mistakes-evidence/task-reconciliation"
+)
+SCREENSHOT_NAMES = (
+    "after-attention-approval-done.png",
+    "after-checkpoint-restore-queued.png",
+    "after-checkpoint-recovery-history.png",
+)
 sys.path.insert(0, str(API_ROOT))
 sys.path.insert(0, str(PROBE_ROOT))
 
@@ -154,24 +164,32 @@ def _scenario(name: str, steps: list[dict]) -> dict:
     return {"name": name, "authenticated": True, "steps": steps}
 
 
-def _screenshot_step(root: Path | None, name: str) -> list[dict]:
-    if root is None:
-        return []
+def _screenshot_step(root: Path, name: str) -> list[dict]:
     return [{"action": "screenshot", "path": str(root / name)}]
+
+
+def _screenshot_root() -> Path:
+    configured = os.environ.get(
+        "PROXIMA_TASK_RECONCILIATION_SCREENSHOTS",
+        "",
+    ).strip()
+    root = Path(configured).resolve() if configured else DEFAULT_SCREENSHOT_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@contextmanager
+def _runtime_fixture() -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(
+        prefix="task-reconciliation-browser-",
+    ) as raw_fixture:
+        yield Path(raw_fixture)
 
 
 def main() -> None:
     _build_web()
-    screenshot_value = os.environ.get(
-        "PROXIMA_TASK_RECONCILIATION_SCREENSHOTS", ""
-    ).strip()
-    screenshot_root = Path(screenshot_value).resolve() if screenshot_value else None
-    (ROOT / ".dev").mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="task-reconciliation-browser-",
-        dir=ROOT / ".dev",
-    ) as raw_fixture:
-        fixture = Path(raw_fixture)
+    screenshot_root = _screenshot_root()
+    with _runtime_fixture() as fixture:
         app = create_app(_config(fixture))
         token, review_id, restore_id, checkpoint_id = _seed(app)
         port = _port()
@@ -186,18 +204,20 @@ def main() -> None:
         )
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                with urlopen(f"{base_url}/api/health", timeout=1):
-                    break
-            except Exception:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("disposable server readiness timed out")
-                time.sleep(0.05)
-
-        executable = _browser()
         try:
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    with urlopen(f"{base_url}/api/health", timeout=1):
+                        break
+                except Exception:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            "disposable server readiness timed out"
+                        )
+                    time.sleep(0.05)
+
+            executable = _browser()
             approval = json.loads(
                 run_scenario(
                     executable=executable,
@@ -316,6 +336,19 @@ def main() -> None:
                     drop_prefix=[],
                 )
             )
+            screenshot_paths = [
+                screenshot_root / name for name in SCREENSHOT_NAMES
+            ]
+            missing = [
+                str(path)
+                for path in screenshot_paths
+                if not path.is_file() or path.stat().st_size == 0
+            ]
+            if missing:
+                raise RuntimeError(
+                    "browser screenshot evidence is missing: "
+                    + ", ".join(missing)
+                )
             print(
                 json.dumps(
                     {
@@ -324,6 +357,9 @@ def main() -> None:
                         "approval": approval,
                         "restore_observer": observer,
                         "recovery_history": history,
+                        "screenshots": [
+                            str(path) for path in screenshot_paths
+                        ],
                     },
                     sort_keys=True,
                 )

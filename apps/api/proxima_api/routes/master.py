@@ -205,7 +205,7 @@ def register(app, deps):
         project = db().execute("SELECT slug, name FROM projects WHERE id = ?", (data.get("project_id"),)).fetchone()
         data["project_slug"] = project["slug"] if project else None
         data["project_name"] = project["name"] if project else None
-        return canonical_job_payload(data)
+        return canonical_job_payload(data, connection=db())
 
     @app.get("/api/master/desk")
     def get_master_desk(user: dict[str, Any] = Depends(current_user)):
@@ -660,7 +660,7 @@ def register(app, deps):
             except (TypeError, ValueError):
                 return None
             job = db().execute(
-                "SELECT status, created_at, started_at, finished_at, steps_state, "
+                "SELECT id, status, created_at, started_at, finished_at, steps_state, "
                 "engine FROM jobs WHERE id = ?",
                 (normalized_job_id,),
             ).fetchone()
@@ -677,7 +677,10 @@ def register(app, deps):
                         (normalized_job_id,),
                     ).fetchall()
                 ]
-            return canonical_job_payload(payload)["run_projection"]
+            return canonical_job_payload(
+                payload,
+                connection=db(),
+            )["run_projection"]
 
         items: list[dict[str, Any]] = []
         for row in db().execute(

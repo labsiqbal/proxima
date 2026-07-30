@@ -557,7 +557,10 @@ is evidence only and is never reset; only an existing job worktree is restorable
 Restore commits the job, node/run rollback, Task-session `job.update`, audit metadata,
 and a durable human-readable Master recovery entry together. The entry identifies the
 owner, checkpoint, prior/restored state, discarded progress, and conflicting progress
-without copying worktree paths or Task titles.
+without copying worktree paths, Task titles, or arbitrary graph identifiers. Recovery
+events use the same 16 KiB durable-event encoder as Master projections. All fallible
+database writes and worktree checks finish before reset; a failure after reset restores
+the original worktree commit before the database rollback is returned.
 Normal project Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
@@ -613,7 +616,9 @@ reconnect accepts the existing cursor query and `Last-Event-ID`. No projection c
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 Owner mutations that happen outside a worker run append a transaction-coupled
-`job.update` to the Task session. A mounted Task workspace consumes this one shared
+`job.update` to the Task session. Review completion/failure also writes its durable
+Master projection in that same transaction and defers Task and Master stream
+notifications until commit. A mounted Task workspace consumes this one shared
 invalidation path for review verdicts and checkpoint restore instead of waiting for
 running-only polling.
 

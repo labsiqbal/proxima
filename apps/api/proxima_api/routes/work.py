@@ -28,6 +28,7 @@ from ..task_delegation import (
     new_idempotency_key,
 )
 from ..master_persistence import canonical_job_payload
+from ..run_projection import effective_job_status_sql
 from ..task_state_events import append_task_update
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
@@ -249,7 +250,7 @@ def register(app, deps):
         ).fetchall()
         if dependencies:
             d["dependencies"] = [dict(row) for row in dependencies]
-        return canonical_job_payload(d)
+        return canonical_job_payload(d, connection=db())
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -460,6 +461,7 @@ def register(app, deps):
         safe_limit = max(0, min(_as_int(limit), 200))
         safe_offset = max(0, _as_int(offset))
         status_filter = status or None
+        status_expression = effective_job_status_sql("jobs")
         filters = (
             user["id"], user["id"], 1 if include_archived else 0,
             status_filter, status_filter, workflow_id, workflow_id,
@@ -471,7 +473,7 @@ def register(app, deps):
             "(SELECT id FROM projects WHERE owner_user_id = ?)) "
             "AND COALESCE(engine,'linear') = 'linear' "
             "AND (? = 1 OR archived_at IS NULL) "
-            "AND (? IS NULL OR status = ?) "
+            f"AND (? IS NULL OR {status_expression} = ?) "
             "AND (? IS NULL OR workflow_id = ?) "
             "AND (? IS NULL OR project_id = ?)",
             filters,
@@ -482,7 +484,7 @@ def register(app, deps):
             "(SELECT id FROM projects WHERE owner_user_id = ?)) "
             "AND COALESCE(engine,'linear') = 'linear' "
             "AND (? = 1 OR archived_at IS NULL) "
-            "AND (? IS NULL OR status = ?) "
+            f"AND (? IS NULL OR {status_expression} = ?) "
             "AND (? IS NULL OR workflow_id = ?) "
             "AND (? IS NULL OR project_id = ?) "
             "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
@@ -552,6 +554,7 @@ def register(app, deps):
             inputs = _decode_json(job["input"]) if job["input"] else {}
             prompt = wf.build_step_prompt(steps[nxt], nxt, len(steps), inputs)
             conn = db()
+            notify_sessions: set[int] = set()
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -579,11 +582,24 @@ def register(app, deps):
                         job_id=job_id,
                         mutation="review_approved",
                     )
+                    notify_sessions.add(task_event["session_id"])
+                    projection = getattr(
+                        app.state,
+                        "master_projection",
+                        None,
+                    )
+                    if projection is not None:
+                        projection.project_task(
+                            job_id,
+                            connection=conn,
+                            notify_sessions=notify_sessions,
+                        )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
-            app.state.hub.notify(task_event["session_id"])
+            for session_id in notify_sessions:
+                app.state.hub.notify(session_id)
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
             # Repo job (slice 2, flag-gated): the final approve is the merge
@@ -618,6 +634,7 @@ def register(app, deps):
             # Final review, Task invalidation, and deliverable verdict commit
             # together so every reader observes one lifecycle state.
             conn = db()
+            notify_sessions: set[int] = set()
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -649,11 +666,24 @@ def register(app, deps):
                         job_id=job_id,
                         mutation="review_approved",
                     )
+                    notify_sessions.add(task_event["session_id"])
+                    projection = getattr(
+                        app.state,
+                        "master_projection",
+                        None,
+                    )
+                    if projection is not None:
+                        projection.project_task(
+                            job_id,
+                            connection=conn,
+                            notify_sessions=notify_sessions,
+                        )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
-            app.state.hub.notify(task_event["session_id"])
+            for session_id in notify_sessions:
+                app.state.hub.notify(session_id)
             app.state.task_delegation.prerequisite_changed(
                 job_id, connection=conn
             )
@@ -672,6 +702,7 @@ def register(app, deps):
         # Claim first (this is the review verdict mutex - a concurrent approve
         # and reject cannot both win), tear down after.
         conn = db()
+        notify_sessions: set[int] = set()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -693,11 +724,24 @@ def register(app, deps):
                     job_id=job_id,
                     mutation="review_rejected",
                 )
+                notify_sessions.add(task_event["session_id"])
+                projection = getattr(
+                    app.state,
+                    "master_projection",
+                    None,
+                )
+                if projection is not None:
+                    projection.project_task(
+                        job_id,
+                        connection=conn,
+                        notify_sessions=notify_sessions,
+                    )
                 conn.execute("COMMIT")
             except Exception:
                 _rollback(conn)
                 raise
-        app.state.hub.notify(task_event["session_id"])
+        for session_id in notify_sessions:
+            app.state.hub.notify(session_id)
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.

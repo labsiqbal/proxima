@@ -44,14 +44,20 @@ dependency readiness before accepting a queued legacy run.
 ## Projection boundary
 
 `MasterProjectionService` is the only writer for asynchronous Task and supervision
-messages in the durable Master thread. A confirmed checkpoint restore is the one
-mutation-coupled exception: `task_state_events.py` appends its recovery message and
-event inside the restore transaction so history cannot lag the restored Task. Both
-boundaries read existing authoritative rows:
+messages in the durable Master thread. Review verdict routes can lend it their open
+transaction so the Task state, invalidation, Master message/event/ledger, and
+deferred notifications share one commit boundary. A confirmed checkpoint restore
+uses the mutation-coupled `task_state_events.py` boundary to append its bounded
+recovery message and event inside the restore transaction. Both boundaries read
+existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
 - `attention_items`
 - `satpam_interventions`
+
+Task payload and projection status hydrate their linear steps or graph node state
+at this boundary. A failed child therefore projects Failed even when the durable
+parent remains parked in Review for recovery.
 
 It writes:
 
