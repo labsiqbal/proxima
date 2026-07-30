@@ -1281,23 +1281,29 @@ read/write, raw/preview, file mutation, Archive presence checks, and ArtifactVie
 resolve that target through the same jailed resolver. The resolver rejects a Container
 or Code target when the path belongs to a more specific active Area, and merged tree
 traversal switches to the authoritative Ops or Code target when it enters that Area.
-Artifact scans resolve every discovered absolute path through the same ownership
-boundary, so Ops-at-dot scans preserve nested Code identity instead of forcing Ops.
+Each file-tree child and artifact scan result resolves through the active-root
+realpath jail before the server assigns ownership. Safe symlinks receive the target
+of their resolved authoritative Area; broken and escaping tree entries are omitted.
+Artifact enrichment is per item, so one unsafe scan result does not discard valid
+results. Ops-at-dot scans preserve nested Code identity instead of forcing Ops.
 This keeps direct files at the physical Ops root distinct from same-name Container
 files, including Markdown, images, and PDFs. Session artifact reads, inline chat media,
 Task and Iterate results, Archive Markdown, deletion, and the Design Studio image
 bridge retain that target. Design scenes persist image targets and use them across
-canvas, thumbnail, frame, and export rendering. Merely finding an Ops file does not
-create an Archive record; only established producer/registry flows do.
+canvas, thumbnail, frame, and export rendering. Agent replies cannot introduce or
+replace locator metadata: a prior target survives only when the layer id and image
+source are unchanged, and source changes clear it. Merely finding an Ops file does
+not create an Archive record; only established producer/registry flows do.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
 layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
 and is not stripped or reinterpreted. Targeted previews use the disjoint
-`/api/target-preview` namespace, so relative HTML assets keep the same Area identity
-and traversal cannot fall into legacy path-only preview; Markdown siblings resolve
-from the source document's Area and directory.
+`/api/target-preview` namespace. Targeted HTML runs in an opaque-origin script
+sandbox with a response policy that permits local resources only below its exact
+Area prefix, so arbitrary parent traversal cannot load legacy path-only preview.
+Markdown siblings resolve from the source document's Area and directory.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`

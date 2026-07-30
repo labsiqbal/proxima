@@ -5,6 +5,7 @@ import '@testing-library/jest-dom/vitest'
 
 const mocks = vi.hoisted(() => ({
   fsRead: vi.fn(),
+  fileUrl: vi.fn(),
   listArtifacts: vi.fn(),
   listMessages: vi.fn(),
   polling: new Map<number, () => Promise<unknown>>(),
@@ -17,7 +18,7 @@ vi.mock('../api/fsAdapter', () => ({
 }))
 vi.mock('../api/files', () => ({
   deleteSessionArtifact: vi.fn(),
-  fileUrl: vi.fn((_slug: string, path: string) => `/file/${path}`),
+  fileUrl: (...args: unknown[]) => mocks.fileUrl(...args),
   listSessionArtifacts: (...args: unknown[]) => mocks.listArtifacts(...args),
   retargetFile: (target: object, path: string) => ({ ...target, path }),
 }))
@@ -41,7 +42,18 @@ vi.mock('../hooks/useEventStream', () => ({
   useEventStream: vi.fn(),
 }))
 vi.mock('../components/design/MiniPreview', () => ({
-  MiniPreview: () => null,
+  MiniPreview: ({
+    art,
+    resolveSrc,
+  }: {
+    art?: { layers?: Array<{ src?: string; target?: unknown }> }
+    resolveSrc: (src: string, target?: unknown) => string
+  }) => {
+    const image = art?.layers?.find(layer => layer.src)
+    return image?.src
+      ? <img alt="Design result thumbnail" src={resolveSrc(image.src, image.target)} />
+      : null
+  },
 }))
 vi.mock('../components/files/AppRunner', () => ({
   AppRunner: () => null,
@@ -79,6 +91,10 @@ describe('IterateStage canonical artifact targets', () => {
     vi.clearAllMocks()
     mocks.polling.clear()
     mocks.listMessages.mockResolvedValue({ messages: [] })
+    mocks.fileUrl.mockImplementation(
+      (_slug: string, path: string, target?: { area?: { kind?: string; id?: number } }) =>
+        `/file/${target?.area?.kind || 'legacy'}/${target?.area?.id || 'root'}/${path}`,
+    )
     mocks.fsRead.mockResolvedValue({
       content: '![Chart](images/chart.png)',
     })
@@ -119,5 +135,77 @@ describe('IterateStage canonical artifact targets', () => {
     const markdown = await screen.findByTestId('iterate-markdown')
     expect(markdown).toHaveAttribute('data-source-path', 'reports/brief.md')
     expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
+  })
+
+  it('forwards scene image targets through design thumbnails', async () => {
+    const designTarget = {
+      project: 'identity',
+      area: { kind: 'ops', id: 42 },
+      path: 'artifacts/design/canonical',
+    }
+    const imageTarget = {
+      project: 'identity',
+      area: { kind: 'ops', id: 42 },
+      path: 'visual.png',
+    }
+    mocks.listArtifacts.mockResolvedValue({
+      artifacts: [
+        {
+          id: 'canonical',
+          type: 'design',
+          title: 'Canonical design',
+          path: 'artifacts/design/canonical',
+          target: designTarget,
+        },
+      ],
+    })
+    mocks.fsRead.mockResolvedValue({
+      content: JSON.stringify({
+        id: 'canonical',
+        type: 'graphic',
+        title: 'Canonical design',
+        artboards: [
+          {
+            id: 'artboard',
+            width: 100,
+            height: 100,
+            background: '#fff',
+            layers: [
+              {
+                id: 'image',
+                type: 'image',
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                src: 'visual.png',
+                target: imageTarget,
+              },
+            ],
+          },
+        ],
+      }),
+    })
+    render(
+      <IterateStage
+        token="token"
+        workflowId={3}
+        sessionId={7}
+        projectSlug="identity"
+      />,
+    )
+
+    await act(async () => {
+      await mocks.polling.get(4000)?.()
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Result/ }))
+
+    expect(await screen.findByRole('img', { name: 'Design result thumbnail' }))
+      .toHaveAttribute('src', '/file/ops/42/visual.png')
+    expect(mocks.fileUrl).toHaveBeenCalledWith(
+      'identity',
+      'visual.png',
+      imageTarget,
+    )
   })
 })

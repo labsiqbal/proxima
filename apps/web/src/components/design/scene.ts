@@ -97,6 +97,43 @@ export type DesignSystem = {
 // never overwrite a scene the user has since edited.
 export type Scene = { id: string; type: 'graphic' | 'deck' | 'mobile' | 'video'; title: string; artboards: Artboard[]; sessionId?: number; autoGrouped?: boolean; designSystem?: DesignSystem; appliedRunId?: number; runPendingId?: number }
 
+export function reconcileSceneMediaTargets(previous: Scene | null, next: Scene): Scene {
+  const priorLayers = new Map<string, Layer>()
+  for (const artboard of previous?.artboards || []) {
+    for (const layer of artboard.layers) priorLayers.set(layer.id, layer)
+  }
+  for (const artboard of next.artboards) {
+    for (const layer of artboard.layers) {
+      const media = layer as Layer & {
+        target?: FileTarget
+        imageTarget?: FileTarget
+      }
+      delete media.target
+      delete media.imageTarget
+      const prior = priorLayers.get(layer.id)
+      if (
+        layer.type === 'image'
+        && prior?.type === 'image'
+        && !!layer.src
+        && layer.src === prior.src
+        && prior.target
+      ) {
+        layer.target = prior.target
+      } else if (
+        canBeImageFrame(layer)
+        && prior
+        && canBeImageFrame(prior)
+        && !!layer.imageSrc
+        && layer.imageSrc === prior.imageSrc
+        && prior.imageTarget
+      ) {
+        layer.imageTarget = prior.imageTarget
+      }
+    }
+  }
+  return next
+}
+
 // Monotonic counter — guarantees unique ids even when many layers are created in
 // one synchronous pass (browsers clamp performance.now(), so a time-only id
 // collides and two layers sharing an id would move/edit together).

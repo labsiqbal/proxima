@@ -118,6 +118,7 @@ def register(app, deps):
                         project,
                         fsapi.list_tree(resolved.root, resolved.locator.path),
                         resolved.path,
+                        root=resolved.root,
                         context=context,
                     ),
                 }
@@ -138,6 +139,7 @@ def register(app, deps):
                         project,
                         fsapi.list_tree(ops.root, ""),
                         ops.path,
+                        root=ops.root,
                         context=context,
                     ),
                 }
@@ -148,6 +150,7 @@ def register(app, deps):
                     project,
                     fsapi.list_tree(container_root, ""),
                     container_root,
+                    root=container_root,
                     context=context,
                 )
                 if entry["name"] != "ops"
@@ -157,6 +160,7 @@ def register(app, deps):
                 project,
                 fsapi.list_tree(ops.root, ""),
                 ops.path,
+                root=ops.root,
                 context=context,
             ):
                 if entry["name"] in container_registry.OPS_VIRTUAL_NAMES:
@@ -1150,6 +1154,7 @@ def register(app, deps):
         area_kind: str,
         area_id: str,
         file_path: str,
+        request: Request,
         user: dict[str, Any] = Depends(current_user),
     ):
         if area_kind == "container":
@@ -1177,7 +1182,31 @@ def register(app, deps):
         resolved = _resolved_file(slug, user, target=target)
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        return FileResponse(str(resolved.path))
+        headers: dict[str, str] = {}
+        if resolved.path.suffix.lower() in {".html", ".htm"}:
+            scope_path = (
+                f"/api/target-preview/{quote(slug, safe='')}/"
+                f"{quote(area_kind, safe='')}/{quote(area_id, safe='')}/"
+            )
+            scope = f"{request.url.scheme}://{request.url.netloc}{scope_path}"
+            headers["Content-Security-Policy"] = "; ".join(
+                (
+                    "sandbox allow-scripts",
+                    "default-src 'none'",
+                    f"img-src data: blob: {scope}",
+                    f"media-src blob: {scope}",
+                    f"style-src 'unsafe-inline' {scope}",
+                    f"script-src 'unsafe-inline' {scope}",
+                    f"font-src data: {scope}",
+                    f"connect-src {scope}",
+                    f"frame-src {scope}",
+                    f"worker-src blob: {scope}",
+                    "object-src 'none'",
+                    "base-uri 'none'",
+                    "form-action 'none'",
+                )
+            )
+        return FileResponse(str(resolved.path), headers=headers)
 
     @app.get("/api/preview/{slug}/{file_path:path}")
     def project_preview(

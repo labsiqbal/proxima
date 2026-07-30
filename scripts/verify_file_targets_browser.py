@@ -111,6 +111,10 @@ def _pdf_fixture() -> bytes:
 def _write_fixture_files(container: Path) -> None:
     ops = container / "ops"
     ops.mkdir(exist_ok=True)
+    image = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8AARMA"
+        "gYGBgAAARAAH+VLfGAAAAAElFTkSuQmCC"
+    )
     (container / "brief.md").write_text(
         "# Container shadow\n\nWRONG CONTAINER MARKDOWN\n",
         encoding="utf-8",
@@ -118,6 +122,7 @@ def _write_fixture_files(container: Path) -> None:
     (container / "visual.png").write_bytes(b"not an image")
     (container / "brief-image.png").write_bytes(b"not an image")
     (container / "handout.pdf").write_bytes(b"not a pdf")
+    (container / "escape.png").write_bytes(image)
     (ops / "brief.md").write_text(
         "# Ops direct Markdown\n\nOPS DIRECT MARKDOWN\n\n"
         "![Ops inline](brief-image.png)\n",
@@ -126,10 +131,6 @@ def _write_fixture_files(container: Path) -> None:
     (ops / "ops-only.md").write_text(
         "# Ops only\n\nOPS ROOT FILE\n",
         encoding="utf-8",
-    )
-    image = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8AARMA"
-        "gYGBgAAARAAH+VLfGAAAAAElFTkSuQmCC"
     )
     (ops / "visual.png").write_bytes(image)
     (ops / "brief-image.png").write_bytes(image)
@@ -141,7 +142,16 @@ def _write_fixture_files(container: Path) -> None:
     )
     (ops / "site").mkdir()
     (ops / "site" / "index.html").write_text(
-        '<link rel="stylesheet" href="theme.css"><main>OPS NESTED HTML</main>',
+        """
+<link rel="stylesheet" href="theme.css"
+  onload="parent.postMessage({probe:'target-preview-css',value:'loaded'}, '*')"
+  onerror="parent.postMessage({probe:'target-preview-css',value:'blocked'}, '*')">
+<main>OPS NESTED HTML</main>
+<img
+  src="../../../../../../../../../../api/preview/canonical-browser/escape.png"
+  onload="parent.postMessage({probe:'target-preview-escape',value:'loaded'}, '*')"
+  onerror="parent.postMessage({probe:'target-preview-escape',value:'blocked'}, '*')">
+""".strip(),
         encoding="utf-8",
     )
     (ops / "site" / "theme.css").write_text(
@@ -271,6 +281,13 @@ def _browser_expression() -> str:
     return `/api/target-preview/${encodeURIComponent(target.project)}/${encodeURIComponent(target.area.kind)}/${target.area.id ?? "root"}/${encodePath(target.path)}`;
   };
   const checks = [];
+  const previewMessages = {};
+  window.addEventListener("message", event => {
+    const data = event.data;
+    if (data?.probe === "target-preview-css" || data?.probe === "target-preview-escape") {
+      previewMessages[data.probe] = data.value;
+    }
+  });
 
   const tour = [...document.querySelectorAll("button")]
     .find(node => /skip tour/i.test(node.textContent || ""));
@@ -338,14 +355,17 @@ def _browser_expression() -> str:
     throw new Error("legacy preview path still collides with the targeted namespace");
   }
   const escapedPreview = new URL(
-    "../../../../brief.md",
+    "../../../../../../../../../../api/preview/canonical-browser/escape.png",
     location.origin + previewFor({...briefTarget, path: "site/index.html"})
   );
-  const escapedResponse = await fetch(escapedPreview);
-  if (escapedResponse.status !== 404) {
-    throw new Error(`Area preview traversal escaped into another resolver: ${escapedResponse.status}`);
+  if (escapedPreview.pathname !== "/api/preview/canonical-browser/escape.png") {
+    throw new Error(`adversarial preview URL did not normalize into legacy routing: ${escapedPreview.pathname}`);
   }
-  checks.push("collision-free-preview-namespace");
+  const escapedResponse = await fetch(escapedPreview);
+  if (!escapedResponse.ok) {
+    throw new Error(`legacy preview compatibility is unavailable: ${escapedResponse.status}`);
+  }
+  checks.push("legacy-preview-compatibility");
 
   const fromImage = await jsonPost(
     "/api/projects/canonical-browser/designs/from-image",
@@ -456,6 +476,15 @@ def _browser_expression() -> str:
         const css = await (await fetch(new URL("theme.css", frame.src))).text();
         return html.includes("OPS NESTED HTML") && css.includes("canonical-ops");
       });
+      await until(`${name} targeted stylesheet load`, () =>
+        previewMessages["target-preview-css"] === "loaded"
+      );
+      const escapeResult = await until(`${name} deep traversal result`, () =>
+        previewMessages["target-preview-escape"]
+      );
+      if (escapeResult !== "blocked") {
+        throw new Error("targeted HTML loaded a legacy Container resource");
+      }
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
