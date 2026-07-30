@@ -300,19 +300,10 @@ def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
         payload: FileWriteRequest,
         path: str = "",
         target: str = "",
-        root_side: Literal["virtual", "container"] = "virtual",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        if root_side == "container":
-            if not path:
-                raise HTTPException(status_code=400, detail="file path is required")
-            root = _file_root(slug, path, user, root_side)
-            try:
-                fsapi.write_file(root, path, payload.content)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            _audit_fs(user, "file.write", slug, path)
-            return {"ok": True, "path": path}
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
         resolved = _resolved_file(slug, user, path=path, target=target)
         if not resolved.locator.path:
             raise HTTPException(status_code=400, detail="file path is required")
@@ -1143,17 +1134,10 @@ def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
     def project_mkdir(
         slug: str,
         payload: FsPathRequest,
-        root_side: Literal["virtual", "container"] = "virtual",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        if root_side == "container":
-            root = _file_root(slug, payload.path, user, root_side)
-            try:
-                fsapi.mkdir(root, payload.path)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            _audit_fs(user, "fs.mkdir", slug, payload.path)
-            return {"ok": True, "path": payload.path}
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
         resolved = _resolved_file(
             slug,
             user,
@@ -1175,28 +1159,10 @@ def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
     def project_rename(
         slug: str,
         payload: FsRenameRequest,
-        root_side: Literal["virtual", "container"] = "virtual",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        if root_side == "container":
-            source_root = _file_root(slug, payload.from_, user, root_side)
-            destination_root = _file_root(slug, payload.to, user, root_side)
-            if source_root.resolve() != destination_root.resolve():
-                raise HTTPException(
-                    status_code=400,
-                    detail="cannot move a file across Container Area boundaries",
-                )
-            try:
-                fsapi.rename(source_root, payload.from_, payload.to)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            _audit_fs(
-                user,
-                "fs.rename",
-                slug,
-                f"{payload.from_} -> {payload.to}",
-            )
-            return {"ok": True}
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
         source = _resolved_file(
             slug,
             user,
@@ -1235,17 +1201,10 @@ def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
         slug: str,
         path: str = "",
         target: str = "",
-        root_side: Literal["virtual", "container"] = "virtual",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        if root_side == "container":
-            root = _file_root(slug, path, user, root_side)
-            try:
-                fsapi.delete(root, path)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            _audit_fs(user, "fs.delete", slug, path)
-            return {"ok": True, "path": path}
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
         resolved = _resolved_file(slug, user, path=path, target=target)
         try:
             fsapi.delete(resolved.root, resolved.locator.path)

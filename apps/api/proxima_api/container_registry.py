@@ -435,7 +435,10 @@ def _build_manifest(
             (container["id"],),
         ).fetchall()
     }
-    if OPS_RELPATH in code_paths:
+    if any(
+        path == OPS_RELPATH or path.startswith(f"{OPS_RELPATH}/")
+        for path in code_paths
+    ):
         raise OpsMigrationCollision("the requested physical Ops root is an active repo Area")
 
     entries: list[dict[str, Any]] = []
@@ -462,11 +465,19 @@ def _build_manifest(
                 "files": files,
             }
         )
+    container_doc = _container_doc_text(
+        str(container.get("name") or container.get("slug") or "Container")
+    )
     return {
         "version": OPS_MIGRATION_VERSION,
         "container_root": str(root),
         "ops_root": str(physical),
         "entries": entries,
+        "container_doc": {
+            "path": CONTAINER_DOC,
+            "content": container_doc,
+            "sha256": hashlib.sha256(container_doc.encode("utf-8")).hexdigest(),
+        },
     }
 
 
@@ -1057,6 +1068,11 @@ def _validate_manifest_area_ownership(
             (container["id"],),
         ).fetchall()
     }
+    for code_path in code_paths:
+        if code_path == OPS_RELPATH or code_path.startswith(f"{OPS_RELPATH}/"):
+            raise OpsMigrationCollision(
+                f"Ops migration path overlaps a repo Area: {code_path}"
+            )
     for entry in manifest.get("entries") or []:
         name = str(entry.get("name") or "")
         physical_name = f"{OPS_RELPATH}/{name}"
@@ -1070,6 +1086,26 @@ def _validate_manifest_area_ownership(
                 raise OpsMigrationCollision(
                     f"Ops migration path overlaps a repo Area: {code_path}"
                 )
+
+
+def _manifest_container_doc(manifest: Mapping[str, Any]) -> tuple[str, str]:
+    planned = manifest.get("container_doc")
+    if not isinstance(planned, Mapping):
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has no planned container.md"
+        )
+    content = planned.get("content")
+    expected_hash = planned.get("sha256")
+    if (
+        planned.get("path") != CONTAINER_DOC
+        or not isinstance(content, str)
+        or not isinstance(expected_hash, str)
+        or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
+    ):
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an invalid planned container.md"
+        )
+    return content, expected_hash
 
 
 def _validated_retry_manifest(
@@ -1130,11 +1166,18 @@ def _validated_retry_manifest(
                 f"physical Ops root contains unplanned content: {unexpected[0]}"
             )
 
-    container_doc_state = _path_state(physical / CONTAINER_DOC)
+    _, expected_container_doc_hash = _manifest_container_doc(manifest)
+    container_doc_path = physical / CONTAINER_DOC
+    container_doc_state = _path_state(container_doc_path)
     if container_doc_state == "symlink":
         raise OpsMigrationCollision("ops/container.md is a symlink")
     if container_doc_state not in {"missing", "file"}:
         raise OpsMigrationCollision("ops/container.md is not a regular file")
+    if (
+        container_doc_state == "file"
+        and _hash_file(container_doc_path) != expected_container_doc_hash
+    ):
+        raise OpsMigrationCollision("ops/container.md changed after migration planning")
 
     destination_device = (
         _path_device(physical) if physical_state == "directory" else _path_device(root)
@@ -1464,11 +1507,19 @@ def migrate_container_ops(
             data,
             dict(current_marker) if current_marker is not None else None,
         )
-        physical = _apply_manifest(manifest)
+        container_doc, expected_container_doc_hash = _manifest_container_doc(manifest)
         _atomic_write_if_missing(
-            physical / CONTAINER_DOC,
-            _container_doc_text(str(data.get("name") or data.get("slug") or "Container")),
+            Path(str(manifest["ops_root"])) / CONTAINER_DOC,
+            container_doc,
         )
+        if (
+            _hash_file(Path(str(manifest["ops_root"])) / CONTAINER_DOC)
+            != expected_container_doc_hash
+        ):
+            raise OpsMigrationCollision(
+                "ops/container.md changed after migration planning"
+            )
+        physical = _apply_manifest(manifest)
         exclude_ops_from_root_repo(container_root(data))
         conn.execute("BEGIN")
         try:

@@ -136,10 +136,10 @@ describe('OpsMigrationDetail', () => {
     await user.click(screen.getByRole('button', { name: 'Reveal legacy wiki' }))
     await user.click(screen.getByRole('button', { name: 'Reveal physical ops/wiki' }))
     expect(events).toEqual([
-      { path: '', projectSlug: project.slug, rootSide: 'container' },
-      { path: 'ops', projectSlug: project.slug, rootSide: 'container' },
-      { path: 'wiki', projectSlug: project.slug, rootSide: 'container' },
-      { path: 'ops/wiki', projectSlug: project.slug, rootSide: 'container' },
+      { path: '', pathKind: 'root', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'ops', pathKind: 'directory', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'wiki', pathKind: 'directory', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'ops/wiki', pathKind: 'directory', projectSlug: project.slug, rootSide: 'container' },
     ])
     window.removeEventListener('proxima:reveal-file', listener)
   })

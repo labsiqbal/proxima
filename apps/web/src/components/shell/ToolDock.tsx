@@ -1,6 +1,6 @@
 import React from 'react'
 import type { Project } from '../../types'
-import { projectFs } from '../../api/fsAdapter'
+import { containerInspectionFs, projectFs } from '../../api/fsAdapter'
 import type { FileRootSide } from '../../api/files'
 import { WorkspaceTree } from '../files/WorkspaceTree'
 import { IconClose, IconFile, IconGear, IconMonitor, IconTerminal } from './icons'
@@ -15,6 +15,7 @@ const AppRunner = React.lazy(() => import('../files/AppRunner').then(m => ({ def
 export type Tool = 'terminal' | 'files' | 'preview'
 type RevealTarget = {
   path: string
+  pathKind: 'root' | 'directory' | 'file'
   projectSlug?: string
   rootSide: FileRootSide
 }
@@ -36,23 +37,31 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   onOpenChange?: (open: boolean) => void
 }) {
   const [open, setOpen] = React.useState<Tool | null>(null)
+  const [revealTarget, setRevealTarget] = React.useState<RevealTarget | null>(null)
   // Latch: once Terminal or Files has been opened it stays mounted (hidden when
   // closed) — unmounting would SIGHUP every shell and drop unsaved file edits.
   // Preview is NOT latched: its dev server is a backend process that survives on
   // its own, and an unmounted AppRunner stops status-polling for free.
   const visited = React.useRef(new Set<Tool>())
   if (open && open !== 'preview') visited.current.add(open)
-  const toggle = (tool: Tool) => setOpen(current => (current === tool ? null : tool))
+  const closePanel = React.useCallback(() => {
+    setOpen(null)
+    setRevealTarget(null)
+  }, [])
+  const selectTool = (tool: Tool, toggle: boolean) => {
+    setRevealTarget(null)
+    setOpen(current => toggle && current === tool ? null : tool)
+  }
 
   React.useEffect(() => {
     if (!open) return
-    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(null) }
+    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') closePanel() }
     window.addEventListener('keydown', dismiss)
     return () => window.removeEventListener('keydown', dismiss)
-  }, [open])
+  }, [closePanel, open])
   React.useEffect(() => {
-    if (!available) setOpen(null)
-  }, [available])
+    if (!available) closePanel()
+  }, [available, closePanel])
 
   // Tell the shell a tool panel is open so main content can reserve space for
   // it. Without this the overlay covers right-edge primary actions (e.g.
@@ -71,7 +80,6 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
   // so far-away screens ask for it with an event instead of prop-drilling
   // through the whole shell. detail.path highlights the file in the tree.
-  const [revealTarget, setRevealTarget] = React.useState<RevealTarget | null>(null)
   React.useEffect(() => {
     const onReveal = (event: Event) => {
       if (!available) return
@@ -86,6 +94,9 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
       ) return
       setRevealTarget({
         path,
+        pathKind: detail?.pathKind === 'root' || detail?.pathKind === 'directory'
+          ? detail.pathKind
+          : 'file',
         projectSlug: typeof projectSlug === 'string' ? projectSlug : undefined,
         rootSide: detail?.rootSide === 'container' ? 'container' : 'virtual',
       })
@@ -96,11 +107,27 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   }, [available, project?.slug])
 
   const slug = project?.slug
-  const rootSide = revealTarget?.rootSide || 'virtual'
-  const revealPath = revealTarget?.path || null
+  React.useEffect(() => {
+    setRevealTarget(null)
+  }, [slug])
+  const applicableReveal = !!(
+    slug
+    && revealTarget
+    && (!revealTarget.projectSlug || revealTarget.projectSlug === slug)
+  )
+  const recoveryInspection = !!(
+    applicableReveal
+    && revealTarget?.rootSide === 'container'
+  )
+  const revealPath = applicableReveal ? revealTarget?.path ?? null : null
+  const revealPathKind = applicableReveal ? revealTarget?.pathKind : undefined
   const fs = React.useMemo(
-    () => (slug ? projectFs(token, slug, '', rootSide) : null),
-    [rootSide, slug, token],
+    () => slug
+      ? recoveryInspection
+        ? containerInspectionFs(token, slug)
+        : projectFs(token, slug)
+      : null,
+    [recoveryInspection, slug, token],
   )
 
   const toolButton = (tool: typeof TOOLS[number], where: 'rail' | 'tab') => (
@@ -110,7 +137,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
       title={tool.label}
       aria-label={tool.label}
       aria-pressed={open === tool.id}
-      onClick={() => (where === 'rail' ? toggle(tool.id) : setOpen(tool.id))}
+      onClick={() => selectTool(tool.id, where === 'rail')}
     ><tool.Icon size={17} />{where === 'tab' && <span>{tool.label}</span>}</button>
   )
 
@@ -129,7 +156,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
     <div className={`tool-panel ${open ? 'open' : ''}`} aria-label="Tool panel" aria-hidden={!open || !available} hidden={!available}>
       <div className="tool-panel-head">
         <div className="tool-panel-tabs">{TOOLS.map(tool => toolButton(tool, 'tab'))}</div>
-        <button className="icon-button" onClick={() => setOpen(null)} aria-label="Close tool panel"><IconClose size={16} /></button>
+        <button className="icon-button" onClick={closePanel} aria-label="Close tool panel"><IconClose size={16} /></button>
       </div>
       <div className="tool-panel-body">
         {pane('terminal',
@@ -138,12 +165,12 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
           </React.Suspense>)}
         {pane('files',
           fs && project
-            ? <WorkspaceTree fs={fs} title={project.name} className="tool-files" activePath={revealPath} />
+            ? <WorkspaceTree fs={fs} title={project.name} className="tool-files" activePath={revealPath} activePathKind={revealPathKind} />
             : <PaneFallback label="Pick a project to browse its files." />)}
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug
             ? <React.Suspense fallback={<PaneFallback label="Loading preview…" />}>
-                <AppRunner token={token} slug={slug} onClose={() => setOpen(null)} />
+                <AppRunner token={token} slug={slug} onClose={closePanel} />
               </React.Suspense>
             : <PaneFallback label="Pick a project to run and preview its app." />}
         </div>}

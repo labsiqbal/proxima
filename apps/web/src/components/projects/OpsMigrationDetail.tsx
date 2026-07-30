@@ -96,10 +96,11 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
     }
   }
 
-  function reveal(path: string) {
+  function reveal(path: string, pathKind: 'root' | 'directory' | 'file') {
     window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
       detail: {
         path,
+        pathKind,
         projectSlug: project.slug,
         rootSide: 'container',
       },
@@ -165,8 +166,8 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
           <p>{detail.validation_reason || 'All planned paths passed collision, type, hash, symlink, overlap, and same-filesystem checks.'}</p>
         </div>
         <div className="ops-migration-actions">
-          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('')}>Reveal legacy side</button>
-          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('ops')}>Reveal physical ops/</button>
+          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('', 'root')}>Reveal legacy side</button>
+          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('ops', 'directory')}>Reveal physical ops/</button>
           <button type="button" className="ghost-button" disabled={!!busy} onClick={() => void refreshValidation()}>
             {busy === 'validate' ? 'Refreshing...' : 'Refresh validation'}
           </button>
@@ -199,8 +200,8 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
                 <td><code>{path.destination}</code><small>{stateLabel(path.physical_state)}</small></td>
                 <td>{path.usable_from_active_ops ? 'Yes' : 'Not from active Ops'}</td>
                 <td><div className="ops-migration-row-actions">
-                  {path.legacy_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.path)} aria-label={`Reveal legacy ${path.path}`}>Legacy</button>}
-                  {path.physical_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.destination)} aria-label={`Reveal physical ${path.destination}`}>Physical</button>}
+                  {path.legacy_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.path, path.expected_kind)} aria-label={`Reveal legacy ${path.path}`}>Legacy</button>}
+                  {path.physical_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.destination, path.expected_kind)} aria-label={`Reveal physical ${path.destination}`}>Physical</button>}
                 </div></td>
               </tr>)}</tbody>
             </table></div>}

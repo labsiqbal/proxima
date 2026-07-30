@@ -343,9 +343,10 @@ stays fail-closed. The intentional repo-at-root plus `ops/` containment is permi
 and `/ops/` is added to the root repo's local git exclude.
 
 Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
-dry-run manifest with content hashes, rejects collisions or ambiguous types before
-moving anything, and atomically renames only known Ops-owned paths on the same
-filesystem. A durable `moving` marker supports restart after any completed rename.
+dry-run manifest with content hashes and the exact generated `ops/container.md`
+content, rejects collisions or ambiguous types before moving anything, and atomically
+renames only known Ops-owned paths on the same filesystem. A durable `moving` marker
+supports restart after any completed rename.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
@@ -356,15 +357,18 @@ routes expose that projection for inspection and refresh. The retry route first
 requires a safe current projection, then delegates to the same hash-bound,
 same-filesystem migration routine used at startup. Immediately before every manifest
 application, that boundary rechecks current code-Area ownership plus path type,
-symlink, hash, and filesystem constraints, including `ops/container.md`. A repaired
-already-physical layout with open migration Attention becomes explicitly retryable;
-the same boundary revalidates it and resolves Attention without moving content. It
-does not add merge, overwrite, delete, cross-device move, symlink-following, or
-content-authority behavior.
+symlink, hash, and filesystem constraints, including ownership of the complete
+physical Ops root and an exact match for any existing manifest-bound
+`ops/container.md`. A repaired already-physical layout with open migration Attention
+becomes explicitly retryable; the same boundary revalidates it and resolves Attention
+without moving content. It does not add merge, overwrite, delete, cross-device move,
+symlink-following, or content-authority behavior.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
 file API all resolve through the active Ops row. Recovery reveal actions can opt into
-an explicit Container-root file target so legacy `wiki` and physical `ops/wiki`
-remain independently inspectable even after physical Ops becomes active.
+an explicit read-only Container-root file target so legacy `wiki` and physical
+`ops/wiki` remain independently inspectable even after physical Ops becomes active.
+Only tree and file reads accept that target; write, mkdir, rename, and delete remain
+virtual-root operations.
 
 The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers`, `GET /api/containers/{slug}`, and

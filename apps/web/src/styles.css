@@ -4192,9 +4192,13 @@ button:disabled {
 }
 
 /* ── VSCode-like file tree: inline input, context menu, active file ── */
-.tree-row.file.active {
+.tree-row.active {
 	background: var(--ui-row-active-background);
 	color: var(--ui-text-primary);
+}
+.tree-read-only {
+	color: var(--ui-text-secondary);
+	font-size: var(--text-xs);
 }
 .tree-row.inline {
 	padding-top: 2px;

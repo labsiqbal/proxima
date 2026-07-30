@@ -3,9 +3,15 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceTree } from './WorkspaceTree'
-import type { FsAdapter } from '../../api/fsAdapter'
+import type { FsAdapter, ReadOnlyFsAdapter } from '../../api/fsAdapter'
 import type { FileRef } from '../../api/files'
 import type { FileEntry } from '../../types'
+
+vi.mock('@uiw/react-codemirror', () => ({
+  default: ({ editable }: { editable?: boolean }) => (
+    <div data-testid="codemirror-stub" data-editable={String(editable)} />
+  ),
+}))
 
 function entries(...names: Array<[string, 'file' | 'dir']>): FileEntry[] {
   return names.map(([name, type]) => ({ name, type, size: type === 'file' ? 10 : 0 }))
@@ -119,6 +125,43 @@ describe('WorkspaceTree reveal / activePath', () => {
     // Wiki owns the editor pane - tree should only highlight, not auto-open.
     expect(fs.read).not.toHaveBeenCalled()
     expect(onOpenFile).not.toHaveBeenCalled()
+  })
+
+  it('expands and highlights a revealed directory target', async () => {
+    const fs = mockFs({
+      '': entries(['ops', 'dir'], ['wiki', 'dir']),
+      ops: entries(['wiki', 'dir']),
+    })
+    render(
+      <WorkspaceTree
+        fs={fs}
+        title="Recovery inspection"
+        activePath="ops"
+        activePathKind="directory"
+      />,
+    )
+
+    const row = await screen.findByRole('button', { name: /ops/ })
+    expect(row).toHaveClass('active')
+    expect(row).toHaveAttribute('data-path', 'ops')
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(fs.list).toHaveBeenCalledWith('ops'))
+  })
+
+  it('keeps a read-only adapter free of mutation and save controls', async () => {
+    const user = userEvent.setup()
+    const fs: ReadOnlyFsAdapter = {
+      list: vi.fn(async () => ({ entries: entries(['note.md', 'file']) })),
+      read: vi.fn(async () => ({ content: 'inspection only' })),
+    }
+    render(<WorkspaceTree fs={fs} title="Recovery inspection" />)
+
+    expect(await screen.findByText('Read-only')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New file' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New folder' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /note\.md/ }))
+    expect(await screen.findByText('Read-only inspection')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
 })
 

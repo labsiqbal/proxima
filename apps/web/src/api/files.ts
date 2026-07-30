@@ -341,10 +341,9 @@ export const writeFile = (
   slug: string,
   ref: FileRef,
   content: string,
-  rootSide: FileRootSide = 'virtual',
 ) =>
   api<{ ok: boolean; target?: FileTarget }>(
-    `/api/projects/${slug}/file?${refQuery(ref)}${rootSideQuery(rootSide)}`,
+    `/api/projects/${slug}/file?${refQuery(ref)}`,
     token,
     { method: 'PUT', body: JSON.stringify({ content }) },
   )
@@ -353,10 +352,9 @@ export const mkdir = (
   token: string,
   slug: string,
   ref: FileRef,
-  rootSide: FileRootSide = 'virtual',
 ) =>
   api<{ ok: boolean; target?: FileTarget }>(
-    `/api/projects/${slug}/fs/mkdir?root_side=${rootSide}`,
+    `/api/projects/${slug}/fs/mkdir`,
     token,
     {
       method: 'POST',
@@ -372,10 +370,9 @@ export const renamePath = (
   slug: string,
   from: FileRef,
   to: FileRef,
-  rootSide: FileRootSide = 'virtual',
 ) =>
   api<{ ok: boolean }>(
-    `/api/projects/${slug}/fs/rename?root_side=${rootSide}`,
+    `/api/projects/${slug}/fs/rename`,
     token,
     {
       method: 'POST',
@@ -392,10 +389,9 @@ export const deletePath = (
   token: string,
   slug: string,
   ref: FileRef,
-  rootSide: FileRootSide = 'virtual',
 ) =>
   api<{ ok: boolean }>(
-    `/api/projects/${slug}/fs?${refQuery(ref)}${rootSideQuery(rootSide)}`,
+    `/api/projects/${slug}/fs?${refQuery(ref)}`,
     token,
     { method: 'DELETE' },
   )
