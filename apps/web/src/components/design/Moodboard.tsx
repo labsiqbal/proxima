@@ -3,11 +3,13 @@ import {
   addMoodboardItem,
   deleteMoodboardItem,
   fileUrl,
+  isSvgPath,
   listMoodboard,
   updateMoodboardItem,
   uploadFile,
   type MoodboardItem,
 } from '../../api/files'
+import { useRawBlobUrl } from '../../hooks/useRawBlobUrl'
 import { confirmDialog } from '../ui/Dialog'
 
 export function DesignStudioMenu({ active, onCanvas, onBrandGuide, onMoodboard }: {
@@ -29,6 +31,37 @@ const splitTags = (value: string) => value
   .filter(Boolean)
   .filter((tag, index, all) => all.indexOf(tag) === index)
   .slice(0, 12)
+
+function MoodboardShotImage({
+  token,
+  slug,
+  path,
+  alt,
+}: {
+  token: string
+  slug: string
+  path: string
+  alt: string
+}) {
+  const svg = isSvgPath(path)
+  const blob = useRawBlobUrl(svg ? token : undefined, svg ? slug : undefined, svg ? path : '')
+  if (svg) {
+    if (blob.status === 'error') {
+      return <div className="moodboard-shot-fallback" role="img" aria-label={`${alt} failed to load`}>
+        <span aria-hidden="true">!</span>
+        <small>Preview unavailable</small>
+        <button type="button" className="ghost-button sm" onClick={blob.retry}>Retry</button>
+      </div>
+    }
+    if (blob.status !== 'ready' || !blob.url) {
+      return <div className="moodboard-shot-fallback muted" aria-busy="true">
+        <small>Loading…</small>
+      </div>
+    }
+    return <img src={blob.url} alt={alt} />
+  }
+  return <img src={fileUrl(slug, path)} alt={alt} />
+}
 
 function MoodboardEdit({ item, busy, onClose, onSave }: {
   item: MoodboardItem
@@ -236,7 +269,12 @@ export function Moodboard({ token, slug }: { token: string; slug: string }) {
         : <div className="moodboard-grid">{filtered.map(item => <article className={`moodboard-card ${item.useAsReference ? 'selected-reference' : ''}`} key={item.id}>
             <div className="moodboard-shot">
               {item.imagePath
-                ? <img src={fileUrl(slug, item.imagePath)} alt={item.title || `Reference from ${item.siteName}`} />
+                ? <MoodboardShotImage
+                    token={token}
+                    slug={slug}
+                    path={item.imagePath}
+                    alt={item.title || `Reference from ${item.siteName}`}
+                  />
                 : <div className="moodboard-shot-fallback" aria-label="Preview unavailable"><span>{(item.siteName || 'R').slice(0, 1).toUpperCase()}</span><small>Preview unavailable</small></div>}
               <div className="moodboard-actions">
                 {item.url && <a href={item.url} target="_blank" rel="noreferrer" title="Open link" aria-label={`Open ${item.siteName}`}>↗</a>}

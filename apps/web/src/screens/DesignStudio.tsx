@@ -11,10 +11,12 @@ import { BackButton } from '../components/ui/BackButton'
 import { CompactTeachingEmpty } from '../components/ui/CompactTeachingEmpty'
 import { SURFACES, surfaceTemplates, sceneFromTemplate, type Surface, type Template } from '../components/design/templates'
 import { projectFs } from '../api/fsAdapter'
-import { fetchRawFile, isSvgPath, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
+import { isSvgPath, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
 import {
   collectArtboardMediaRefs,
+  measureProjectMedia,
   mergeProjectMediaRefs,
+  projectMediaDataUrl,
   projectMediaKey,
   resolveProjectMediaSrc,
   type ProjectMediaRef,
@@ -1939,18 +1941,25 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       if (mountedRef.current && seq === actionSeq.current) setUploading(false)
     }
   }
-  const imageSize = (path: string) => new Promise<{ w: number; h: number }>(resolve => {
-    const img = new window.Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => resolve({ w: img.naturalWidth || img.width || 1, h: img.naturalHeight || img.height || 1 })
-    img.onerror = () => resolve({ w: 1, h: 1 })
-    img.src = resolveSrc(path)
-  })
+  const imageSize = async (path: string, target?: FileTarget) => {
+    if (!project) throw new Error('No project selected')
+    return measureProjectMedia(
+      token,
+      project.slug,
+      path,
+      target,
+      resolveSrc(path, target) || undefined,
+    )
+  }
   const addImage = async (path: string) => {
-    const { w, h } = await imageSize(path)
-    if (!mountedRef.current) return
-    const scale = Math.min((ab.width * 0.5) / Math.max(1, w), (ab.height * 0.5) / Math.max(1, h), 1)
-    addLayer({ id: uid('i'), type: 'image', x: 64, y: 64, width: Math.max(24, Math.round(w * scale)), height: Math.max(24, Math.round(h * scale)), src: path })
+    try {
+      const { w, h } = await imageSize(path)
+      if (!mountedRef.current) return
+      const scale = Math.min((ab.width * 0.5) / Math.max(1, w), (ab.height * 0.5) / Math.max(1, h), 1)
+      addLayer({ id: uid('i'), type: 'image', x: 64, y: 64, width: Math.max(24, Math.round(w * scale)), height: Math.max(24, Math.round(h * scale)), src: path })
+    } catch (err) {
+      if (mountedRef.current) setChat(c => [...c, { role: 'assistant', content: 'Image error: ' + String(err) }])
+    }
   }
   const addBackgroundImage = (path: string) => {
     const id = uid('i')
@@ -2284,23 +2293,16 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     const toDataUrl = async (src: string, target?: FileTarget) => {
       const cacheKey = `${src}\n${target ? JSON.stringify(target) : ''}`
       if (cache[cacheKey]) return cache[cacheKey]
-      if (/^gen:/i.test(src)) return ''
-      const resolved = resolveSrc(src, target)
-      if (!resolved && !target) return ''
-      try {
-        const blob = target && project
-          ? await fetchRawFile(token, project.slug, src, target)
-          : await fetch(resolved).then(response => response.blob())
-        const data = await new Promise<string>(resolve => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(String(reader.result))
-          reader.readAsDataURL(blob)
-        })
-        cache[cacheKey] = data
-        return data
-      } catch {
-        return target ? '' : resolved
-      }
+      if (!project || !src || /^gen:/i.test(src)) return ''
+      const data = await projectMediaDataUrl(
+        token,
+        project.slug,
+        src,
+        target,
+        resolveSrc(src, target) || undefined,
+      )
+      if (data) cache[cacheKey] = data
+      return data
     }
     const boards: string[] = []
     const pageStyles: string[] = []

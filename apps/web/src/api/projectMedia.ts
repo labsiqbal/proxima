@@ -1,5 +1,5 @@
 import type { FileTarget } from '../types'
-import { fileUrl, isSvgPath } from './files'
+import { fetchRawFile, fileUrl, isSvgPath } from './files'
 
 export type ProjectMediaRef = {
   src: string
@@ -41,6 +41,107 @@ export function resolveProjectMediaSrc(
     return urls[projectMediaKey(src, target)] || ''
   }
   return slug ? fileUrl(slug, src, target) : src
+}
+
+function revokeObjectUrl(url: string) {
+  if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
+}
+
+/** Authenticated/raw when required; otherwise the resolved preview/absolute URL. */
+export async function loadProjectMediaBlob(
+  token: string,
+  slug: string,
+  src: string,
+  target?: FileTarget,
+  resolvedUrl?: string,
+): Promise<Blob> {
+  if (!src || /^gen:/i.test(src)) throw new Error('missing media source')
+  if (isAbsoluteMediaSrc(src) && !needsRawDisplayBlob(src, target)) {
+    const response = await fetch(src)
+    if (!response.ok) throw new Error(`Could not download ${src}`)
+    return response.blob()
+  }
+  if (needsRawDisplayBlob(src, target)) {
+    return fetchRawFile(token, slug, src, target)
+  }
+  const url = resolvedUrl || (slug ? fileUrl(slug, src, target) : '')
+  if (!url) throw new Error(`Could not resolve ${src}`)
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Could not download ${src}`)
+  return response.blob()
+}
+
+export function measureImageBlob(blob: Blob): Promise<{ w: number; h: number }> {
+  const objectUrl = URL.createObjectURL(blob)
+  return new Promise((resolve, reject) => {
+    const img = new window.Image()
+    img.onload = () => {
+      const size = {
+        w: img.naturalWidth || img.width || 1,
+        h: img.naturalHeight || img.height || 1,
+      }
+      revokeObjectUrl(objectUrl)
+      resolve(size)
+    }
+    img.onerror = () => {
+      revokeObjectUrl(objectUrl)
+      reject(new Error('Could not decode image'))
+    }
+    img.src = objectUrl
+  })
+}
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Could not read image bytes'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** Size a project image without depending on a pre-hydrated resolveSrc map. */
+export async function measureProjectMedia(
+  token: string,
+  slug: string,
+  src: string,
+  target?: FileTarget,
+  resolvedUrl?: string,
+): Promise<{ w: number; h: number }> {
+  if (!src) throw new Error('missing media source')
+  if (needsRawDisplayBlob(src, target)) {
+    const blob = await loadProjectMediaBlob(token, slug, src, target)
+    return measureImageBlob(blob)
+  }
+  const url = resolvedUrl || (isAbsoluteMediaSrc(src) ? src : fileUrl(slug, src, target))
+  if (!url) throw new Error(`Could not resolve ${src}`)
+  return new Promise((resolve, reject) => {
+    const img = new window.Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve({
+      w: img.naturalWidth || img.width || 1,
+      h: img.naturalHeight || img.height || 1,
+    })
+    img.onerror = () => reject(new Error(`Could not decode ${src}`))
+    img.src = url
+  })
+}
+
+/** Export bytes as a data URL; raw-fetch SVG/target media, never hang on empty src. */
+export async function projectMediaDataUrl(
+  token: string,
+  slug: string,
+  src: string,
+  target?: FileTarget,
+  resolvedUrl?: string,
+): Promise<string> {
+  if (!src || /^gen:/i.test(src)) return ''
+  try {
+    const blob = await loadProjectMediaBlob(token, slug, src, target, resolvedUrl)
+    return await blobToDataUrl(blob)
+  } catch {
+    return ''
+  }
 }
 
 type ArtboardLike = {
