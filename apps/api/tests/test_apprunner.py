@@ -2253,12 +2253,16 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
             raise asyncio.TimeoutError
 
         monkeypatch.setattr(proc, "wait", hang_wait)
-        monkeypatch.setattr(
-            os,
-            "killpg",
-            lambda *_args, **_kwargs: None,
-        )
+        monkeypatch.setattr(proc, "kill", lambda: None)
         monkeypatch.setattr(proc, "terminate", lambda: None)
+
+        import proxima_api.apprunner as apprunner_module
+
+        monkeypatch.setattr(
+            apprunner_module,
+            "terminate_process_tree",
+            lambda *_args, **_kwargs: False,
+        )
         await manager.stop("demo")
 
         assert lease.finished is not None
@@ -2553,3 +2557,158 @@ def test_contained_app_runner_kills_detached_descendants(tmp_path):
         await manager.shutdown()
 
     asyncio.run(run_case())
+
+
+def _listener_pids(port: int) -> set[int]:
+    from proxima_api.apprunner import _listening_socket_inodes
+
+    inodes = _listening_socket_inodes(port) or set()
+    found: set[int] = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                try:
+                    target = os.readlink(f"/proc/{pid}/fd/{fd}")
+                except OSError:
+                    continue
+                if target.startswith("socket:[") and target[8:-1] in inodes:
+                    found.add(pid)
+                    break
+        except OSError:
+            continue
+    return found
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian process-tree stop is Linux-only",
+)
+def test_guarded_app_runner_stop_kills_orphan_writer_tree(tmp_path):
+    """Stop must tear down setsid() writers, not only the guardian launcher."""
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    lease, root = _activity_lease(tmp_path, "guarded-stop-tree")
+    manager = AppManager()
+    released = {"done": False}
+
+    class TrackingLease:
+        def release(self) -> None:
+            released["done"] = True
+            lease.release()
+
+        def guard_process(self, command):
+            return lease.guard_process(command)
+
+        def mark_process_started(self) -> None:
+            lease.mark_process_started()
+
+        def finish(self, **kwargs):
+            if kwargs.get("process_exited"):
+                self.release()
+
+    tracking = TrackingLease()
+
+    async def run_case():
+        try:
+            await manager.start(
+                "demo",
+                str(root),
+                f"python3 -m http.server {port} --bind 127.0.0.1",
+                port,
+                effect_lease=tracking,
+            )
+            for _ in range(80):
+                if manager.status("demo").get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("guarded preview never became ready")
+
+            app = manager._apps["demo"]
+            launcher = int(app["proc_pid"])
+            listeners_before = _listener_pids(port)
+            assert listeners_before
+            assert launcher not in listeners_before or len(listeners_before) >= 1
+
+            await manager.stop("demo")
+            assert manager.status("demo")["running"] is False
+            assert released["done"] is True
+
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and _listener_pids(port):
+                await asyncio.sleep(0.05)
+            assert not _listener_pids(port)
+            assert not Path(f"/proc/{launcher}").exists()
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian process-tree stop is Linux-only",
+)
+def test_terminate_process_tree_sigkills_setsid_writers_not_just_launcher(
+    tmp_path,
+):
+    """SIGKILL must target the whole tree; launcher-only kill would orphan writers."""
+    from proxima_api.process_containment import (
+        process_tree_pids,
+        terminate_process_tree,
+    )
+
+    ready = tmp_path / "ready"
+    launcher = os.fork()
+    if launcher == 0:
+        writer = os.fork()
+        if writer == 0:
+            try:
+                os.setsid()
+                ready.write_text(str(os.getpid()), encoding="utf-8")
+                while True:
+                    time.sleep(1)
+            finally:
+                os._exit(0)
+        while True:
+            time.sleep(1)
+    try:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not ready.is_file():
+            time.sleep(0.01)
+        assert ready.is_file()
+        writer_pid = int(ready.read_text(encoding="utf-8").strip())
+        tree = process_tree_pids(launcher) or set()
+        assert writer_pid in tree
+        assert terminate_process_tree(
+            launcher,
+            grace_seconds=0.05,
+            kill_seconds=0.5,
+        )
+        try:
+            os.waitpid(launcher, 0)
+        except ChildProcessError:
+            pass
+        for pid in (launcher, writer_pid):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError(f"pid {pid} survived tree terminate")
+    finally:
+        for pid in (launcher,):
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass

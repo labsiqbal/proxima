@@ -33,6 +33,11 @@ from .preview_output import (
     cgroup_is_within,
     process_start_time,
 )
+from .process_containment import (
+    pid_namespace_argv,
+    process_tree_pids,
+    terminate_process_tree,
+)
 from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15

@@ -446,6 +446,54 @@ def _run_writer(
     return int(result)
 
 
+def _attached_to_controlling_tty() -> bool:
+    """True when this process still owns a controlling terminal.
+
+    Project terminals ``pty.fork()`` the guardian as the interactive session
+    leader. Detaching via ``setsid()`` would drop that ctty and break job
+    control / tty signal delivery, so PTY-attached guardians stay in-session.
+    """
+    for fd in (0, 1, 2):
+        try:
+            if os.isatty(fd):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _run_linux_attached(
+    activity_fd: int,
+    command: list[str],
+    target_cwd: str,
+    target_env: dict[str, str],
+    record_path: str,
+    owner_pid: int,
+    owner_start: str,
+) -> int:
+    """Run the writer in-process so a PTY session keeps its controlling tty."""
+    record_created = False
+    try:
+        _write_record(
+            record_path,
+            sentinel_pid=os.getpid(),
+            launcher_pid=os.getpid(),
+            owner_pid=owner_pid,
+            owner_start=owner_start,
+            job_name=None,
+        )
+        record_created = True
+        return _run_writer(
+            activity_fd,
+            command,
+            target_cwd,
+            target_env,
+        )
+    finally:
+        if record_created:
+            _remove_record(record_path)
+
+
 def _run_linux_sentinel(
     activity_fd: int,
     command: list[str],
@@ -537,6 +585,16 @@ def main() -> int:
     owner_start = sys.argv[5]
     command = sys.argv[7:]
     if sys.platform.startswith("linux"):
+        if _attached_to_controlling_tty():
+            return _run_linux_attached(
+                activity_fd,
+                command,
+                target_cwd,
+                target_env,
+                record_path,
+                owner_pid,
+                owner_start,
+            )
         return _run_linux_sentinel(
             activity_fd,
             command,

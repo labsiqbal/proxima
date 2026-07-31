@@ -7,14 +7,17 @@ import os
 import pty
 import signal
 import struct
-import subprocess
 import termios
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from .container_activity import process_start_identity
-from .process_containment import pid_namespace_argv
+from .process_containment import (
+    pid_namespace_argv,
+    process_tree_pids,
+    terminate_process_tree,
+)
 
 logger = logging.getLogger("proxima.terminal")
 
@@ -23,11 +26,12 @@ logger = logging.getLogger("proxima.terminal")
 class CloseResult:
     """Outcome of shutting down a PTY session.
 
-    ``session_stopped`` is True only when the full session membership could be
-    verified empty. ``child_reaped`` is True once the direct child is proven
-    reaped (or was never started). Callers may release writer-activity leases
-    only when ``child_reaped`` is True; otherwise they must retain the lease
-    behind an identity-bound lifecycle monitor.
+    ``session_stopped`` is True only when the full identity-bound writer tree
+    could be verified empty. ``child_reaped`` is True once that tree is proven
+    exited and the direct child is reaped (or was never started). Callers may
+    release writer-activity and maintenance-ingress leases only when the
+    corresponding flag is True; otherwise they must retain the lease behind an
+    identity-bound lifecycle monitor.
     """
 
     session_stopped: bool
@@ -60,46 +64,23 @@ def _signal_process(pid: int, value: int) -> None:
         pass
 
 
-def _session_members(sid: int) -> set[int] | None:
-    try:
-        result = subprocess.run(
-            ["ps", "-axo", "pid=,sid="],
-            capture_output=True,
-            text=True,
-            timeout=1,
-            check=False,
-        )
-    except Exception:
+def _tree_exited(root_pid: int) -> bool | None:
+    """True when the tracked tree is gone, False if live, None if unprovable."""
+    tree = process_tree_pids(root_pid)
+    if tree is None:
         return None
-    if result.returncode != 0:
-        return None
-    members: set[int] = set()
-    for line in result.stdout.splitlines():
+    if not tree:
+        return True
+    for pid in tree:
         try:
-            pid_raw, sid_raw = line.split()
-            if int(sid_raw) == sid:
-                members.add(int(pid_raw))
-        except (TypeError, ValueError):
+            with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+                stat = fh.read()
+            state = stat.rsplit(") ", 1)[1].split()[0]
+        except (OSError, IndexError, ValueError):
             continue
-    return members
-
-
-def _stop_session(sid: int, leader: int) -> bool:
-    members = _session_members(sid)
-    if members is None:
-        return False
-    for pid in members:
-        _signal_process(pid, signal.SIGHUP)
-    for _ in range(50):
-        members = _session_members(sid)
-        if members is None:
+        if state != "Z":
             return False
-        if not members - {leader}:
-            return True
-        for pid in members:
-            _signal_process(pid, signal.SIGKILL)
-        time.sleep(0.01)
-    return False
+    return True
 
 
 class TerminalSession:
@@ -188,27 +169,48 @@ class TerminalSession:
             return b""
 
     def close(self) -> CloseResult:
-        fd, pid, sid = self.fd, self.pid, self.sid
+        fd, pid, _sid = self.fd, self.pid, self.sid
         start_identity = self.start_identity
         self.fd = None
         self.pid = None
         self.sid = None
         self.start_identity = None
-        # Close the PTY master first so the shell sees EOF on its controlling tty.
+        if not pid:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            return CloseResult(session_stopped=True, child_reaped=True)
+        # Snapshot the writer tree before closing the PTY master. Closing first
+        # can kill the shell and reparent background jobs to init, which would
+        # hide them from a root-only process-tree walk.
+        known = process_tree_pids(pid)
+        seed = set(known) if known is not None else {pid}
+        # Close the PTY master so the shell sees EOF on its controlling tty.
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        if not pid:
-            return CloseResult(session_stopped=True, child_reaped=True)
-        stopped = False
-        if sid is None:
-            _signal_process(pid, signal.SIGHUP)
-        else:
-            stopped = _stop_session(sid, pid)
-            if not stopped:
-                _signal_process(pid, signal.SIGKILL)
+        # Stop through the identity-bound writer tree (guardian sentinel / shell
+        # descendants), never launcher session membership alone. PTY-attached
+        # guardians stay in-session, but writers may still setsid() themselves.
+        tree_stopped = terminate_process_tree(
+            pid,
+            grace_seconds=0.5,
+            kill_seconds=0.5,
+            initial_signal=signal.SIGHUP,
+            known_pids=seed,
+        )
+        if not tree_stopped:
+            # One more aggressive pass if the first sweep could not prove exit.
+            tree_stopped = terminate_process_tree(
+                pid,
+                grace_seconds=0.2,
+                kill_seconds=0.5,
+                known_pids=seed,
+            )
         reaped = _reap(pid, attempts=20, delay=0.005)
         if not reaped:
             _signal_process(pid, signal.SIGKILL)
@@ -219,9 +221,18 @@ class TerminalSession:
                 reaped = True
             except OSError as exc:
                 reaped = exc.errno == errno.ECHILD
+        proven = tree_stopped
+        if proven is not True:
+            leftover = _tree_exited(pid)
+            if leftover is True:
+                proven = True
+            elif leftover is False:
+                proven = False
+            else:
+                proven = False
         return CloseResult(
-            session_stopped=sid is not None and stopped,
-            child_reaped=reaped,
+            session_stopped=bool(proven and reaped),
+            child_reaped=bool(proven and reaped),
             pid=pid,
             start_identity=start_identity,
         )
