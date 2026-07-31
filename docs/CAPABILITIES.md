@@ -1275,6 +1275,7 @@ Supported Windows hosts use detached breakaway supervisors. If durable ownership
 unavailable, start fails before app spawn with a recoverable
 `output_sink_unavailable` stopped state. Stop retains the last available log, and a
 later supervisor disconnect preserves fail-closed authority.
+
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

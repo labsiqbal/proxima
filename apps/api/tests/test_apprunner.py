@@ -954,15 +954,23 @@ def test_reconcile_post_register_snapshot_failure_disposes_generation(
 
     monkeypatch.setattr(OutputBroker, "reconnect", staticmethod(fake_reconnect))
     monkeypatch.setattr(manager, "_register_app", tracking_register)
-    monkeypatch.setattr(manager, "_cgroup_identity", lambda pid: {
-        fake_broker.pid: "broker-cgroup",
-        fake_broker._proc.pid: "process-cgroup",
-        os.getpid(): "controller-cgroup",
-    }.get(pid))
-    monkeypatch.setattr(apprunner, "process_start_time", lambda pid: {
-        fake_broker.pid: 10,
-        fake_broker._proc.pid: fake_broker._proc.start_time,
-    }.get(pid))
+    monkeypatch.setattr(
+        manager,
+        "_cgroup_identity",
+        lambda pid: {
+            fake_broker.pid: "broker-cgroup",
+            fake_broker._proc.pid: "process-cgroup",
+            os.getpid(): "controller-cgroup",
+        }.get(pid),
+    )
+    monkeypatch.setattr(
+        apprunner,
+        "process_start_time",
+        lambda pid: {
+            fake_broker.pid: 10,
+            fake_broker._proc.pid: fake_broker._proc.start_time,
+        }.get(pid),
+    )
     monkeypatch.setattr(
         apprunner,
         "_process_has_lineage",

@@ -6,6 +6,7 @@ PROXIMA_PREVIEW_BIND can widen that. Separately, a dev server that binds
 beyond loopback is directly reachable by LAN/tailnet devices with no auth,
 so the app runner must detect and surface it.
 """
+
 from __future__ import annotations
 
 import asyncio

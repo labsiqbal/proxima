@@ -92,7 +92,8 @@ export const fileUrl = (slug: string, path: string) =>
   `/api/preview/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`
 
 // Run & preview a project app (managed dev server). preview_port is the app's
-// credential-stripping relay listener — the preview origin for remote clients.
+// credential-stripping relay listener - the isolated preview origin for local
+// and remote clients when no apps-domain subdomain applies.
 export type AppLifecycleState =
   | 'stopped'
   | 'starting'

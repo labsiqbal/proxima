@@ -74,11 +74,7 @@ def _wal_database(path: Path, value: str) -> sqlite3.Connection:
 def _database_value(path: Path) -> str:
     connection = sqlite3.connect(path)
     try:
-        return str(
-            connection.execute(
-                "SELECT value FROM fixture_values"
-            ).fetchone()[0]
-        )
+        return str(connection.execute("SELECT value FROM fixture_values").fetchone()[0])
     finally:
         connection.close()
 
@@ -227,10 +223,7 @@ def test_disposable_switch_quarantines_real_wal_and_shm_before_commit(
             "drain",
             "stop_and_verify",
         ]
-        phases = [
-            record.phase
-            for record in _journal(root, run_id, intent).records()
-        ]
+        phases = [record.phase for record in _journal(root, run_id, intent).records()]
         assert phases[-1] is Phase.COMPLETED
         assert Phase.WAL_CHECKPOINTED in phases
         assert Phase.SIDECARS_QUARANTINED in phases
@@ -721,12 +714,7 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         app.state.db.execute("CREATE TABLE fence_cache(value TEXT NOT NULL)")
         app.state.db.execute(cached_insert, ("before",))
         app.state.db.execute("DELETE FROM profiles")
-        wiki_root = (
-            Path(config["workspace_root"])
-            / "users"
-            / "owner"
-            / "wiki"
-        )
+        wiki_root = Path(config["workspace_root"]) / "users" / "owner" / "wiki"
         assert not wiki_root.exists()
         sessions_before = app.state.db.execute(
             "SELECT COUNT(*) FROM auth_sessions"
@@ -770,31 +758,30 @@ def test_fence_blocks_mutating_http_terminal_and_dynamic_database_writes(
         assert detected_codex["masterUnavailableReason"] == (
             "Master runner verification is unavailable during maintenance"
         )
-        assert client.get(
-            "/api/dashboard",
-            headers={"Authorization": f"Bearer {token}"},
-        ).status_code == 200
+        assert (
+            client.get(
+                "/api/dashboard",
+                headers={"Authorization": f"Bearer {token}"},
+            ).status_code
+            == 200
+        )
         assert not wiki_root.exists()
         assert client.get("/api/appview/missing/").status_code == 423
         assert (
-            app.state.db.execute(
-                "SELECT COUNT(*) FROM auth_sessions"
-            ).fetchone()[0]
+            app.state.db.execute("SELECT COUNT(*) FROM auth_sessions").fetchone()[0]
             == sessions_before
         )
         with pytest.raises(WebSocketDisconnect) as rejected:
-            with client.websocket_connect(
-                f"/api/ws/terminal?token={token}"
-            ):
+            with client.websocket_connect(f"/api/ws/terminal?token={token}"):
                 pass
         assert rejected.value.code == 4423
         with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
             app.state.db.execute("CREATE TABLE forbidden(value TEXT)")
         with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
             app.state.db.execute(cached_insert, ("after",))
-        assert app.state.db.execute(
-            "SELECT COUNT(*) FROM fence_cache"
-        ).fetchone()[0] == 1
+        assert (
+            app.state.db.execute("SELECT COUNT(*) FROM fence_cache").fetchone()[0] == 1
+        )
 
     maintenance_app = create_app(
         {
@@ -903,10 +890,13 @@ def test_fence_removal_keeps_runner_probes_blocked_until_ingress_reopens(
             assert detected_codex["masterUnavailableReason"] == (
                 "Master runner verification is unavailable during maintenance"
             )
-            assert client.get(
-                "/api/dashboard",
-                headers={"Authorization": f"Bearer {token}"},
-            ).status_code == 200
+            assert (
+                client.get(
+                    "/api/dashboard",
+                    headers={"Authorization": f"Bearer {token}"},
+                ).status_code
+                == 200
+            )
         finally:
             release_removal.set()
             remover.join(timeout=5)
@@ -1175,12 +1165,7 @@ def test_admitted_wiki_write_finishes_audit_before_fence(
         assert fence_errors == []
         assert responses[0].status_code == 200
         assert (
-            tmp_path
-            / "workspace"
-            / "users"
-            / "owner"
-            / "wiki"
-            / "atomic.md"
+            tmp_path / "workspace" / "users" / "owner" / "wiki" / "atomic.md"
         ).read_text(encoding="utf-8") == "complete"
         audit = app.state.db.execute(
             "SELECT action FROM audit_log "
@@ -1208,16 +1193,22 @@ def test_fenced_provider_reads_return_inert_readiness(
     with TestClient(app) as client:
         token = client.post("/auth/auto").json()["token"]
         auth = {"Authorization": f"Bearer {token}"}
-        assert client.post(
-            "/api/projects",
-            headers=auth,
-            json={"slug": "demo", "name": "Demo"},
-        ).status_code == 201
-        assert client.put(
-            "/api/settings/image-gen",
-            headers=auth,
-            json={"provider": "higgsfield"},
-        ).status_code == 200
+        assert (
+            client.post(
+                "/api/projects",
+                headers=auth,
+                json={"slug": "demo", "name": "Demo"},
+            ).status_code
+            == 201
+        )
+        assert (
+            client.put(
+                "/api/settings/image-gen",
+                headers=auth,
+                json={"provider": "higgsfield"},
+            ).status_code
+            == 200
+        )
         write_fence(fence, "1" * 32, "write_fenced")
 
         def unexpected_readiness(*_args, **_kwargs):
@@ -1292,11 +1283,14 @@ def test_appview_request_drains_before_fence_activation(
     with TestClient(app) as client:
         token = client.post("/auth/auto").json()["token"]
         auth = {"Authorization": f"Bearer {token}"}
-        assert client.post(
-            "/api/projects",
-            headers=auth,
-            json={"slug": "demo", "name": "Demo"},
-        ).status_code == 201
+        assert (
+            client.post(
+                "/api/projects",
+                headers=auth,
+                json={"slug": "demo", "name": "Demo"},
+            ).status_code
+            == 201
+        )
         monkeypatch.setattr(
             app.state.app_manager,
             "preview_target",
@@ -1307,9 +1301,7 @@ def test_appview_request_drains_before_fence_activation(
 
         def request_appview() -> None:
             try:
-                responses.append(
-                    client.get("/api/appview/demo/", headers=auth)
-                )
+                responses.append(client.get("/api/appview/demo/", headers=auth))
             except BaseException as exc:
                 request_errors.append(exc)
 
@@ -1398,9 +1390,7 @@ def test_established_terminal_drains_session_before_fence_activation(
 
     with TestClient(app) as client:
         token = client.post("/auth/auto").json()["token"]
-        with client.websocket_connect(
-            f"/api/ws/terminal?token={token}"
-        ) as websocket:
+        with client.websocket_connect(f"/api/ws/terminal?token={token}") as websocket:
             assert started.wait(timeout=2)
             websocket.send_bytes(b"admitted-input")
             assert input_started.wait(timeout=2)
@@ -1476,9 +1466,7 @@ def test_background_thread_retains_ingress_until_completion(
 ):
     fence = tmp_path / "status" / "fence.json"
     _provision_ingress(fence)
-    maintenance = MaintenanceBoundary(
-        {"safe_update_fence_path": str(fence)}
-    )
+    maintenance = MaintenanceBoundary({"safe_update_fence_path": str(fence)})
     request_lease = maintenance.acquire()
     started = threading.Event()
     finish = threading.Event()
@@ -1525,9 +1513,7 @@ def test_background_task_retains_ingress_until_completion(
 ):
     fence = tmp_path / "status" / "fence.json"
     _provision_ingress(fence)
-    maintenance = MaintenanceBoundary(
-        {"safe_update_fence_path": str(fence)}
-    )
+    maintenance = MaintenanceBoundary({"safe_update_fence_path": str(fence)})
 
     async def run_case() -> None:
         request_lease = maintenance.acquire()
@@ -1578,9 +1564,7 @@ def test_background_task_retains_ingress_until_completion(
 def test_ingress_drain_timeout_leaves_pending_state(tmp_path: Path):
     fence = tmp_path / "status" / "fence.json"
     _provision_ingress(fence)
-    maintenance = MaintenanceBoundary(
-        {"safe_update_fence_path": str(fence)}
-    )
+    maintenance = MaintenanceBoundary({"safe_update_fence_path": str(fence)})
     lease = maintenance.acquire()
     try:
         with pytest.raises(
@@ -1706,9 +1690,7 @@ def test_active_worker_run_holds_ingress_until_completion(
         worker.reap_stale_runs = lambda _seconds: None
         worker.reap_orphaned_jobs = lambda: None
         worker.satpam.maybe_tick = lambda _now: None
-        worker.claim_run = (
-            lambda: pending_runs.pop(0) if pending_runs else None
-        )
+        worker.claim_run = lambda: pending_runs.pop(0) if pending_runs else None
 
         async def execute(_run) -> None:
             started.set()

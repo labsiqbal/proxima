@@ -65,10 +65,10 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
   with budgets, provenance, and cross-Container isolation.
 - **Terminal** (`terminal.py`) — a PTY-backed shell exposed over WebSocket.
 - **App runner + preview proxy** (`apprunner.py`, `preview_output.py`,
-  `preview_proxy.py`) - reserve each project lifecycle by generation, launch its
-  dev server through a profile-specific supervisor, and reverse-proxy only a
-  currently ownership-verified connection. Supervisor output uses bounded,
-  versioned deltas and an atomic final snapshot.
+  `preview_output_broker.py`, `preview_proxy.py`) - reserve each project
+  lifecycle by generation, launch its dev server through a profile-specific
+  supervisor, and reverse-proxy only a currently ownership-verified connection.
+  Supervisor output uses bounded, versioned deltas and an atomic final snapshot.
 
 ## Frontend — `apps/web`
 

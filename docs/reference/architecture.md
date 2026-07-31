@@ -58,7 +58,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
-│  AppManager    per-project dev-server processes  ── PreviewProxy (subdomains)  │
+│  AppManager    project generations + supervisors ── PreviewProxy (subdomains) │
 │                                                  ── PreviewRelay (per-app port)│
 │  Terminal      PTY shell over WebSocket                                         │
 └───────────────────────────────┬───────────────────────────────────────────────┘

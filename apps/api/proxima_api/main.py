@@ -17,7 +17,10 @@ from .db import connect, init_db
 from .migrations import run_migrations
 from .master_persistence import MasterPersistenceError, assert_master_persistence
 from .master_runtime import ensure_master_identity
-from .container_registry import migrate_legacy_ops_containers, refresh_registry_projections
+from .container_registry import (
+    migrate_legacy_ops_containers,
+    refresh_registry_projections,
+)
 from .acp import AcpManager
 from .apprunner import AppManager
 from .preview_proxy import (
@@ -108,27 +111,37 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
         try:
             backfill(app.state.db, cfg)
         except Exception as _exc:
-            logging.getLogger("proxima.provisioning").exception("startup backfill failed")
+            logging.getLogger("proxima.provisioning").exception(
+                "startup backfill failed"
+            )
     try:
         with app.state.db_lock:
             archive_old_jobs(app.state.db, _as_int(cfg.get("job_archive_days", 30)))
     except Exception as _exc:
-        logging.getLogger("proxima.api").exception("job archive sweep failed (non-fatal)")
+        logging.getLogger("proxima.api").exception(
+            "job archive sweep failed (non-fatal)"
+        )
     worker = app.state.worker
     # Reclaim runs orphaned by a previous shutdown: a run left in 'running'
     # had in-memory ACP state that's now gone, so it can never complete.
     # Mark it failed (and emit a terminal event) instead of leaving it stuck.
     try:
         with app.state.db_lock:
-            orphaned = [dict(r) for r in app.state.worker_db.execute(
-                "SELECT id, session_id, project_id FROM runs WHERE status = 'running'"
-            ).fetchall()]
+            orphaned = [
+                dict(r)
+                for r in app.state.worker_db.execute(
+                    "SELECT id, session_id, project_id FROM runs WHERE status = 'running'"
+                ).fetchall()
+            ]
         for r in orphaned:
-            worker._fail_interrupted(r["id"], r["session_id"], r["project_id"], "Interrupted by server restart")
-        with app.state.db_lock:
-            focus_sessions = master_focus.reconcile_pending_focuses(
-                app.state.worker_db
+            worker._fail_interrupted(
+                r["id"],
+                r["session_id"],
+                r["project_id"],
+                "Interrupted by server restart",
             )
+        with app.state.db_lock:
+            focus_sessions = master_focus.reconcile_pending_focuses(app.state.worker_db)
         for session_id in focus_sessions:
             app.state.hub.notify(session_id)
         worker.reap_orphaned_jobs()
@@ -151,6 +164,7 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
         _as_int(cfg.get("container_registry_refresh_seconds", 5)),
     )
     if registry_interval:
+
         def _refresh_registry() -> None:
             conn = connect(
                 cfg["database_path"],
@@ -175,6 +189,7 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
     code_graph_task: asyncio.Task | None = None
     knowledge_graph_task: asyncio.Task | None = None
     if cfg.get("start_worker", True) and cfg.get("feature_master_orchestrator", False):
+
         async def _master_loop() -> None:
             while True:
                 await asyncio.sleep(5)
@@ -183,7 +198,10 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
                     if supervisor is not None:
                         supervisor.tick()
                 except Exception:
-                    logging.getLogger("proxima.master").exception("Master supervisor tick failed")
+                    logging.getLogger("proxima.master").exception(
+                        "Master supervisor tick failed"
+                    )
+
         master_task = asyncio.create_task(_master_loop())
 
         code_graph_interval = max(
@@ -224,6 +242,7 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
 
         knowledge_graph_task = asyncio.create_task(_knowledge_graph_loop())
     if cfg.get("start_worker", True) and cfg.get("start_scheduler", True):
+
         async def _scheduler_loop() -> None:
             while True:
                 # Align to the top of each minute. A fixed sleep(60) measured from
@@ -232,24 +251,33 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
                 # set for that minute never fires. Sleeping to the next :00 keeps
                 # every minute sampled exactly once.
                 now = datetime.now()
-                await asyncio.sleep(max(1.0, 60 - now.second - now.microsecond / 1_000_000))
+                await asyncio.sleep(
+                    max(1.0, 60 - now.second - now.microsecond / 1_000_000)
+                )
                 try:
                     _scheduler_tick(app)
                 except Exception as _exc:
-                    logging.getLogger("proxima.scheduler").exception("scheduler tick failed")
+                    logging.getLogger("proxima.scheduler").exception(
+                        "scheduler tick failed"
+                    )
+
         scheduler_task = asyncio.create_task(_scheduler_loop())
     # Reconcile markers left by the removed live-checkout updater.
     app.state.updates.reconcile_marker()
     update_task: asyncio.Task | None = None
     if cfg.get("update_check", True):
+
         async def _update_check_loop() -> None:
             await asyncio.sleep(UPDATE_FIRST_CHECK_DELAY_SECONDS)
             while True:
                 try:
                     await app.state.updates.check_now()  # contract: never raises
                 except Exception as _exc:
-                    logging.getLogger("proxima.updates").exception("update check loop tick failed")
+                    logging.getLogger("proxima.updates").exception(
+                        "update check loop tick failed"
+                    )
                 await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
+
         update_task = asyncio.create_task(_update_check_loop())
     startup_lease.release()
     yield
@@ -325,14 +353,21 @@ def _create_app(
         # A controller-prepared fixture is already migrated.  Failing this check
         # is safer than letting the candidate create or alter anything at startup.
         required = {"users", "schema_migrations"}
-        found = {row[0] for row in app.state.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        found = {
+            row[0]
+            for row in app.state.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
         if not required.issubset(found):
             raise ValueError("candidate fixture is not a migrated Proxima database")
         workspace = Path(cfg["workspace_root"]).resolve()
         for row in app.state.db.execute("SELECT path FROM projects").fetchall():
             project_path = Path(row[0]).resolve()
             if project_path != workspace and workspace not in project_path.parents:
-                raise ValueError("candidate fixture contains a non-candidate project path")
+                raise ValueError(
+                    "candidate fixture contains a non-candidate project path"
+                )
     elif maintenance_mode:
         required = {"users", "schema_migrations"}
         found = {
@@ -344,8 +379,15 @@ def _create_app(
         if not required.issubset(found):
             raise ValueError("maintenance database is not a migrated Proxima database")
     else:
-        init_db(app.state.db, cfg.get("seed_users") or [], lambda username, slug: hermes_home_for(cfg, username, slug), source_hermes_home=cfg.get("source_hermes_home"))
-        run_migrations(app.state.db, cfg.get("database_path"))  # versioned migrations (backs up before applying)
+        init_db(
+            app.state.db,
+            cfg.get("seed_users") or [],
+            lambda username, slug: hermes_home_for(cfg, username, slug),
+            source_hermes_home=cfg.get("source_hermes_home"),
+        )
+        run_migrations(
+            app.state.db, cfg.get("database_path")
+        )  # versioned migrations (backs up before applying)
         assert_master_persistence(app.state.db)
         assert_master_projection_ledger(app.state.db)
         migrate_legacy_ops_containers(app.state.db)
@@ -358,11 +400,7 @@ def _create_app(
     app.state.worker = RunWorker(app)
     app.state.acp_manager = AcpManager(
         contained=maintenance.process_containment_required,
-        maintenance=(
-            maintenance
-            if maintenance.process_containment_required
-            else None
-        ),
+        maintenance=(maintenance if maintenance.process_containment_required else None),
     )
     app.state.app_manager = AppManager(
         contained=maintenance.process_containment_required,
@@ -387,10 +425,12 @@ def _create_app(
     async def maintenance_write_fence(request: Request, call_next):
         lease = maintenance.acquire()
         maintenance_state = maintenance.status()
-        write_capable = (
-            request.method in {"POST", "PUT", "PATCH", "DELETE"}
-            or request.url.path.startswith("/api/appview/")
-        )
+        write_capable = request.method in {
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+        } or request.url.path.startswith("/api/appview/")
         if (
             write_capable
             and request.url.path != "/auth/resume"
@@ -525,11 +565,13 @@ def _create_app(
         if cfg.get("candidate_mode", False):
             # Supplementary only: the trusted updater independently resolves the
             # immutable release and hashes assets before accepting this response.
-            payload.update({
-                "release_id": cfg.get("candidate_release_id"),
-                "commit": cfg.get("candidate_commit"),
-                "asset_manifest_digest": cfg.get("candidate_asset_manifest_digest"),
-            })
+            payload.update(
+                {
+                    "release_id": cfg.get("candidate_release_id"),
+                    "commit": cfg.get("candidate_commit"),
+                    "asset_manifest_digest": cfg.get("candidate_asset_manifest_digest"),
+                }
+            )
         return payload
 
     routes_work.register(app, _route_deps)
@@ -570,13 +612,26 @@ def _create_app(
         # Host-only cookie for the UI's own host: authorizes the per-app preview
         # relay ports (cookies are host-scoped but port-blind, so the browser
         # sends it to http://<this-host>:<relay port>/ and its subresources).
-        resp.set_cookie(PREVIEW_COOKIE, token, path="/", httponly=True,
-                        secure=request.url.scheme == "https", samesite="lax",
-                        max_age=PREVIEW_TOKEN_TTL_SECONDS)
+        resp.set_cookie(
+            PREVIEW_COOKIE,
+            token,
+            path="/",
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="lax",
+            max_age=PREVIEW_TOKEN_TTL_SECONDS,
+        )
         if cfg.get("apps_domain"):
-            resp.set_cookie(PREVIEW_COOKIE, token, domain="." + cfg["apps_domain"], path="/",
-                            httponly=True, secure=True, samesite="lax",
-                            max_age=PREVIEW_TOKEN_TTL_SECONDS)
+            resp.set_cookie(
+                PREVIEW_COOKIE,
+                token,
+                domain="." + cfg["apps_domain"],
+                path="/",
+                httponly=True,
+                secure=True,
+                samesite="lax",
+                max_age=PREVIEW_TOKEN_TTL_SECONDS,
+            )
         return resp
 
     # Port-based preview origins for installs without an apps domain (LAN/Tailscale):
@@ -585,11 +640,12 @@ def _create_app(
         cfg.get("preview_bind_host"),
         port_for=lambda slug: app.state.app_manager.preview_target(slug),
         verify_connection=(
-            lambda slug, port, client_port:
-            app.state.app_manager.verify_preview_connection(
-                slug,
-                port,
-                client_port,
+            lambda slug, port, client_port: (
+                app.state.app_manager.verify_preview_connection(
+                    slug,
+                    port,
+                    client_port,
+                )
             )
         ),
         validate_token=_valid_preview_token,
@@ -599,9 +655,13 @@ def _create_app(
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
     # app's dev port, HTTP + WebSocket). Gated by the proxima_preview cookie (no CF Access on
     # these subdomains, so they can be iframed). No-op when apps_domain is unset.
-    app.add_middleware(PreviewProxyMiddleware, fastapi_app=app, apps_domain=cfg.get("apps_domain"),
-                       validate_token=_valid_preview_token,
-                       maintenance=maintenance)
+    app.add_middleware(
+        PreviewProxyMiddleware,
+        fastapi_app=app,
+        apps_domain=cfg.get("apps_domain"),
+        validate_token=_valid_preview_token,
+        maintenance=maintenance,
+    )
 
     return app
 
@@ -627,7 +687,11 @@ def _config_from_env() -> dict[str, Any]:
     Mirrors scripts/serve.py so running either way behaves the same and never
     falls back to the /srv demo defaults.
     """
-    workspace_root = Path(os.environ.get("PROXIMA_WORKSPACE_ROOT", str(Path.home() / ".local/share/proxima")))
+    workspace_root = Path(
+        os.environ.get(
+            "PROXIMA_WORKSPACE_ROOT", str(Path.home() / ".local/share/proxima")
+        )
+    )
     update_check_env = os.environ.get("PROXIMA_UPDATE_CHECK")
     try:
         max_upload_mb = max(1, int(os.environ.get("PROXIMA_MAX_UPLOAD_MB", "100")))
@@ -641,24 +705,40 @@ def _config_from_env() -> dict[str, Any]:
             return default
 
     return {
-        "database_path": os.environ.get("PROXIMA_DB_PATH", str(workspace_root / "proxima.db")),
+        "database_path": os.environ.get(
+            "PROXIMA_DB_PATH", str(workspace_root / "proxima.db")
+        ),
         "workspace_root": str(workspace_root),
-        "hermes_profiles_root": os.environ.get("PROXIMA_HERMES_PROFILES_ROOT", str(workspace_root / "hermes-profiles")),
+        "hermes_profiles_root": os.environ.get(
+            "PROXIMA_HERMES_PROFILES_ROOT", str(workspace_root / "hermes-profiles")
+        ),
         "web_dist_path": os.environ.get("PROXIMA_WEB_DIST") or None,
         "max_upload_bytes": max_upload_mb * 1024 * 1024,
-        "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split() or None,
+        "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split()
+        or None,
         # Turn quota + worker knobs, mirrored from serve.py (T5): before this the
         # env overrides only existed via scripts/serve.py and this entrypoint was
         # stuck at the defaults. The in-app run_timeout_seconds setting overrides
         # these at run time on both entrypoints (app_settings.get_run_timeout_seconds).
-        "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["run_timeout_seconds"])),
-        "run_continuation_limit": env_int("PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])),
-        "run_worker_concurrency": env_int("PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])),
+        "run_timeout_seconds": env_int(
+            "PROXIMA_RUN_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["run_timeout_seconds"])
+        ),
+        "run_continuation_limit": env_int(
+            "PROXIMA_RUN_CONTINUATION_LIMIT",
+            int(DEFAULT_CONFIG["run_continuation_limit"]),
+        ),
+        "run_worker_concurrency": env_int(
+            "PROXIMA_RUN_WORKER_CONCURRENCY",
+            int(DEFAULT_CONFIG["run_worker_concurrency"]),
+        ),
         "master_max_parallel": env_int(
             "PROXIMA_MASTER_MAX_PARALLEL",
             int(DEFAULT_CONFIG["master_max_parallel"]),
         ),
-        "graph_node_concurrency": env_int("PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])),
+        "graph_node_concurrency": env_int(
+            "PROXIMA_GRAPH_NODE_CONCURRENCY",
+            int(DEFAULT_CONFIG["graph_node_concurrency"]),
+        ),
         "graph_query_max_depth": env_int(
             "PROXIMA_GRAPH_QUERY_MAX_DEPTH",
             int(DEFAULT_CONFIG["graph_query_max_depth"]),
@@ -686,7 +766,8 @@ def _config_from_env() -> dict[str, Any]:
         "graph_semantic_egress_enabled": os.environ.get(
             "PROXIMA_GRAPH_SEMANTIC_EGRESS",
             "0",
-        ).lower() in ("1", "true", "yes", "on"),
+        ).lower()
+        in ("1", "true", "yes", "on"),
         "container_registry_refresh_seconds": env_int(
             "PROXIMA_CONTAINER_REGISTRY_REFRESH_SECONDS",
             int(DEFAULT_CONFIG["container_registry_refresh_seconds"]),
@@ -697,10 +778,17 @@ def _config_from_env() -> dict[str, Any]:
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME", "admin"),
         # Point the claude-code runner at the live ~/.claude (full skills/plugins/
         # rules/memory) instead of an isolated seeded profile home.
-        "claude_live_home": os.environ.get("PROXIMA_CLAUDE_LIVE_HOME", "").lower() in ("1", "true", "yes"),
+        "claude_live_home": os.environ.get("PROXIMA_CLAUDE_LIVE_HOME", "").lower()
+        in ("1", "true", "yes"),
         # Capability bundle (T8): unset -> <repo root>/bundled-skills via normalize_config.
         "bundled_skills_dir": os.environ.get("PROXIMA_BUNDLED_SKILLS_DIR") or None,
-        "link_roots": [p for p in os.environ.get("PROXIMA_LINK_ROOTS", os.path.expanduser("~")).split(":") if p],
+        "link_roots": [
+            p
+            for p in os.environ.get(
+                "PROXIMA_LINK_ROOTS", os.path.expanduser("~")
+            ).split(":")
+            if p
+        ],
         # Per-app remote preview: apps run on their own subdomain (<slug>.<apps_domain>)
         # that rides the tunnel; unset ⇒ local-only preview (no subdomain routing). The
         # cf_* creds let the app create/remove that subdomain hostname on the tunnel.
@@ -708,7 +796,8 @@ def _config_from_env() -> dict[str, Any]:
         # Interface for per-app preview relay ports (remote preview without an apps
         # domain). Default "auto": loopback plus the tailnet interface if present -
         # never 0.0.0.0 unless explicitly set. "off" disables relays.
-        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
+        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND")
+        or DEFAULT_CONFIG["preview_bind_host"],
         "preview_profile": (
             os.environ.get("PROXIMA_PREVIEW_PROFILE")
             or DEFAULT_CONFIG["preview_profile"]
@@ -726,20 +815,37 @@ def _config_from_env() -> dict[str, Any]:
         # Release update check — PROXIMA_UPDATE_CHECK=0 disables the periodic
         # phone-home; PROXIMA_UPDATE_REPO points forks at their own releases.
         "update_check": (
-            DEFAULT_CONFIG["update_check"] if update_check_env is None
+            DEFAULT_CONFIG["update_check"]
+            if update_check_env is None
             else update_check_env.lower() in ("1", "true", "yes")
         ),
-        "update_repo": os.environ.get("PROXIMA_UPDATE_REPO") or DEFAULT_CONFIG["update_repo"],
-        "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
-        "feature_design_studio": os.environ.get("PROXIMA_FEATURE_DESIGN_STUDIO", "1").lower() in ("1", "true", "yes", "on"),
-        "feature_workflow_graph": os.environ.get("PROXIMA_FEATURE_WORKFLOW_GRAPH", "1").lower() in ("1", "true", "yes", "on"),
-        "feature_repo_worktrees": os.environ.get("PROXIMA_FEATURE_REPO_WORKTREES", "1").lower() in ("1", "true", "yes", "on"),
+        "update_repo": os.environ.get("PROXIMA_UPDATE_REPO")
+        or DEFAULT_CONFIG["update_repo"],
+        "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or None,
+        "feature_design_studio": os.environ.get(
+            "PROXIMA_FEATURE_DESIGN_STUDIO", "1"
+        ).lower()
+        in ("1", "true", "yes", "on"),
+        "feature_workflow_graph": os.environ.get(
+            "PROXIMA_FEATURE_WORKFLOW_GRAPH", "1"
+        ).lower()
+        in ("1", "true", "yes", "on"),
+        "feature_repo_worktrees": os.environ.get(
+            "PROXIMA_FEATURE_REPO_WORKTREES", "1"
+        ).lower()
+        in ("1", "true", "yes", "on"),
         "feature_master_orchestrator": os.environ.get(
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "0"
-        ).lower() in ("1", "true", "yes", "on"),
+        ).lower()
+        in ("1", "true", "yes", "on"),
         **safe_update_config_from_env(),
         # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
-        "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip() or DEFAULT_CONFIG["service_name"],
+        "service_name": (
+            os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]
+        ).strip()
+        or DEFAULT_CONFIG["service_name"],
     }
 
 

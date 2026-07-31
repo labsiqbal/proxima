@@ -25,20 +25,22 @@ def pid_namespace_argv(
     ]
     if info_fd is not None:
         command.extend(["--info-fd", str(info_fd)])
-    command.extend([
-        "--bind",
-        "/",
-        "/",
-        "--dev-bind",
-        "/dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--chdir",
-        cwd,
-        "--",
-        *argv,
-    ])
+    command.extend(
+        [
+            "--bind",
+            "/",
+            "/",
+            "--dev-bind",
+            "/dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--chdir",
+            cwd,
+            "--",
+            *argv,
+        ]
+    )
     return command
 
 
@@ -64,8 +66,6 @@ async def terminate_and_verify(
         try:
             await asyncio.wait_for(process.wait(), timeout=timeout)
         except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"{label} process did not exit after kill"
-            ) from exc
+            raise RuntimeError(f"{label} process did not exit after kill") from exc
     if process.returncode is None:
         raise RuntimeError(f"{label} process exit was not verified")

@@ -3,6 +3,7 @@
 Extracted verbatim from main.py (no behavior change) so the route handlers and
 the request contracts live in separate, smaller files.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -402,7 +403,9 @@ class ImageGenRequest(BaseModel):
     prompt: str = Field(min_length=1)
     size: str = "1024x1024"
     model: str | None = None
-    image: str | None = None  # relative project path of an existing asset, for edit/manipulate
+    image: str | None = (
+        None  # relative project path of an existing asset, for edit/manipulate
+    )
     # Multiple source/reference images (relative project paths) to edit/compose into
     # one — providers that advertise referenceImages (e.g. codex) honour all of them;
     # single-image providers use the first. Takes precedence over `image` when set.
@@ -416,7 +419,7 @@ class WikiDraftRequest(BaseModel):
 class WikiCommitRequest(BaseModel):
     path: str
     content: str
-    mode: str = "new"   # 'new' | 'append' | 'overwrite'
+    mode: str = "new"  # 'new' | 'append' | 'overwrite'
 
 
 class ChatSendRequest(BaseModel):

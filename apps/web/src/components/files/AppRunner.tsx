@@ -173,10 +173,12 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     }, 0)
   }
 
-  // Remote: use the app's isolated preview subdomain (Cloudflare apps domain), or
-  // without one — the app's preview relay port on the same host: its own origin, so
-  // absolute asset paths and HMR websockets work, gated by the proxima_preview
-  // cookie (host-scoped cookies ignore ports) and credential-stripped upstream.
+  // Prefer an isolated origin: remote apps-domain subdomain when configured, else
+  // the app's preview relay port on the same host (local and remote). Absolute
+  // asset paths and HMR websockets work on that origin, gated by the
+  // proxima_preview cookie (host-scoped cookies ignore ports) and
+  // credential-stripped upstream. Fall back to same-origin appview only when no
+  // isolated origin is available.
   const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
   const subdomainUrl = appsDomain && isRemote && status.running && status.ready ? `${location.protocol}//preview-${slug}.${appsDomain}/` : ''
   const relayUrl = !subdomainUrl && status.running && status.preview_port ? `${location.protocol}//${location.hostname}:${status.preview_port}/` : ''

@@ -1,8 +1,11 @@
-"""Run a project's app (dev server) as a managed background process and proxy it.
+"""Run a project's app (dev server) under ownership-verified lifecycle control.
 
-Lets you preview something the agent built — e.g. `npm run dev` — live inside
-Proxima. One managed process per project; the HTTP proxy forwards to its port so
-relative assets resolve and no port is exposed directly.
+Lets you preview something the agent built - e.g. `npm run dev` - live inside
+Proxima. One project generation at a time launches through a profile-specific
+supervisor. The requested port is only a candidate; appview, relay, and
+subdomain paths forward only after the connected server socket is proven to
+belong to a currently ready managed endpoint. Foreign listeners are never
+signaled or terminated.
 """
 
 from __future__ import annotations
@@ -1750,9 +1753,7 @@ class AppManager:
         if not candidates:
             return "unresolved"
         self._unadopted.discard(slug)
-        deadline = (
-            asyncio.get_running_loop().time() + RECONCILE_DEADLINE_SECONDS
-        )
+        deadline = asyncio.get_running_loop().time() + RECONCILE_DEADLINE_SECONDS
         try:
             await self._reconcile_slug(slug, candidates, deadline)
         except asyncio.CancelledError:
@@ -1806,7 +1807,8 @@ class AppManager:
                     self._last_exit[slug] = {
                         key: status[key]
                         for key in status
-                        if key in {
+                        if key
+                        in {
                             "state",
                             "running",
                             "ready",
@@ -1847,9 +1849,7 @@ class AppManager:
         )
         status = self._adoption_unknown_status(
             {
-                "port": previous.get("requested_port")
-                or previous.get("port")
-                or 0,
+                "port": previous.get("requested_port") or previous.get("port") or 0,
                 "command": previous.get("command") or "",
             },
             message,
@@ -1906,7 +1906,8 @@ class AppManager:
             self._last_exit[slug] = {
                 key: status[key]
                 for key in status
-                if key in {
+                if key
+                in {
                     "state",
                     "running",
                     "ready",

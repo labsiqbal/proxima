@@ -1,27 +1,33 @@
-"""Reverse proxying for remote app previews — one engine, two front doors.
+"""Reverse proxying for app previews - one engine, two front doors.
 
-A project's running dev server (Vite/Next/static/…) must be served **root-
+A project's running dev server (Vite/Next/static/...) must be served **root-
 relative on its own origin** for a preview to actually work: SPA HTML references
 absolute asset paths (`/assets/x.js`, `/@vite/client`) and the HMR client opens
 a WebSocket to the page origin, none of which survive a sub-path proxy like
-`/api/appview/<slug>/`. The engine here forwards HTTP + WebSocket to the app's
-local dev port, rewrites Host to `127.0.0.1:<port>` (so Vite-style allowed-host
-checks pass), and strips cookies/authorization so project code never sees
-Proxima credentials.
+`/api/appview/<slug>/`. The engine authenticates the preview capability first,
+then opens an upstream connection and verifies that the connected server socket
+belongs to a currently ready managed endpoint before sending HTTP or WebSocket
+bytes. It rewrites Host to `127.0.0.1:<port>` (so Vite-style allowed-host checks
+pass) and strips cookies/authorization so project code never sees Proxima
+credentials. Starting, conflict, ownership-unknown, and exited states have no
+proxy target.
 
 Two front doors share it:
 
-- `PreviewProxyMiddleware` — host-based: `preview-<slug>.<APPS_DOMAIN>` rides
-  the Cloudflare tunnel. Unset APPS_DOMAIN ⇒ no-op passthrough.
-- `PreviewRelayManager` — port-based, for deployments without an apps domain
-  (LAN / Tailscale): each running app gets its own listener on the Proxima
-  host, so `http://<proxima-host>:<relay port>/` is that app's origin.
+- `PreviewProxyMiddleware` - host-based: `preview-<slug>.<APPS_DOMAIN>` rides
+  the Cloudflare tunnel. Unset APPS_DOMAIN => no-op passthrough.
+- `PreviewRelayManager` - port-based origin for local and remote browsers when
+  no apps-domain subdomain applies: each running app gets its own listener on
+  the Proxima host, so `http://<proxima-host>:<relay port>/` is that app's
+  origin. Default bind is loopback plus Tailscale when present; never
+  `0.0.0.0` unless configured explicitly.
 
 Auth for both: the short-lived `proxima_preview` capability cookie minted by
 `POST /api/preview-auth`. It is never an owner API session, is host-scoped (so
-the browser sends it to relay ports — cookies ignore ports), and is stripped
+the browser sends it to relay ports - cookies ignore ports), and is stripped
 before forwarding.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,10 +49,21 @@ import websockets
 _LOG = logging.getLogger("proxima.preview_proxy")
 
 # Hop-by-hop headers must not be forwarded verbatim across a proxy.
-_HOP = {"authorization", "cf-access-jwt-assertion", "connection", "cookie",
-        "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade", "content-length",
-        "host"}
+_HOP = {
+    "authorization",
+    "cf-access-jwt-assertion",
+    "connection",
+    "cookie",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "host",
+}
 _RESPONSE_HOP = _HOP | {"set-cookie", "www-authenticate"}
 PREVIEW_COOKIE = "proxima_preview"
 PREVIEW_TOKEN_TTL_SECONDS = 60 * 60
@@ -91,15 +108,14 @@ def resolve_preview_bind_host(configured: str | None) -> str:
 
 def resolve_preview_bind_hosts(configured: str | None) -> tuple[str, ...]:
     host = resolve_preview_bind_host(configured)
-    if (
-        (configured or "").strip().lower() == "auto"
-        and host != "127.0.0.1"
-    ):
+    if (configured or "").strip().lower() == "auto" and host != "127.0.0.1":
         return ("127.0.0.1", host)
     return (host,)
 
 
-def mint_preview_token(secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS) -> str:
+def mint_preview_token(
+    secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECONDS
+) -> str:
     """Mint a short-lived capability that authorizes previews only.
 
     It is intentionally unrelated to the owner's API session. Tokens are signed
@@ -115,13 +131,19 @@ def mint_preview_token(secret: bytes, ttl_seconds: int = PREVIEW_TOKEN_TTL_SECON
 def valid_preview_token(secret: bytes, token: str, now: int | None = None) -> bool:
     try:
         encoded, signed = token.split(".", 1)
-        expected = base64.urlsafe_b64encode(
-            hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
-        ).decode().rstrip("=")
+        expected = (
+            base64.urlsafe_b64encode(
+                hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
+            )
+            .decode()
+            .rstrip("=")
+        )
         if not hmac.compare_digest(signed, expected):
             return False
         padding = "=" * (-len(encoded) % 4)
-        expires_raw, _nonce = base64.urlsafe_b64decode(encoded + padding).decode().split(":", 1)
+        expires_raw, _nonce = (
+            base64.urlsafe_b64decode(encoded + padding).decode().split(":", 1)
+        )
         return int(expires_raw) >= (int(time.time()) if now is None else now)
     except (ValueError, UnicodeDecodeError):
         return False
@@ -139,7 +161,7 @@ def _authed(scope: dict[str, Any], validate_token) -> bool:
     for part in cookie.split(";"):
         p = part.strip()
         if p.startswith(PREVIEW_COOKIE + "="):
-            token = p[len(PREVIEW_COOKIE) + 1:]
+            token = p[len(PREVIEW_COOKIE) + 1 :]
             break
     if not token:
         return False
@@ -153,8 +175,13 @@ async def _reject(scope, send, status: int, msg: str) -> None:
     if scope["type"] == "websocket":
         await send({"type": "websocket.close", "code": 1013})
         return
-    await send({"type": "http.response.start", "status": status,
-                "headers": [(b"content-type", b"text/plain; charset=utf-8")]})
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+        }
+    )
     await send({"type": "http.response.body", "body": msg.encode()})
 
 
@@ -339,9 +366,13 @@ async def _proxy_http(
                 for key, value in resp.headers
                 if key.decode("latin-1").lower() not in _RESPONSE_HOP
             ]
-            await send({"type": "http.response.start", "status": resp.status, "headers": out})
+            await send(
+                {"type": "http.response.start", "status": resp.status, "headers": out}
+            )
             async for chunk in resp.aiter_stream():
-                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                await send(
+                    {"type": "http.response.body", "body": chunk, "more_body": True}
+                )
             await send({"type": "http.response.body", "body": b"", "more_body": False})
     except PreviewConnectionRejected:
         await _reject(scope, send, 503, "preview app ownership changed")
@@ -526,11 +557,13 @@ class PreviewProxyMiddleware:
                 host = v.decode("latin-1").split(":")[0].lower()
                 break
         if host and host.endswith(self.suffix):
-            label = host[: -len(self.suffix)]  # e.g. "preview-myapp" — or "os" for the main app
+            label = host[
+                : -len(self.suffix)
+            ]  # e.g. "preview-myapp" — or "os" for the main app
             # Only intercept our own `preview-<slug>` single-label hosts; everything
             # else under the zone (proxima.example.com, www, …) passes through untouched.
             if "." not in label and label.startswith("preview-"):
-                slug = label[len("preview-"):]
+                slug = label[len("preview-") :]
                 return slug or None
         return None
 
@@ -538,6 +571,7 @@ class PreviewProxyMiddleware:
         if scope["type"] in ("http", "websocket"):
             slug = self._slug_for(scope)
             if slug is not None:
+
                 def resolve_port() -> int | None:
                     return self.fastapi_app.state.app_manager.preview_target(slug)
 
@@ -636,6 +670,7 @@ class PreviewRelayManager:
                 verify_connection=verify_connection,
                 maintenance=self.maintenance,
             )
+
         return relay_app
 
     async def start(self, slug: str) -> int | None:
@@ -658,13 +693,15 @@ class PreviewRelayManager:
                 with contextlib.suppress(OSError):
                     sock.close()
             raise
-        server = _RelayServer(uvicorn.Config(
-            self._asgi_for(slug),
-            lifespan="off",
-            access_log=False,
-            log_level="warning",
-            ws="websockets-sansio",
-        ))
+        server = _RelayServer(
+            uvicorn.Config(
+                self._asgi_for(slug),
+                lifespan="off",
+                access_log=False,
+                log_level="warning",
+                ws="websockets-sansio",
+            )
+        )
         task = asyncio.create_task(server.serve(sockets=sockets))
         self._relays[slug] = {
             "server": server,
