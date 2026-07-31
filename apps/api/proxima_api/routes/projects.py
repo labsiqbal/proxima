@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException
 from .. import container_registry, fsapi, repo_remote
 from ..project_browse import (
     AllowedRoots,
+    CreatedDirectory,
     DirectoryBrowseUnavailable,
     DirectoryComponentInvalid,
     PathOutsideRoots,
@@ -134,22 +135,13 @@ def register(app, deps):
     def _link_error(status_code: int, message: str, field: str) -> HTTPException:
         return HTTPException(status_code=status_code, detail={"message": message, "field": field})
 
-    def _rmdir_if_empty(path: Path) -> None:
-        try:
-            path.rmdir()
-        except OSError:
-            pass
-
     @app.post("/api/projects/link", status_code=201)
     def link_project(payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)):
         """Register a folder as a project (no scaffold under the data dir). The
         project's path points at the real folder, so chat/terminal/files operate
         on it. Pass mkdir=true to create a brand-new empty directory first
         (parent must already exist inside the link roots)."""
-        # created_dir tracks a directory we made in this request. On any failure
-        # after mkdir (known 4xx or unexpected DB/area errors), finally removes it
-        # so a retry is not blocked by an orphan empty folder.
-        created_dir: Path | None = None
+        created_dir: CreatedDirectory | None = None
         try:
             error_field = "parent" if payload.mkdir else "path"
             try:
@@ -163,35 +155,28 @@ def register(app, deps):
                     raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 folder_name = _validate_new_folder_name(raw_name)
                 try:
-                    parent = allowed_roots.resolve(raw_parent).path
+                    parent = allowed_roots.resolve(raw_parent)
                 except PathOutsideRoots as exc:
                     raise _link_error(403, str(exc), "parent") from exc
                 except PathResolutionUnavailable as exc:
                     raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 try:
-                    parent_is_dir = parent.is_dir()
-                except PermissionError as exc:
-                    raise _link_error(403, "permission denied - parent directory is not accessible", "parent") from exc
-                except OSError as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
-                if not parent_is_dir:
-                    raise _link_error(400, "parent directory does not exist", "parent")
-                try:
-                    target = create_directory_component(parent, folder_name)
+                    created_dir = create_directory_component(parent, folder_name)
                 except DirectoryComponentInvalid as exc:
                     raise _link_error(400, str(exc), "folder") from exc
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
                 except FileExistsError as exc:
                     raise _link_error(409, "a folder with that name already exists", "folder") from exc
+                except FileNotFoundError as exc:
+                    raise _link_error(400, "parent directory does not exist", "parent") from exc
+                except NotADirectoryError as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 except OSError as exc:
                     raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
-                created_dir = target
                 try:
-                    target = allowed_roots.resolve(target).path
-                except PathOutsideRoots as exc:
-                    raise _link_error(403, str(exc), "parent") from exc
-                except PathResolutionUnavailable as exc:
+                    target = created_dir.require_visible()
+                except (PathOutsideRoots, PathResolutionUnavailable) as exc:
                     raise _link_error(400, "created folder is not reachable", "parent") from exc
             else:
                 try:
@@ -228,10 +213,18 @@ def register(app, deps):
                 (slug, name, str(target), user["id"]),
             )
             pid = cur.lastrowid
-            # INSERT succeeded: the project row owns the path. Clear created_dir so a
-            # later area/audit failure cannot delete a folder the project still points at.
             made_dir = created_dir is not None
-            created_dir = None
+            if created_dir is not None:
+                try:
+                    created_dir.commit()
+                except (OSError, PathOutsideRoots, PathResolutionUnavailable) as exc:
+                    db().execute("DELETE FROM projects WHERE id = ?", (pid,))
+                    raise _link_error(
+                        400,
+                        "created folder is not reachable",
+                        "parent",
+                    ) from exc
+                created_dir = None
             # Container areas (T1): register the ops area + auto-detect code areas.
             ensure_ops_area(db(), pid, rel_path=".")
             container_registry.migrate_container_ops(db(), pid)
@@ -255,7 +248,7 @@ def register(app, deps):
             return project_payload(row)
         finally:
             if created_dir is not None:
-                _rmdir_if_empty(created_dir)
+                created_dir.rollback()
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreateRequest, user: dict[str, Any] = Depends(current_user)):

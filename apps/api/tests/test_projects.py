@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from proxima_api import project_browse
 from proxima_api.main import create_app
 
 
@@ -101,7 +102,10 @@ def test_link_project_invalid_slug_returns_422_not_500(tmp_path):
     assert r.json()["detail"]["field"] == "slug"
 
 
-def _link_client(tmp_path: Path, roots: list[Path] | None = None) -> tuple[TestClient, dict[str, str]]:
+def _link_client(
+    tmp_path: Path,
+    roots: list[str | Path] | None = None,
+) -> tuple[TestClient, dict[str, str]]:
     app = create_app({
         "database_path": str(tmp_path / "h.db"),
         "workspace_root": str(tmp_path / "ws"),
@@ -224,7 +228,7 @@ def test_link_mkdir_routes_parent_permission_failure_to_parent(
     assert not target.exists()
 
 
-def test_link_mkdir_routes_unreadable_parent_probe_to_parent(
+def test_link_mkdir_routes_unreadable_parent_descriptor_to_parent(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -232,14 +236,14 @@ def test_link_mkdir_routes_unreadable_parent_probe_to_parent(
     parent.mkdir()
     target = parent / "blocked"
     c, h = _link_client(tmp_path)
-    original_is_dir = Path.is_dir
+    original_open = os.open
 
-    def deny_parent(path: Path):
-        if path == parent:
+    def deny_parent(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None and path == parent.name:
             raise PermissionError("denied")
-        return original_is_dir(path)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(Path, "is_dir", deny_parent)
+    monkeypatch.setattr(os, "open", deny_parent)
     response = c.post(
         "/api/projects/link",
         headers=h,
@@ -248,7 +252,7 @@ def test_link_mkdir_routes_unreadable_parent_probe_to_parent(
 
     assert response.status_code == 403
     assert response.json()["detail"] == {
-        "message": "permission denied - parent directory is not accessible",
+        "message": "permission denied - cannot create folder here",
         "field": "parent",
     }
     assert not target.exists()
@@ -342,6 +346,33 @@ def test_link_mkdir_routes_post_syscall_component_too_long_to_folder(
     assert not target.exists()
 
 
+def test_link_mkdir_routes_post_create_component_open_failure_to_folder(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "short-name"
+    c, h = _link_client(tmp_path)
+    original_open = os.open
+
+    def reject_created_component(path, *args, **kwargs):
+        if kwargs.get("dir_fd") is not None and path == target.name:
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", reject_created_component)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["field"] == "folder"
+    assert not target.exists()
+
+
 def test_link_mkdir_keeps_long_parent_failure_on_parent(
     tmp_path: Path,
     monkeypatch,
@@ -353,7 +384,7 @@ def test_link_mkdir_keeps_long_parent_failure_on_parent(
     original_open = os.open
 
     def reject_parent(path, *args, **kwargs):
-        if Path(path) == parent:
+        if kwargs.get("dir_fd") is not None and path == parent.name:
             raise OSError(errno.ENAMETOOLONG, "File name too long")
         return original_open(path, *args, **kwargs)
 
@@ -367,6 +398,80 @@ def test_link_mkdir_keeps_long_parent_failure_on_parent(
     assert response.status_code == 400
     assert response.json()["detail"]["field"] == "parent"
     assert not target.exists()
+
+
+def test_link_mkdir_rejects_intermediate_symlink_swap(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "allowed"
+    parent = root / "middle" / "parent"
+    outside = tmp_path / "outside"
+    outside_parent = outside / "parent"
+    parent.mkdir(parents=True)
+    outside_parent.mkdir(parents=True)
+    c, h = _link_client(tmp_path, roots=[root])
+    target = parent / "escaped"
+    original_create = project_browse.create_directory_component
+
+    def swap_then_create(resolved_parent, name, mode=0o755):
+        middle = root / "middle"
+        middle.rename(root / "middle-original")
+        middle.symlink_to(outside, target_is_directory=True)
+        return original_create(resolved_parent, name, mode)
+
+    monkeypatch.setattr(
+        "proxima_api.routes.projects.create_directory_component",
+        swap_then_create,
+    )
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["field"] == "parent"
+    assert not (outside_parent / target.name).exists()
+
+
+def test_link_mkdir_rolls_back_through_retained_parent_descriptor(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "allowed"
+    parent = root / "middle" / "parent"
+    outside = tmp_path / "outside"
+    outside_parent = outside / "parent"
+    parent.mkdir(parents=True)
+    outside_parent.mkdir(parents=True)
+    outside_target = outside_parent / "orphan-me"
+    outside_target.mkdir()
+    c, h = _link_client(tmp_path, roots=[root])
+    target = parent / outside_target.name
+
+    def swap_then_fail(_slug: str) -> str:
+        middle = root / "middle"
+        middle.rename(root / "middle-original")
+        middle.symlink_to(outside, target_is_directory=True)
+        raise RuntimeError("simulated unexpected failure")
+
+    monkeypatch.setattr(
+        "proxima_api.routes.projects.validate_slug",
+        swap_then_fail,
+    )
+    try:
+        c.post(
+            "/api/projects/link",
+            headers=h,
+            json={"path": str(target), "name": "Orphan Me", "mkdir": True},
+        )
+        raise AssertionError("expected unexpected failure to propagate")
+    except RuntimeError as exc:
+        assert "simulated unexpected failure" in str(exc)
+
+    assert outside_target.is_dir()
+    assert not (root / "middle-original" / "parent" / target.name).exists()
 
 
 def test_browse_recovers_to_nearest_readable_ancestor(tmp_path: Path):
@@ -394,14 +499,14 @@ def test_browse_recovers_from_unreadable_selection(tmp_path: Path, monkeypatch):
     selected = root / "blocked"
     selected.mkdir(parents=True)
     c, h = _link_client(tmp_path, roots=[root])
-    original_iterdir = Path.iterdir
+    original_open = project_browse._open_directory_under_root
 
-    def deny_selected(path: Path):
+    def deny_selected(root_path: Path, path: Path):
         if path == selected:
             raise PermissionError("denied")
-        return original_iterdir(path)
+        return original_open(root_path, path)
 
-    monkeypatch.setattr(Path, "iterdir", deny_selected)
+    monkeypatch.setattr(project_browse, "_open_directory_under_root", deny_selected)
     response = c.get(
         "/api/fs/dirs",
         headers=h,
@@ -420,20 +525,14 @@ def test_browse_retains_error_when_no_allowed_ancestor_is_readable(
     selected = root / "blocked"
     selected.mkdir(parents=True)
     c, h = _link_client(tmp_path, roots=[root])
-    original_is_dir = Path.is_dir
+    original_open = project_browse._open_directory_under_root
 
-    def deny_selected_status(path: Path):
-        if path == selected:
+    def deny_candidates(root_path: Path, path: Path):
+        if path in (selected, root):
             raise PermissionError("denied")
-        return original_is_dir(path)
+        return original_open(root_path, path)
 
-    def deny_root_traversal(path: Path):
-        if path == root:
-            raise PermissionError("denied")
-        return iter(())
-
-    monkeypatch.setattr(Path, "is_dir", deny_selected_status)
-    monkeypatch.setattr(Path, "iterdir", deny_root_traversal)
+    monkeypatch.setattr(project_browse, "_open_directory_under_root", deny_candidates)
     response = c.get(
         "/api/fs/dirs",
         headers=h,
@@ -445,6 +544,37 @@ def test_browse_retains_error_when_no_allowed_ancestor_is_readable(
         "message": "No readable folder is available inside the allowed roots",
         "field": "path",
     }
+
+
+def test_browse_rejects_intermediate_symlink_swap(tmp_path: Path, monkeypatch):
+    root = tmp_path / "allowed"
+    selected = root / "middle" / "selected"
+    outside = tmp_path / "outside"
+    selected.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "private").mkdir()
+    c, h = _link_client(tmp_path, roots=[root])
+    original_open = project_browse._open_directory_under_root
+    swapped = False
+
+    def swap_then_open(root_path: Path, path: Path):
+        nonlocal swapped
+        if path == selected and not swapped:
+            swapped = True
+            (root / "middle").rename(root / "middle-original")
+            (root / "middle").symlink_to(outside, target_is_directory=True)
+        return original_open(root_path, path)
+
+    monkeypatch.setattr(project_browse, "_open_directory_under_root", swap_then_open)
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(selected)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(root)
+    assert all(entry["name"] != "private" for entry in response.json()["dirs"])
 
 
 def test_browse_never_traverses_outside_allowed_roots(tmp_path: Path):
@@ -541,6 +671,30 @@ def test_unresolvable_configured_root_returns_structured_path_error(tmp_path: Pa
     }
 
 
+def test_unexpandable_root_keeps_valid_siblings_available(tmp_path: Path):
+    missing_home = "~definitely-no-such-proxima-test-user"
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    c, h = _link_client(tmp_path, roots=[missing_home, valid])
+
+    response = c.get("/api/fs/dirs", headers=h)
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(valid)
+    assert response.json()["roots"] == [missing_home, str(valid)]
+
+    retained = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": f"{missing_home}/retained-selection"},
+    )
+    assert retained.status_code == 403
+    assert retained.json()["detail"] == {
+        "message": "Selected folder root is not reachable",
+        "field": "path",
+    }
+
+
 def test_failed_configured_root_selection_never_falls_back_to_another_root(
     tmp_path: Path,
 ):
@@ -565,6 +719,40 @@ def test_failed_configured_root_selection_never_falls_back_to_another_root(
     valid_response = c.get("/api/fs/dirs", headers=h, params={"path": str(valid)})
     assert valid_response.status_code == 200
     assert valid_response.json()["roots"] == [str(valid), str(failed)]
+
+
+def test_nested_root_mutation_never_falls_back_to_containing_root(
+    tmp_path: Path,
+    monkeypatch,
+):
+    outer = tmp_path / "outer"
+    nested = outer / "nested"
+    nested.mkdir(parents=True)
+    original_resolve = project_browse._resolve
+    nested_resolutions = 0
+
+    def mutate_nested_root(value):
+        nonlocal nested_resolutions
+        if Path(value) == nested:
+            nested_resolutions += 1
+            if nested_resolutions == 2:
+                nested.rename(outer / "nested-original")
+                nested.symlink_to("nested")
+        return original_resolve(value)
+
+    monkeypatch.setattr(project_browse, "_resolve", mutate_nested_root)
+    c, h = _link_client(tmp_path, roots=[outer, nested])
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(nested / "retained-selection")},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "Selected folder root is not reachable",
+        "field": "path",
+    }
 
 
 def test_link_mkdir_routes_derived_slug_collisions_to_name(tmp_path: Path):

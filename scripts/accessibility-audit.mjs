@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  assertServiceWorkerCacheMatrix,
   GATE_TEXT_STYLES,
   privateEntryUrl,
   resolvePrivateTailscaleEntry,
@@ -45,6 +46,20 @@ function canonicalThemes() {
 }
 
 const themes = canonicalThemes()
+
+function canonicalServiceWorkerShellPaths() {
+  const source = fs.readFileSync(path.join(webRoot, 'public', 'sw.js'), 'utf8')
+  assert.doesNotMatch(source, /\b(?:WebSocket|EventSource)\b/)
+  const catalog = source.match(/const APP_SHELL\s*=\s*\[([^\]]+)\]/)
+  assert(catalog, 'Could not read the production service-worker APP_SHELL')
+  const paths = [...catalog[1].matchAll(/['"]([^'"]+)['"]/g)]
+    .map(match => match[1])
+  assert(paths.length > 0, 'Production service-worker APP_SHELL is empty')
+  assert(paths.every(item => !/^\/(?:api|auth)\//.test(item)))
+  return paths
+}
+
+const serviceWorkerShellPaths = canonicalServiceWorkerShellPaths()
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -163,11 +178,22 @@ class CdpClient {
     this.nextId = 0
     this.pending = new Map()
     this.listeners = new Map()
+    const rejectPending = reason => {
+      const error = reason instanceof Error
+        ? reason
+        : new Error('Chrome DevTools connection closed')
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout)
+        pending.reject(error)
+      }
+      this.pending.clear()
+    }
     socket.onmessage = event => {
       const message = JSON.parse(event.data)
       if (message.id && this.pending.has(message.id)) {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
+        clearTimeout(pending.timeout)
         if (message.error) pending.reject(new Error(JSON.stringify(message.error)))
         else pending.resolve(message.result)
         return
@@ -176,18 +202,30 @@ class CdpClient {
         listener(message.params, message.sessionId)
       }
     }
+    socket.onerror = rejectPending
+    socket.onclose = rejectPending
   }
 
-  send(method, params = {}, sessionId = null) {
+  send(method, params = {}, sessionId = null, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
       const id = ++this.nextId
-      this.pending.set(id, { resolve, reject })
-      this.socket.send(JSON.stringify({
-        id,
-        method,
-        params,
-        ...(sessionId ? { sessionId } : {}),
-      }))
+      const timeout = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Timed out sending ${method}`))
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timeout })
+      try {
+        this.socket.send(JSON.stringify({
+          id,
+          method,
+          params,
+          ...(sessionId ? { sessionId } : {}),
+        }))
+      } catch (error) {
+        clearTimeout(timeout)
+        this.pending.delete(id)
+        reject(error)
+      }
     })
   }
 
@@ -203,6 +241,12 @@ class CdpClient {
   }
 
   close() {
+    const error = new Error('Chrome DevTools connection closed')
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout)
+      pending.reject(error)
+    }
+    this.pending.clear()
     this.socket.close()
   }
 }
@@ -366,6 +410,44 @@ async function refreshSelectedFolder(cdp) {
     return true
   })()`)
   assert(refreshed, 'Missing selected-folder recovery control')
+}
+
+async function failNextFolderBrowse(cdp) {
+  let resolveIntercepted
+  let rejectIntercepted
+  const intercepted = new Promise((resolve, reject) => {
+    resolveIntercepted = resolve
+    rejectIntercepted = reject
+  })
+  let handled = false
+  const listener = event => {
+    if (handled) return
+    handled = true
+    cdp.send('Fetch.fulfillRequest', {
+      requestId: event.requestId,
+      responseCode: 403,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+      body: Buffer.from(JSON.stringify({
+        detail: {
+          message: 'No readable folder is available inside the allowed roots',
+          field: 'path',
+        },
+      })).toString('base64'),
+    })
+      .then(() => cdp.send('Fetch.disable'))
+      .then(resolveIntercepted, rejectIntercepted)
+  }
+  cdp.on('Fetch.requestPaused', listener)
+  await cdp.send('Fetch.enable', {
+    patterns: [{ urlPattern: '*api/fs/dirs*', requestStage: 'Request' }],
+  })
+  return {
+    intercepted,
+    stop: async () => {
+      cdp.off('Fetch.requestPaused', listener)
+      if (!handled) await cdp.send('Fetch.disable')
+    },
+  }
 }
 
 async function pressKey(cdp, key, code, keyCode, text = '') {
@@ -651,6 +733,38 @@ function discoverPrivateTailscaleEntry(environment) {
   })
 }
 
+async function closeInspectedTargets(browserCdp, interceptor, pageTargetId) {
+  const targetIds = new Set([pageTargetId])
+  const deadline = Date.now() + 5000
+  let emptySince = null
+  while (Date.now() <= deadline) {
+    for (const targetId of interceptor.inspectedTargetIds()) {
+      targetIds.add(targetId)
+    }
+    const remaining = await browserCdp.send('Target.getTargets', {}, null, 1000)
+    const remainingIds = new Set(
+      (remaining.targetInfos || []).map(targetInfo => targetInfo.targetId),
+    )
+    const liveTargetIds = [...targetIds].filter(targetId => remainingIds.has(targetId))
+    if (liveTargetIds.length === 0) {
+      emptySince ??= Date.now()
+      if (Date.now() - emptySince >= Math.max(interceptor.quietMs, 100)) return
+    } else {
+      emptySince = null
+      for (const targetId of liveTargetIds) {
+        await browserCdp.send(
+          'Target.closeTarget',
+          { targetId },
+          null,
+          1000,
+        ).catch(() => null)
+      }
+    }
+    await sleep(25)
+  }
+  throw new Error('Remote entry left an inspected page or worker target open')
+}
+
 async function auditRemoteEntry({
   pageCdp,
   browserCdp,
@@ -671,104 +785,142 @@ async function auditRemoteEntry({
   await pageCdp.send('Network.clearBrowserCookies')
   await pageCdp.send('Network.clearBrowserCache')
   await interceptor.start()
-  let navigationError = null
   let serviceWorkerExpected = false
+  let pageClosed = false
+  let interception = null
+  let auditFailed = false
   try {
-    try {
-      await navigate(pageCdp, target, 'Welcome back')
-      serviceWorkerExpected = await evaluate(
-        pageCdp,
-        `window.isSecureContext
-          && 'serviceWorker' in navigator
-          && ![...document.scripts].some(script =>
-            script.src.includes('/@vite/client') || script.src.includes('/src/')
-          )`,
-      )
-      if (serviceWorkerExpected) {
-        await waitForPage(pageCdp, `(async () => {
-          const registrations = await navigator.serviceWorker.getRegistrations()
-          if (registrations.length === 0) return false
-          await navigator.serviceWorker.ready
-          return true
-        })()`, `${origin} service worker`)
-      }
-    } catch (error) {
-      navigationError = error
-    }
+    await navigate(pageCdp, target, 'Welcome back')
+    serviceWorkerExpected = await evaluate(
+      pageCdp,
+      `window.isSecureContext
+        && 'serviceWorker' in navigator
+        && ![...document.scripts].some(script =>
+          script.src.includes('/@vite/client') || script.src.includes('/src/')
+        )`,
+    )
     await interceptor.waitForSettled()
-  } finally {
-    await interceptor.stop()
-  }
-  const interception = interceptor.snapshot()
-  const forwardedLabels = interception.forwarded.map(request => request.label)
-  const fulfilledLabels = interception.fulfilled.map(request => request.label)
-  const blockedLabels = interception.blocked.map(request => request.label)
-  if (navigationError) {
     const state = await evaluate(pageCdp, `(() => ({
       title: document.title,
-      heading: document.querySelector('h1')?.textContent || '',
-      text: document.body?.innerText?.slice(0, 240) || '',
-      scripts: document.scripts.length,
-    }))()`).catch(() => null)
+      mainCount: document.querySelectorAll('main').length,
+      passwordInputCount: document.querySelectorAll('input[type=password]').length,
+      passwordCount: document.querySelectorAll('input[autocomplete=current-password]').length,
+      owner: document.querySelector('input[name=username]')?.value,
+      authenticatedShell: Boolean(document.querySelector('.app-shell')),
+    }))()`)
+    assert.equal(state.title, 'Proxima')
+    assert.equal(state.authenticatedShell, false)
+    assert.equal(state.passwordInputCount, 1)
+    if (assertAccessibilityContract) {
+      assert.equal(state.mainCount, 1)
+      assert.equal(state.passwordCount, 1)
+      assert.equal(state.owner, 'owner')
+    }
+    if (screenshotName) await screenshot(pageCdp, screenshotName)
+
+    await closeInspectedTargets(browserCdp, interceptor, pageTargetId)
+    pageClosed = true
+    await interceptor.waitForSettled()
+    interception = interceptor.snapshot()
+
+    const forwardedLabels = interception.forwarded.map(request => request.label)
+    const fulfilledLabels = interception.fulfilled.map(request => request.label)
+    assert(
+      interception.forwarded.length > 0,
+      `${origin} did not receive static shell GET requests`,
+    )
+    assert(forwardedLabels.every(
+      request => !request.startsWith('GET /api/') && !request.startsWith('GET /auth/'),
+    ))
+    if (serviceWorkerExpected) {
+      assert(
+        interception.targetTypes.includes('service_worker'),
+        `${origin} service worker was not attached and inspected`,
+      )
+    }
+    const shellRequests = summarizeStaticShellRequests(interception.forwarded)
+    if (serviceWorkerExpected) {
+      const workerRequests = shellRequests.requestCountsByTargetType.service_worker || {}
+      assertServiceWorkerCacheMatrix(workerRequests, serviceWorkerShellPaths)
+    }
+    const fulfilledSet = new Set(fulfilledLabels)
+    const bootstrapLabels = [
+      'GET /api/config',
+      'GET /api/setup/status',
+      'POST /auth/resume',
+    ]
+    assert(bootstrapLabels.every(label => fulfilledSet.has(label)))
+    assert([...fulfilledSet].every(label => (
+      bootstrapLabels.includes(label) || label === 'GET /@vite/client'
+    )))
+    assert.equal(interception.webSocket.handshakeRequestCount, 0)
+    assert.equal(interception.webSocket.handshakeResponseCount, 0)
+    assert.equal(interception.webSocket.framesSent, 0)
+    assert.equal(interception.webSocket.framesReceived, 0)
+    assert.equal(
+      interception.webSocket.blockedCount,
+      interception.webSocket.attemptedCount,
+    )
+    assert.equal(
+      interception.webSocket.failureCount,
+      interception.webSocket.attemptedCount,
+    )
+    return {
+      origin,
+      status: 'pass',
+      ...(provenance ? { provenance } : {}),
+      network: {
+        forwarded: 'same-origin static shell GETs from attached page and worker targets only',
+        shellRootGetCount: shellRequests.rootGetCount,
+        pageRootGetCount: shellRequests.pageRootGetCount,
+        forwardedStaticGetCount: shellRequests.staticGetCount,
+        forwardedByTargetType: shellRequests.targetTypeCounts,
+        rootGetsByTargetType: shellRequests.rootGetCountByTargetType,
+        requestCountsByTargetType: shellRequests.requestCountsByTargetType,
+        observedTargetTypes: interception.targetTypes,
+        bootstrap: 'fulfilled in browser fixture',
+        viteRuntime: fulfilledSet.has('GET /@vite/client')
+          ? 'inert browser fixture'
+          : 'not requested',
+        liveDataRequests: 'blocked through page and worker shutdown',
+        blockedRequestCount: interception.blocked.length,
+        webSocket: interception.webSocket,
+      },
+    }
+  } catch (error) {
+    auditFailed = true
+    const state = pageClosed
+      ? null
+      : await evaluate(pageCdp, `(() => ({
+        title: document.title,
+        heading: document.querySelector('h1')?.textContent || '',
+        text: document.body?.innerText?.slice(0, 240) || '',
+        scripts: document.scripts.length,
+      }))()`).catch(() => null)
+    const observed = interception || interceptor.snapshot()
     throw new Error(
-      `${origin} static shell did not render the login gate: `
+      `${origin} static shell audit failed: `
       + `${JSON.stringify({
         state,
-        forwarded: [...new Set(forwardedLabels)].sort(),
-        fulfilled: [...new Set(fulfilledLabels)].sort(),
-        blocked: [...new Set(blockedLabels)].sort(),
-        targetTypes: interception.targetTypes,
-      })}; ${navigationError}`,
+        forwarded: [...new Set(observed.forwarded.map(request => request.label))].sort(),
+        fulfilled: [...new Set(observed.fulfilled.map(request => request.label))].sort(),
+        blocked: [...new Set(observed.blocked.map(request => request.label))].sort(),
+        targetTypes: observed.targetTypes,
+        webSocket: observed.webSocket,
+      })}; ${error}`,
     )
-  }
-  assert(interception.forwarded.length > 0, `${origin} did not receive static shell GET requests`)
-  assert(forwardedLabels.every(
-    request => !request.startsWith('GET /api/') && !request.startsWith('GET /auth/'),
-  ))
-  if (serviceWorkerExpected) {
-    assert(
-      interception.targetTypes.includes('service_worker'),
-      `${origin} service worker was not attached and inspected`,
-    )
-  }
-  const shellRequests = summarizeStaticShellRequests(interception.forwarded)
-  assert.deepEqual(
-    [...new Set(fulfilledLabels)].sort(),
-    ['GET /api/config', 'GET /api/setup/status', 'POST /auth/resume'],
-  )
-  const state = await evaluate(pageCdp, `(() => ({
-    title: document.title,
-    mainCount: document.querySelectorAll('main').length,
-    passwordInputCount: document.querySelectorAll('input[type=password]').length,
-    passwordCount: document.querySelectorAll('input[autocomplete=current-password]').length,
-    owner: document.querySelector('input[name=username]')?.value,
-    authenticatedShell: Boolean(document.querySelector('.app-shell')),
-  }))()`)
-  assert.equal(state.title, 'Proxima')
-  assert.equal(state.authenticatedShell, false)
-  assert.equal(state.passwordInputCount, 1)
-  if (assertAccessibilityContract) {
-    assert.equal(state.mainCount, 1)
-    assert.equal(state.passwordCount, 1)
-    assert.equal(state.owner, 'owner')
-  }
-  if (screenshotName) await screenshot(pageCdp, screenshotName)
-  return {
-    origin,
-    status: 'pass',
-    ...(provenance ? { provenance } : {}),
-    network: {
-      forwarded: 'same-origin static shell GETs from attached page and worker targets only',
-      shellRootGetCount: shellRequests.rootGetCount,
-      pageRootGetCount: shellRequests.pageRootGetCount,
-      forwardedStaticGetCount: shellRequests.staticGetCount,
-      forwardedByTargetType: shellRequests.targetTypeCounts,
-      rootGetsByTargetType: shellRequests.rootGetCountByTargetType,
-      observedTargetTypes: interception.targetTypes,
-      bootstrap: 'fulfilled in browser fixture',
-      liveDataRequests: 'blocked',
-      blockedRequestCount: interception.blocked.length,
-    },
+  } finally {
+    if (!pageClosed) {
+      await closeInspectedTargets(
+        browserCdp,
+        interceptor,
+        pageTargetId,
+      ).catch(() => null)
+      await interceptor.waitForSettled().catch(() => null)
+    }
+    await interceptor.stop().catch(error => {
+      if (!auditFailed) throw error
+    })
   }
 }
 
@@ -851,9 +1003,13 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry browser check runs in an isolated profile, attaches to the page and
-every related worker target, accounts for every shell GET, verifies the current device
-Serve mapping, and blocks every live API or data request.
+The private-entry browser check runs in an isolated profile, attaches one policy owner
+to the page and every related worker target, accounts for every shell GET, and verifies
+the current device Serve mapping. Page, dedicated-worker, and shared-worker traffic stays
+intercepted through target closure. The production service worker is source-checked for
+an inert static-only cache list, attached before it runs, and verified against that exact
+request matrix. A development-served entry receives an inert no-socket Vite client
+fixture, and any remaining outbound WebSocket handshake or frame fails the audit.
 
 | Check | Result |
 | --- | --- |
@@ -862,6 +1018,7 @@ Serve mapping, and blocks every live API or data request.
 | Unsafe folder focus and single announcement | pass |
 | Repeated unsafe folder gets one fresh announcement with Enter | pass |
 | Repeated unsafe folder gets one fresh announcement with Space | pass |
+| Initial folder-load failure focuses an announced retry target | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
 | Missing create parent focuses selected-folder recovery | pass |
@@ -881,6 +1038,7 @@ Serve mapping, and blocks every live API or data request.
 | Production service-worker install and cache GET accounting | pass |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
 | Remote browser accounts for page and worker shell GETs | pass |
+| Remote browser blocks and accounts for WebSocket attempts | pass |
 | Private Tailscale unauthenticated entry | ${remote} |
 
 ## Before and after
@@ -888,7 +1046,7 @@ Serve mapping, and blocks every live API or data request.
 | Flow | Before | After |
 | --- | --- | --- |
 | Password gate | [tour capture](../../screenshots/first-run-password.png) | [setup mismatch](auth-setup-mismatch-after.png), [returning login](auth-login-error-after.png) |
-| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing create parent](onboarding-create-parent-error-after.png), [permission-denied parent](onboarding-parent-permission-after.png), [missing selected folder](onboarding-path-error-after.png) |
+| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [initial folder-load recovery](onboarding-folder-load-error-after.png), [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing create parent](onboarding-create-parent-error-after.png), [permission-denied parent](onboarding-parent-permission-after.png), [missing selected folder](onboarding-path-error-after.png) |
 | Remote entry | - | [isolated Tailnet-host login](tailnet-unauthenticated-entry.png) |
 
 Machine-readable details are in [report.json](report.json), with the full
@@ -1048,15 +1206,56 @@ async function main() {
     await screenshot(cdp, 'auth-setup-mismatch-after.png')
 
     await setInput(cdp, 'password-confirmation', 'longenough1')
+    const initialBrowseFailure = await failNextFolderBrowse(cdp)
+    const initialBrowseFocusedBeforeError = await startAnnouncementTrace(cdp)
     await clickButton(cdp, 'Set password & enter')
+    await initialBrowseFailure.intercepted
+    await initialBrowseFailure.stop()
     await waitForPage(
       cdp,
       `document.querySelector('h1')?.textContent === 'Pick your working folder'
-        && [...document.querySelectorAll('button')]
-          .some(button => button.textContent.trim() === 'Link existing')`,
-      'Onboarding controls',
+        && document.querySelector('button[name=selected-folder]')
+        && document.querySelector('[role=alert]')?.textContent.includes('No readable folder')`,
+      'Initial folder browser recovery',
     )
     assert.equal(await evaluate(cdp, `document.querySelectorAll('main').length`), 1)
+    const initialBrowseTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      initialBrowseTrace,
+      'selected-folder',
+      /No readable folder/,
+      initialBrowseFocusedBeforeError === 'selected-folder',
+    )
+    const initialBrowseAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      initialBrowseAx,
+      node => node.role === 'button' && node.name === 'Folder browser. Retry folders',
+      /No readable folder/,
+    )
+    assert.equal(
+      await evaluate(cdp, `document.activeElement?.getAttribute('name')`),
+      'selected-folder',
+    )
+    assert.equal(
+      await evaluate(
+        cdp,
+        `document.querySelector('button[name=selected-folder]').getAttribute('aria-invalid')`,
+      ),
+      'true',
+    )
+    await screenshot(cdp, 'onboarding-folder-load-error-after.png')
+    await pressKey(cdp, 'Enter', 'Enter', 13, '\r')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent
+          === ${JSON.stringify(fixtureHome)}
+        && !document.querySelector('[role=alert]')`,
+      'Initial folder browser retry',
+    )
+    assert.equal(
+      await evaluate(cdp, `document.activeElement?.getAttribute('name')`),
+      'selected-folder',
+    )
 
     await focusButton(cdp, 'Link existing')
     await pressKey(cdp, 'Tab', 'Tab', 9)
@@ -1440,6 +1639,7 @@ async function main() {
         permissionDeniedParent: permissionParentTrace,
         noReadableAncestor: noReadableTrace,
         selectedPath: selectedPathTrace,
+        initialFolderBrowse: initialBrowseTrace,
         returningLogin: loginTrace,
       },
       accessibilityTrees: {
@@ -1451,6 +1651,7 @@ async function main() {
         permissionDeniedParent: permissionParentAx,
         noReadableAncestor: noReadableAx,
         selectedPath: selectedPathAx,
+        initialFolderBrowse: initialBrowseAx,
         returningLogin: loginAx,
       },
       themes: themeResults,

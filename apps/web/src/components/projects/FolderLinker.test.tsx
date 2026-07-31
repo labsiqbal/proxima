@@ -39,6 +39,34 @@ describe('FolderLinker', () => {
     vi.mocked(linkProject).mockResolvedValue(project)
   })
 
+  it('renders a focused retry target when initial browsing fails', async () => {
+    const user = userEvent.setup()
+    vi.mocked(browseDirs)
+      .mockRejectedValueOnce(new Error('No readable folder is available inside the allowed roots'))
+      .mockResolvedValueOnce(dirs)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    const alert = await screen.findByRole('alert')
+    const retry = screen.getByRole('button', {
+      name: 'Folder browser. Retry folders',
+    })
+    expect(alert).toHaveTextContent('No readable folder is available inside the allowed roots')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(retry).toHaveFocus()
+    expect(retry).toHaveAttribute('aria-invalid', 'true')
+    expect(retry).not.toHaveAttribute('aria-describedby')
+
+    await user.keyboard('{Enter}')
+
+    const selected = await screen.findByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    expect(selected).toHaveFocus()
+    expect(selected).not.toHaveAttribute('aria-invalid')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(browseDirs).toHaveBeenLastCalledWith('tok', '')
+  })
+
   it('links the current folder in link mode', async () => {
     const user = userEvent.setup()
     const onLinked = vi.fn().mockResolvedValue(undefined)

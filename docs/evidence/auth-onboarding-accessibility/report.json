@@ -100,13 +100,23 @@
     "noReadableAncestor": [
       {
         "type": "alert",
-        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
+        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-7lm5we%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
       }
     ],
     "selectedPath": [
       {
         "type": "alert",
         "name": "not a directory"
+      }
+    ],
+    "initialFolderBrowse": [
+      {
+        "type": "focus",
+        "name": "selected-folder"
+      },
+      {
+        "type": "alert",
+        "name": "GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots"
       }
     ],
     "returningLogin": [
@@ -250,7 +260,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -355,7 +365,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -451,7 +461,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -460,7 +470,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -535,7 +545,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -544,7 +554,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -606,7 +616,7 @@
           "description": "",
           "focused": false,
           "invalid": false,
-          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y- Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
+          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-7lm5we%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y- 7lm5we%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
         }
       ],
       "focused": [
@@ -619,7 +629,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -628,7 +638,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -703,7 +713,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -712,7 +722,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-7lm5we/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -753,6 +763,60 @@
           "focused": false,
           "invalid": "false",
           "pressed": "false"
+        }
+      ],
+      "tabs": []
+    },
+    "initialFolderBrowse": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "button",
+          "name": "Folder browser. Retry folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Folder browser. Retry folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
         }
       ],
       "tabs": []
@@ -968,24 +1032,61 @@
     "status": "pass",
     "network": {
       "forwarded": "same-origin static shell GETs from attached page and worker targets only",
-      "shellRootGetCount": 3,
+      "shellRootGetCount": 2,
       "pageRootGetCount": 1,
-      "forwardedStaticGetCount": 21,
+      "forwardedStaticGetCount": 18,
       "forwardedByTargetType": {
-        "page": 15,
-        "service_worker": 6
+        "page": 14,
+        "service_worker": 4
       },
       "rootGetsByTargetType": {
         "page": 1,
-        "service_worker": 2
+        "service_worker": 1
+      },
+      "requestCountsByTargetType": {
+        "page": {
+          "GET /": 1,
+          "GET /manifest.webmanifest": 1,
+          "GET /assets/index-DK6Bhz53.js": 1,
+          "GET /assets/rolldown-runtime-aKtaBQYM.js": 1,
+          "GET /assets/jsx-runtime-2Zwg-L3c.js": 1,
+          "GET /assets/lib-iMw8T7-H.js": 1,
+          "GET /assets/client-CPHncNCm.js": 1,
+          "GET /assets/files--pJaZrKJ.js": 1,
+          "GET /assets/runs-DUuH3qDf.js": 1,
+          "GET /assets/eventTypes-DzrJzNGq.js": 1,
+          "GET /assets/icons-Dgww-zVO.js": 1,
+          "GET /assets/useEventStream-DldYYYpd.js": 1,
+          "GET /assets/index-BrqOC6bu.css": 1,
+          "GET /icons/icon-512.svg": 1
+        },
+        "service_worker": {
+          "GET /sw.js": 1,
+          "GET /": 1,
+          "GET /manifest.webmanifest": 1,
+          "GET /icons/icon-192.png": 1
+        }
       },
       "observedTargetTypes": [
         "page",
         "service_worker"
       ],
       "bootstrap": "fulfilled in browser fixture",
-      "liveDataRequests": "blocked",
-      "blockedRequestCount": 1
+      "viteRuntime": "not requested",
+      "liveDataRequests": "blocked through page and worker shutdown",
+      "blockedRequestCount": 1,
+      "webSocket": {
+        "attemptedCount": 0,
+        "targetTypeCounts": {},
+        "handshakeRequestCount": 0,
+        "handshakeResponseCount": 0,
+        "framesSent": 0,
+        "framesReceived": 0,
+        "blockedCount": 0,
+        "failureCount": 0,
+        "errorCount": 0,
+        "closedCount": 0
+      }
     }
   },
   "tailnetFixture": {
@@ -1002,12 +1103,43 @@
       "rootGetsByTargetType": {
         "page": 1
       },
+      "requestCountsByTargetType": {
+        "page": {
+          "GET /": 1,
+          "GET /manifest.webmanifest": 1,
+          "GET /assets/index-DK6Bhz53.js": 1,
+          "GET /assets/rolldown-runtime-aKtaBQYM.js": 1,
+          "GET /assets/jsx-runtime-2Zwg-L3c.js": 1,
+          "GET /assets/lib-iMw8T7-H.js": 1,
+          "GET /assets/client-CPHncNCm.js": 1,
+          "GET /assets/files--pJaZrKJ.js": 1,
+          "GET /assets/runs-DUuH3qDf.js": 1,
+          "GET /assets/eventTypes-DzrJzNGq.js": 1,
+          "GET /assets/icons-Dgww-zVO.js": 1,
+          "GET /assets/useEventStream-DldYYYpd.js": 1,
+          "GET /assets/index-BrqOC6bu.css": 1,
+          "GET /icons/icon-512.svg": 1
+        }
+      },
       "observedTargetTypes": [
         "page"
       ],
       "bootstrap": "fulfilled in browser fixture",
-      "liveDataRequests": "blocked",
-      "blockedRequestCount": 1
+      "viteRuntime": "not requested",
+      "liveDataRequests": "blocked through page and worker shutdown",
+      "blockedRequestCount": 1,
+      "webSocket": {
+        "attemptedCount": 0,
+        "targetTypeCounts": {},
+        "handshakeRequestCount": 0,
+        "handshakeResponseCount": 0,
+        "framesSent": 0,
+        "framesReceived": 0,
+        "blockedCount": 0,
+        "failureCount": 0,
+        "errorCount": 0,
+        "closedCount": 0
+      }
     }
   },
   "tailscaleEntry": {
@@ -1022,24 +1154,133 @@
       "forwarded": "same-origin static shell GETs from attached page and worker targets only",
       "shellRootGetCount": 1,
       "pageRootGetCount": 1,
-      "forwardedStaticGetCount": 94,
+      "forwardedStaticGetCount": 92,
       "forwardedByTargetType": {
-        "page": 94
+        "page": 92
       },
       "rootGetsByTargetType": {
         "page": 1
+      },
+      "requestCountsByTargetType": {
+        "page": {
+          "GET /": 1,
+          "GET /src/main.tsx": 1,
+          "GET /manifest.webmanifest": 1,
+          "GET /@react-refresh": 1,
+          "GET /node_modules/.vite/deps/react.js": 1,
+          "GET /node_modules/.vite/deps/react-dom_client.js": 1,
+          "GET /src/styles.css": 1,
+          "GET /src/App.tsx": 1,
+          "GET /src/pwa.ts": 1,
+          "GET /src/theme.ts": 1,
+          "GET /src/components/shell/ErrorBoundary.tsx": 1,
+          "GET /node_modules/.vite/deps/react_jsx-dev-runtime.js": 1,
+          "GET /node_modules/.vite/deps/chunk-B4lejLz5.js": 1,
+          "GET /src/api/auth.ts": 1,
+          "GET /src/api/profiles.ts": 1,
+          "GET /src/api/projects.ts": 1,
+          "GET /src/api/sessions.ts": 1,
+          "GET /src/api/runs.ts": 1,
+          "GET /src/api/jobs.ts": 1,
+          "GET /src/api/client.ts": 1,
+          "GET /src/api/config.ts": 1,
+          "GET /src/features.ts": 1,
+          "GET /src/components/shell/AppShell.tsx": 1,
+          "GET /src/screens/AuthGate.tsx": 1,
+          "GET /src/components/shell/HermesBanner.tsx": 1,
+          "GET /src/screens/ChatScreen.tsx": 1,
+          "GET /src/screens/HomeScreen.tsx": 1,
+          "GET /src/components/ui/Dialog.tsx": 1,
+          "GET /src/hooks/useUpdateStatus.ts": 1,
+          "GET /src/hooks/usePolling.ts": 1,
+          "GET /src/components/shell/UpdateModal.tsx": 1,
+          "GET /src/components/brand/ProximaMark.tsx": 1,
+          "GET /src/master/MasterStateProvider.tsx": 1,
+          "GET /src/lib/navStack.ts": 1,
+          "GET /node_modules/.vite/deps/react-dom.js": 1,
+          "GET /node_modules/.vite/deps/scheduler-DPsYWsWX.js": 1,
+          "GET /src/components/shell/Sidebar.tsx": 1,
+          "GET /src/components/shell/MobileTopbar.tsx": 1,
+          "GET /src/components/shell/SearchModal.tsx": 1,
+          "GET /src/components/shell/ToolDock.tsx": 1,
+          "GET /src/components/shell/icons.tsx": 1,
+          "GET /src/components/shell/AttentionInbox.tsx": 1,
+          "GET /src/components/shell/RunningTasks.tsx": 1,
+          "GET /src/components/shell/CoreTour.tsx": 1,
+          "GET /src/components/master/MasterPopup.tsx": 1,
+          "GET /src/components/master/MasterToastRegion.tsx": 1,
+          "GET /src/components/shell/ShellModeSwitch.tsx": 1,
+          "GET /src/lib/goal.ts": 1,
+          "GET /src/api/wiki.ts": 1,
+          "GET /src/hooks/useRunStream.ts": 1,
+          "GET /src/components/chat/ChatThread.tsx": 1,
+          "GET /src/components/wiki/WikiNotePreview.tsx": 1,
+          "GET /src/components/ConvertToWorkflowButton.tsx": 1,
+          "GET /src/components/chat/Composer.tsx": 1,
+          "GET /src/components/ui/Dropdown.tsx": 1,
+          "GET /src/components/shell/runnerReadiness.ts": 1,
+          "GET /src/lib/notify.ts": 1,
+          "GET /src/api/updates.ts": 1,
+          "GET /node_modules/.vite/deps/react-markdown.js": 1,
+          "GET /node_modules/.vite/deps/remark-gfm.js": 1,
+          "GET /src/api/dashboard.ts": 1,
+          "GET /src/components/tasks/TaskComposer.tsx": 1,
+          "GET /src/api/master.ts": 1,
+          "GET /src/api/containers.ts": 1,
+          "GET /src/lib/eventTypes.ts": 1,
+          "GET /src/master/masterProjection.ts": 1,
+          "GET /src/master/masterHistory.ts": 1,
+          "GET /src/components/shell/ProjectSwitcher.tsx": 1,
+          "GET /src/api/search.ts": 1,
+          "GET /src/api/fsAdapter.ts": 1,
+          "GET /src/components/files/WorkspaceTree.tsx": 1,
+          "GET /src/components/master/MasterComposer.tsx": 1,
+          "GET /src/components/master/MasterConversation.tsx": 1,
+          "GET /src/components/master/MasterTargetPicker.tsx": 1,
+          "GET /src/hooks/useEventStream.ts": 1,
+          "GET /src/api/commands.ts": 1,
+          "GET /src/components/ui/MentionTextarea.tsx": 1,
+          "GET /src/api/files.ts": 1,
+          "GET /src/hooks/useProjectMentionItems.ts": 1,
+          "GET /node_modules/.vite/deps/react_jsx-runtime.js": 1,
+          "GET /node_modules/.vite/deps/lib-9qH3G_6W.js": 1,
+          "GET /src/components/chat/MessageContent.tsx": 1,
+          "GET /src/components/chat/QuestionForm.tsx": 1,
+          "GET /src/components/chat/questionForm.ts": 1,
+          "GET /src/components/chat/MessageReviewSidecar.tsx": 1,
+          "GET /src/components/chat/runError.ts": 1,
+          "GET /src/components/chat/ChatEmpty.tsx": 1,
+          "GET /src/components/chat/threadScroll.ts": 1,
+          "GET /src/components/ui/CompactTeachingEmpty.tsx": 1,
+          "GET /src/api/messageReviews.ts": 1,
+          "GET /icons/icon-512.svg": 1,
+          "GET /icons/icon-192.png": 1
+        }
       },
       "observedTargetTypes": [
         "page"
       ],
       "bootstrap": "fulfilled in browser fixture",
-      "liveDataRequests": "blocked",
-      "blockedRequestCount": 1
+      "viteRuntime": "inert browser fixture",
+      "liveDataRequests": "blocked through page and worker shutdown",
+      "blockedRequestCount": 1,
+      "webSocket": {
+        "attemptedCount": 0,
+        "targetTypeCounts": {},
+        "handshakeRequestCount": 0,
+        "handshakeResponseCount": 0,
+        "framesSent": 0,
+        "framesReceived": 0,
+        "blockedCount": 0,
+        "failureCount": 0,
+        "errorCount": 0,
+        "closedCount": 0
+      }
     }
   },
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:33679/"
+    "url": "http://127.0.0.1:43551/"
   }
 }

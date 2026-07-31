@@ -1399,24 +1399,38 @@ selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership.
 `FolderLinker` maps parent and link-path failures to a focusable selected-folder refresh
 control, child-name failures to the folder input, and name/slug failures to the
 display-name input before focusing and publishing the single alert. Every repeated
-attempt remounts that sole announcement owner. Directory browsing tests readability,
-uses one fail-closed resolution and containment boundary, skips symlink cycles, climbs
-only to the nearest readable ancestor within the owning configured root, and returns a
-structured path error while retaining the current invalid selection when no allowed
-ancestor is readable. Configured roots retain their lexical identities when resolution
-fails, so a selection owned by an unavailable root cannot fall back to another root.
-Create-on-disk opens the resolved parent and performs validation plus child creation
-relative to that descriptor, preserving component versus parent error ownership even
-when the filesystem rejects the child syscall. The retained browser audit runs the production bundle
-with allowlisted child environments, disposable runtime/profile roots, and
-background/live-service features disabled. Its real Tailscale entry check
-correlates the origin to the current device root Serve handler and uses a fresh browser
-profile for each origin. Browser-level CDP auto-attachment pauses the page plus every
-related service, shared, and nested worker until Fetch interception is active recursively.
-The secure disposable production fixture proves service-worker installation and shell
-cache GET accounting before the same boundary checks the current private entry. The audit
-forwards and accounts for only allowlisted static asset GETs across those targets. Config,
-setup status, and failed session resume are fulfilled inside the browser
-fixture; every other API, auth, cross-origin, and non-static request is blocked. The
-report persists only exact per-target request counts, a redacted pass label, and
-current-device Serve provenance, never the private origin or address.
+attempt remounts that sole announcement owner. Initial browse failure renders and focuses
+a marked retry control before its alert is published. Directory browsing tests
+readability, uses one fail-closed resolution and containment boundary, skips symlink
+cycles, climbs only to the nearest readable ancestor within the owning configured root,
+and returns a structured path error while retaining the current invalid selection when
+no allowed ancestor is readable. Configured roots retain raw identity even when lexical
+expansion or resolution fails, continue valid siblings, and bind recovery to the
+original owning root. Create-on-disk opens the verified root and traverses each parent
+component with no-follow directory descriptors. Child creation and rollback remain
+relative to the retained parent descriptor through the created-directory commit,
+preserving
+component versus parent error ownership even when the filesystem changes concurrently.
+
+The retained browser audit runs the production bundle with allowlisted child
+environments, disposable runtime/profile roots, and background/live-service features
+disabled. Its real Tailscale entry check correlates the origin to the current device root
+Serve handler and uses a fresh browser profile for each origin. Browser-level CDP
+auto-attachment pauses the page plus every related service, shared, and nested worker
+until one bounded policy owner is ready. Duplicate sessions wait on that owner, and
+stable target/network IDs cannot duplicate request evidence. Page, dedicated-worker, and
+shared-worker owners install Fetch, Network, and WebSocket policy before resuming. The
+production service worker is source-checked for a static-only cache list with no data or
+duplex API, must be the same-origin `/sw.js`, and installs Fetch interception before
+resuming. A secure disposable production fixture then proves the exact service-worker
+cache matrix before the same boundary checks the current private entry. If that entry is
+development-served, the audit fulfills `/@vite/client` with an inert compatibility shim
+that preserves module and style loading without opening HMR duplex traffic. Interception
+remains active through DOM checks, screenshots, and page/worker shutdown. The audit
+forwards and accounts for only allowlisted static asset GETs across those targets.
+Config, setup status, failed session resume, and the optional inert Vite client are
+fulfilled inside the browser fixture; every other API, auth, cross-origin, non-static,
+and duplex request is blocked or fails the audit. All CDP policy installation and
+shutdown waits are bounded. The report persists only exact per-target and per-path
+request counts, the Vite fixture state, redacted WebSocket totals, a redacted pass label,
+and current-device Serve provenance, never the private origin or address.

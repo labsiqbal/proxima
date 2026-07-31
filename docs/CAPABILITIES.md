@@ -1080,22 +1080,28 @@ focus there before the alert is published. The alert is the only semantic announ
 owner, so the focused target does not duplicate the message as its description. Every
 invalid submission mounts a fresh single alert, including an unchanged repeat while the
 target remains focused.
+If the initial folder listing is unavailable, the chooser renders and focuses a marked
+retry control before publishing the same single alert; keyboard retry keeps that control
+as the correction target until a readable folder is selected.
 Display names are checked against the API's 120-character limit before submission. The
 project-link error contract distinguishes the selected `path`/`parent`, child `folder`,
 and display `name`/`slug` targets. Parent and link-path failures focus a selected-folder
 refresh control, child-name failures focus the folder field, and name/slug failures
 focus the display-name field. Browsing selects the nearest actually readable ancestor
 inside the configured root, skips self-referential or mutual symlink cycles, and never
-uses an unresolved path for containment. Every configured root keeps a stable lexical
-identity even when resolution fails, so a retained selection owned by that root fails
-closed instead of falling back to an unrelated root. If no allowed ancestor is readable,
-the chooser retains its selection and explicit invalid state instead of reporting an
-empty success.
+uses an unresolved path for containment. Every configured root keeps its raw identity
+plus optional lexical and resolved identities, so one unexpandable root does not disable
+valid siblings and a retained selection stays bound to its original owning root. Later
+resolution failure cannot fall back to a containing root. If no allowed ancestor is
+readable, the chooser retains its selection and explicit invalid state instead of
+reporting an empty success.
 New folder names are validated against the target filesystem's encoded component-byte
-limit and created relative to an open descriptor for the validated parent. Component and
-encoding failures from validation or the child syscall therefore stay owned by the folder
-field, while parent descriptor and location failures remain owned by the selected-folder
-control.
+limit. The API opens the verified allowed root and each parent component separately with
+no-follow directory descriptors, creates the child relative to the retained parent
+descriptor, and keeps the handle through its created-directory commit or
+descriptor-relative rollback. Component and encoding failures from validation or the
+child syscall therefore stay owned by the folder field, while parent descriptor and
+location failures remain owned by the selected-folder control.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

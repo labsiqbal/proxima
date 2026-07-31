@@ -33,6 +33,43 @@ const staticPathPrefixes = [
   '/src/',
 ]
 
+const inertViteClient = `
+const contexts = new Map()
+export class ErrorOverlay extends HTMLElement {}
+export function createHotContext(ownerPath) {
+  if (!contexts.has(ownerPath)) {
+    contexts.set(ownerPath, {
+      data: {},
+      accept() {},
+      acceptExports() {},
+      dispose() {},
+      prune() {},
+      decline() {},
+      invalidate() {},
+      on() {},
+      off() {},
+      send() {},
+    })
+  }
+  return contexts.get(ownerPath)
+}
+export function injectQuery(url) {
+  return url
+}
+export function updateStyle(id, content) {
+  let style = document.querySelector('style[data-vite-dev-id="' + id + '"]')
+  if (!style) {
+    style = document.createElement('style')
+    style.setAttribute('data-vite-dev-id', id)
+    document.head.appendChild(style)
+  }
+  style.textContent = content
+}
+export function removeStyle(id) {
+  document.querySelector('style[data-vite-dev-id="' + id + '"]')?.remove()
+}
+`
+
 export function privateEntryUrl(value) {
   let url
   try {
@@ -115,6 +152,14 @@ export function resolvePrivateTailscaleEntry({
 }
 
 function bootstrapResponse(method, pathname) {
+  if (method === 'GET' && pathname === '/@vite/client') {
+    return {
+      status: 200,
+      body: inertViteClient,
+      contentType: 'text/javascript',
+      raw: true,
+    }
+  }
   if (method === 'GET' && pathname === '/api/config') {
     return {
       status: 200,
@@ -200,8 +245,13 @@ export function summarizeStaticShellRequests(requests) {
   )
   const targetTypeCounts = {}
   const rootGetCountByTargetType = {}
+  const requestCountsByTargetType = {}
   for (const request of normalized) {
     targetTypeCounts[request.targetType] = (targetTypeCounts[request.targetType] || 0) + 1
+    requestCountsByTargetType[request.targetType] ||= {}
+    requestCountsByTargetType[request.targetType][request.label] = (
+      requestCountsByTargetType[request.targetType][request.label] || 0
+    ) + 1
     if (request.label === 'GET /') {
       rootGetCountByTargetType[request.targetType] = (
         rootGetCountByTargetType[request.targetType] || 0
@@ -214,5 +264,21 @@ export function summarizeStaticShellRequests(requests) {
     staticGetCount: normalized.length,
     targetTypeCounts,
     rootGetCountByTargetType,
+    requestCountsByTargetType,
   }
+}
+
+export function assertServiceWorkerCacheMatrix(requestCounts, shellPaths) {
+  const expected = Object.fromEntries(
+    shellPaths.map(pathname => [`GET ${pathname}`, 1]),
+  )
+  const actual = Object.fromEntries(
+    Object.keys(expected).map(label => [label, requestCounts[label] || 0]),
+  )
+  assert(
+    Object.values(requestCounts).every(count => count === 1),
+    'Service-worker requests must each be observed exactly once',
+  )
+  assert.deepEqual(actual, expected, 'Service-worker cache requests do not match APP_SHELL')
+  return actual
 }

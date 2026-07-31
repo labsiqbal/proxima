@@ -20,10 +20,12 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const [folderName, setFolderName] = React.useState('')
   const [error, setError] = React.useState<FormError | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [loading, setLoading] = React.useState(true)
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
   const errorSeq = React.useRef(0)
+  const restorePathFocusRef = React.useRef(false)
   const pathRef = React.useRef<HTMLButtonElement>(null)
   const folderNameRef = React.useRef<HTMLInputElement>(null)
   const displayNameRef = React.useRef<HTMLInputElement>(null)
@@ -45,15 +47,28 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const load = React.useCallback((path = '') => {
     const seq = ++loadSeq.current
     setError(null)
+    setLoading(true)
     browseDirs(token, path)
-      .then(next => { if (mountedRef.current && seq === loadSeq.current) setCur(next) })
+      .then(next => {
+        if (mountedRef.current && seq === loadSeq.current) {
+          setCur(next)
+          setLoading(false)
+        }
+      })
       .catch(e => {
         if (mountedRef.current && seq === loadSeq.current) {
           reportError(e instanceof Error ? e.message : String(e), 'path')
+          setLoading(false)
         }
       })
   }, [reportError, token])
   React.useEffect(() => { load() }, [load])
+  React.useLayoutEffect(() => {
+    if (cur && restorePathFocusRef.current) {
+      restorePathFocusRef.current = false
+      pathRef.current?.focus()
+    }
+  }, [cur])
 
   const switchMode = (next: Mode) => {
     if (busy || next === mode) return
@@ -121,7 +136,30 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
     }
   }
 
-  if (!cur) return <p className="muted">Loading folders…</p>
+  if (!cur) {
+    return <div className="folder-linker">
+      <button
+        ref={pathRef}
+        type="button"
+        name="selected-folder"
+        className="fl-path"
+        aria-label="Folder browser. Retry folders"
+        aria-invalid={error?.field === 'path' || undefined}
+        aria-disabled={loading || undefined}
+        onClick={() => {
+          if (!loading) {
+            restorePathFocusRef.current = true
+            load()
+          }
+        }}
+      >
+        <span className="muted" aria-hidden="true">📁</span>
+        <span>{loading ? 'Loading folders…' : 'Retry folder browser'}</span>
+        <span className="fl-path-refresh">{loading ? 'Loading' : 'Retry'}</span>
+      </button>
+      {error && <p key={error.id} className="error-text" role="alert">{error.message}</p>}
+    </div>
+  }
   const here = cur.path.split('/').filter(Boolean).pop() || cur.path
   const createLabel = folderName.trim() || 'new-folder'
   const errorField = error?.field
@@ -146,8 +184,13 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       className="fl-path"
       aria-label={`Selected folder: ${cur.path}. Refresh folders`}
       aria-invalid={errorField === 'path' || undefined}
-      aria-disabled={busy || undefined}
-      onClick={() => { if (!busy) load(cur.path) }}
+      aria-disabled={busy || loading || undefined}
+      onClick={() => {
+        if (!busy && !loading) {
+          restorePathFocusRef.current = true
+          load(cur.path)
+        }
+      }}
     >
       <span className="muted" aria-hidden="true">📁</span>
       <code>{cur.path}</code>
