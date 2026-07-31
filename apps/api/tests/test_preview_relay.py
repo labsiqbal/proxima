@@ -706,7 +706,7 @@ def test_appview_returns_non_proxy_responses_for_starting_unknown_and_exited(
         monkeypatch.setattr(
             apprunner,
             "_listener_ownership",
-            lambda _pid, _port, *, contained, group_id=None, lineage_token=None: (
+            lambda _port, *, authority: (
                 apprunner.PortOwnership.UNKNOWN
             ),
         )

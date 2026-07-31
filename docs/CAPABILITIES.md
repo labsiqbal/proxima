@@ -1228,9 +1228,11 @@ post-preflight bind race: if an unrelated listener wins, the managed command is
 signaled by its recorded process group, the foreign listener remains untouched, and
 the conflict stays visible with logs, Stop, retry, and change-port actions. Unavailable
 procfs evidence and uncontained detached descendants fail closed as
-`ownership_unknown`; detached descendants qualify only under PID-namespace containment.
-An ephemeral per-launch lineage marker keeps a reparented uncontained descendant in
-that fail-closed state instead of misclassifying it as a foreign listener.
+`ownership_unknown`. For a contained launch, every socket owner must carry the
+launch marker and match the exact launch-specific PID namespace reported by
+Bubblewrap, even when it retains the managed process group. The marker alone
+never grants authority; it keeps a reparented uncontained descendant in that
+fail-closed state instead of misclassifying it as a foreign listener.
 A start with no listener after 15 seconds shows an actionable prolonged-start warning
 with Stop and logs instead of an infinite spinner. When a command self-exits (short
 script, crash, or non-server entry point), status keeps
@@ -1241,8 +1243,10 @@ The existing bounded 40-line status buffer survives preview Reload and explicit 
 so stopped/retry feedback shows the most recent command output, including terminal
 shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
-Final drain waiting is bounded, retains output already available, and never signals an
-uncontained detached child merely because it inherited stdout.
+Final drain waiting is bounded and retains output already available. If a detached
+child keeps stdout open, a tracked background reader discards later bytes without
+retaining app state until EOF, so Stop neither blocks nor closes the read end and never
+signals that child.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

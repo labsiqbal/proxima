@@ -67,4 +67,5 @@ Supersedes / superseded-by / links to feature docs.
 | [0007](0007-master-focus-is-a-durable-execution-boundary.md) | Master Focus is a durable execution boundary | Accepted |
 | [0008](0008-external-safe-update-authority.md) | Safe update authority stays outside candidate releases | Accepted |
 | [0009](0009-one-durable-master-interface-state.md) | One durable Master interface state | Accepted |
-| [0010](0010-preview-authority-requires-verified-connections.md) | Preview authority requires verified managed connections | Accepted |
+| [0010](0010-preview-authority-requires-verified-connections.md) | Preview authority requires verified managed connections | Superseded by ADR-0011 |
+| [0011](0011-preview-containment-membership-and-detached-output.md) | Preview containment membership and detached output | Accepted |

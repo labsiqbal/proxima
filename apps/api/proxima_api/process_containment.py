@@ -12,15 +12,20 @@ def pid_namespace_argv(
     *,
     cwd: str,
     label: str,
+    info_fd: int | None = None,
 ) -> list[str]:
     bwrap = shutil.which("bwrap")
     if os.name != "posix" or bwrap is None:
         raise RuntimeError(f"{label} containment is unavailable")
-    return [
+    command = [
         bwrap,
         "--die-with-parent",
         "--unshare-pid",
         "--as-pid-1",
+    ]
+    if info_fd is not None:
+        command.extend(["--info-fd", str(info_fd)])
+    command.extend([
         "--bind",
         "/",
         "/",
@@ -33,7 +38,8 @@ def pid_namespace_argv(
         cwd,
         "--",
         *argv,
-    ]
+    ])
+    return command
 
 
 async def terminate_and_verify(

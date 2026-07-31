@@ -7,7 +7,9 @@ relative assets resolve and no port is exposed directly.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from enum import Enum
+import json
 import os
 import re
 import secrets
@@ -22,6 +24,7 @@ from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15
 FINAL_DRAIN_SECONDS = 1
+CONTAINMENT_INFO_SECONDS = 1
 _LINEAGE_ENV = "PROXIMA_APP_LINEAGE"
 
 
@@ -68,6 +71,15 @@ class PortOwnership(str, Enum):
     FOREIGN = "foreign"
     DETACHED = "detached"
     UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ProcessAuthority:
+    leader_pid: int
+    process_group: int | None
+    lineage_token: str
+    containment_required: bool
+    containment_pid_namespace: int | None
 
 
 def _process_table(
@@ -126,12 +138,9 @@ def _is_descendant(
 
 
 def _listener_ownership(
-    leader_pid: int,
     port: int,
     *,
-    contained: bool,
-    group_id: int | None = None,
-    lineage_token: str | None = None,
+    authority: ProcessAuthority,
 ) -> PortOwnership:
     """Classify a listener without equating reachability with ownership.
 
@@ -142,11 +151,8 @@ def _listener_ownership(
     """
     inodes = _listening_socket_inodes(port)
     return _socket_ownership(
-        leader_pid,
         inodes,
-        contained=contained,
-        group_id=group_id,
-        lineage_token=lineage_token,
+        authority=authority,
     )
 
 
@@ -178,20 +184,18 @@ def _connected_socket_inodes(
 
 
 def _socket_ownership(
-    leader_pid: int,
     inodes: set[str] | None,
     *,
-    contained: bool,
-    group_id: int | None = None,
-    lineage_token: str | None = None,
+    authority: ProcessAuthority,
 ) -> PortOwnership:
     if inodes is None:
         return PortOwnership.UNKNOWN
     if not inodes:
         return PortOwnership.NO_LISTENER
+    group_id = authority.process_group
     if group_id is None:
         try:
-            group_id = os.getpgid(leader_pid)
+            group_id = os.getpgid(authority.leader_pid)
         except OSError:
             return PortOwnership.UNKNOWN
     processes = _process_table(inodes)
@@ -205,16 +209,39 @@ def _socket_ownership(
     if any(not pids for pids in owners.values()):
         return PortOwnership.UNKNOWN
     owner_pids = {pid for pids in owners.values() for pid in pids}
-    if all(processes[pid][1] == group_id for pid in owner_pids):
-        return PortOwnership.VERIFIED
-    if all(_is_descendant(pid, leader_pid, processes) for pid in owner_pids):
-        return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
-    if lineage_token and all(
-        _process_has_lineage(pid, lineage_token)
+    managed_group = all(
+        processes[pid][1] == group_id
         for pid in owner_pids
-    ):
-        return PortOwnership.VERIFIED if contained else PortOwnership.DETACHED
-    return PortOwnership.FOREIGN
+    )
+    descendants = all(
+        _is_descendant(pid, authority.leader_pid, processes)
+        for pid in owner_pids
+    )
+    lineage_matches = all(
+        _process_has_lineage(pid, authority.lineage_token)
+        for pid in owner_pids
+    )
+    if not authority.containment_required:
+        if managed_group:
+            return PortOwnership.VERIFIED
+        return (
+            PortOwnership.DETACHED
+            if descendants or lineage_matches
+            else PortOwnership.FOREIGN
+        )
+    if not managed_group and not descendants and not lineage_matches:
+        return PortOwnership.FOREIGN
+    if not lineage_matches or authority.containment_pid_namespace is None:
+        return PortOwnership.DETACHED
+    owner_namespaces = {
+        _pid_namespace_id(pid)
+        for pid in owner_pids
+    }
+    if None in owner_namespaces:
+        return PortOwnership.UNKNOWN
+    if owner_namespaces != {authority.containment_pid_namespace}:
+        return PortOwnership.DETACHED
+    return PortOwnership.VERIFIED
 
 
 def _process_has_lineage(pid: int, lineage_token: str) -> bool:
@@ -227,21 +254,24 @@ def _process_has_lineage(pid: int, lineage_token: str) -> bool:
     return marker in environment
 
 
+def _pid_namespace_id(pid: int) -> int | None:
+    try:
+        identity = os.readlink(f"/proc/{pid}/ns/pid")
+    except OSError:
+        return None
+    match = re.fullmatch(r"pid:\[(\d+)\]", identity)
+    return int(match.group(1)) if match else None
+
+
 def _connected_socket_ownership(
-    leader_pid: int,
     port: int,
     client_port: int,
     *,
-    contained: bool,
-    group_id: int | None = None,
-    lineage_token: str | None = None,
+    authority: ProcessAuthority,
 ) -> PortOwnership:
     return _socket_ownership(
-        leader_pid,
         _connected_socket_inodes(port, client_port),
-        contained=contained,
-        group_id=group_id,
-        lineage_token=lineage_token,
+        authority=authority,
     )
 
 
@@ -298,6 +328,7 @@ class AppManager:
         # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
         self._retained_effects: list[EffectLease] = []
+        self._discard_tasks: set[asyncio.Task[None]] = set()
 
     def _finish_effect(
         self,
@@ -348,6 +379,8 @@ class AppManager:
         env.setdefault("HOST", "127.0.0.1")
         # Run the command string through the platform shell, in its own process
         # group so we can clean-kill the whole tree later.
+        containment_read_fd: int | None = None
+        containment_write_fd: int | None = None
         try:
             if IS_WINDOWS:
                 shell_argv = ["cmd", "/c", command]
@@ -356,20 +389,47 @@ class AppManager:
                 shell_argv = ["bash", "-lc", command]
                 extra = {"start_new_session": True}
             if self.contained:
+                containment_read_fd, containment_write_fd = os.pipe()
+                os.set_blocking(containment_read_fd, False)
                 shell_argv = pid_namespace_argv(
                     shell_argv,
                     cwd=cwd,
                     label="project app",
+                    info_fd=containment_write_fd,
                 )
+                extra["pass_fds"] = (containment_write_fd,)
             proc = await asyncio.create_subprocess_exec(
                 *shell_argv, cwd=cwd, env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                 **extra,
             )
         except BaseException:
+            if containment_read_fd is not None:
+                os.close(containment_read_fd)
             if effect_lease is not None:
                 effect_lease.release()
             raise
+        finally:
+            if containment_write_fd is not None:
+                os.close(containment_write_fd)
+        containment_pid_namespace = None
+        if containment_read_fd is not None:
+            try:
+                containment_pid_namespace = (
+                    await self._read_containment_pid_namespace(
+                        containment_read_fd,
+                        proc,
+                    )
+                )
+            finally:
+                os.close(containment_read_fd)
+        authority = ProcessAuthority(
+            leader_pid=proc.pid,
+            process_group=proc.pid if not IS_WINDOWS else None,
+            lineage_token=lineage_token,
+            containment_required=self.contained,
+            containment_pid_namespace=containment_pid_namespace,
+        )
         app = {
             "proc": proc,
             "port": port,
@@ -377,11 +437,49 @@ class AppManager:
             "started_at": time.time(),
             "log": [],
             "effect_lease": effect_lease,
-            "process_group": proc.pid if not IS_WINDOWS else None,
-            "lineage_token": lineage_token,
+            "authority": authority,
         }
         self._apps[slug] = app
         app["drain_task"] = asyncio.create_task(self._drain(slug, proc))
+
+    @staticmethod
+    async def _read_containment_pid_namespace(
+        info_fd: int,
+        proc: asyncio.subprocess.Process,
+    ) -> int | None:
+        deadline = (
+            asyncio.get_running_loop().time()
+            + CONTAINMENT_INFO_SECONDS
+        )
+        data = b""
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                chunk = os.read(info_fd, 4096)
+            except BlockingIOError:
+                chunk = None
+            except OSError:
+                return None
+            if chunk:
+                data += chunk
+                try:
+                    payload = json.loads(data)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+                else:
+                    if not isinstance(payload, dict):
+                        return None
+                    namespace = payload.get("pid-namespace")
+                    return (
+                        int(namespace)
+                        if isinstance(namespace, int) and namespace > 0
+                        else None
+                    )
+            elif chunk == b"":
+                break
+            if proc.returncode is not None and not data:
+                break
+            await asyncio.sleep(0.01)
+        return None
 
     @staticmethod
     def _append_log(app: dict[str, Any], line: bytes) -> None:
@@ -425,6 +523,24 @@ class AppManager:
                     app,
                     terminated=proc.returncode is not None,
                 )
+
+    async def _discard_output(
+        self,
+        stdout: asyncio.StreamReader,
+    ) -> None:
+        try:
+            while await stdout.read(65536):
+                pass
+        except (OSError, RuntimeError):
+            pass
+
+    def _start_discard_drain(
+        self,
+        stdout: asyncio.StreamReader,
+    ) -> None:
+        task = asyncio.create_task(self._discard_output(stdout))
+        self._discard_tasks.add(task)
+        task.add_done_callback(self._discard_tasks.discard)
 
     @staticmethod
     def _stopped_status(previous: dict[str, Any]) -> dict[str, Any]:
@@ -501,9 +617,8 @@ class AppManager:
             except asyncio.TimeoutError:
                 drain_task.cancel()
                 await asyncio.gather(drain_task, return_exceptions=True)
-                stdout_transport = getattr(proc.stdout, "_transport", None)
-                if stdout_transport is not None:
-                    stdout_transport.close()
+                if proc.stdout is not None:
+                    self._start_discard_drain(proc.stdout)
         if self._apps.get(slug) is app:
             self._apps.pop(slug, None)
         self._finish_effect(
@@ -560,11 +675,8 @@ class AppManager:
         candidate_port = app.get("detected_port") or app["port"]
         ownership = (
             _listener_ownership(
-                app["proc"].pid,
                 candidate_port,
-                contained=self.contained,
-                group_id=app.get("process_group"),
-                lineage_token=app.get("lineage_token"),
+                authority=app["authority"],
             )
             if _port_open(candidate_port)
             else PortOwnership.NO_LISTENER
@@ -660,11 +772,8 @@ class AppManager:
         port_open = _port_open(candidate_port)
         ownership = (
             _listener_ownership(
-                app["proc"].pid,
                 candidate_port,
-                contained=self.contained,
-                group_id=app.get("process_group"),
-                lineage_token=app.get("lineage_token"),
+                authority=app["authority"],
             )
             if port_open
             else PortOwnership.NO_LISTENER
@@ -743,12 +852,9 @@ class AppManager:
         if int(candidate_port) != int(port):
             return False
         ownership = _connected_socket_ownership(
-            app["proc"].pid,
             port,
             client_port,
-            contained=self.contained,
-            group_id=app.get("process_group"),
-            lineage_token=app.get("lineage_token"),
+            authority=app["authority"],
         )
         if ownership == PortOwnership.FOREIGN:
             app["terminal_state"] = "port_conflict"

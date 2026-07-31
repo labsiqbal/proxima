@@ -1,6 +1,6 @@
 # ADR-0010: Preview authority requires verified managed connections
 
-- Status: Accepted
+- Status: Superseded by ADR-0011
 - Date: 2026-07-31
 
 ## Context
@@ -44,19 +44,14 @@ upstream TCP connection and verifies the connected server-side socket before it
 sends HTTP or WebSocket bytes.
 
 Appview, per-app relays, and preview subdomains use this same connection
-boundary. Under automatic binding, one per-app relay port binds separately on
-loopback and the Tailscale interface when present, so local and tailnet origins
-remain reachable without a wildcard listener. Appview remains the fallback when
-relays are disabled. Capability authentication precedes target resolution and
-procfs work. No browser path connects directly to the candidate development-server
-port.
+boundary. Local browser preview prefers the per-app relay and uses appview only
+when relays are disabled. No browser path connects directly to the candidate
+development-server port.
 
 A foreign listener produces a sticky `port_conflict` state. Proxima may signal
 only the process group it created. Missing procfs data, incomplete socket-owner
 visibility, or an uncontained descendant in another process group fails closed
-as `ownership_unknown`. An ephemeral launch marker preserves that classification
-after a descendant is reparented. The marker never grants preview authority to an
-uncontained process. A detached descendant qualifies only while PID namespace
+as `ownership_unknown`. A detached descendant qualifies only while PID namespace
 containment owns its lifetime.
 
 ## Consequences
@@ -67,8 +62,6 @@ containment owns its lifetime.
   that evidence cannot be established.
 - Every proxy request uses a newly verified upstream connection instead of a
   reusable connection pool.
-- Final stdout draining is bounded and retains output already collected without
-  signaling an uncontained detached child.
 - Detached development-server patterns require configured PID namespace
   containment or a command that keeps the listener in the managed process group.
 

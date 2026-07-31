@@ -414,12 +414,16 @@ This proof deliberately fails closed. Hosts without usable procfs, incomplete
 socket-owner visibility, and uncontained descendants that detach into another process
 group report `ownership_unknown`; their listener is not previewed. Each launch receives
 an ephemeral lineage marker so a detached owner remains identifiable after reparenting
-without becoming trusted. A detached descendant can qualify only when PID-namespace
-containment is active, because namespace teardown owns that descendant lifetime.
-Stopping waits a bounded interval for available stdout, retains the collected tail, and
-never signals an uncontained detached child that keeps the pipe open. This policy
+without becoming trusted. For a contained launch, every socket owner must carry that
+marker and match the exact launch-specific PID namespace identity reported by
+Bubblewrap, even when it retains the managed process group. Missing or mismatched
+membership remains ownership-unknown.
+Stopping waits a bounded interval for available stdout and retains the collected tail.
+A tracked background reader then discards later detached output without retaining app
+state until EOF, keeping the read end valid so Stop never signals that child. This policy
 preserves the ownership boundary instead of treating a successful TCP handshake as
-ownership evidence. See [ADR-0010](adr/0010-preview-authority-requires-verified-connections.md).
+ownership evidence. See
+[ADR-0011](adr/0011-preview-containment-membership-and-detached-output.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale

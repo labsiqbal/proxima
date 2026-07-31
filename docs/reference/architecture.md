@@ -1104,12 +1104,14 @@ an owner-facing reason instead of running unisolated.
 process for the project with a filtered environment. The requested port is only a
 candidate. Status is a discriminated state:
 `stopped | starting | ready | port_conflict | ownership_unknown | exited`.
-Only `ready` carries a proxy target, and readiness requires Linux procfs evidence that
-every listener socket belongs to the managed process group. Appview, relay, and preview
-subdomain paths open a fresh TCP connection and verify its server-side socket belongs
-to that process group before sending HTTP or WebSocket bytes. Starting, conflict,
-ownership-unknown, and exited states return a non-proxy response. An existing relay
-remains available to return that safe response until Stop releases it.
+Only `ready` carries a proxy target. An uncontained launch requires Linux procfs
+evidence that every listener socket belongs to its managed process group. A contained
+launch instead requires every socket owner to match the exact launch-specific PID
+namespace and lineage marker reported at start. Appview, relay, and preview subdomain
+paths repeat the applicable proof on a fresh server-side socket before sending HTTP or
+WebSocket bytes. Starting, conflict, ownership-unknown, and exited states return a
+non-proxy response. An existing relay remains available to return that safe response
+until Stop releases it.
 
 If an unrelated process owns the candidate before start, start returns a structured
 HTTP 409 conflict. If it claims the port after preflight but before the managed app
@@ -1117,10 +1119,11 @@ binds, status becomes the sticky terminal `port_conflict` state and Proxima sign
 only its own managed process group. It never reaches, signals, or terminates the
 foreign listener. Missing or incomplete procfs evidence fails closed as
 `ownership_unknown`. An uncontained child that detaches into another process group is
-also ownership-unknown; a detached descendant is accepted only inside the configured
-PID namespace, whose teardown owns the full descendant lifetime. Each launch carries
-an ephemeral lineage marker so an observed descendant that is later reparented remains
-ownership-unknown instead of becoming a foreign-port conflict.
+also ownership-unknown. Bubblewrap reports the exact launch-specific namespace
+identity at start; every contained socket owner must match it and carry the ephemeral
+launch marker. The marker alone never grants authority. It keeps an observed
+descendant that is later reparented ownership-unknown instead of becoming a
+foreign-port conflict.
 
 A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
@@ -1142,8 +1145,10 @@ forever. The bounded 40-line status buffer and Logs toggle remain available whil
 starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
 the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
 including terminal shutdown output, remains available for the stopped/retry
-state. Final draining has a bounded grace period: output already available is retained,
-while an uncontained child that inherited stdout cannot block Stop and is not signaled.
+state. Final draining has a bounded grace period: output already available is retained.
+If an uncontained child keeps stdout open, a tracked background task reads and discards
+later bytes without retaining app state until EOF. Stop returns without closing that
+read end, so the child is neither blocked nor signaled.
 Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
@@ -1151,7 +1156,7 @@ change-port actions. When
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to
 `127.0.0.1:<dev port>`, gated by a one-hour, signed `proxima_preview` capability that
 is unrelated to the owner API session (minted host-scoped by `POST /api/preview-auth`,
-so the browser also sends it to relay ports — cookies ignore ports). Capability
+so the browser also sends it to relay ports because cookies ignore ports). Capability
 authentication runs before target resolution or procfs ownership work. Proxy paths remove
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight

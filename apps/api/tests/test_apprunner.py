@@ -178,14 +178,32 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
     port = _free_port()
     child_pid_file = tmp_path / "inherited-pipe.pid"
     output_ready_file = tmp_path / "inherited-output.ready"
+    write_trigger_file = tmp_path / "inherited-write.trigger"
+    write_result_file = tmp_path / "inherited-write.result"
 
     async def run_case():
         child_pid = None
         try:
+            worker_code = (
+                "import os, pathlib, time\n"
+                f"trigger = pathlib.Path({str(write_trigger_file)!r})\n"
+                f"result = pathlib.Path({str(write_result_file)!r})\n"
+                "while not trigger.exists():\n"
+                "    time.sleep(0.01)\n"
+                "try:\n"
+                "    for _ in range(4):\n"
+                "        os.write(1, b'after-stop\\n')\n"
+                "        time.sleep(0.02)\n"
+                "except OSError as exc:\n"
+                "    result.write_text(f'error:{exc.errno}')\n"
+                "else:\n"
+                "    result.write_text('success')\n"
+                "time.sleep(60)\n"
+            )
             worker = [
                 sys.executable,
                 "-c",
-                "import time; time.sleep(60)",
+                worker_code,
             ]
             managed = (
                 "import sys, time; "
@@ -217,7 +235,10 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                     break
                 await asyncio.sleep(0.01)
             assert output_ready_file.is_file()
-            managed_group = manager._apps["demo"]["process_group"]
+            managed_group = (
+                manager._apps["demo"]["authority"].process_group
+            )
+            assert managed_group is not None
             for _ in range(100):
                 if os.getpgid(child_pid) != managed_group:
                     break
@@ -232,6 +253,18 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
             status = manager.status("demo")
             assert status["state"] == "stopped"
             assert "inherited-tail" in status["log"]
+            assert manager._discard_tasks
+            write_trigger_file.write_text("write")
+            for _ in range(200):
+                if write_result_file.is_file():
+                    break
+                await asyncio.sleep(0.01)
+            assert write_result_file.read_text() == "success"
+            assert manager.status("demo")["log"] == status["log"]
+            assert not any(
+                "after-stop" in line
+                for line in manager.status("demo")["log"]
+            )
             os.kill(child_pid, 0)
         finally:
             if child_pid is not None:
@@ -239,6 +272,11 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                     os.kill(child_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+            for _ in range(200):
+                if not manager._discard_tasks:
+                    break
+                await asyncio.sleep(0.01)
+            assert not manager._discard_tasks
 
     asyncio.run(run_case())
 
@@ -397,7 +435,9 @@ def test_app_runner_fails_closed_when_procfs_cannot_prove_listener_ownership(
     asyncio.run(run_case())
 
 
-def test_detached_descendant_requires_pid_namespace_containment(monkeypatch):
+def test_detached_descendant_requires_exact_pid_namespace_membership(
+    monkeypatch,
+):
     leader_pid = 1200
     detached_pid = 1201
     listener_inode = "98765"
@@ -415,16 +455,49 @@ def test_detached_descendant_requires_pid_namespace_containment(monkeypatch):
             detached_pid: (leader_pid, detached_pid, {listener_inode}),
         },
     )
+    monkeypatch.setattr(
+        apprunner,
+        "_process_has_lineage",
+        lambda _pid, _token: True,
+    )
+    monkeypatch.setattr(
+        apprunner,
+        "_pid_namespace_id",
+        lambda _pid: 4242,
+    )
+    uncontained = apprunner.ProcessAuthority(
+        leader_pid=leader_pid,
+        process_group=leader_pid,
+        lineage_token="launch-token",
+        containment_required=False,
+        containment_pid_namespace=None,
+    )
+    missing_proof = apprunner.ProcessAuthority(
+        leader_pid=leader_pid,
+        process_group=leader_pid,
+        lineage_token="launch-token",
+        containment_required=True,
+        containment_pid_namespace=None,
+    )
+    exact_proof = apprunner.ProcessAuthority(
+        leader_pid=leader_pid,
+        process_group=leader_pid,
+        lineage_token="launch-token",
+        containment_required=True,
+        containment_pid_namespace=4242,
+    )
 
     assert apprunner._listener_ownership(
-        leader_pid,
         5180,
-        contained=False,
+        authority=uncontained,
     ) == apprunner.PortOwnership.DETACHED
     assert apprunner._listener_ownership(
-        leader_pid,
         5180,
-        contained=True,
+        authority=missing_proof,
+    ) == apprunner.PortOwnership.DETACHED
+    assert apprunner._listener_ownership(
+        5180,
+        authority=exact_proof,
     ) == apprunner.PortOwnership.VERIFIED
 
 
@@ -524,6 +597,101 @@ def test_reparented_uncontained_listener_stays_ownership_unknown(tmp_path):
                     os.kill(child_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="Bubblewrap is required for process containment",
+)
+def test_stolen_marker_outside_containment_never_verifies(tmp_path):
+    port = _free_port()
+    manager = AppManager(contained=True)
+
+    async def run_case():
+        foreign = None
+        try:
+            await manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                port,
+            )
+            authority = manager._apps["demo"]["authority"]
+            assert authority.containment_pid_namespace is not None
+            foreign_env = os.environ.copy()
+            foreign_env[apprunner._LINEAGE_ENV] = authority.lineage_token
+            foreign = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "http.server",
+                    str(port),
+                    "--bind",
+                    "127.0.0.1",
+                ],
+                env=foreign_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            for _ in range(100):
+                if manager_port_open(port):
+                    break
+                await asyncio.sleep(0.01)
+            assert manager_port_open(port)
+
+            status = manager.status("demo")
+
+            assert status["state"] == "ownership_unknown"
+            assert status["ready"] is False
+            assert manager.preview_target("demo") is None
+            assert foreign.poll() is None
+            await manager.stop("demo")
+            assert foreign.poll() is None
+        finally:
+            await manager.shutdown()
+            if foreign is not None and foreign.poll() is None:
+                foreign.terminate()
+                foreign.wait(timeout=5)
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bwrap") is None,
+    reason="Bubblewrap is required for process containment",
+)
+def test_detached_listener_inside_exact_containment_is_ready(tmp_path):
+    port = _free_port()
+    manager = AppManager(contained=True)
+
+    async def run_case():
+        try:
+            command = (
+                f"setsid {shlex.quote(sys.executable)} -m http.server "
+                "$PORT --bind 127.0.0.1 >/dev/null 2>&1 & wait"
+            )
+            await manager.start("demo", str(tmp_path), command, port)
+            authority = manager._apps["demo"]["authority"]
+            assert authority.containment_pid_namespace is not None
+            status = {}
+            for _ in range(200):
+                status = manager.status("demo")
+                if status.get("state") in {
+                    "ready",
+                    "ownership_unknown",
+                    "port_conflict",
+                }:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert status["state"] == "ready"
+            assert status["ready"] is True
+            assert manager.preview_target("demo") == port
+        finally:
+            await manager.shutdown()
 
     asyncio.run(run_case())
 
