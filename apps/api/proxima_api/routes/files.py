@@ -518,7 +518,6 @@ def register(app, deps):
                 effect_lease=effect_lease,
             )
         except apprunner.PortInUseError as exc:
-            effect_lease.release()
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -528,7 +527,6 @@ def register(app, deps):
                 },
             ) from exc
         except apprunner.OutputBrokerUnavailable as exc:
-            effect_lease.release()
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -537,9 +535,6 @@ def register(app, deps):
                     "message": str(exc),
                 },
             ) from exc
-        except BaseException:
-            effect_lease.release()
-            raise
         # Preview relay: the app's own remote-reachable origin (best-effort; the
         # app still runs without it and localhost preview needs no relay).
         try:
@@ -559,7 +554,19 @@ def register(app, deps):
     @app.post("/api/projects/{slug}/app/stop")
     async def app_stop(slug: str, user: dict[str, Any] = Depends(current_user)):
         _project_root(slug, user)
-        await app.state.app_manager.stop(slug)
+        result = await app.state.app_manager.stop(slug)
+        if not result.get("ok", True):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": result.get("state") or "ownership_unknown",
+                    "message": result.get("message")
+                    or (
+                        "Authenticated stop could not finish. The prior "
+                        "preview scope remains unresolved."
+                    ),
+                },
+            )
         await app.state.preview_relays.stop(slug)
         if cf_hostnames.configured(app.state.config):
             maintenance.create_task(

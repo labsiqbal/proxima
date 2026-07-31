@@ -1122,7 +1122,11 @@ binds, status becomes the sticky terminal `port_conflict` state and Proxima sign
 only its own managed process group. It never reaches, signals, or terminates the
 foreign listener. Missing or incomplete procfs evidence fails closed as
 `ownership_unknown`. An uncontained child that detaches into another process group is
-also ownership-unknown. Bubblewrap reports the exact launch-specific namespace
+also ownership-unknown. When a scope is unadopted, Stop tries authenticated recovery
+from durable supervisor evidence and otherwise returns HTTP 409 with an
+ownership-unknown message instead of claiming success; start refuses a replacement
+generation while that authority stays unresolved. Once `AppManager.start` accepts a
+launch, it owns the ingress effect lease through cancel and failed-spawn cleanup. Bubblewrap reports the exact launch-specific namespace
 identity at start; every contained socket owner must match it and carry the ephemeral
 launch marker. The marker alone never grants authority. It keeps an observed
 descendant that is later reparented ownership-unknown instead of becoming a

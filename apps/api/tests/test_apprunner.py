@@ -412,6 +412,8 @@ def test_cancelled_start_reaps_provisional_process(
         with pytest.raises(asyncio.CancelledError):
             await task
         assert manager._cleanup_tasks
+        if stage == "after_spawn":
+            assert lease.released is False
         release.set()
         await asyncio.wait_for(manager.shutdown(), timeout=7)
 
@@ -680,7 +682,9 @@ def test_failed_stop_is_retryable_and_blocks_replacement(tmp_path):
             raise OutputBrokerUnavailable("supervisor unavailable")
 
         app["proc"].refresh = unavailable
-        await manager.stop("demo")
+        first_stop = await manager.stop("demo")
+        assert first_stop["ok"] is False
+        assert first_stop["state"] == "ownership_unknown"
         assert "stop_task" not in app
         with pytest.raises(OutputBrokerUnavailable, match="still live"):
             await manager.start(
@@ -693,8 +697,120 @@ def test_failed_stop_is_retryable_and_blocks_replacement(tmp_path):
         assert manager._generations["demo"] == 1
 
         app["proc"].refresh = original_refresh
-        await manager.stop("demo")
+        second_stop = await manager.stop("demo")
+        assert second_stop["ok"] is True
         assert "demo" not in manager._apps
+
+    asyncio.run(run_case())
+
+
+def test_unadopted_stop_reports_unresolved_and_blocks_replacement(tmp_path):
+    manager = AppManager()
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def run_case():
+        manager._unadopted.add("demo")
+        manager._generations["demo"] = 1
+        manager._retain_effect("demo", lease)
+        manager._last_exit["demo"] = manager._adoption_unknown_status(
+            {"port": 5180, "command": "sleep 60"},
+            "Preview registration failed and terminal cleanup could not "
+            "be authenticated.",
+        )
+
+        result = await manager.stop("demo")
+        assert result["ok"] is False
+        assert result["state"] == "ownership_unknown"
+        assert "authenticate" in result["message"]
+        assert "demo" in manager._unadopted
+        assert lease.released is False
+        assert manager.status("demo")["state"] == "ownership_unknown"
+
+        with pytest.raises(OutputBrokerUnavailable, match="without complete"):
+            await manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+                effect_lease=Lease(),
+            )
+        assert manager._generations["demo"] == 1
+
+    asyncio.run(run_case())
+
+
+def test_unadopted_stop_recovers_ended_durable_scope(tmp_path):
+    state_root = tmp_path / "preview-supervisors"
+    state_root.mkdir()
+    record = {
+        "version": 2,
+        "phase": "attached",
+        "profile": "direct",
+        "slug": "demo",
+        "generation": 3,
+        "port": 5180,
+        "command": "sleep 60",
+        "started_at": time.time() - 30,
+        "lineage_token": "ended-token",
+        "contained": False,
+        "broker": {
+            "pid": 2**22,
+            "start_time": 1,
+            "cgroup": "broker-cgroup",
+            "controller_cgroup": "controller-cgroup",
+            "profile": "direct",
+        },
+        "process": {
+            "pid": 2**22 + 1,
+            "start_time": 1,
+            "cgroup": "process-cgroup",
+        },
+    }
+    (state_root / "demo.3.json").write_text(
+        json.dumps(record),
+        encoding="utf-8",
+    )
+    manager = AppManager(state_root=state_root)
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def run_case():
+        manager._unadopted.add("demo")
+        manager._generations["demo"] = 3
+        manager._retain_effect("demo", lease)
+        manager._last_exit["demo"] = manager._adoption_unknown_status(
+            record,
+            "Preview adoption exceeded the startup deadline.",
+        )
+
+        result = await manager.stop("demo")
+        assert result["ok"] is True
+        assert "demo" not in manager._unadopted
+        assert lease.released is True
+        assert manager.status("demo")["state"] == "stopped"
+        assert not list(state_root.glob("*.json"))
+
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        assert manager._generations["demo"] == 4
+        await manager.stop("demo")
 
     asyncio.run(run_case())
 

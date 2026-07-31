@@ -1263,7 +1263,12 @@ checkout executables. A durable pending generation exists before supervisor crea
 then atomically gains broker and app identity. Startup and shutdown reconcile project
 generations concurrently under aggregate deadlines. A restarted API adopts only exact
 durable supervisor, process, app cgroup, profile, protocol, and lineage evidence;
-anything incomplete remains ownership-unknown and is not signaled. Unit upgrades scan
+anything incomplete remains ownership-unknown and is not signaled. Stop on an
+unadopted scope attempts authenticated reconnect/cleanup when durable evidence
+allows it; otherwise it returns a non-success recoverable ownership-unknown
+result and keeps blocking replacement generations until that scope resolves.
+Start hands the ingress effect lease to `AppManager` and keeps it held through
+cancel or failed-spawn cleanup until terminal authenticated disposal. Unit upgrades scan
 same-user procfs first and refuse while an older protocol process or a pre-protocol
 preview identified by API lineage or service-cgroup membership remains live.
 Supported Windows hosts use detached breakaway supervisors. If durable ownership is

@@ -379,7 +379,7 @@ class AppManager:
         # status polling can recover the bounded command buffer after page reload
         # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
-        self._retained_effects: list[EffectLease] = []
+        self._retained_effects: dict[str, list[EffectLease]] = {}
         self._output_broker_factory = output_broker_factory or OutputBroker.open
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
@@ -389,8 +389,22 @@ class AppManager:
         self._state_root = Path(state_root) if state_root else None
         self._profile = profile
 
+    def _retain_effect(
+        self,
+        slug: str,
+        lease: EffectLease | None,
+    ) -> None:
+        if lease is None:
+            return
+        self._retained_effects.setdefault(slug, []).append(lease)
+
+    def _release_retained_effects(self, slug: str) -> None:
+        for lease in self._retained_effects.pop(slug, []):
+            lease.release()
+
     def _finish_effect(
         self,
+        slug: str,
         app: dict[str, Any],
         *,
         terminated: bool,
@@ -401,7 +415,7 @@ class AppManager:
         if terminated:
             lease.release()
         else:
-            self._retained_effects.append(lease)
+            self._retain_effect(slug, lease)
 
     def _track_cleanup(
         self,
@@ -724,8 +738,7 @@ class AppManager:
                 record,
                 "Preview spawn outcome could not be authenticated.",
             )
-            if effect_lease is not None:
-                self._retained_effects.append(effect_lease)
+            self._retain_effect(slug, effect_lease)
             return
         if effect_lease is not None:
             effect_lease.release()
@@ -869,8 +882,7 @@ class AppManager:
             "Preview registration failed and terminal cleanup could not "
             "be authenticated.",
         )
-        if effect_lease is not None:
-            self._retained_effects.append(effect_lease)
+        self._retain_effect(slug, effect_lease)
 
     @staticmethod
     def _cgroup_identity(pid: int) -> str | None:
@@ -1608,7 +1620,9 @@ class AppManager:
         self._remove_app_record(slug, app)
         self._clear_reservation(slug, int(app["generation"]))
         self._last_exit[slug] = result
-        self._finish_effect(app, terminated=True)
+        self._finish_effect(slug, app, terminated=True)
+        self._release_retained_effects(slug)
+        self._unadopted.discard(slug)
         app["stopped"] = True
 
     @staticmethod
@@ -1650,28 +1664,156 @@ class AppManager:
         slug: str,
         *,
         preserve_status: bool = True,
-    ) -> None:
+    ) -> dict[str, Any]:
         async with self._lifecycle_lock(slug):
             await self._settle_reservation(slug)
-            await self._stop_locked(
+            return await self._stop_locked(
                 slug,
                 preserve_status=preserve_status,
             )
+
+    def _durable_records_for_slug(
+        self,
+        slug: str,
+    ) -> list[tuple[Path, dict[str, Any]]]:
+        if self._state_root is None or not self._state_root.exists():
+            return []
+        records: list[tuple[Path, dict[str, Any]]] = []
+        for path in self._state_root.glob(f"{slug}.*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if (
+                not isinstance(record, dict)
+                or record.get("version") not in (1, 2)
+                or record.get("profile") != self._profile
+                or record.get("slug") != slug
+                or not isinstance(record.get("generation"), int)
+                or record["generation"] <= 0
+            ):
+                continue
+            records.append((path, record))
+        return records
+
+    async def _try_recover_unadopted(
+        self,
+        slug: str,
+    ) -> str:
+        candidates = self._durable_records_for_slug(slug)
+        if not candidates:
+            return "unresolved"
+        self._unadopted.discard(slug)
+        deadline = (
+            asyncio.get_running_loop().time() + RECONCILE_DEADLINE_SECONDS
+        )
+        try:
+            await self._reconcile_slug(slug, candidates, deadline)
+        except asyncio.CancelledError:
+            self._unadopted.add(slug)
+            raise
+        except Exception:
+            self._unadopted.add(slug)
+            return "unresolved"
+        if slug in self._apps:
+            self._unadopted.discard(slug)
+            return "adopted"
+        if slug in self._unadopted:
+            return "unresolved"
+        return "ended"
+
+    async def _stop_unadopted(
+        self,
+        slug: str,
+        *,
+        preserve_status: bool,
+    ) -> dict[str, Any]:
+        recovery = await self._try_recover_unadopted(slug)
+        if recovery == "adopted":
+            app = self._apps.get(slug)
+            if app is None:
+                recovery = "unresolved"
+            else:
+                stopped = await self._stop_app(
+                    slug,
+                    app,
+                    preserve_status=preserve_status,
+                )
+                if stopped:
+                    return {"ok": True}
+                self._unadopted.add(slug)
+                status = self.status(slug)
+                message = str(
+                    status.get("message")
+                    or (
+                        "Authenticated stop could not finish. The prior "
+                        "preview scope remains unresolved."
+                    )
+                )
+                return {
+                    "ok": False,
+                    "state": "ownership_unknown",
+                    "message": message,
+                }
+        if recovery == "ended":
+            self._unadopted.discard(slug)
+            self._release_retained_effects(slug)
+            previous = self._last_exit.get(slug)
+            if preserve_status and previous:
+                self._last_exit[slug] = self._stopped_status(previous)
+            elif previous is None:
+                self._last_exit[slug] = {
+                    "state": "stopped",
+                    "running": False,
+                    "ready": False,
+                    "message": (
+                        "The previous supervised preview ended. Retry to "
+                        "start a new generation."
+                    ),
+                }
+            return {"ok": True}
+        previous = self._last_exit.get(slug) or {}
+        message = (
+            "A prior preview scope is still live without complete adoption "
+            "proof. Stop could not authenticate cleanup; resolve or remove "
+            "that scope before retrying."
+        )
+        status = self._adoption_unknown_status(
+            {
+                "port": previous.get("requested_port")
+                or previous.get("port")
+                or 0,
+                "command": previous.get("command") or "",
+            },
+            message,
+        )
+        if previous.get("log"):
+            status["log"] = list(previous.get("log") or [])[-40:]
+        self._last_exit[slug] = status
+        self._unadopted.add(slug)
+        return {
+            "ok": False,
+            "state": "ownership_unknown",
+            "message": message,
+        }
 
     async def _stop_locked(
         self,
         slug: str,
         *,
         preserve_status: bool,
-    ) -> bool:
+    ) -> dict[str, Any]:
         if slug in self._unadopted:
-            return False
+            return await self._stop_unadopted(
+                slug,
+                preserve_status=preserve_status,
+            )
         previous = self._last_exit.pop(slug, None)
         app = self._apps.get(slug)
         if not app:
             if preserve_status and previous:
                 self._last_exit[slug] = self._stopped_status(previous)
-            return True
+            return {"ok": True}
         stop_task = app.get("stop_task")
         if not isinstance(stop_task, asyncio.Task):
             stop_task = self._track_cleanup(
@@ -1683,7 +1825,36 @@ class AppManager:
             )
             app["stop_task"] = stop_task
         await asyncio.shield(stop_task)
-        return self._apps.get(slug) is not app
+        if self._apps.get(slug) is not app:
+            return {"ok": True}
+        status = self.status(slug)
+        message = str(
+            status.get("message")
+            or (
+                "Authenticated stop could not finish. The prior preview "
+                "scope remains unresolved."
+            )
+        )
+        if preserve_status and status.get("state") == "ownership_unknown":
+            self._last_exit[slug] = {
+                key: status[key]
+                for key in status
+                if key in {
+                    "state",
+                    "running",
+                    "ready",
+                    "requested_port",
+                    "command",
+                    "log",
+                    "message",
+                    "reason",
+                }
+            }
+        return {
+            "ok": False,
+            "state": str(status.get("state") or "ownership_unknown"),
+            "message": message,
+        }
 
     async def _stop_app(
         self,
@@ -1779,9 +1950,12 @@ class AppManager:
                 self._apps.pop(slug, None)
             self._remove_app_record(slug, app)
             self._finish_effect(
+                slug,
                 app,
-                terminated=proc.returncode is not None,
+                terminated=True,
             )
+            self._release_retained_effects(slug)
+            self._unadopted.discard(slug)
             app["stopped"] = True
             self._clear_reservation(slug, int(app["generation"]))
             if preserve_status:
