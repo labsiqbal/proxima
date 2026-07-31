@@ -666,6 +666,450 @@ def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
     assert created.status_code == 422
 
 
+def test_manual_intake_create_edit_delete_is_atomic_and_ids_survive_reload(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    }
+                ],
+            }
+        ]
+    }
+    job = _create(client, graph)
+    job_id = job["id"]
+
+    edited = {
+        "nodes": [
+            {
+                **graph["nodes"][0],
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign name",
+                        "kind": "text",
+                        "required": True,
+                    },
+                    {
+                        "id": "audience",
+                        "label": "Audience",
+                        "kind": "text",
+                        "required": False,
+                    },
+                ],
+            }
+        ]
+    }
+    response = client.patch(
+        f"/api/graph/jobs/{job_id}/graph", json={"graph": edited}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["graph"]["nodes"][0]["inputs"] == edited["nodes"][0]["inputs"]
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["graph"]["nodes"][0][
+        "inputs"
+    ] == edited["nodes"][0]["inputs"]
+
+    duplicate = {
+        "nodes": [
+            {
+                **edited["nodes"][0],
+                "inputs": [
+                    edited["nodes"][0]["inputs"][0],
+                    {
+                        **edited["nodes"][0]["inputs"][1],
+                        "id": "campaign",
+                    },
+                ],
+            }
+        ]
+    }
+    rejected_duplicate = client.patch(
+        f"/api/graph/jobs/{job_id}/graph", json={"graph": duplicate}
+    )
+    assert rejected_duplicate.status_code == 422
+    assert "duplicate input id" in rejected_duplicate.json()["detail"]
+
+    invalid_id = {
+        "nodes": [
+            {
+                **edited["nodes"][0],
+                "inputs": [
+                    {
+                        **edited["nodes"][0]["inputs"][0],
+                        "id": "campaign name",
+                    }
+                ],
+            }
+        ]
+    }
+    rejected_id = client.patch(
+        f"/api/graph/jobs/{job_id}/graph", json={"graph": invalid_id}
+    )
+    assert rejected_id.status_code == 422
+    assert "letters, numbers, and underscores" in rejected_id.json()["detail"]
+
+    # Both rejected whole-graph edits leave the last accepted intake contract intact.
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["graph"]["nodes"][0][
+        "inputs"
+    ] == edited["nodes"][0]["inputs"]
+
+    deleted = {
+        "nodes": [{**edited["nodes"][0], "inputs": [edited["nodes"][0]["inputs"][0]]}]
+    }
+    response = client.patch(
+        f"/api/graph/jobs/{job_id}/graph", json={"graph": deleted}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["graph"]["nodes"][0]["inputs"] == deleted["nodes"][0]["inputs"]
+
+
+def test_manual_start_requires_values_and_resolves_optional_defaults(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    },
+                    {
+                        "id": "notes",
+                        "label": "Notes",
+                        "kind": "text",
+                        "required": False,
+                    },
+                    {
+                        "id": "channel",
+                        "label": "Channel",
+                        "kind": "text",
+                        "required": False,
+                        "default": "email",
+                    },
+                ],
+            }
+        ]
+    }
+    job = _create(client, graph)
+    job_id = job["id"]
+
+    missing = client.post(f"/api/graph/jobs/{job_id}/start")
+    assert missing.status_code == 422
+    assert "Campaign" in missing.json()["detail"]
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["status"] == "queued"
+
+    started = client.post(
+        f"/api/graph/jobs/{job_id}/start",
+        json={"input": {"campaign": "Launch week", "notes": ""}},
+    )
+    assert started.status_code == 200, started.text
+    body = started.json()
+    assert body["status"] == "review"
+    assert body["input"] == {"brief": "launch", "campaign": "Launch week", "channel": "email"}
+    trigger = next(state for state in body["node_states"] if state["node_id"] == "trigger")
+    assert trigger["inputs"] == {"job_input": body["input"]}
+    assert trigger["output"] == body["input"]
+
+
+def test_manual_start_rejects_invalid_number_and_url_values_atomically(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "quantity",
+                        "label": "Quantity",
+                        "kind": "number",
+                        "required": True,
+                    },
+                    {
+                        "id": "landing_page",
+                        "label": "Landing page",
+                        "kind": "url",
+                        "required": False,
+                    },
+                ],
+            }
+        ]
+    }
+    job = _create(client, graph)
+
+    invalid_number = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"quantity": "many"}},
+    )
+    assert invalid_number.status_code == 422
+    assert invalid_number.json()["detail"] == "Quantity: value must be a number"
+
+    non_finite_number = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"quantity": "NaN"}},
+    )
+    assert non_finite_number.status_code == 422
+    assert non_finite_number.json()["detail"] == "Quantity: value must be a finite number"
+
+    invalid_url = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"quantity": "12", "landing_page": "example.com"}},
+    )
+    assert invalid_url.status_code == 422
+    assert "complete http:// or https:// URL" in invalid_url.json()["detail"]
+
+    unchanged = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert unchanged["status"] == "queued"
+    assert unchanged["input"] == {"brief": "launch"}
+
+    started = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={
+            "input": {
+                "quantity": "12",
+                "landing_page": "https://example.com/launch",
+            }
+        },
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["input"] == {
+        "brief": "launch",
+        "quantity": "12",
+        "landing_page": "https://example.com/launch",
+    }
+
+
+def test_start_rejects_a_saved_graph_change_during_the_execution_claim(
+    tmp_path, monkeypatch
+):
+    from proxima_api import worktrees
+
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    }
+                ],
+            }
+        ]
+    }
+    job = _create(client, graph)
+    changed_graph = {
+        "nodes": [
+            {
+                **graph["nodes"][0],
+                "inputs": [
+                    graph["nodes"][0]["inputs"][0],
+                    {
+                        "id": "audience",
+                        "label": "Audience",
+                        "kind": "text",
+                        "required": False,
+                    },
+                ],
+            }
+        ]
+    }
+
+    def save_concurrent_graph(*_args):
+        app.state.db.execute(
+            "UPDATE jobs SET graph = ? WHERE id = ?",
+            (json.dumps(changed_graph), job["id"]),
+        )
+
+    monkeypatch.setattr(worktrees, "bind_graph_job_repo_worktree", save_concurrent_graph)
+
+    refused = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week"}},
+    )
+
+    assert refused.status_code == 409
+    assert "workflow changed while starting" in refused.json()["detail"]
+    unchanged = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert unchanged["status"] == "queued"
+    assert unchanged["input"] == {"brief": "launch"}
+    assert unchanged["graph"]["nodes"][0]["inputs"] == changed_graph["nodes"][0]["inputs"]
+
+
+def test_start_dispatch_failure_restores_original_input(tmp_path, monkeypatch):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    },
+                    {
+                        "id": "notes",
+                        "label": "Notes",
+                        "kind": "text",
+                        "required": False,
+                    },
+                ],
+            },
+            {"id": "write", "name": "Write", "instruction": "draft", "depends_on": ["trigger"]},
+        ]
+    }
+    job = _create(client, graph)
+    real_dispatch = app.state.worker.graph_executor.dispatch_ready
+    attempts = {"count": 0}
+
+    def flaky_dispatch(job_id):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("missing execution profile")
+        return real_dispatch(job_id)
+
+    monkeypatch.setattr(app.state.worker.graph_executor, "dispatch_ready", flaky_dispatch)
+
+    refused = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week", "notes": "temp"}},
+    )
+    assert refused.status_code == 409
+    assert "missing execution profile" in refused.json()["detail"]
+
+    rolled_back = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert rolled_back["status"] == "queued"
+    assert rolled_back["input"] == {"brief": "launch"}
+    assert rolled_back.get("started_at") in (None, "")
+
+    # Blank optional notes must not keep a polluted freeze from the failed claim.
+    started = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week"}},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["input"] == {"brief": "launch", "campaign": "Launch week"}
+
+
+def test_start_no_dispatchable_node_restores_original_input(tmp_path, monkeypatch):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    }
+                ],
+            },
+            {"id": "write", "name": "Write", "instruction": "draft", "depends_on": ["trigger"]},
+        ]
+    }
+    job = _create(client, graph)
+
+    monkeypatch.setattr(app.state.worker.graph_executor, "dispatch_ready", lambda _job_id: [])
+
+    refused = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week"}},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "graph job has no dispatchable node"
+
+    rolled_back = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert rolled_back["status"] == "queued"
+    assert rolled_back["input"] == {"brief": "launch"}
+
+
+def test_scheduled_start_preserves_trigger_owned_input(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    created = client.post(
+        "/api/graph/jobs",
+        json={
+            "title": "Scheduled graph",
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "trigger",
+                        "type": "trigger",
+                        "trigger_kind": "scheduled",
+                        "name": "Weekday morning",
+                        "schedule": {
+                            "cron": "30 8 * * 1-5",
+                            "overlap_policy": "skip",
+                            "enabled": True,
+                        },
+                        "inputs": [
+                            {
+                                "id": "campaign",
+                                "label": "Campaign",
+                                "kind": "text",
+                                "required": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+            "input": {
+                "campaign": "scheduler-owned",
+                "scheduled_for": "2026-08-03T08:30:00Z",
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    started = client.post(f"/api/graph/jobs/{created.json()['id']}/start")
+
+    assert started.status_code == 200, started.text
+    assert started.json()["input"] == {
+        "campaign": "scheduler-owned",
+        "scheduled_for": "2026-08-03T08:30:00Z",
+    }
+
+
 # ── per-job targets + repo plans (Phase-1 slice 3, T1/T2) ────────────────
 
 

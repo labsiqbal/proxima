@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import heapq
 import json
+import re
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, TypeAlias, cast
+from urllib.parse import urlsplit
 
 from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[reportMissingModuleSource]
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
@@ -28,6 +31,7 @@ _INPUT_KINDS: frozenset[str] = frozenset({"text", "url", "number", "file"})
 _RUNNABLE_STATUSES: frozenset[str] = frozenset({"pending", "stale"})
 _NODE_TYPES: frozenset[str] = frozenset({"agent", "trigger", "script"})
 _TRIGGER_KINDS: frozenset[str] = frozenset({"manual", "scheduled"})
+_INPUT_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 TRIGGER_OUTPUT_KIND: OutputKind = "json"
 # The sentinel target for work that does not touch a repo: the project's ops
 # area (T1). Every other target names a registered code area's rel_path.
@@ -120,6 +124,11 @@ def _parse_trigger_inputs(raw: Mapping[str, Any], node_id: str) -> list[dict[str
                 f"node '{node_id}' input at index {index} must have a non-empty id"
             )
         input_id = input_id.strip()
+        if not _INPUT_ID.fullmatch(input_id):
+            raise GraphValidationError(
+                f"node '{node_id}' input id '{input_id}' must begin with a letter "
+                "and contain only letters, numbers, and underscores"
+            )
         if input_id in ids:
             raise GraphValidationError(
                 f"node '{node_id}' has duplicate input id: {input_id}"
@@ -138,15 +147,88 @@ def _parse_trigger_inputs(raw: Mapping[str, Any], node_id: str) -> list[dict[str
             raise GraphValidationError(
                 f"node '{node_id}' input '{input_id}' required must be a boolean"
             )
-        inputs.append(
-            {
-                "id": input_id,
-                "label": label.strip(),
-                "kind": kind,
-                "required": required,
-            }
-        )
+        parsed = {
+            "id": input_id,
+            "label": label.strip(),
+            "kind": kind,
+            "required": required,
+        }
+        if "default" in item:
+            default = _validated_input_value(parsed, item.get("default"), default=True)
+            if default is not None:
+                parsed["default"] = default
+        inputs.append(parsed)
     return inputs
+
+
+def _validated_input_value(
+    declaration: Mapping[str, Any],
+    value: Any,
+    *,
+    default: bool = False,
+) -> Any | None:
+    """Validate one declared intake value and return its canonical form."""
+    label = str(declaration.get("label") or declaration.get("id") or "Input")
+    kind = str(declaration.get("kind") or "text")
+    source = "default value" if default else "value"
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise GraphValidationError(f"{label}: {source} must be a number")
+        text = str(value).strip()
+        try:
+            number = Decimal(text)
+        except InvalidOperation as exc:
+            raise GraphValidationError(f"{label}: {source} must be a number") from exc
+        if not number.is_finite():
+            raise GraphValidationError(f"{label}: {source} must be a finite number")
+        return text
+    if not isinstance(value, str):
+        raise GraphValidationError(f"{label}: {source} must be text")
+    text = value.strip()
+    if kind == "url":
+        parsed = urlsplit(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise GraphValidationError(
+                f"{label}: {source} must be a complete http:// or https:// URL"
+            )
+    return text
+
+
+def resolved_manual_trigger_input(
+    graph: Mapping[str, Any],
+    values: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve and validate the values approved for a manual trigger.
+
+    Extra job-owned values are preserved for compatibility. Declared blank optional
+    fields are omitted, defaults are applied, and a required field without either a
+    submitted value or default fails before the job can claim ``running``.
+    Scheduled triggers deliberately retain their existing source-owned payload.
+    """
+    result = dict(values)
+    trigger = next(
+        (node for node in graph.get("nodes", []) if node.get("type") == "trigger"),
+        None,
+    )
+    if trigger is None or trigger.get("trigger_kind", "manual") != "manual":
+        return result
+    for declaration in trigger.get("inputs", []) or []:
+        input_id = str(declaration["id"])
+        resolved = _validated_input_value(declaration, result.get(input_id))
+        if resolved is None and "default" in declaration:
+            resolved = _validated_input_value(
+                declaration, declaration.get("default"), default=True
+            )
+        if resolved is None:
+            result.pop(input_id, None)
+            if declaration.get("required"):
+                label = declaration.get("label") or input_id
+                raise GraphValidationError(f"{label}: a value is required")
+            continue
+        result[input_id] = resolved
+    return result
 
 
 def _parse_trigger_schedule(

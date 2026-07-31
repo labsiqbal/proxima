@@ -2,38 +2,210 @@ import React from 'react'
 import type { WorkflowInput } from '../../types'
 
 const INPUT_KINDS: WorkflowInput['kind'][] = ['text', 'url', 'number', 'file']
-const slugifyId = (value: string) =>
-  value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+const INPUT_ID = /^[A-Za-z][A-Za-z0-9_]*$/
 
-export function WorkflowInputsEditor({ inputs, disabled = false, onChange }: {
+type EditState = { dirty: boolean; valid: boolean }
+
+function defaultError(item: WorkflowInput) {
+  const value = item.default?.trim()
+  if (!value) return ''
+  if (item.kind === 'number' && !Number.isFinite(Number(value))) return 'Default must be a valid number.'
+  if (item.kind === 'url') {
+    try {
+      const url = new URL(value)
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol')
+    } catch {
+      return 'Default must be a complete http:// or https:// URL.'
+    }
+  }
+  return ''
+}
+
+function WorkflowInputRow({ item, index, inputs, disabled, onPatch, onRemove, onEditState }: {
+  item: WorkflowInput
+  index: number
+  inputs: WorkflowInput[]
+  disabled: boolean
+  onPatch: (next: WorkflowInput) => void
+  onRemove: () => void
+  onEditState: (state: EditState) => void
+}) {
+  const [draft, setDraft] = React.useState(item)
+  const itemSignature = JSON.stringify(item)
+  const dirtyRef = React.useRef(false)
+  const trimmedId = draft.id.trim()
+  const trimmedLabel = draft.label.trim()
+  const idError = !trimmedId
+    ? 'ID is required.'
+    : !INPUT_ID.test(trimmedId)
+      ? 'Use letters, numbers, and underscores, starting with a letter.'
+      : inputs.some((other, otherIndex) => otherIndex !== index && other.id === trimmedId)
+        ? 'ID must be unique.'
+        : ''
+  const labelError = trimmedLabel ? '' : 'Label is required.'
+  const valueError = defaultError(draft)
+  const valid = !idError && !labelError && !valueError
+  const normalized: WorkflowInput = {
+    id: trimmedId,
+    label: trimmedLabel,
+    kind: draft.kind,
+    required: draft.required,
+    ...(draft.default?.trim() ? { default: draft.default.trim() } : {}),
+  }
+  const dirty = JSON.stringify(normalized) !== itemSignature
+  dirtyRef.current = dirty
+  React.useEffect(() => {
+    if (dirtyRef.current) return
+    setDraft(JSON.parse(itemSignature) as WorkflowInput)
+  }, [itemSignature])
+
+  React.useEffect(() => {
+    onEditState({ dirty, valid })
+  }, [dirty, valid, onEditState])
+  const editStateRef = React.useRef(onEditState)
+  editStateRef.current = onEditState
+  React.useEffect(() => () => {
+    editStateRef.current({ dirty: false, valid: true })
+  }, [])
+
+  const skipCommit = React.useRef(false)
+  const commit = () => {
+    if (skipCommit.current) {
+      skipCommit.current = false
+      return
+    }
+    if (!dirty || !valid) return
+    setDraft(normalized)
+    onPatch(normalized)
+  }
+  const reset = () => setDraft(item)
+  const keyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur()
+    if (event.key === 'Escape') {
+      skipCommit.current = true
+      reset()
+      event.currentTarget.blur()
+    }
+  }
+
+  return <div className="wf-input-row">
+    <label><span>Label</span><input
+      className="wf-input-cell"
+      value={draft.label}
+      disabled={disabled}
+      placeholder="e.g. Topic"
+      aria-label={`Input ${index + 1} label`}
+      aria-invalid={!!labelError}
+      onChange={event => setDraft(current => ({ ...current, label: event.target.value }))}
+      onBlur={commit}
+      onKeyDown={keyDown}
+    />{labelError && <small className="wf-field-error">{labelError}</small>}</label>
+    <label><span>ID</span><span className="wf-input-id"><span>{'{{'}</span><input
+      className="wf-input-cell"
+      value={draft.id}
+      disabled={disabled}
+      placeholder="topic"
+      aria-label={`Input ${index + 1} ID`}
+      aria-invalid={!!idError}
+      onChange={event => setDraft(current => ({ ...current, id: event.target.value }))}
+      onBlur={commit}
+      onKeyDown={keyDown}
+    /><span>{'}}'}</span></span>{idError && <small className="wf-field-error">{idError}</small>}</label>
+    <label><span>Type</span><select
+      className="wf-input-cell"
+      value={draft.kind}
+      disabled={disabled}
+      aria-label={`Input ${index + 1} type`}
+      onChange={event => setDraft(current => ({ ...current, kind: event.target.value as WorkflowInput['kind'] }))}
+      onBlur={commit}
+    >
+      {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+    </select></label>
+    <label><span>Default <span className="muted">(optional)</span></span><input
+      className="wf-input-cell"
+      type={draft.kind === 'number' ? 'number' : draft.kind === 'url' ? 'url' : 'text'}
+      value={draft.default ?? ''}
+      disabled={disabled}
+      placeholder="Value used when left blank"
+      aria-label={`Input ${index + 1} default`}
+      aria-invalid={!!valueError}
+      onChange={event => setDraft(current => ({ ...current, default: event.target.value }))}
+      onBlur={commit}
+      onKeyDown={keyDown}
+    />{valueError && <small className="wf-field-error">{valueError}</small>}</label>
+    <label className="wf-input-req"><span>Required</span><input
+      type="checkbox"
+      checked={draft.required}
+      disabled={disabled}
+      aria-label={`Input ${index + 1} required`}
+      onChange={event => {
+        const next = { ...draft, required: event.target.checked }
+        setDraft(next)
+        const canonical: WorkflowInput = {
+          ...next,
+          id: next.id.trim(),
+          label: next.label.trim(),
+          ...(next.default?.trim() ? { default: next.default.trim() } : {}),
+        }
+        if (!next.default?.trim()) delete canonical.default
+        if (!idError && !labelError && !defaultError(next)) onPatch(canonical)
+      }}
+    /></label>
+    <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={disabled} onClick={onRemove}>×</button>
+  </div>
+}
+
+export function WorkflowInputsEditor({ inputs, disabled = false, onChange, onEditStateChange }: {
   inputs: WorkflowInput[]
   disabled?: boolean
   onChange: (inputs: WorkflowInput[]) => void
+  onEditStateChange?: (state: EditState) => void
 }) {
-  const patch = (index: number, next: Partial<WorkflowInput>) =>
-    onChange(inputs.map((item, i) => i === index ? { ...item, ...next } : item))
+  const [rowStates, setRowStates] = React.useState<Record<string, EditState>>({})
+  const updateRowState = React.useCallback((key: string, state: EditState) => {
+    setRowStates(current => {
+      if (!state.dirty && state.valid) {
+        if (!(key in current)) return current
+        const next = { ...current }
+        delete next[key]
+        return next
+      }
+      const previous = current[key]
+      if (previous?.dirty === state.dirty && previous.valid === state.valid) return current
+      return { ...current, [key]: state }
+    })
+  }, [])
+  React.useEffect(() => {
+    const states = Object.values(rowStates)
+    onEditStateChange?.({
+      dirty: states.some(state => state.dirty),
+      valid: states.every(state => state.valid),
+    })
+  }, [rowStates, onEditStateChange])
+  const add = () => {
+    const ids = new Set(inputs.map(item => item.id))
+    let id = 'field'
+    let suffix = 2
+    while (ids.has(id)) {
+      id = `field_${suffix}`
+      suffix += 1
+    }
+    onChange([...inputs, { id, label: 'New field', kind: 'text', required: false }])
+  }
 
   return <div className="wf-inputs">
-    {inputs.map((item, index) => <div className="wf-input-row" key={index}>
-      <label><span>Label</span><input className="wf-input-cell" value={item.label} disabled={disabled} placeholder="e.g. Topic"
-        aria-label={`Input ${index + 1} label`}
-        onChange={event => patch(index, { label: event.target.value, id: item.id.trim() ? item.id : slugifyId(event.target.value) })} /></label>
-      <label><span>ID</span><span className="wf-input-id"><span>{'{{'}</span><input className="wf-input-cell" value={item.id} disabled={disabled} placeholder="topic"
-        aria-label={`Input ${index + 1} ID`}
-        onChange={event => patch(index, { id: slugifyId(event.target.value) })} /><span>{'}}'}</span></span></label>
-      <label><span>Type</span><select className="wf-input-cell" value={item.kind} disabled={disabled}
-        aria-label={`Input ${index + 1} type`}
-        onChange={event => patch(index, { kind: event.target.value as WorkflowInput['kind'] })}>
-        {INPUT_KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
-      </select></label>
-      <label className="wf-input-req"><span>Required</span><input type="checkbox" checked={item.required} disabled={disabled}
-        aria-label={`Input ${index + 1} required`}
-        onChange={event => patch(index, { required: event.target.checked })} /></label>
-      <button className="row-action danger" title="Remove input" aria-label="Remove input" disabled={disabled}
-        onClick={() => onChange(inputs.filter((_, i) => i !== index))}>×</button>
-    </div>)}
+    {inputs.map((item, index) => <WorkflowInputRow
+      key={item.id}
+      item={item}
+      index={index}
+      inputs={inputs}
+      disabled={disabled}
+      onPatch={next => onChange(inputs.map((current, i) => i === index ? next : current))}
+      onRemove={() => onChange(inputs.filter((_, i) => i !== index))}
+      onEditState={state => updateRowState(item.id, state)}
+    />)}
     <button className="ghost-button wf-add-step" disabled={disabled}
-      onClick={() => onChange([...inputs, { id: '', label: '', kind: 'text', required: false }])}>+ Add field</button>
+      onClick={add}>+ Add field</button>
   </div>
 }
 

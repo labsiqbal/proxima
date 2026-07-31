@@ -59,6 +59,27 @@ function getJson(port, path) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+async function stopBrowser(chrome, userDataDir) {
+  const exited = new Promise(resolve => chrome.once('exit', resolve))
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    chrome.kill('SIGTERM')
+    await Promise.race([exited, sleep(3000)])
+  }
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    chrome.kill('SIGKILL')
+    await Promise.race([exited, sleep(1000)])
+  }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+      return
+    } catch (err) {
+      if (err.code !== 'ENOTEMPTY' || attempt === 4) throw err
+      await sleep(100)
+    }
+  }
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer()
@@ -182,6 +203,56 @@ async function apiSmoke() {
   return token
 }
 
+async function createWorkflowIntakeFixture(token) {
+  const headers = { Authorization: `Bearer ${token}` }
+  const projects = await request('/api/projects', { headers })
+  let project = projects.body.projects?.[0]
+  let ownsProject = false
+  if (!project?.slug) {
+    const slug = `workflow-intake-smoke-${Date.now()}`
+    project = (await request('/api/projects', {
+      method: 'POST',
+      headers,
+      body: { slug, name: 'Workflow Intake Smoke' },
+    })).body
+    ownsProject = true
+  }
+  if (!project?.slug) throw new Error('workflow intake browser smoke needs a project')
+  const title = `Workflow intake integrity ${Date.now()}`
+  const job = await request('/api/graph/jobs', {
+    method: 'POST',
+    headers,
+    body: {
+      title,
+      project_slug: project.slug,
+      graph: {
+        nodes: [{
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          inputs: [],
+        }],
+        edges: [],
+      },
+    },
+  })
+  return { id: job.body.id, title, projectSlug: project.slug, ownsProject }
+}
+
+async function deleteWorkflowIntakeFixture(token, fixture) {
+  if (!fixture) return
+  const headers = { Authorization: `Bearer ${token}` }
+  await request(`/api/jobs/${fixture.id}`, { method: 'DELETE', headers, body: {} }).catch(() => {})
+  if (fixture.ownsProject) {
+    await request(`/api/projects/${encodeURIComponent(fixture.projectSlug)}`, {
+      method: 'DELETE',
+      headers,
+      body: {},
+    }).catch(() => {})
+  }
+}
+
 async function waitForTarget(port) {
   for (let i = 0; i < 80; i += 1) {
     try {
@@ -194,7 +265,273 @@ async function waitForTarget(port) {
   throw new Error(`Chrome DevTools target for ${BASE} was not ready`)
 }
 
-async function browserNavigationSmoke({ name, width, height, port, mobile, token }) {
+async function workflowIntakeBrowserRegression(send, fixture) {
+  const phaseOne = await send('Runtime.evaluate', {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `(${async function (title, jobId) {
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+      const body = () => document.body.innerText || ''
+      async function until(check, message, attempts = 60) {
+        for (let i = 0; i < attempts; i += 1) {
+          const result = await check()
+          if (result) return result
+          await wait(150)
+        }
+        throw new Error(`${message}\n${body().slice(0, 800)}`)
+      }
+      function clickText(label, scope = document) {
+        const node = [...scope.querySelectorAll('button, [role="button"], a')]
+          .find(item => (item.textContent || '').trim() === label)
+        if (!node) throw new Error(`missing ${label}`)
+        node.click()
+      }
+      function setInput(label, value, blur = true) {
+        const input = document.querySelector(`[aria-label="${label}"]`)
+        if (!(input instanceof HTMLInputElement)) throw new Error(`missing input ${label}`)
+        input.focus()
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+        setter.call(input, value)
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+        if (blur) input.blur()
+        return input
+      }
+      async function job() {
+        const response = await fetch(`/api/graph/jobs/${jobId}`)
+        if (!response.ok) throw new Error(`job read failed: ${response.status}`)
+        return response.json()
+      }
+
+      const workflows = await until(
+        () => [...document.querySelectorAll('.sidebar button, .sidebar a')]
+          .find(node => (node.textContent || '').trim() === 'Workflows'),
+        'Workflows navigation did not load',
+      )
+      workflows.click()
+      await until(() => body().includes('Workflows'), 'Workflows did not open')
+      const draftsTab = await until(
+        () => [...document.querySelectorAll('[role="tab"]')]
+          .find(node => (node.textContent || '').trim().startsWith('Drafts ')),
+        'Drafts tab missing',
+      )
+      draftsTab.click()
+      const row = await until(
+        () => [...document.querySelectorAll('[role="row"]')]
+          .find(node => (node.textContent || '').includes(title)),
+        `draft ${title} missing`,
+      )
+      clickText('Edit', row)
+      await until(() => body().includes(title) && document.querySelector('.graph-canvas'), 'draft editor did not open')
+      const trigger = await until(
+        () => document.querySelector('[role="button"][aria-label^="When I run it,"]'),
+        'manual trigger node missing',
+      )
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await until(() => body().toLowerCase().includes('intake form'), 'trigger inspector did not open')
+
+      clickText('+ Add field')
+      await until(async () => {
+        const inputs = (await job()).graph.nodes[0].inputs
+        return inputs.length === 1 && inputs[0].id === 'field' && inputs[0].label === 'New field'
+      }, 'complete generated intake row was not saved')
+
+      const nativeFetch = window.fetch.bind(window)
+      let rejectNextGraphPatch = true
+      window.fetch = (resource, init = {}) => {
+        const url = typeof resource === 'string' ? resource : resource.url
+        if (rejectNextGraphPatch
+          && init.method === 'PATCH'
+          && url.includes(`/api/graph/jobs/${jobId}/graph`)) {
+          rejectNextGraphPatch = false
+          return Promise.reject(new TypeError('simulated graph persistence rejection'))
+        }
+        return nativeFetch(resource, init)
+      }
+      setInput('Input 1 label', 'Network rejected')
+      await until(
+        () => body().includes('Not saved')
+          && [...document.querySelectorAll('button')].some(node => (node.textContent || '').trim() === 'Retry save'),
+        'network rejection did not keep the graph unsaved with Retry',
+      )
+      if ((await job()).graph.nodes[0].inputs[0].label !== 'New field') {
+        throw new Error('rejected graph edit reached persistence')
+      }
+      window.fetch = nativeFetch
+      clickText('Retry save')
+      await until(async () => {
+        const state = await job()
+        return state.graph.nodes[0].inputs[0].label === 'Network rejected'
+          && body().includes('Saved ✓')
+      }, 'Retry did not persist the rejected edit')
+
+      setInput('Input 1 ID', 'bad id')
+      await until(() => {
+        const id = document.querySelector('[aria-label="Input 1 ID"]')
+        return id?.getAttribute('aria-invalid') === 'true' && body().includes('Not saved')
+      }, 'invalid ID did not block save')
+      const invalidRun = [...document.querySelectorAll('.graph-editor-footer button')]
+        .find(node => (node.textContent || '').trim().endsWith('Run'))
+      if (!invalidRun?.disabled) throw new Error('Run stayed enabled for invalid intake')
+      const rejectedState = await job()
+      if (rejectedState.graph.nodes[0].inputs[0].id !== 'field') {
+        throw new Error('invalid staged ID reached persistence')
+      }
+
+      setInput('Input 1 label', 'Campaign')
+      setInput('Input 1 ID', 'campaign')
+      const required = document.querySelector('[aria-label="Input 1 required"]')
+      if (!(required instanceof HTMLInputElement)) throw new Error('required checkbox missing')
+      required.click()
+      await wait(50)
+
+      clickText('+ Add field')
+      await until(() => document.querySelector('[aria-label="Input 2 label"]'), 'second intake row did not render')
+      setInput('Input 2 label', 'Channel')
+      setInput('Input 2 default', 'email')
+      setInput('Input 2 ID', 'channel')
+      await wait(50)
+
+      clickText('+ Add field')
+      const remove = await until(() => {
+        const buttons = [...document.querySelectorAll('button[aria-label="Remove input"]')]
+        return buttons.length === 3 ? buttons : null
+      }, 'third intake row missing before delete')
+      remove[2].click()
+
+      await until(async () => {
+        const state = await job()
+        const inputs = state.graph.nodes[0].inputs
+        return inputs.length === 2
+          && inputs[0].id === 'campaign'
+          && inputs[0].label === 'Campaign'
+          && inputs[0].required === true
+          && inputs[1].id === 'channel'
+          && inputs[1].label === 'Channel'
+          && inputs[1].default === 'email'
+      }, 'rapid intake edits and delete did not persist')
+      await until(() => body().includes('Saved ✓'), 'accepted intake did not become Saved')
+      return 'workflow-intake-edit:ok'
+    }})(${JSON.stringify(fixture.title)}, ${fixture.id})`,
+  })
+  if (phaseOne.result.value !== 'workflow-intake-edit:ok') {
+    throw new Error(`unexpected workflow intake edit result: ${JSON.stringify(phaseOne)}`)
+  }
+
+  await send('Page.reload', { ignoreCache: true })
+  await sleep(2500)
+  const phaseTwo = await send('Runtime.evaluate', {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `(${async function (title, jobId) {
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+      const body = () => document.body.innerText || ''
+      async function until(check, message, attempts = 60) {
+        for (let i = 0; i < attempts; i += 1) {
+          const result = await check()
+          if (result) return result
+          await wait(150)
+        }
+        throw new Error(`${message}\n${body().slice(0, 800)}`)
+      }
+      function clickText(label, scope = document) {
+        const node = [...scope.querySelectorAll('button, [role="button"], a')]
+          .find(item => (item.textContent || '').trim() === label)
+        if (!node) throw new Error(`missing ${label}`)
+        node.click()
+      }
+      function setInput(label, value) {
+        const input = document.querySelector(`[aria-label="${label}"]`)
+        if (!(input instanceof HTMLInputElement)) throw new Error(`missing input ${label}`)
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+        setter.call(input, value)
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+      }
+      async function job() {
+        const response = await fetch(`/api/graph/jobs/${jobId}`)
+        if (!response.ok) throw new Error(`job read failed: ${response.status}`)
+        return response.json()
+      }
+
+      const workflows = await until(
+        () => [...document.querySelectorAll('.sidebar button, .sidebar a')]
+          .find(node => (node.textContent || '').trim() === 'Workflows'),
+        'Workflows navigation did not reload',
+      )
+      workflows.click()
+      await until(() => body().includes('Workflows'), 'Workflows did not reopen')
+      const draftsTab = await until(
+        () => [...document.querySelectorAll('[role="tab"]')]
+          .find(node => (node.textContent || '').trim().startsWith('Drafts ')),
+        'Drafts tab missing after reload',
+      )
+      draftsTab.click()
+      const row = await until(
+        () => [...document.querySelectorAll('[role="row"]')]
+          .find(node => (node.textContent || '').includes(title)),
+        `reloaded draft ${title} missing`,
+      )
+      clickText('Edit', row)
+      await until(() => body().includes(title) && document.querySelector('.graph-canvas'), 'reloaded editor did not open')
+      const trigger = await until(
+        () => document.querySelector('[role="button"][aria-label^="When I run it,"]'),
+        'reloaded trigger missing',
+      )
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await until(() => document.querySelector('[aria-label="Input 2 default"]'), 'reloaded intake fields missing')
+
+      const values = ['Campaign', 'campaign', 'Channel', 'channel', 'email']
+      const labels = ['Input 1 label', 'Input 1 ID', 'Input 2 label', 'Input 2 ID', 'Input 2 default']
+      labels.forEach((label, index) => {
+        const input = document.querySelector(`[aria-label="${label}"]`)
+        if (!(input instanceof HTMLInputElement) || input.value !== values[index]) {
+          throw new Error(`${label} did not survive reload`)
+        }
+      })
+      const required = document.querySelector('[aria-label="Input 1 required"]')
+      if (!(required instanceof HTMLInputElement) || !required.checked) {
+        throw new Error('required flag did not survive reload')
+      }
+      const run = [...document.querySelectorAll('.graph-editor-footer button')]
+        .find(node => (node.textContent || '').trim().endsWith('Run'))
+      if (!run || run.disabled) throw new Error('saved valid draft could not run')
+      run.click()
+
+      await until(() => document.querySelector(`[role="dialog"][aria-label="Run ${title}"]`), 'validated Run dialog missing')
+      clickText('Run workflow', document.querySelector('[role="dialog"]'))
+      await until(() => body().includes('Campaign') && body().includes('required'), 'required value error missing')
+      if ((await job()).status !== 'queued') throw new Error('invalid dialog submission started the job')
+
+      setInput('Campaign', 'Launch week')
+      clickText('Run workflow', document.querySelector('[role="dialog"]'))
+      const executed = await until(async () => {
+        const state = await job()
+        return state.status === 'review' ? state : null
+      }, 'valid intake did not execute')
+      const expected = { campaign: 'Launch week', channel: 'email' }
+      if (JSON.stringify(executed.input) !== JSON.stringify(expected)) {
+        throw new Error(`unexpected resolved input: ${JSON.stringify(executed.input)}`)
+      }
+      const triggerState = executed.node_states.find(state => state.node_id === 'trigger')
+      if (JSON.stringify(triggerState?.output) !== JSON.stringify(expected)
+        || JSON.stringify(triggerState?.inputs?.job_input) !== JSON.stringify(expected)) {
+        throw new Error('trigger did not execute with the resolved input')
+      }
+      const reviewedTrigger = await until(
+        () => document.querySelector('[role="button"][aria-label^="When I run it,"]'),
+        'review trigger missing',
+      )
+      reviewedTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await until(() => body().includes('Resolved inputs') && body().includes('Launch week'), 'resolved inputs not visible')
+      return 'workflow-intake-run:ok'
+    }})(${JSON.stringify(fixture.title)}, ${fixture.id})`,
+  })
+  if (phaseTwo.result.value !== 'workflow-intake-run:ok') {
+    throw new Error(`unexpected workflow intake run result: ${JSON.stringify(phaseTwo)}`)
+  }
+  console.log('browser:desktop: workflow intake create/edit/delete/reload/run ok')
+}
+
+async function browserNavigationSmoke({ name, width, height, port, mobile, token, workflowFixture }) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `proxima-smoke-${name}-`))
   const chrome = spawn('google-chrome', [
     '--headless=new',
@@ -251,6 +588,11 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
     }
     await send('Page.navigate', { url: BASE })
     await sleep(2500)
+    if (!mobile) {
+      await workflowIntakeBrowserRegression(send, workflowFixture)
+      await send('Page.navigate', { url: BASE })
+      await sleep(2500)
+    }
     const result = await send('Runtime.evaluate', {
       awaitPromise: true,
       returnByValue: true,
@@ -292,7 +634,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
         }
         async function clickDesktopSettings() {
           if (mobile) return null
-          const account = document.querySelector('[aria-label="Account"]')
+          const account = document.querySelector('[aria-label="Account actions"]')
           if (!account) throw new Error(`missing account menu\\n${body().slice(0, 500)}`)
           account.click()
           let settings = null
@@ -306,7 +648,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
           for (let i = 0; i < 40; i += 1) {
             await wait(150)
             const heading = document.querySelector('.settings-content-head h2')
-            if ((heading?.textContent || '').trim() !== 'Account & Preferences') continue
+            if ((heading?.textContent || '').trim() !== 'Account') continue
             async function clickSettingsSection(label, expect) {
               const section = [...document.querySelectorAll('.settings-menu-item')]
                 .find(node => (node.textContent || '').includes(label))
@@ -318,7 +660,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
               }
               throw new Error(label + ' did not show ' + expect)
             }
-            await clickSettingsSection('Agents & Collaboration', 'Agent goals')
+            await clickSettingsSection('Agents', 'Agent goals')
             await clickSettingsSection('Diagnostics', 'Debug logs')
             return 'Settings:ok'
           }
@@ -359,11 +701,10 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
           return 'Delegate:ok'
         }
         const checks = [
-          await clickLabel('Wiki', 'Wiki'),
-          await clickLabel('Artifacts', 'Artifacts'),
+          await clickLabel('Chat', 'Chat'),
+          await clickLabel('Tasks', 'Tasks'),
           await clickLabel('Workflows', 'Workflows'),
-          await clickLabel('Activity', 'Activity'),
-          await clickLabel('Terminal', 'Terminal 1'),
+          await clickLabel('Archive', 'Archive'),
         ]
         const settings = await clickDesktopSettings()
         if (settings) checks.push(settings)
@@ -374,7 +715,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
     })
     const rawChecks = result.result.value
     const checks = typeof rawChecks === 'string' ? JSON.parse(rawChecks) : rawChecks
-    const expectedChecks = mobile ? 5 : 6
+    const expectedChecks = mobile ? 4 : 5
     if (!Array.isArray(checks) || checks.length < expectedChecks || checks.length > expectedChecks + 1 || checks.some(check => typeof check !== 'string' || !check.endsWith(':ok'))) {
       throw new Error(`unexpected browser check result: ${JSON.stringify({ checks, result })}`)
     }
@@ -385,13 +726,11 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
     const hint = stderr.split('\n').filter(Boolean).slice(-5).join('\n')
     throw new Error(`${err.message}${hint ? `\nChrome stderr:\n${hint}` : ''}`)
   } finally {
-    chrome.kill('SIGTERM')
-    await sleep(300)
-    fs.rmSync(userDataDir, { recursive: true, force: true })
+    await stopBrowser(chrome, userDataDir)
   }
 }
 
-async function browserSmoke(token) {
+async function browserSmoke(token, workflowFixture) {
   if (SKIP_BROWSER) {
     console.log('browser: skipped (PROXIMA_SMOKE_SKIP_BROWSER=1)')
     return
@@ -401,14 +740,19 @@ async function browserSmoke(token) {
   const configuredPort = process.env.PROXIMA_SMOKE_CDP_PORT ? Number(process.env.PROXIMA_SMOKE_CDP_PORT) : null
   const desktopPort = configuredPort || await freePort()
   const mobilePort = configuredPort ? configuredPort + 1 : await freePort()
-  await browserNavigationSmoke({ name: 'desktop', width: 1280, height: 900, port: desktopPort, mobile: false, token })
+  await browserNavigationSmoke({ name: 'desktop', width: 1280, height: 900, port: desktopPort, mobile: false, token, workflowFixture })
   await browserNavigationSmoke({ name: 'mobile', width: 390, height: 844, port: mobilePort, mobile: true, token })
 }
 
 async function main() {
   console.log(`smoke: ${BASE}`)
   const token = await apiSmoke()
-  await browserSmoke(token)
+  const workflowFixture = SKIP_BROWSER ? null : await createWorkflowIntakeFixture(token)
+  try {
+    await browserSmoke(token, workflowFixture)
+  } finally {
+    await deleteWorkflowIntakeFixture(token, workflowFixture)
+  }
   console.log('smoke: ok')
 }
 

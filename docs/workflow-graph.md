@@ -115,7 +115,7 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | --- | --- |
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
 | `trigger_kind` | Trigger nodes only. `manual` exposes intake fields; `scheduled` exposes cadence settings. |
-| `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required}` fields whose values fill `{{id}}` placeholders. |
+| `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders. IDs begin with a letter and contain only letters, numbers, and underscores. |
 | `schedule` | Scheduled trigger only. `{cron, overlap_policy, enabled}` settings promoted to the workflow's schedule row. |
 | `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
@@ -143,9 +143,13 @@ vanishing. The whole input is still handed to the node as typed data in
 and a profile already carries its skill/MCP selection — a second picker on the node would
 be a second answer to the same question. Choosing the agent is choosing the tool surface.
 
-A manual trigger carries declared **`inputs`** in the same shape a linear recipe does
-(`{id, label, kind, required}`). They are authored in the trigger inspector as the
-reusable intake contract, and a run created from that template asks for them first.
+A manual trigger carries declared **`inputs`** as
+`{id, label, kind, required, default?}`. They are authored in the trigger inspector as
+the reusable intake contract. New rows are valid, complete objects from their first
+write; label, ID, and default edits stage within a stable-ID row and commit only when
+the complete row is valid. Blank, malformed, and duplicate IDs remain local with an
+actionable field error. A rejected graph PATCH leaves the previous contract intact,
+keeps the draft Not saved, and exposes Retry without allowing execution.
 `workflows.inputs` remains a compatibility projection for existing RunModal and API
 consumers. New saves derive it from the trigger, while migration and read-time
 hydration move legacy declarations onto the trigger without breaking `{{var}}`
@@ -164,9 +168,12 @@ be a contradiction). Its contract is fixed rather than authored — it is forced
 `output_kind: "json"` and drops `profile_id`/`review_required`/`output_schema`.
 
 It resolves without a runner: `dispatch_ready` completes it immediately with the
-approved **job input** as its output, so downstream nodes receive that input as
+validated, frozen **job input** as its output, so downstream nodes receive that input as
 ordinary typed upstream data rather than through a special case. A manual trigger is
-the owner pressing start and exposes its intake-form editor. A scheduled trigger
+the owner pressing start and exposes its intake-form editor. Before the job can claim
+`running`, the start API requires every declared required value, validates number and
+URL fields, applies declared defaults, and removes blank optional values. Existing
+job-owned values are preserved. A scheduled trigger
 exposes cron, overlap, and enabled settings instead; promotion creates the schedule
 with an empty input payload, so cadence execution does not prompt a human.
 
@@ -297,8 +304,9 @@ demands a one-line reason, then `POST /api/jobs/{id}/reject` fails the plan with
 chat promotion
   → architect DAG draft
   → queued graph job (autosaved human plan edit + layout)
-  → Run
-  → trigger (if any) → done immediately, output = job input, no run
+  → Run dialog (required/type validation + defaults)
+  → atomic start claim with resolved job input
+  → trigger (if any) → done immediately, output = resolved job input, no run
   → every ready node, up to the concurrency budget, in parallel:
       pending → ready → running → done
                            ├─ review gate → review → approve → done
@@ -345,12 +353,14 @@ attempt cannot overwrite a corrected or rerun node.
 4. Optionally choose **Save as Workflow**. Promotion is one click because the inline
    plan name and trigger contract already exist; category and description are optional
    metadata.
-5. Choose **Run**. The latest pending autosave flushes before execution starts.
+5. Choose **Run**. It is disabled until the graph and intake contract are valid,
+   accepted by the server, and free of pending edits. The shared Run dialog collects
+   and validates declared manual values before the start request.
 6. Inspect live node state and validated outputs on the canvas.
 7. When paused in review, choose **Approve node**, **Save correction**, or
    **Rerun node**. Complete the final **Approve final result** action.
-8. Saved templates appear in the canvas sidebar; select one to create a fresh queued
-   graph job and review its new frozen snapshot before starting.
+8. Saved templates appear on the Workflows home. Manual Run opens the same validated
+   dialog used by drafts, then creates the job and starts it with the resolved input.
 
 ### Canvas interaction
 
@@ -418,8 +428,8 @@ the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so 
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
 a saved workflow. Workflow rows are split into **Manual (on-demand)** and
 **Scheduled** groups by trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows run with their trigger intake; Scheduled rows show cadence and
-open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
+fallback. Manual rows open the same validated Run dialog used by drafts; Scheduled rows show
+cadence and open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
 action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
@@ -441,7 +451,9 @@ The canvas is the workspace; the chrome yields to it.
 - **Header bar**: one shared `.tasks-head, .graph-header` rule (inherited from the
   retired Sequential mode, kept so list-shell surfaces cannot drift apart). Left to
   right: plan-list toggle, the project picker (the shared `Dropdown`), plan title, job
-  status, node count, and passive **Saving… / Saved ✓** state. The title renames inline
+  status, node count, and passive **Saving… / Saved ✓ / Not saved** state. Saved means
+  the current graph is the last version accepted by the API; pending edits, invalid
+  intake fields, and rejected writes cannot display Saved. The title renames inline
   like a file. The draft footer owns exactly two plan-level actions: one-click
   **Save as Workflow** and **Run**. They live outside the node form because they act on
   the whole plan, which is also what allows the inspector to close.
@@ -519,7 +531,8 @@ the inspector wraps under the canvas; below 52rem everything stacks.
 Editing gestures are live only while the job is `queued` — the same window in which
 `PATCH /graph` accepts a plan. Positions are part of the graph, so they are saved by
 the debounced autosave along with every other canvas edit. Pending work flushes before
-leaving the editor, promoting the plan, or running it.
+leaving the editor or promoting the plan. Run cannot open until that flush has
+completed successfully.
 
 A connection that would make the graph loop back on itself is refused on the canvas
 with an explanation, rather than being sent to the server for a 422.
@@ -545,7 +558,9 @@ are:
 - `GET /api/graph/templates` — list reusable graph-backed workflows;
 - `GET /api/graph/jobs/{id}` — inspect graph and node state;
 - `PATCH /api/graph/jobs/{id}/graph` - queued graph autosave plus inline title rename;
-- `POST /api/graph/jobs/{id}/start` - explicit Run action;
+- `POST /api/graph/jobs/{id}/start` - explicit Run action; accepts an optional
+  `{input: {...}}` body and atomically validates/freezes resolved manual intake before
+  claiming execution;
 - node output, rerun, and approval routes under `/nodes/{node_id}` (including the
   one-time script approval, `POST .../nodes/{node_id}/approve-script`);
 - `POST /api/graph/jobs/{id}/approve` — final approval;

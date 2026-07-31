@@ -1,19 +1,71 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { GraphScreen } from './GraphScreen'
-import { getGraphJob, listGraphJobs } from '../api/graph'
+import { createGraphJob, getGraphJob, listGraphJobs, startGraphJob, updateGraphPlan } from '../api/graph'
 import { FRESH_FAILED_REVIEW_RUN } from '../testFixtures/failedReviewRun'
-import type { RunEvent } from '../types'
+import type { GraphJob, RunEvent, WorkflowGraph } from '../types'
+import { GraphScreen } from './GraphScreen'
 
 let graphEventHandler: ((event: RunEvent) => void) | null = null
 let homePollTask: (() => void | Promise<void>) | null = null
+
+const draftGraph: WorkflowGraph = {
+  nodes: [{
+    id: 'trigger',
+    type: 'trigger',
+    trigger_kind: 'manual',
+    name: 'When I run it',
+    instruction: '',
+    output_kind: 'json',
+    inputs: [
+      { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+      { id: 'audience', label: 'Audience', kind: 'text', required: false },
+    ],
+  }],
+  edges: [],
+}
+
+const draftJob: GraphJob = {
+  id: 1,
+  title: 'Draft report',
+  status: 'queued',
+  engine: 'graph',
+  graph: draftGraph,
+  node_states: [{
+    id: 1,
+    job_id: 1,
+    node_id: 'trigger',
+    status: 'pending',
+    output_kind: 'json',
+    version: 0,
+  }],
+  created_at: '2026-07-26T00:00:00Z',
+}
 
 vi.mock('../api/graph', () => ({
   listGraphJobs: vi.fn(),
   listGraphTemplates: vi.fn().mockResolvedValue({
     items: [
-      { id: 10, name: 'Manual report', category: 'research', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
+      {
+        id: 10,
+        name: 'Manual report',
+        category: 'research',
+        status: 'active',
+        graph: {
+          nodes: [{
+            id: 'trigger',
+            type: 'trigger',
+            trigger_kind: 'manual',
+            name: 'When I run it',
+            inputs: [
+              { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+              { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+            ],
+          }],
+          edges: [],
+        },
+        inputs: [],
+      },
       { id: 11, name: 'Daily report', category: 'content', status: 'active', graph: { nodes: [], edges: [] }, inputs: [] },
     ],
   }),
@@ -31,6 +83,13 @@ vi.mock('../api/graph', () => ({
   approveGraphNodeScript: vi.fn(),
   editGraphNodeOutput: vi.fn(),
   rerunGraphNode: vi.fn(),
+}))
+vi.mock('../components/workflows/GraphCanvas', () => ({
+  GraphCanvas: ({ onSelect }: { onSelect: (nodeId: string) => void }) => (
+    <button onClick={() => onSelect('trigger')}>Select trigger</button>
+  ),
+  stateFor: vi.fn(() => undefined),
+  statusLabel: (status: string) => status,
 }))
 vi.mock('../api/schedules', () => ({
   listSchedules: vi.fn().mockResolvedValue([
@@ -88,17 +147,6 @@ const props = {
   profileId: null,
   features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
   activeProfile: null,
-}
-
-const draftJob = {
-  id: 1,
-  session_id: 1,
-  title: 'Draft report',
-  status: 'queued' as const,
-  engine: 'graph' as const,
-  graph: { nodes: [], edges: [] },
-  node_states: [],
-  created_at: '2026-07-26T00:00:00Z',
 }
 
 const restoredRun = {
@@ -164,7 +212,7 @@ describe('GraphScreen workflow home tabs', () => {
     expect(screen.getByRole('table', { name: 'Draft plans' })).toBeInTheDocument()
   })
 
-  it('refreshes keep-alive home Runs after checkpoint restore job.update', async () => {
+it('refreshes keep-alive home Runs after checkpoint restore job.update', async () => {
     localStorage.setItem('proxima.graph.homeTab', 'runs')
     const view = render(<GraphScreen {...props} pendingJobId={41} onPendingConsumed={vi.fn()} />)
 
@@ -226,5 +274,199 @@ describe('GraphScreen workflow home tabs', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Drafts/ }))
     const drafts = screen.getByRole('table', { name: 'Draft plans' })
     expect(within(drafts).getByText('Launch readiness review')).toBeInTheDocument()
+  })
+
+  it('validates reusable manual workflow intake before creating and starting a run', async () => {
+    vi.mocked(createGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          inputs: [
+            { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+            { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+          ],
+        }],
+        edges: [],
+      },
+      node_states: [],
+    })
+    vi.mocked(startGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'review',
+      engine: 'graph',
+      graph: { nodes: [], edges: [] },
+      node_states: [],
+    })
+    render(<GraphScreen {...props} />)
+
+    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
+    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+
+    expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
+    expect(createGraphJob).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Campaign')
+    expect(createGraphJob).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => {
+      expect(createGraphJob).toHaveBeenCalledWith('t', expect.objectContaining({
+        workflow_id: 10,
+      }))
+      expect(createGraphJob).toHaveBeenCalledWith(
+        't',
+        expect.not.objectContaining({ input: expect.anything() }),
+      )
+      expect(startGraphJob).toHaveBeenCalledWith(
+        't',
+        21,
+        { campaign: 'Launch week', channel: 'email' },
+      )
+    })
+  })
+
+  it('reuses the created template job when start fails and the dialog is retried', async () => {
+    vi.mocked(createGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          inputs: [
+            { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+            { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+          ],
+        }],
+        edges: [],
+      },
+      node_states: [],
+    })
+    vi.mocked(startGraphJob)
+      .mockRejectedValueOnce(new Error('missing execution profile'))
+      .mockResolvedValueOnce({
+        id: 21,
+        title: 'Manual report',
+        status: 'running',
+        engine: 'graph',
+        graph: { nodes: [], edges: [] },
+        node_states: [],
+      })
+
+    render(<GraphScreen {...props} />)
+    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
+    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('missing execution profile')
+    expect(createGraphJob).toHaveBeenCalledTimes(1)
+    expect(startGraphJob).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Retry launch' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => {
+      expect(startGraphJob).toHaveBeenCalledTimes(2)
+      expect(startGraphJob).toHaveBeenLastCalledWith(
+        't',
+        21,
+        { campaign: 'Retry launch', channel: 'email' },
+      )
+    })
+    expect(createGraphJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks home draft Run while the open draft is unsaved or invalid', async () => {
+    vi.mocked(listGraphJobs).mockResolvedValue({
+      items: [structuredClone(draftJob)],
+    })
+    vi.mocked(getGraphJob).mockResolvedValue(structuredClone(draftJob))
+    vi.mocked(updateGraphPlan).mockImplementation(async (_token, _jobId, body) => ({
+      ...structuredClone(draftJob),
+      title: body.title ?? draftJob.title,
+      graph: body.graph ?? structuredClone(draftGraph),
+    }))
+
+    const view = render(<GraphScreen {...props} pendingJobId={1} backNonce={0} />)
+    await screen.findByRole('heading', { name: 'Draft report' })
+    fireEvent.click(screen.getByRole('button', { name: 'Select trigger' }))
+
+    const audienceId = screen.getByRole('textbox', { name: 'Input 2 ID' })
+    fireEvent.change(audienceId, { target: { value: 'campaign' } })
+    fireEvent.blur(audienceId)
+    expect(screen.getByText('ID must be unique.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '▶ Run' })).toBeDisabled()
+
+    view.rerender(<GraphScreen {...props} pendingJobId={1} backNonce={1} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    const drafts = screen.getByRole('table', { name: 'Draft plans' })
+    const run = within(drafts).getByRole('button', { name: 'Run' })
+    expect(run).toBeDisabled()
+    expect(run).toHaveAttribute('title', 'Wait for a valid saved workflow before running')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('runs the open draft from its current in-memory graph, not the stale home list row', async () => {
+    const staleListJob: GraphJob = {
+      ...structuredClone(draftJob),
+      graph: { nodes: [], edges: [] },
+      node_states: [],
+    }
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [staleListJob] })
+    vi.mocked(getGraphJob).mockResolvedValue(structuredClone(draftJob))
+    vi.mocked(updateGraphPlan).mockImplementation(async (_token, _jobId, body) => ({
+      ...structuredClone(draftJob),
+      title: body.title ?? draftJob.title,
+      graph: body.graph ?? structuredClone(draftGraph),
+    }))
+    vi.mocked(startGraphJob).mockResolvedValue({
+      ...structuredClone(draftJob),
+      status: 'running',
+    })
+
+    const view = render(<GraphScreen {...props} pendingJobId={1} backNonce={0} />)
+    await screen.findByRole('heading', { name: 'Draft report' })
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+
+    view.rerender(<GraphScreen {...props} pendingJobId={1} backNonce={1} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    const drafts = screen.getByRole('table', { name: 'Draft plans' })
+    fireEvent.click(within(drafts).getByRole('button', { name: 'Run' }))
+
+    expect(screen.getByRole('dialog', { name: 'Run Draft report' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Campaign' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Audience' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 1, {
+      campaign: 'Launch week',
+    }))
   })
 })

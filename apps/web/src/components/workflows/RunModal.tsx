@@ -15,7 +15,9 @@ export function RunModal({ title, inputs, confirmLabel = 'Run workflow', onCance
   const declared = inputs || []
   const hasInputs = declared.length > 0
   const [brief, setBrief] = React.useState('')
-  const [values, setValues] = React.useState<Record<string, string>>({})
+  const [values, setValues] = React.useState<Record<string, string>>(() =>
+    Object.fromEntries(declared.flatMap(item => item.default == null ? [] : [[item.id, item.default]])),
+  )
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
   const mountedRef = React.useRef(true)
@@ -51,6 +53,23 @@ export function RunModal({ title, inputs, confirmLabel = 'Run workflow', onCance
     }
     const missing = declared.find(x => x.required && !(values[x.id] || '').trim())
     if (missing) { setError(`“${missing.label}” is required.`); return }
+    for (const item of declared) {
+      const value = (values[item.id] || '').trim()
+      if (!value) continue
+      if (item.kind === 'number' && !Number.isFinite(Number(value))) {
+        setError(`“${item.label}” must be a valid number.`)
+        return
+      }
+      if (item.kind === 'url') {
+        try {
+          const url = new URL(value)
+          if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol')
+        } catch {
+          setError(`“${item.label}” must be a complete http:// or https:// URL.`)
+          return
+        }
+      }
+    }
     const input: Record<string, string> = {}
     for (const x of declared) {
       const value = (values[x.id] || '').trim()
@@ -61,12 +80,19 @@ export function RunModal({ title, inputs, confirmLabel = 'Run workflow', onCance
 
   const close = () => { if (!busy) onCancel() }
 
-  return <div className="modal-scrim" onClick={close}><div className="modal-card" onClick={e => e.stopPropagation()}>
+  return <div className="modal-scrim" onClick={close}><div className="modal-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Run ${title}`}>
     <h3>Run “{title}”</h3>
-    {error && <div className="error-bar">{error}</div>}
+    {error && <div className="error-bar" role="alert">{error}</div>}
     {hasInputs
       ? declared.map((x, i) => <label key={x.id}>{x.label}{x.required && <span className="muted"> (required)</span>}
-          <input autoFocus={i === 0} type={x.kind === 'number' ? 'number' : x.kind === 'url' ? 'url' : 'text'} value={values[x.id] || ''} onChange={e => setValues(v => ({ ...v, [x.id]: e.target.value }))} placeholder={x.kind === 'file' ? 'Path or URL' : x.label} />
+          <input
+            aria-label={x.label}
+            autoFocus={i === 0}
+            type={x.kind === 'number' ? 'number' : x.kind === 'url' ? 'url' : 'text'}
+            value={values[x.id] || ''}
+            onChange={e => setValues(v => ({ ...v, [x.id]: e.target.value }))}
+            placeholder={x.kind === 'file' ? 'Path or URL' : x.label}
+          />
         </label>)
       : <label>Brief <span className="muted">(context for this run)</span><textarea autoFocus rows={4} value={brief} onChange={e => setBrief(e.target.value)} placeholder="What should this run focus on?" /></label>}
     <div className="modal-actions">

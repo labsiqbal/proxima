@@ -25,6 +25,7 @@ from ..graph import (
     descendant_node_ids,
     normalize_graph,
     plan_target_problems,
+    resolved_manual_trigger_input,
     repo_target_paths,
 )
 from ..graph_advancers import NodeOutputError, validate_node_output  # pyright: ignore[reportMissingImports]
@@ -32,6 +33,7 @@ from ..job_checkpoints import create_checkpoint
 from ..schemas import (
     GraphDefinitionUpdateRequest,
     GraphJobCreateRequest,
+    GraphJobStartRequest,
     GraphNodeAnswerRequest,
     GraphNodeOutputEditRequest,
     GraphScriptApproveRequest,
@@ -641,12 +643,27 @@ def register(app, deps):
 
     @app.post("/api/graph/jobs/{job_id}/start")
     def start_graph_job(
-        job_id: int, user: dict[str, Any] = Depends(current_user)
+        job_id: int,
+        payload: GraphJobStartRequest | None = None,
+        user: dict[str, Any] = Depends(current_user),
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
         if job["status"] != "queued":
             return graph_job_payload(job)
+        graph_source = str(job["graph"] or "")
+        input_source = str(job["input"] or "{}")
+        try:
+            graph = normalize_graph(graph_source)
+            stored_input = _decode_json(input_source, {})
+            if not isinstance(stored_input, dict):
+                raise GraphValidationError("stored graph input must be an object")
+            candidate_input = dict(stored_input)
+            if payload is not None and payload.input is not None:
+                candidate_input.update(payload.input)
+            resolved_input = resolved_manual_trigger_input(graph, candidate_input)
+        except GraphValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         # Repo jobs reserve their path (slice 2 wiring, flag-gated): cut the
         # plan's worktree BEFORE claiming running, so a refused cut (dirty
         # repo, detached HEAD, no commits) surfaces loudly and leaves the plan
@@ -659,25 +676,49 @@ def register(app, deps):
                 status_code=409, detail=f"cannot start repo plan: {exc}"
             ) from exc
         job = graph_job_or_404(job_id, user)
+        if (
+            str(job["graph"] or "") != graph_source
+            or str(job["input"] or "{}") != input_source
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="workflow changed while starting; review the saved graph and try again",
+            )
         # Master graph plans capture their latest queued node state after any
         # isolated worktree exists and before ready nodes are dispatched.
         if job["origin_master_session_id"] is not None:
             create_checkpoint(db(), job_id)
         claimed = db().execute(
-            "UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, "
-            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued' AND engine='graph'",
-            (job_id,),
+            "UPDATE jobs SET input=?, status='running', started_at=CURRENT_TIMESTAMP, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued' AND engine='graph' "
+            "AND graph=? AND input=?",
+            (
+                json.dumps(resolved_input, ensure_ascii=False),
+                job_id,
+                graph_source,
+                input_source,
+            ),
         )
         if claimed.rowcount == 0:
-            return graph_job_payload(graph_job_or_404(job_id, user))
+            current = graph_job_or_404(job_id, user)
+            if current["status"] == "queued":
+                raise HTTPException(
+                    status_code=409,
+                    detail="workflow changed while starting; review the saved graph and try again",
+                )
+            return graph_job_payload(current)
+
+        def restore_preclaim_queued() -> None:
+            db().execute(
+                "UPDATE jobs SET input=?, status='queued', started_at=NULL, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
+                (input_source, job_id),
+            )
+
         try:
             run_ids = app.state.worker.graph_executor.dispatch_ready(job_id)
         except Exception as exc:
-            db().execute(
-                "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='running'",
-                (job_id,),
-            )
+            restore_preclaim_queued()
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not run_ids:
             # No runs is not automatically a failure: a trigger resolves without a
@@ -688,11 +729,7 @@ def register(app, deps):
                 (job_id,),
             ).fetchone()
             if unfinished:
-                db().execute(
-                    "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='running'",
-                    (job_id,),
-                )
+                restore_preclaim_queued()
                 raise HTTPException(status_code=409, detail="graph job has no dispatchable node")
             state.guarded_transition(
                 db(),

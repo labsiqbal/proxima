@@ -719,7 +719,10 @@ explicitly instructed to size each job to complete within ONE turn quota (T5 sli
 continuation is the safety net, not the plan). The draft lands as
 a queued plan the owner reviews/edits and starts directly. Its graph and click-to-edit
 title autosave through a debounced queued-plan PATCH, including a flush before leaving
-the screen or starting, so there is no manual Save gate. Saving it as a reusable
+the screen, so there is no manual Save gate. The save indicator reflects only accepted
+server state: local intake edits, pending autosaves, and rejected writes all keep the
+draft out of Saved, and Run stays disabled until the complete graph is valid and
+persisted. Saving it as a reusable
 Workflow is an optional, separate one-click action (before or after the run). Slice-into-plan is
 single-flight on the button (double-click cannot start two promote runs), and the
 Recipes editor creates at most one graph job per draft object — React Strict Mode
@@ -741,8 +744,13 @@ and never gate promotion. **One workflow = one project** - open plans/templates 
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
 edges carry dependencies. The trigger node owns **Manual / Scheduled** mode. Manual
 triggers declare their intake fields (`text`, `url`, `number`, or `file`) in the node
-inspector; each field's `{{id}}` is asked for at run time and substituted into node
-text. Scheduled triggers own cron, overlap, and enabled settings instead and start with
+inspector; each field has a stable identifier, optional default, and required flag.
+Rows are created and edited as complete units, so a transient blank or duplicate ID
+never reaches persistence. Draft Run and reusable Manual Run open the same validated
+dialog, which applies defaults, omits blank optional values, and refuses missing or
+type-invalid values before execution. The API repeats that validation before claiming
+the job and freezes the resolved values into the job and trigger output. Each field's
+`{{id}}` is substituted into node text. Scheduled triggers own cron, overlap, and enabled settings instead and start with
 no human intake prompt. Existing graph workflows keep the compatibility
 `workflows.inputs` projection, which is migrated and hydrated onto the trigger so old
 templates and `{{id}}` references continue to work. An **authoring chat** (Plan Chat) beside the
@@ -763,7 +771,8 @@ authored.
 The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
 and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
 **Scheduled** groups from the trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows expose Run and ask for the trigger's intake fields. Scheduled rows
+fallback. Manual rows expose Run through the same validated dialog used by drafts.
+Scheduled rows
 show cadence and pause/resume controls, with Run now and schedule maintenance available
 in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
 plan is promoted; it never carries manual intake values.
