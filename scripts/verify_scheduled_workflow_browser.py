@@ -66,7 +66,7 @@ def _port() -> int:
 
 
 def _browser() -> str:
-    for name in ("chromium", "chromium-browser", "google-chrome"):
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"):
         executable = shutil.which(name)
         if executable:
             return executable

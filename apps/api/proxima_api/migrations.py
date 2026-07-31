@@ -5746,6 +5746,35 @@ def _require_authoritative_recovery_task_session(
     )
 
 
+
+def _rewrite_legacy_last_run_minute(
+    conn: sqlite3.Connection, timezone_name: str, schedule_id: int, raw_key: object
+) -> None:
+    """Rewrite pre-timezone minute claims into the timezone-aware claim key."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from .schedule_policy import minute_claim_key
+
+    if raw_key in (None, ""):
+        return
+    key = str(raw_key)
+    if "[" in key:
+        return
+    try:
+        naive = datetime.strptime(key, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return
+    try:
+        local_now = naive.replace(tzinfo=ZoneInfo(timezone_name))
+    except (ZoneInfoNotFoundError, ValueError):
+        return
+    conn.execute(
+        "UPDATE schedules SET last_run_minute = ? WHERE id = ?",
+        (minute_claim_key(local_now, timezone_name), schedule_id),
+    )
+
+
 def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
     """Add explicit timezone state and turn unsafe legacy schedules off."""
     from .schedule_policy import (
@@ -5766,13 +5795,14 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
         str(row[1])
         for row in conn.execute("PRAGMA table_info(schedules)").fetchall()
     }
+    host_timezone = local_timezone_name()
     if "timezone" not in columns:
         conn.execute(
             "ALTER TABLE schedules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
         )
         conn.execute(
             "UPDATE schedules SET timezone = ?",
-            (local_timezone_name(),),
+            (host_timezone,),
         )
     conn.execute(
         "UPDATE schedules SET project_id = ("
@@ -5782,6 +5812,19 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
         "AND schedules.project_id IS NOT workflows.project_id"
         ")"
     )
+
+    if "last_run_minute" in columns:
+        claim_rows = conn.execute(
+            "SELECT id, last_run_minute, timezone FROM schedules "
+            "WHERE last_run_minute IS NOT NULL AND TRIM(last_run_minute) != ''"
+        ).fetchall()
+        for schedule_id, raw_key, timezone_name in claim_rows:
+            _rewrite_legacy_last_run_minute(
+                conn,
+                str(timezone_name or host_timezone),
+                int(schedule_id),
+                raw_key,
+            )
 
     rows = conn.execute(
         "SELECT s.id, s.input, w.inputs, w.graph FROM schedules s "

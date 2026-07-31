@@ -2000,6 +2000,126 @@ def test_v54_backfills_schedule_timezone_project_and_disables_missing_sources(
         "enabled": 0,
     }
 
+
+def test_v54_rewrites_legacy_last_run_minute_so_current_minute_cannot_double_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import datetime, timezone
+
+    from fastapi.testclient import TestClient
+
+    from proxima_api import main
+    from proxima_api.main import create_app
+    from proxima_api.migrations import _rewrite_legacy_last_run_minute
+    from proxima_api.schedule_policy import minute_claim_key, schedule_local_time
+
+    monkeypatch.setenv("TZ", "Asia/Jakarta")
+    db_path = tmp_path / "schema-53-claim.db"
+    conn = connect(db_path)
+    tick = datetime(2026, 6, 22, 2, 0, tzinfo=timezone.utc)
+    local_now = schedule_local_time(tick, "Asia/Jakarta")
+    legacy_key = local_now.strftime("%Y-%m-%dT%H:%M")
+    expected_key = minute_claim_key(local_now, "Asia/Jakarta")
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations(
+          version INTEGER PRIMARY KEY,
+          description TEXT,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE workflows(
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER,
+          inputs TEXT,
+          graph TEXT
+        );
+        CREATE TABLE schedules(
+          id INTEGER PRIMARY KEY,
+          workflow_id INTEGER,
+          project_id INTEGER,
+          cron TEXT NOT NULL,
+          input TEXT,
+          overlap_policy TEXT NOT NULL DEFAULT 'skip',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          last_run_minute TEXT,
+          updated_at TEXT
+        );
+        INSERT INTO schema_migrations(version, description, applied_at)
+        VALUES (53, 'schema 53', CURRENT_TIMESTAMP);
+        INSERT INTO workflows(id, project_id, inputs, graph)
+        VALUES (7, 11, '[]', '{"nodes":[],"edges":[]}');
+        INSERT INTO schedules(
+          id, workflow_id, project_id, cron, input, overlap_policy, enabled,
+          last_run_minute, updated_at
+        ) VALUES (
+          9, 7, 11, '0 9 * * *', '{}', 'skip', 1,
+          '"""
+        + legacy_key
+        + """', CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    assert run_migrations(conn, str(db_path), migrations=[MIGRATIONS[-1]]) == [54]
+    rewritten = conn.execute(
+        "SELECT last_run_minute, timezone, enabled FROM schedules WHERE id = 9"
+    ).fetchone()
+    assert dict(rewritten) == {
+        "last_run_minute": expected_key,
+        "timezone": "Asia/Jakarta",
+        "enabled": 1,
+    }
+    assert legacy_key != expected_key
+    conn.close()
+
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "live-claim.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [
+                {"username": "owner", "role": "member", "os_user": "owner"}
+            ],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    workflow_id = client.post(
+        "/api/workflows",
+        json={"name": "Nightly", "steps": [{"name": "A", "instruction": "a"}]},
+    ).json()["id"]
+    schedule = client.post(
+        "/api/schedules",
+        json={
+            "workflow_id": workflow_id,
+            "cron": "0 9 * * *",
+            "timezone": "Asia/Jakarta",
+            "enabled": True,
+        },
+    ).json()
+    live = app.state.db
+    live.execute(
+        "UPDATE schedules SET last_run_minute = ? WHERE id = ?",
+        (legacy_key, schedule["id"]),
+    )
+    live.commit()
+    _rewrite_legacy_last_run_minute(
+        live, "Asia/Jakarta", int(schedule["id"]), legacy_key
+    )
+    live.commit()
+    assert (
+        live.execute(
+            "SELECT last_run_minute FROM schedules WHERE id = ?",
+            (schedule["id"],),
+        ).fetchone()["last_run_minute"]
+        == expected_key
+    )
+    assert main._scheduler_tick(app, now=tick) == []
+    assert client.get("/api/jobs").json()["items"] == []
+
+
 def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     tmp_path: Path,
 ):

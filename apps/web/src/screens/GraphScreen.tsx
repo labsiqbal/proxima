@@ -1793,7 +1793,7 @@ export function GraphScreen({
                     onChange={schedule => updateSelected({ schedule })}
                   />
                   <p className="muted graph-field-note">
-                    Scheduled runs never ask for per-run input. Save this schedule Off, then open Schedules to configure durable bindings before turning it On.
+                    Scheduled runs never ask for per-run input. Leave this schedule Off, then open Schedules to configure durable bindings before turning it On.
                   </p>
                 </div>}
               </> : definition.type === 'script' ? <>

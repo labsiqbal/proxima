@@ -27,11 +27,28 @@ describe('ScheduleManager', () => {
     const user = userEvent.setup()
     render(<ScheduleManager token="token" workflows={[declaredWorkflow]} workflowId={7} defaultTimezone="UTC" />)
     await screen.findByText('No schedules yet.')
+    await user.click(screen.getByLabelText('Enabled'))
     await user.click(screen.getByRole('button', { name: 'Add schedule' }))
 
     expect(createSchedule).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent(/source node or save a durable binding/i)
     expect(screen.getByLabelText('Topic automation binding')).toBeInTheDocument()
+  })
+
+  it('creates a schedule off by default so bindings can be filled before enablement', async () => {
+    const user = userEvent.setup()
+    render(<ScheduleManager token="token" workflows={[declaredWorkflow]} workflowId={7} defaultTimezone="UTC" />)
+    await screen.findByText('No schedules yet.')
+    await user.click(screen.getByRole('button', { name: 'Add schedule' }))
+
+    expect(createSchedule).toHaveBeenCalledWith('token', {
+      workflow_id: 7,
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      bindings: {},
+      overlap_policy: 'skip',
+      enabled: false,
+    })
   })
 
   it('creates a schedule with durable bindings and an explicit timezone', async () => {
@@ -47,7 +64,7 @@ describe('ScheduleManager', () => {
       timezone: 'UTC',
       bindings: { topic: 'Weekly launch' },
       overlap_policy: 'skip',
-      enabled: true,
+      enabled: false,
     })
   })
 
@@ -61,7 +78,7 @@ describe('ScheduleManager', () => {
       cron: '0 9 * * *',
       timezone: expect.any(String),
       overlap_policy: 'skip',
-      enabled: true,
+      enabled: false,
     }))
   })
 

@@ -55,6 +55,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 20
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@9ffc9ce4183e2bb421a52b1ebd1860eeabce138e # v1.7.3
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - name: Expose Chrome for regression discovery
+        run: |
+          chrome_path="${{ steps.chrome.outputs.chrome-path }}"
+          sudo ln -sfn "$chrome_path" /usr/local/bin/google-chrome
+          command -v google-chrome
+          google-chrome --version
       - name: Sync API dependencies
         working-directory: apps/api
         run: uv sync --locked

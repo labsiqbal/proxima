@@ -32,7 +32,7 @@ export const DEFAULT_GRAPH_SCHEDULE: GraphScheduleConfig = {
   cron: '0 9 * * *',
   timezone: browserTimezone(),
   overlap_policy: 'skip',
-  enabled: true,
+  enabled: false,
 }
 
 export const cronHint = (cron: string) => CRON_PRESETS.find(p => p.cron && p.cron === cron.trim())?.label || cron
