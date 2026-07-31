@@ -2,11 +2,9 @@ import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createGraphJob, getGraphJob, listGraphJobs, startGraphJob, updateGraphPlan } from '../api/graph'
-import type { GraphJob, WorkflowGraph } from '../types'
-import { GraphScreen } from './GraphScreen'
-import { getGraphJob, listGraphJobs } from '../api/graph'
 import { FRESH_FAILED_REVIEW_RUN } from '../testFixtures/failedReviewRun'
-import type { RunEvent } from '../types'
+import type { GraphJob, RunEvent, WorkflowGraph } from '../types'
+import { GraphScreen } from './GraphScreen'
 
 let graphEventHandler: ((event: RunEvent) => void) | null = null
 let homePollTask: (() => void | Promise<void>) | null = null
@@ -149,17 +147,6 @@ const props = {
   profileId: null,
   features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
   activeProfile: null,
-}
-
-const draftJob = {
-  id: 1,
-  session_id: 1,
-  title: 'Draft report',
-  status: 'queued' as const,
-  engine: 'graph' as const,
-  graph: { nodes: [], edges: [] },
-  node_states: [],
-  created_at: '2026-07-26T00:00:00Z',
 }
 
 const restoredRun = {
