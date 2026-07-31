@@ -412,7 +412,13 @@ class GuardedWriterTree:
         return pid, start
 
     def seed_live_members(self) -> None:
-        """Capture currently visible tree members under launcher/sentinel."""
+        """Capture currently visible tree members under launcher/sentinel.
+
+        Observation is complete only when a stable process-tree walk records an
+        identity for every live member, including at least one non-root writer.
+        Partial, racy, unsupported, or sentinel-only walks leave
+        ``members_observed`` unset so recovery fails closed.
+        """
         from .process_containment import process_tree_pids
 
         roots: list[int] = []
@@ -428,18 +434,41 @@ class GuardedWriterTree:
             if _process_has_identity(pid, start) is True:
                 roots.append(pid)
                 self.known_identities[pid] = start
+        if not roots:
+            return
+
+        complete = True
+        inspected = False
+        observed_non_root = False
         for root in roots:
-            tree = process_tree_pids(root)
-            if tree is None:
+            first = process_tree_pids(root)
+            if first is None:
+                complete = False
                 continue
-            # Successfully inspected a live root - identity is complete enough
-            # for recovery to clear the durable record after every known member
-            # exits. Missing inspection must fail closed instead.
-            self.members_observed = True
-            for pid in tree:
+            # Stabilize against /proc TOCTOU: require two identical walks before
+            # treating the member set as identity-complete.
+            second = process_tree_pids(root)
+            if second is None or second != first:
+                complete = False
+                for raw_pid in set(first) | set(second or ()):
+                    start = _process_start_identity(int(raw_pid))
+                    if start:
+                        self.known_identities[int(raw_pid)] = start
+                continue
+            inspected = True
+            for raw_pid in first:
+                pid = int(raw_pid)
+                if pid != int(root):
+                    observed_non_root = True
                 start = _process_start_identity(pid)
                 if start:
-                    self.known_identities[int(pid)] = start
+                    self.known_identities[pid] = start
+                    continue
+                # Live member without a stable identity keeps observation open.
+                if _process_exists(pid):
+                    complete = False
+        if complete and inspected and observed_non_root:
+            self.members_observed = True
 
     def monitor_roots(self) -> list[tuple[int, str]]:
         """Identities whose liveness keeps the writer tree active."""
@@ -513,10 +542,28 @@ class GuardedWriterTree:
             if alive is True:
                 # Arm descendant identities while the root is still live so a
                 # later sentinel crash cannot orphan writers unobserved.
-                tree = process_tree_pids(pid)
-                if tree is not None:
-                    self.members_observed = True
-                    for child in tree:
+                first = process_tree_pids(pid)
+                second = (
+                    process_tree_pids(pid)
+                    if first is not None
+                    else None
+                )
+                if first is not None and second == first:
+                    complete = True
+                    observed_non_root = False
+                    for child in first:
+                        child_pid = int(child)
+                        if child_pid != int(pid):
+                            observed_non_root = True
+                        child_start = _process_start_identity(child_pid)
+                        if child_start:
+                            self.known_identities[child_pid] = child_start
+                        elif _process_exists(child_pid):
+                            complete = False
+                    if complete and observed_non_root:
+                        self.members_observed = True
+                elif first is not None:
+                    for child in set(first) | set(second or ()):
                         child_start = _process_start_identity(int(child))
                         if child_start:
                             self.known_identities[int(child)] = child_start
@@ -1162,13 +1209,41 @@ def _guardian_records_present(
     return False
 
 
+def _observation_root_pids(tree: GuardedWriterTree) -> set[int]:
+    """Launcher/sentinel roots that do not prove writer-descendant capture."""
+    roots: set[int] = set()
+    if tree.launcher_pid is not None:
+        try:
+            roots.add(int(tree.launcher_pid))
+        except (TypeError, ValueError):
+            pass
+    sentinel = tree._sentinel_identity()
+    if sentinel is not None:
+        roots.add(int(sentinel[0]))
+    payload = tree._read_record()
+    if payload is not None:
+        for key in ("sentinel_pid", "launcher_pid"):
+            try:
+                roots.add(int(payload[key]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return roots
+
+
+def _has_identity_proven_descendants(tree: GuardedWriterTree) -> bool:
+    """True when known identities include a member beyond launcher/sentinel."""
+    roots = _observation_root_pids(tree)
+    return any(int(pid) not in roots for pid in tree.known_identities)
+
+
 def _reconcile_recovered_guardian_record(tree: GuardedWriterTree) -> bool:
     """Clear a recovered guardian record only after writer-tree proof.
 
     Returns True when the durable record is gone. Clean sentinel teardown
     removes the record itself. Recovery may unlink only after every
-    identity-bound member observed while the tree was live is proven exited.
-    Sentinel or launcher death alone never clears the record.
+    identity-bound writer descendant observed while the tree was live is
+    proven exited. Sentinel-only or incomplete observation never clears the
+    record.
     """
     record = tree.guardian_record
     if record is None:
@@ -1187,11 +1262,15 @@ def _reconcile_recovered_guardian_record(tree: GuardedWriterTree) -> bool:
         if _process_has_identity(pid, start) is not False:
             return False
 
-    # Without a live-tree observation (or Windows job authority), descendant
-    # identity is incomplete - retain the durable blocker.
+    # Without complete descendant observation (or Windows job authority),
+    # identity is incomplete - retain the durable blocker. Sentinel/launcher
+    # death alone is never enough.
     job_authoritative = bool(tree.job_name) and _platform_is_windows()
-    if not tree.members_observed and not job_authoritative:
-        return False
+    if not job_authoritative:
+        if not tree.members_observed:
+            return False
+        if not _has_identity_proven_descendants(tree):
+            return False
 
     try:
         record_stat = record.lstat()
@@ -1351,6 +1430,13 @@ def recover_container_activity_guardians(
                 if not job_name or not _terminate_windows_job(job_name):
                     continue
             else:
+                # Incomplete / sentinel-only observation must not signal or
+                # clear - retain the durable blocker for owner intervention.
+                if (
+                    not tree.members_observed
+                    or not _has_identity_proven_descendants(tree)
+                ):
+                    continue
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except OSError:

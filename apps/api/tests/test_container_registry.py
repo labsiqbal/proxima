@@ -1929,6 +1929,162 @@ def test_reconcile_never_unlinks_on_sentinel_death_alone(
     assert record.exists()
 
 
+def test_reconcile_never_unlinks_on_sentinel_only_observation(
+    tmp_path: Path,
+):
+    """Sentinel-only observation must not clear the durable guardian record."""
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'f' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_021,
+                "sentinel_start": "gone-sentinel",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_021: "gone-sentinel"},
+        members_observed=True,
+    )
+    assert (
+        container_activity._reconcile_recovered_guardian_record(tree)
+        is False
+    )
+    assert record.exists()
+
+
+def test_seed_live_members_requires_identity_complete_descendants(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Child identity failure and sentinel-only walks stay incomplete."""
+    from proxima_api import process_containment as process_containment_module
+
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'c' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 4242,
+                "sentinel_start": "sentinel-start",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_has_identity",
+        lambda pid, start: pid == 4242 and start == "sentinel-start",
+    )
+
+    # Sentinel-only walk: no writer descendant captured.
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {4242},
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        lambda pid: "sentinel-start" if pid == 4242 else None,
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert tree.known_identities.get(4242) == "sentinel-start"
+
+    # Writer visible but identity unreadable: stay incomplete.
+    tree.members_observed = False
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {4242, 4243},
+    )
+
+    def start_identity(pid: int) -> str | None:
+        if pid == 4242:
+            return "sentinel-start"
+        return None
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        start_identity,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_exists",
+        lambda pid: pid in {4242, 4243},
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert 4243 not in tree.known_identities
+
+    # Stable walk with identity-bound writer becomes complete.
+    def complete_identity(pid: int) -> str | None:
+        if pid == 4242:
+            return "sentinel-start"
+        if pid == 4243:
+            return "writer-start"
+        return None
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        complete_identity,
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is True
+    assert tree.known_identities[4243] == "writer-start"
+
+
+def test_seed_live_members_treats_proc_walk_race_as_incomplete(
+    monkeypatch,
+):
+    from proxima_api import process_containment as process_containment_module
+
+    walk_results: list[set[int]] = [{4242}, {4242, 4243}]
+
+    def racing_tree(_root: int) -> set[int]:
+        if walk_results:
+            return walk_results.pop(0)
+        return {4242, 4243}
+
+    tree = container_activity.GuardedWriterTree(
+        launcher_pid=4242,
+        launcher_start="launcher-start",
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_has_identity",
+        lambda pid, start: pid == 4242 and start == "launcher-start",
+    )
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        racing_tree,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        lambda pid: {
+            4242: "launcher-start",
+            4243: "writer-start",
+        }.get(pid),
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert tree.known_identities.get(4243) == "writer-start"
+
+
 def test_reconcile_unlinks_only_after_observed_members_exit(
     tmp_path: Path,
 ):
@@ -1981,6 +2137,265 @@ def test_reconcile_retains_record_while_seeded_writer_live(
     finally:
         writer.kill()
         writer.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="incomplete observation recovery proof uses Linux /proc",
+)
+def test_recovery_sentinel_only_observation_keeps_missed_orphan_blocked(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Sentinel-only seed must not signal or clear while a writer stays live."""
+    from proxima_api import process_containment as process_containment_module
+
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-sentinel-only"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-sentinel-only",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "2" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    ready = tmp_path / "sentinel-only-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_031,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    # Force sentinel-only observation even though the writer is live.
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {sentinel},
+    )
+
+    killed: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def track_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", track_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.4,
+        )
+        assert record.exists()
+        assert recovery.recovered == 0
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert (sentinel, signal.SIGTERM) not in killed
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(
+            encoding="utf-8"
+        ) == "keep"
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="identity-miss recovery proof uses Linux /proc",
+)
+def test_recovery_child_identity_miss_keeps_record_and_blocks_migrate(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Live child without start identity must not be signaled or cleared."""
+    from proxima_api import process_containment as process_containment_module
+
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-identity-miss"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-identity-miss",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "3" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    ready = tmp_path / "identity-miss-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_032,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {sentinel, writer_pid},
+    )
+    real_start_identity = container_activity._process_start_identity
+
+    def hide_writer_identity(pid: int) -> str | None:
+        if pid == writer_pid:
+            return None
+        return real_start_identity(pid)
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        hide_writer_identity,
+    )
+
+    killed: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def track_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", track_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.4,
+        )
+        assert record.exists()
+        assert recovery.recovered == 0
+        assert recovery.unresolved >= 1
+        assert (sentinel, signal.SIGTERM) not in killed
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
 
 
 @pytest.mark.skipif(
