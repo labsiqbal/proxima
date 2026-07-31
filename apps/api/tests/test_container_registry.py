@@ -6,6 +6,7 @@ import hashlib
 import errno
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -1898,6 +1899,342 @@ def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
             os.waitpid(writer_pid, 0)
         except ChildProcessError:
             pass
+
+
+def test_reconcile_never_unlinks_on_sentinel_death_alone(
+    tmp_path: Path,
+):
+    """Incomplete identity must retain the durable guardian record."""
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'f' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_011,
+                "sentinel_start": "gone",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_011: "gone"},
+        members_observed=False,
+    )
+    assert (
+        container_activity._reconcile_recovered_guardian_record(tree)
+        is False
+    )
+    assert record.exists()
+
+
+def test_reconcile_unlinks_only_after_observed_members_exit(
+    tmp_path: Path,
+):
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'a' * 32}.guardian.json"
+    record.write_text("{}", encoding="utf-8")
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_012: "gone"},
+        members_observed=True,
+    )
+    assert (
+        container_activity._reconcile_recovered_guardian_record(tree)
+        is True
+    )
+    assert not record.exists()
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="live writer identity proof uses Linux /proc",
+)
+def test_reconcile_retains_record_while_seeded_writer_live(
+    tmp_path: Path,
+):
+    writer = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+    )
+    try:
+        start = container_activity.process_start_identity(writer.pid)
+        assert start
+        record_dir = tmp_path / "locks"
+        record_dir.mkdir(mode=0o700)
+        record = record_dir / f"1.activity.{'b' * 32}.guardian.json"
+        record.write_text("{}", encoding="utf-8")
+        tree = container_activity.GuardedWriterTree(
+            guardian_record=record,
+            known_identities={
+                writer.pid: start,
+                2_000_000_013: "dead-sentinel",
+            },
+            members_observed=True,
+        )
+        assert (
+            container_activity._reconcile_recovered_guardian_record(tree)
+            is False
+        )
+        assert record.exists()
+    finally:
+        writer.kill()
+        writer.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="recovery-signal-then-sentinel-crash proof uses Linux /proc",
+)
+def test_recovery_signal_then_sentinel_crash_retains_live_orphan(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Unclean sentinel death after recovery signal must keep live orphans blocked."""
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-unclean-sentinel"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-unclean-sentinel",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "e" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    ready = tmp_path / "recovery-orphan-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_014,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+
+    real_kill = os.kill
+
+    def unclean_kill(pid: int, sig: int) -> None:
+        # Recovery SIGTERM becomes an unclean sentinel death; do not touch the
+        # reparented writer here so the durable record must retain the blocker.
+        if pid == sentinel and sig == signal.SIGTERM:
+            real_kill(pid, 9)
+            return
+        if pid == writer_pid:
+            return
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", unclean_kill)
+    monkeypatch.setattr(
+        container_activity.GuardedWriterTree,
+        "terminate",
+        lambda self, **_kwargs: False,
+    )
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.6,
+        )
+        assert record.exists(), (
+            "unclean sentinel death must not drop the durable guardian record"
+        )
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(
+            encoding="utf-8"
+        ) == "keep"
+        blocked = False
+        try:
+            with container_registry.container_quiescence_lock(
+                conn,
+                container_id,
+            ):
+                pass
+        except ContainerBoundaryError:
+            blocked = True
+        assert blocked
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="delayed tree-exit recovery proof uses Linux /proc",
+)
+def test_recovery_clears_record_after_delayed_observed_tree_exit(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Once every seeded member exits, recovery may clear the leftover record."""
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-delayed-exit"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-delayed-exit",
+    )
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "1" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    ready = tmp_path / "delayed-exit-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    time.sleep(0.35)
+                finally:
+                    os._exit(0)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_015,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    real_kill = os.kill
+
+    def unclean_kill(pid: int, sig: int) -> None:
+        if pid == sentinel and sig == signal.SIGTERM:
+            real_kill(pid, 9)
+            return
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", unclean_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=2.0,
+        )
+        assert recovery.recovered == 1
+        assert recovery.unresolved == 0
+        assert recovery.active == 0
+        assert not record.exists()
+        with container_registry.container_quiescence_lock(
+            conn,
+            container_id,
+        ):
+            pass
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
 
 
 def test_generated_container_doc_creation_never_clobbers_late_content(

@@ -307,6 +307,7 @@ class GuardedWriterTree:
     guardian_record: Path | None = None
     known_identities: dict[int, str] = None  # type: ignore[assignment]
     job_name: str | None = None
+    members_observed: bool = False
 
     def __post_init__(self) -> None:
         raw_identities = self.known_identities or {}
@@ -329,6 +330,7 @@ class GuardedWriterTree:
             self.launcher_start = str(self.launcher_start) or None
         if self.guardian_record is not None:
             self.guardian_record = Path(self.guardian_record)
+        self.members_observed = bool(self.members_observed)
 
     @classmethod
     def bind(
@@ -428,8 +430,12 @@ class GuardedWriterTree:
                 self.known_identities[pid] = start
         for root in roots:
             tree = process_tree_pids(root)
-            if not tree:
+            if tree is None:
                 continue
+            # Successfully inspected a live root - identity is complete enough
+            # for recovery to clear the durable record after every known member
+            # exits. Missing inspection must fail closed instead.
+            self.members_observed = True
             for pid in tree:
                 start = _process_start_identity(pid)
                 if start:
@@ -508,7 +514,8 @@ class GuardedWriterTree:
                 # Arm descendant identities while the root is still live so a
                 # later sentinel crash cannot orphan writers unobserved.
                 tree = process_tree_pids(pid)
-                if tree:
+                if tree is not None:
+                    self.members_observed = True
                     for child in tree:
                         child_start = _process_start_identity(int(child))
                         if child_start:
@@ -1144,41 +1151,49 @@ def _guardian_records_present(
     return False
 
 
-def _reconcile_recovered_guardian_record(
-    record: Path,
-    *,
-    expected_pid: int,
-    expected_start: str,
-) -> None:
-    """Unlink a record only after its exact verified sentinel identity is dead."""
+def _reconcile_recovered_guardian_record(tree: GuardedWriterTree) -> bool:
+    """Clear a recovered guardian record only after writer-tree proof.
+
+    Returns True when the durable record is gone. Clean sentinel teardown
+    removes the record itself. Recovery may unlink only after every
+    identity-bound member observed while the tree was live is proven exited.
+    Sentinel or launcher death alone never clears the record.
+    """
+    record = tree.guardian_record
+    if record is None:
+        return True
+    try:
+        if not record.exists():
+            return True
+    except OSError:
+        return False
+
+    tree.seed_live_members()
+    if not tree.known_identities:
+        return False
+
+    for pid, start in list(tree.known_identities.items()):
+        if _process_has_identity(pid, start) is not False:
+            return False
+
+    # Without a live-tree observation (or Windows job authority), descendant
+    # identity is incomplete - retain the durable blocker.
+    job_authoritative = bool(tree.job_name) and _platform_is_windows()
+    if not tree.members_observed and not job_authoritative:
+        return False
+
     try:
         record_stat = record.lstat()
         if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
             record_stat.st_mode
         ):
-            return
-        payload = json.loads(record.read_text(encoding="utf-8"))
-        pid = int(payload["sentinel_pid"])
-        start = str(payload["sentinel_start"])
-    except (
-        FileNotFoundError,
-        KeyError,
-        OSError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-    ):
-        return
-    if pid != int(expected_pid) or start != str(expected_start):
-        return
-    if _process_has_identity(pid, start) is not False:
-        return
-    try:
+            return False
         record.unlink()
     except FileNotFoundError:
-        pass
+        return True
     except OSError:
-        return
+        return False
+    return True
 
 
 @contextmanager
@@ -1273,7 +1288,7 @@ def recover_container_activity_guardians(
         "activity_guardian.py"
     )
     recovered = 0
-    waiting: list[tuple[int, str, Path]] = []
+    waiting: list[tuple[int, str, GuardedWriterTree]] = []
     pattern = f"{int(data['id'])}.activity.*.guardian.json"
     container_id = int(data["id"])
     for record in sorted(lock_dir.glob(pattern)):
@@ -1312,13 +1327,24 @@ def recover_container_activity_guardians(
             if owner_live is not False:
                 continue
             pid, start = verified
+            job_name = str(payload.get("job_name") or "") or None
+            tree = GuardedWriterTree.bind(
+                guardian_record=record,
+                job_name=job_name,
+            )
+            tree.known_identities[int(pid)] = str(start)
+            # Seed writers while the sentinel is still live so later unclean
+            # sentinel death cannot drop identity-bound descendants.
+            tree.seed_live_members()
             if _platform_is_windows():
-                job_name = str(payload.get("job_name") or "")
-                if not _terminate_windows_job(job_name):
+                if not job_name or not _terminate_windows_job(job_name):
                     continue
             else:
-                os.kill(pid, signal.SIGTERM)
-            waiting.append((pid, start, record))
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            waiting.append((pid, start, tree))
             recovered += 1
         except (
             FileNotFoundError,
@@ -1331,24 +1357,33 @@ def recover_container_activity_guardians(
             continue
     deadline = time.monotonic() + timeout
     while waiting and time.monotonic() < deadline:
-        next_waiting: list[tuple[int, str, Path]] = []
-        for pid, start, record in waiting:
+        next_waiting: list[tuple[int, str, GuardedWriterTree]] = []
+        for pid, start, tree in waiting:
+            if _reconcile_recovered_guardian_record(tree):
+                continue
             alive = _process_has_identity(pid, start)
             if alive is False:
-                _reconcile_recovered_guardian_record(
-                    record,
-                    expected_pid=pid,
-                    expected_start=start,
-                )
-                continue
-            next_waiting.append((pid, start, record))
+                # Sentinel is gone but the record remains: signal any still-live
+                # identity-bound members. Never unlink from sentinel death alone.
+                tree.seed_live_members()
+                live_members = [
+                    member_pid
+                    for member_pid, member_start in tree.known_identities.items()
+                    if _process_has_identity(member_pid, member_start) is True
+                ]
+                if live_members:
+                    tree.terminate(
+                        grace_seconds=0.2,
+                        kill_seconds=0.2,
+                    )
+            next_waiting.append((pid, start, tree))
         waiting = next_waiting
         if waiting:
             time.sleep(0.02)
-    for pid, start, record in waiting:
+    for pid, start, tree in waiting:
         # Timed out while identity still unproven - leave the record and count
-        # it unresolved in the final scan.
-        del pid, start, record
+        # it unresolved in the final scan. Never clear on timeout alone.
+        del pid, start, tree
 
     # Authoritative recount: any remaining record without a verified live owner
     # preserves the explicit active-process / ownership blocker.
