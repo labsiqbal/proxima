@@ -421,6 +421,16 @@ fetch and XHR may use the `empty` destination token with `cors`, `no-cors`, or
 and cross-origin subresource metadata is rejected before file service. Named-local
 HTTP uses a Secure `SameSite=None` cookie under the browser's trustworthy-localhost
 exception.
+The accepted tuple set follows the
+[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
+and the
+[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
+worklet modules remain `cors`, and only top-level worker, shared-worker, and
+service-worker module requests switch to `same-origin`. Site, mode, and destination
+must each be one canonical Structured Field token; optional user activation must be
+the canonical `?1` boolean on a navigation. Duplicate lines, comma-combined values,
+non-ASCII bytes, noncanonical casing, and surrounding whitespace fail closed before
+admission.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the
 canonical response sandbox, active XML and SVG download, main-origin HTML denies

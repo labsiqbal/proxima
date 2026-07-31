@@ -11,6 +11,7 @@ import html
 import ipaddress
 import json
 import mimetypes
+import re
 import secrets
 import socket
 import time
@@ -50,6 +51,47 @@ _SCRIPT_MEDIA_TYPES = frozenset(
         "text/javascript",
     }
 )
+_STRUCTURED_TOKEN = re.compile(
+    r"[A-Za-z*][!#$%&'*+\-.^_`|~:/A-Za-z0-9]*\Z",
+    re.ASCII,
+)
+_FETCH_SITES = frozenset(
+    {"cross-site", "none", "same-origin", "same-site"}
+)
+_FETCH_MODES = frozenset(
+    {"cors", "navigate", "no-cors", "same-origin", "websocket"}
+)
+_FETCH_DESTINATIONS = frozenset(
+    {
+        "audio",
+        "audioworklet",
+        "document",
+        "embed",
+        "empty",
+        "font",
+        "frame",
+        "iframe",
+        "image",
+        "json",
+        "manifest",
+        "object",
+        "paintworklet",
+        "report",
+        "script",
+        "serviceworker",
+        "sharedworker",
+        "style",
+        "text",
+        "track",
+        "video",
+        "webidentity",
+        "worker",
+        "xslt",
+    }
+)
+# Sources: https://www.w3.org/TR/fetch-metadata/,
+# https://fetch.spec.whatwg.org/#concept-request-destination, and
+# https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script
 _SAME_ORIGIN_RESOURCE_FETCH_METADATA = frozenset(
     {
         ("cors", "empty"),
@@ -76,8 +118,6 @@ _SAME_ORIGIN_RESOURCE_FETCH_METADATA = frozenset(
         ("no-cors", "track"),
         ("no-cors", "video"),
         ("same-origin", "empty"),
-        ("same-origin", "audioworklet"),
-        ("same-origin", "paintworklet"),
         ("same-origin", "script"),
         ("same-origin", "serviceworker"),
         ("same-origin", "sharedworker"),
@@ -248,8 +288,64 @@ def _optional_header(scope: Scope, name: str) -> str | None:
     return None
 
 
+def _raw_header_values(scope: Scope, name: str) -> tuple[bytes, ...]:
+    encoded = name.lower().encode("ascii")
+    return tuple(
+        value
+        for key, value in scope.get("headers", [])
+        if key.lower() == encoded
+    )
+
+
 def _header(scope: Scope, name: str) -> str:
     return _optional_header(scope, name) or ""
+
+
+@dataclass(frozen=True)
+class _ParsedFetchField:
+    value: str | None
+    present: bool
+    valid: bool
+
+
+def _single_structured_token(
+    scope: Scope,
+    name: str,
+    *,
+    required: bool,
+) -> _ParsedFetchField:
+    values = _raw_header_values(scope, name)
+    if not values:
+        return _ParsedFetchField(
+            value=None,
+            present=False,
+            valid=not required,
+        )
+    if len(values) != 1:
+        return _ParsedFetchField(value=None, present=True, valid=False)
+    try:
+        value = values[0].decode("ascii")
+    except UnicodeDecodeError:
+        return _ParsedFetchField(value=None, present=True, valid=False)
+    if _STRUCTURED_TOKEN.fullmatch(value) is None:
+        return _ParsedFetchField(value=None, present=True, valid=False)
+    return _ParsedFetchField(value=value, present=True, valid=True)
+
+
+def _single_structured_boolean(
+    scope: Scope,
+    name: str,
+) -> _ParsedFetchField:
+    values = _raw_header_values(scope, name)
+    if not values:
+        return _ParsedFetchField(value=None, present=False, valid=True)
+    if len(values) != 1 or values[0] not in {b"?0", b"?1"}:
+        return _ParsedFetchField(value=None, present=True, valid=False)
+    return _ParsedFetchField(
+        value=values[0].decode("ascii"),
+        present=True,
+        valid=True,
+    )
 
 
 def _capability_query(scope: Scope) -> tuple[str, str]:
@@ -273,28 +369,54 @@ class _PreviewFetchMetadata:
     mode: str | None
     destination: str | None
     opaque_origin: bool
+    user_active: bool | None = None
+    present: bool = True
+    valid: bool = True
 
     @classmethod
     def from_scope(cls, scope: Scope) -> _PreviewFetchMetadata:
-        site = _optional_header(scope, "sec-fetch-site")
-        mode = _optional_header(scope, "sec-fetch-mode")
-        destination = _optional_header(scope, "sec-fetch-dest")
+        site = _single_structured_token(
+            scope,
+            "sec-fetch-site",
+            required=True,
+        )
+        mode = _single_structured_token(
+            scope,
+            "sec-fetch-mode",
+            required=True,
+        )
+        destination = _single_structured_token(
+            scope,
+            "sec-fetch-dest",
+            required=True,
+        )
+        user = _single_structured_boolean(scope, "sec-fetch-user")
+        fields = (site, mode, destination, user)
+        user_active = True if user.value == "?1" else None
+        valid = (
+            all(field.valid for field in fields)
+            and site.value in _FETCH_SITES
+            and mode.value in _FETCH_MODES
+            and destination.value in _FETCH_DESTINATIONS
+            and user.value in {None, "?1"}
+            and (user_active is None or mode.value == "navigate")
+        )
         return cls(
-            site=site.strip().lower() if site is not None else None,
-            mode=mode.strip().lower() if mode is not None else None,
-            destination=(
-                destination.strip().lower()
-                if destination is not None
-                else None
-            ),
+            site=site.value,
+            mode=mode.value,
+            destination=destination.value,
             opaque_origin=(
                 _header(scope, "origin").strip().lower() == "null"
             ),
+            user_active=user_active,
+            present=any(field.present for field in fields),
+            valid=valid,
         )
 
     def admits_area_request(self, *, capability_present: bool) -> bool:
         if (
-            self.opaque_origin
+            not self.valid
+            or self.opaque_origin
             or self.site is None
             or self.mode is None
             or self.destination is None
@@ -319,6 +441,17 @@ class _PreviewFetchMetadata:
                 self.destination,
             ) in _SAME_ORIGIN_RESOURCE_FETCH_METADATA
         return False
+
+    def blocks_application_request(self) -> bool:
+        if self.opaque_origin:
+            return True
+        if self.present and not self.valid:
+            return True
+        return (
+            self.valid
+            and self.site in {"same-site", "cross-site"}
+            and self.destination != "document"
+        )
 
 
 def _scope_origin(scope: Scope) -> str:
@@ -355,10 +488,13 @@ def passive_preview_headers(request: Request) -> dict[str, str]:
     }
 
 
-def _is_service_worker_request(scope: Scope) -> bool:
+def _is_service_worker_request(
+    scope: Scope,
+    metadata: _PreviewFetchMetadata,
+) -> bool:
     return (
         _header(scope, "service-worker").strip().lower() == "script"
-        or _header(scope, "sec-fetch-dest").strip().lower() == "serviceworker"
+        or metadata.destination == "serviceworker"
     )
 
 
@@ -610,7 +746,13 @@ class TargetPreviewManager:
                 "preview request metadata is invalid",
             )
             return
-        await self._serve_admitted(area, scope, receive, send)
+        await self._serve_admitted(
+            area,
+            scope,
+            receive,
+            send,
+            metadata,
+        )
 
     async def _serve_admitted(
         self,
@@ -618,6 +760,7 @@ class TargetPreviewManager:
         scope: Scope,
         receive: Receive,
         send: Send,
+        metadata: _PreviewFetchMetadata,
     ) -> None:
         if self.maintenance is not None and self.maintenance.fenced():
             await self._reject(scope, send, 423, "maintenance write fenced")
@@ -632,7 +775,7 @@ class TargetPreviewManager:
         if payload is None or _area_from_payload(payload) != area:
             await self._reject(scope, send, 403, "preview capability is invalid")
             return
-        if _is_service_worker_request(scope):
+        if _is_service_worker_request(scope, metadata):
             await self._reject(scope, send, 403, "service workers are unavailable")
             return
         if query_token:
@@ -849,16 +992,8 @@ class TargetPreviewMiddleware:
             if label is not None and label.startswith("preview-"):
                 await self.app(scope, receive, send)
                 return
-            fetch_site = _header(scope, "sec-fetch-site").strip().lower()
-            fetch_destination = _header(
-                scope,
-                "sec-fetch-dest",
-            ).strip().lower()
-            if (
-                fetch_site in {"same-site", "cross-site"}
-                and fetch_destination
-                and fetch_destination != "document"
-            ) or _header(scope, "origin").strip().lower() == "null":
+            metadata = _PreviewFetchMetadata.from_scope(scope)
+            if metadata.blocks_application_request():
                 await self.manager._reject(
                     scope,
                     send,

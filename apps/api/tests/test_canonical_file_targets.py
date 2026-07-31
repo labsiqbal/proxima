@@ -13,6 +13,7 @@ from urllib.parse import (
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import Scope
 from starlette.websockets import WebSocketDisconnect
 
 from proxima_api import (
@@ -55,68 +56,80 @@ def _clean_capability_url(url: str) -> str:
     )
 
 
-@pytest.mark.parametrize(
-    ("mode", "destinations"),
-    [
-        (
-            "cors",
-            (
-                "empty",
-                "audio",
-                "audioworklet",
-                "font",
-                "image",
-                "json",
-                "manifest",
-                "paintworklet",
-                "script",
-                "sharedworker",
-                "style",
-                "text",
-                "track",
-                "video",
-                "worker",
-            ),
-        ),
-        (
-            "no-cors",
-            (
-                "empty",
-                "audio",
-                "image",
-                "manifest",
-                "script",
-                "style",
-                "track",
-                "video",
-            ),
-        ),
-        (
-            "same-origin",
-            (
-                "empty",
-                "audioworklet",
-                "paintworklet",
-                "script",
-                "serviceworker",
-                "sharedworker",
-                "style",
-                "worker",
-            ),
-        ),
-    ],
+_BROWSER_RESOURCE_FETCH_METADATA = frozenset(
+    {
+        ("cors", "empty"),
+        ("cors", "audio"),
+        ("cors", "audioworklet"),
+        ("cors", "font"),
+        ("cors", "image"),
+        ("cors", "json"),
+        ("cors", "manifest"),
+        ("cors", "paintworklet"),
+        ("cors", "script"),
+        ("cors", "sharedworker"),
+        ("cors", "style"),
+        ("cors", "text"),
+        ("cors", "track"),
+        ("cors", "video"),
+        ("cors", "worker"),
+        ("no-cors", "empty"),
+        ("no-cors", "audio"),
+        ("no-cors", "image"),
+        ("no-cors", "manifest"),
+        ("no-cors", "script"),
+        ("no-cors", "style"),
+        ("no-cors", "track"),
+        ("no-cors", "video"),
+        ("same-origin", "empty"),
+        ("same-origin", "script"),
+        ("same-origin", "serviceworker"),
+        ("same-origin", "sharedworker"),
+        ("same-origin", "style"),
+        ("same-origin", "worker"),
+    }
 )
-def test_same_origin_preview_metadata_allows_resource_tuples(
+
+
+def _fetch_metadata(
+    headers: list[tuple[str, str | bytes]],
+) -> target_preview._PreviewFetchMetadata:
+    scope: Scope = {
+        "type": "http",
+        "headers": [
+            (
+                name.encode("ascii"),
+                value if isinstance(value, bytes) else value.encode("ascii"),
+            )
+            for name, value in headers
+        ],
+    }
+    return target_preview._PreviewFetchMetadata.from_scope(scope)
+
+
+def _browser_fetch_metadata(
     mode: str,
-    destinations: tuple[str, ...],
-) -> None:
-    for destination in destinations:
-        metadata = target_preview._PreviewFetchMetadata(
-            site="same-origin",
-            mode=mode,
-            destination=destination,
-            opaque_origin=False,
-        )
+    destination: str,
+    *,
+    user: str | None = None,
+) -> target_preview._PreviewFetchMetadata:
+    headers: list[tuple[str, str | bytes]] = [
+        ("Sec-Fetch-Site", "same-origin"),
+        ("Sec-Fetch-Mode", mode),
+        ("Sec-Fetch-Dest", destination),
+    ]
+    if user is not None:
+        headers.append(("Sec-Fetch-User", user))
+    return _fetch_metadata(headers)
+
+
+def test_same_origin_preview_metadata_allows_normative_resource_tuples() -> None:
+    assert (
+        target_preview._SAME_ORIGIN_RESOURCE_FETCH_METADATA
+        == _BROWSER_RESOURCE_FETCH_METADATA
+    )
+    for mode, destination in _BROWSER_RESOURCE_FETCH_METADATA:
+        metadata = _browser_fetch_metadata(mode, destination)
         assert metadata.admits_area_request(capability_present=True)
 
 
@@ -138,19 +151,146 @@ def test_same_origin_preview_metadata_allows_resource_tuples(
         ("cors", "invalid"),
         ("no-cors", "worker"),
         ("same-origin", "image"),
+        ("same-origin", "audioworklet"),
+        ("same-origin", "paintworklet"),
     ],
 )
 def test_same_origin_preview_metadata_rejects_invalid_resource_tuples(
     mode: str | None,
     destination: str | None,
 ) -> None:
-    metadata = target_preview._PreviewFetchMetadata(
-        site="same-origin",
-        mode=mode,
-        destination=destination,
-        opaque_origin=False,
-    )
+    headers: list[tuple[str, str | bytes]] = [
+        ("Sec-Fetch-Site", "same-origin"),
+    ]
+    if mode is not None:
+        headers.append(("Sec-Fetch-Mode", mode))
+    if destination is not None:
+        headers.append(("Sec-Fetch-Dest", destination))
+    metadata = _fetch_metadata(headers)
     assert not metadata.admits_area_request(capability_present=True)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+            ("Sec-Fetch-Dest", "document"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Site", "cross-site"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Mode", "navigate"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "navigate"),
+            ("Sec-Fetch-Dest", "iframe"),
+            ("Sec-Fetch-User", "?1"),
+            ("Sec-Fetch-User", "?0"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "navigate"),
+            ("Sec-Fetch-Dest", "iframe"),
+            ("Sec-Fetch-User", "?1"),
+            ("Sec-Fetch-User", "?1"),
+        ],
+    ],
+)
+def test_preview_metadata_rejects_duplicate_raw_fields(
+    headers: list[tuple[str, str | bytes]],
+) -> None:
+    metadata = _fetch_metadata(headers)
+    assert not metadata.valid
+    assert not metadata.admits_area_request(capability_present=True)
+    assert metadata.blocks_application_request()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("Sec-Fetch-Site", "same-origin, cross-site"),
+        ("Sec-Fetch-Mode", "cors, navigate"),
+        ("Sec-Fetch-Dest", "script, document"),
+        ("Sec-Fetch-User", "?1, ?1"),
+        ("Sec-Fetch-Site", "Same-Origin"),
+        ("Sec-Fetch-Mode", "CORS"),
+        ("Sec-Fetch-Dest", "SCRIPT"),
+        ("Sec-Fetch-Site", " same-origin"),
+        ("Sec-Fetch-Mode", "cors "),
+        ("Sec-Fetch-Dest", "\tscript"),
+        ("Sec-Fetch-Site", "same origin"),
+        ("Sec-Fetch-Mode", "cors;"),
+        ("Sec-Fetch-Dest", b"\xff"),
+        ("Sec-Fetch-User", "true"),
+        ("Sec-Fetch-User", "?0"),
+        ("Sec-Fetch-User", " ?1"),
+        ("Sec-Fetch-User", "?1 "),
+    ],
+)
+def test_preview_metadata_rejects_noncanonical_structured_fields(
+    name: str,
+    value: str | bytes,
+) -> None:
+    headers: list[tuple[str, str | bytes]] = [
+        ("Sec-Fetch-Site", "same-origin"),
+        ("Sec-Fetch-Mode", "navigate"),
+        ("Sec-Fetch-Dest", "iframe"),
+        ("Sec-Fetch-User", "?1"),
+    ]
+    headers = [
+        (header_name, header_value)
+        for header_name, header_value in headers
+        if header_name != name
+    ]
+    headers.append((name, value))
+    metadata = _fetch_metadata(headers)
+    assert not metadata.valid
+    assert not metadata.admits_area_request(capability_present=True)
+    assert metadata.blocks_application_request()
+
+
+def test_preview_metadata_accepts_canonical_user_activation_only_on_navigation(
+) -> None:
+    navigation = _browser_fetch_metadata(
+        "navigate",
+        "iframe",
+        user="?1",
+    )
+    assert navigation.valid
+    assert navigation.admits_area_request(capability_present=True)
+
+    resource = _browser_fetch_metadata("cors", "script", user="?1")
+    assert not resource.valid
+    assert not resource.admits_area_request(capability_present=True)
 
 
 def _api(
@@ -541,6 +681,46 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         rejected_resource = api.get(
             isolated_url,
             headers=invalid_resource_metadata,
+        )
+        assert rejected_resource.status_code == 403
+        assert rejected_resource.text == (
+            "preview request metadata is invalid"
+        )
+
+    for invalid_raw_resource_metadata in (
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+            ("Sec-Fetch-Dest", "document"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "script"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors, navigate"),
+            ("Sec-Fetch-Dest", "script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", " script"),
+        ],
+        [
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "navigate"),
+            ("Sec-Fetch-Dest", "iframe"),
+            ("Sec-Fetch-User", "?1"),
+            ("Sec-Fetch-User", "?1"),
+        ],
+    ):
+        rejected_resource = api.get(
+            isolated_url,
+            headers=invalid_raw_resource_metadata,
         )
         assert rejected_resource.status_code == 403
         assert rejected_resource.text == (
