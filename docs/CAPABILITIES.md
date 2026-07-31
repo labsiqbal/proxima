@@ -1572,15 +1572,16 @@ never a double-encoded string under `path`. The modal pretty-prints metadata
 ## 19b. Diagnostics debug logs
 
 **Why:** Owners need the service journal plus stuck-run state without SSHing to the host.
-**How:** Settings → Diagnostics → Debug logs calls `GET /api/debug/logs`, which runs
-`journalctl --user -u <unit>` for the configured systemd unit (`PROXIMA_SERVICE_NAME`,
-default `proxima` → `proxima.service`), and lists active/stale runs and orphaned jobs.
-Empty journals return a `logHint` naming the unit and how to point `PROXIMA_SERVICE_NAME`
-at staging/preview units; the panel head uses correct singular/plural line counts and
-shows the unit under the description. The Platform support panel projects the
-canonical server catalog from `/api/config`: Linux is supported, while macOS and
-Windows are experimental. Diagnostics do not attempt `journalctl` on non-Linux
-hosts; they return service-manager-specific experimental guidance instead.
+**How:** Settings → Diagnostics → Debug logs calls `GET /api/debug/logs`. On Linux it
+runs `journalctl --user -u <unit>` for the configured systemd unit
+(`PROXIMA_SERVICE_NAME`, default `proxima` → `proxima.service`) and lists active/stale
+runs and orphaned jobs. Empty journals return a `logHint` naming the unit and how to
+point `PROXIMA_SERVICE_NAME` at staging/preview units; the panel head uses correct
+singular/plural line counts and shows the unit under the description. The Platform
+support panel projects the canonical server catalog from `/api/config`: Linux is
+supported, while macOS and Windows are experimental. Non-Linux hosts do not attempt
+`journalctl`; they return `serviceManager` / `platformSupport` plus
+service-manager-specific experimental guidance instead.
 **Endpoints:** `GET /api/debug/logs`, `POST /api/debug/reap-orphaned-jobs`.
 
 ## 20. Reliability (cross-cutting)

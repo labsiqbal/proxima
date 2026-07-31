@@ -91,7 +91,8 @@ proxy, reconnectable supervisor client, and delta log protocol) with
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
-bounded vision inputs), and `routes/` (the HTTP surface).
+bounded vision inputs), `platform_support.py` (Linux-first host support catalog
+projected by `/api/config` and `/api/health`), and `routes/` (the HTTP surface).
 
 ## Runtime / repo split
 

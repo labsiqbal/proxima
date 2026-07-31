@@ -13,12 +13,14 @@ custody was used.
 
 The raw Chrome DevTools Protocol capture is a 1440x1000 PNG at the exact path
 `docs/evidence/linux-daily-driver/diagnostics-platform-support.png`.
-`Page.captureScreenshot` produced 177,664 bytes. Independent verification checked:
+`Page.captureScreenshot` produced 177,664 bytes. The capture script writes the PNG
+with mode `0644` at capture time; checked-out mode may follow the local umask.
+Independent verification checked:
 
 - PNG signature `89504e470d0a1a0a`
 - nonzero IHDR dimensions `1440x1000`
 - regular file size `177664`
-- mode `0644`
+- exact resolved output path
 - no real-browser console errors
 
 The same browser pass asserted:

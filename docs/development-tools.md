@@ -40,11 +40,18 @@ npm --prefix apps/web run build
 npm --prefix apps/web run test:accessibility
 npm --prefix apps/web run test:artifact-feedback-browser
 python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
+bash scripts/linux-daily-driver-acceptance
 ```
 
 `test:accessibility` owns the disposable auth/onboarding browser pass. Details and
 evidence live in [ui-shell.md](ui-shell.md#validation) and
 [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md).
+
+`scripts/linux-daily-driver-acceptance` is the isolated Linux support matrix (install,
+lifecycle, PTY, backup/restore, diagnostics, preview, access, upgrade readiness).
+It requires Linux and `apps/api/.venv`, enables Master and keeps Safe Self-Update
+off for that process only, and never targets the installed database or service.
+See [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md).
 
 The preview browser verifier builds the web app, installs its pinned Astro
 dependency inside a disposable fixture, authenticates a real headless browser,
@@ -119,6 +126,7 @@ apps/api/proxima_api/db.py            SQLite schema + migrate_existing
 apps/api/proxima_api/migrations.py    versioned migrations
 apps/api/proxima_api/auth.py          password/token helpers
 apps/api/proxima_api/settings.py      config/path helpers
+apps/api/proxima_api/platform_support.py  host support catalog (Linux supported; macOS/Windows experimental)
 apps/web/src/App.tsx                       app state and screen routing
 apps/web/src/screens/*                     UI screens
 apps/web/src/api/*                         typed API calls

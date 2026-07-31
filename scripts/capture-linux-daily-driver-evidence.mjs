@@ -211,6 +211,9 @@ async function driveEvidence(cdp) {
     `[...document.querySelectorAll('button')].some(button => button.getAttribute('aria-label') === 'Settings')`,
     'Authenticated application shell',
   )
+  // Auth-gate probes can emit expected 401 network log noise before the session exists.
+  // Clear them once the authenticated shell is visible so only post-auth errors fail the run.
+  consoleErrors.length = 0
 
   for (const label of ['Skip for now', 'Skip tour']) {
     await clickText(cdp, label)
