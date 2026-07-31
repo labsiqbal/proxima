@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import (
     parse_qs,
@@ -2167,3 +2169,190 @@ def test_legacy_ops_at_dot_keeps_area_identity_and_does_not_rewrite_ops_prefix(
         params={"path": "ops/legacy.md"},
     )
     assert protected.status_code == 400
+
+
+def test_active_preview_revokes_when_owner_session_ttl_elapses_same_utc_day(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<script>globalThis.executed = true</script>",
+        encoding="utf-8",
+    )
+    area_row = api.app.state.db.execute(
+        "SELECT pa.id, pa.project_id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    target = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": area_row["id"]},
+        "path": "index.html",
+    }
+    preview_session, generation = _enable_active_preview(api, headers, target)
+    entry = api.get(
+        f"/api/target-preview/identity/ops/{area_row['id']}/index.html",
+        headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": preview_session,
+            "__proxima_preview_generation": generation,
+        },
+        follow_redirects=False,
+    )
+    assert entry.status_code == 307, entry.text
+    location = entry.headers["location"]
+    token = parse_qs(urlsplit(location).query)["__proxima_cap"][0]
+    cookie_name = (
+        f"proxima_file_preview_{area_row['project_id']}_ops_{area_row['id']}"
+    )
+    area_client = TestClient(
+        api.app,
+        base_url=(
+            f"http://file-{area_row['project_id']}-ops-{area_row['id']}.testserver"
+        ),
+    )
+    frame_metadata = {
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
+    gate = area_client.get(
+        location,
+        headers=frame_metadata,
+        follow_redirects=False,
+    )
+    assert gate.status_code == 200, gate.text
+    clean_url = _clean_capability_url(location)
+    live = area_client.get(
+        clean_url,
+        headers={
+            **frame_metadata,
+            "Cookie": f"{cookie_name}={token}",
+        },
+    )
+    assert live.status_code == 200, live.text
+
+    expired_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=5)
+    ).isoformat()
+    assert "T" in expired_at
+    with api.app.state.db_lock:
+        api.app.state.db.execute(
+            "UPDATE auth_sessions SET expires_at = ?",
+            (expired_at,),
+        )
+
+    stale = area_client.get(
+        clean_url,
+        headers={
+            **frame_metadata,
+            "Cookie": f"{cookie_name}={token}",
+        },
+    )
+    assert stale.status_code == 403
+    assert stale.text == "active preview capability is revoked"
+
+
+def test_capability_gate_jails_bootstrap_redirect_to_same_origin_path(
+    tmp_path: Path,
+):
+    api, _headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<main>Canonical</main>",
+        encoding="utf-8",
+    )
+    row = api.app.state.db.execute(
+        "SELECT pa.id, pa.project_id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    area = target_preview.PreviewArea(
+        project_id=int(row["project_id"]),
+        kind="ops",
+        area_id=int(row["id"]),
+    )
+    manager = api.app.state.target_previews
+    token = target_preview.mint_file_preview_token(
+        manager.secret,
+        area,
+        frame_origin="http://127.0.0.1:8766",
+    )
+    app = manager._relay_app(area)
+
+    def _dispatch(
+        path: str,
+        *,
+        scheme: str = "http",
+        host: str = "127.0.0.1:43123",
+    ) -> tuple[int, dict[str, str], bytes]:
+        messages: list[dict] = []
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: dict) -> None:
+            messages.append(message)
+
+        scope: Scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": scheme,
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": f"__proxima_cap={token}".encode("ascii"),
+            "headers": [
+                (b"host", host.encode("ascii")),
+                (b"sec-fetch-site", b"same-site"),
+                (b"sec-fetch-mode", b"navigate"),
+                (b"sec-fetch-dest", b"iframe"),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 43123),
+        }
+
+        async def run() -> None:
+            await app(scope, receive, send)
+
+        asyncio.run(run())
+        start = next(
+            message
+            for message in messages
+            if message["type"] == "http.response.start"
+        )
+        body = b"".join(
+            message.get("body", b"")
+            for message in messages
+            if message["type"] == "http.response.body"
+        )
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in start.get("headers", [])
+        }
+        return int(start["status"]), headers, body
+
+    status, headers, _body = _dispatch("//evil.example")
+    assert status == 307
+    location = headers["location"]
+    assert location == "/evil.example"
+    assert urlsplit(location).netloc == ""
+
+    host_label = (
+        f"file-{row['project_id']}-ops-{row['id']}.localhost:43123"
+    )
+    refresh_status, refresh_headers, refresh_body = _dispatch(
+        "//evil.example",
+        scheme="https",
+        host=host_label,
+    )
+    assert refresh_status == 200
+    assert "set-cookie" in refresh_headers
+    assert b'content="0;url=/evil.example"' in refresh_body
+    assert b"url=//" not in refresh_body
+    assert b"url=https://" not in refresh_body
+
+    bad_status, _bad_headers, bad_body = _dispatch("/../secret")
+    assert bad_status == 400
+    assert bad_body == b"invalid preview path"

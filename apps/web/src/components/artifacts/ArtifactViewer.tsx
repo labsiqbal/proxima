@@ -2,6 +2,7 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import {
   previewUrl,
+  rawUrl,
   setTargetPreviewMode,
   type Artifact,
 } from '../../api/files'
@@ -288,7 +289,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         sandbox={authority ? 'allow-scripts allow-same-origin' : ''}
       />
     }
-    if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
+    if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={rawUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
     if (error) return <div className="av-msg muted">{error}</div>
     if (text == null) return <div className="av-msg muted">Loading...</div>
     if (kind === 'markdown') return <div className="av-doc">{splitMermaidSections(text).map((section, sectionIndex) => section.type === 'mermaid'
@@ -476,7 +477,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
                 : <button type="button" className="ghost-button" disabled={previewModePending || !previewSessionRef.current} onClick={() => { setPreviewModeError(''); setPreviewConsentOpen(true) }}>Enable active preview</button>)}
               <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
               {EDITABLE.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
-              <a className="ghost-button" href={previewUrl(slug, path, item.target)} download={name}>Download</a>
+              <a className="ghost-button" href={rawUrl(slug, path, item.target)} download={name}>Download</a>
               <button type="button" className="ghost-button" ref={closeRef} onClick={onClose} title="Close (Esc)" aria-label="Close artifact review">✕</button>
             </div>
           </header>

@@ -10,6 +10,7 @@ import {
   deleteSessionArtifact,
   fetchRawFile,
   previewUrl,
+  rawUrl,
   relativeFileUrl,
   setTargetPreviewMode,
 } from './files'
@@ -131,5 +132,21 @@ describe('canonical file URLs', () => {
     expect(init).toEqual({
       headers: { Authorization: 'Bearer owner-token' },
     })
+  })
+
+  it('builds authenticated raw download URLs without the preview entry', () => {
+    const activeHtml = {
+      ...target,
+      path: 'site/index.html',
+    }
+    expect(rawUrl('identity', 'site/index.html', activeHtml)).toBe(
+      `/api/projects/identity/raw?target=${encodeURIComponent(JSON.stringify(activeHtml))}`,
+    )
+    expect(rawUrl('identity', 'notes.bin')).toBe(
+      '/api/projects/identity/raw?path=notes.bin',
+    )
+    expect(rawUrl('identity', 'site/index.html', activeHtml)).not.toContain(
+      '/api/target-preview/',
+    )
   })
 })

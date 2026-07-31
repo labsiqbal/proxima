@@ -125,9 +125,13 @@ export const listReferenceFiles = (token: string, slug: string) =>
 export const projectWikiAll = (token: string, slug: string) =>
   api<{ notes: { path: string; content: string }[] }>(`/api/projects/${slug}/wiki/all`, token)
 
-export async function fetchRawFile(token: string, slug: string, path: string, target?: FileTarget): Promise<Blob> {
+export const rawUrl = (slug: string, path: string, target?: FileTarget) => {
   const query = target ? `target=${targetParam(target)}` : `path=${q(path)}`
-  const res = await fetch(`/api/projects/${q(slug)}/raw?${query}`, { headers: { Authorization: `Bearer ${token}` } })
+  return `/api/projects/${q(slug)}/raw?${query}`
+}
+
+export async function fetchRawFile(token: string, slug: string, path: string, target?: FileTarget): Promise<Blob> {
+  const res = await fetch(rawUrl(slug, path, target), { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) throw await responseError(res, `Could not download ${path}`)
   return res.blob()
 }

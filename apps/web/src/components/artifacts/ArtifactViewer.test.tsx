@@ -4,13 +4,18 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { ArtifactViewer } from './ArtifactViewer'
-import { previewUrl } from '../../api/files'
+import { previewUrl, rawUrl } from '../../api/files'
 
 const fsRead = vi.fn()
 const setTargetPreviewMode = vi.fn()
 
 vi.mock('../../api/files', () => ({
   previewUrl: vi.fn((_slug: string, path: string, _target?: unknown, active?: { generation: string }) => `/preview/${path}${active ? `?generation=${active.generation}` : ''}`),
+  rawUrl: vi.fn((slug: string, path: string, target?: { path?: string }) => (
+    target
+      ? `/api/projects/${slug}/raw?target=${encodeURIComponent(JSON.stringify(target))}`
+      : `/api/projects/${slug}/raw?path=${encodeURIComponent(path)}`
+  )),
   setTargetPreviewMode: (...args: unknown[]) => setTargetPreviewMode(...args),
 }))
 vi.mock('../../api/fsAdapter', () => ({
@@ -344,7 +349,7 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(screen.getAllByRole('link', { name: 'Download' })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          href: expect.stringContaining('/preview/artifacts/starter-app'),
+          href: expect.stringContaining('/api/projects/master/raw?path=artifacts%2Fstarter-app'),
         }),
       ]),
     )
@@ -409,5 +414,37 @@ describe('ArtifactViewer v2 review flow', () => {
       sessionId: 9,
       text: expect.stringContaining('[flow.excalidraw](artifacts/whiteboards/flow.excalidraw)'),
     }))
+  })
+
+  it('downloads active media through the authenticated raw endpoint', () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const download = screen.getByRole('link', { name: 'Download' })
+    expect(download).toHaveAttribute(
+      'href',
+      `/api/projects/master/raw?target=${encodeURIComponent(JSON.stringify(target))}`,
+    )
+    expect(download).toHaveAttribute('download', 'index.html')
+    expect(rawUrl).toHaveBeenCalledWith('master', 'site/index.html', target)
+    expect(previewUrl).toHaveBeenCalledWith(
+      'master',
+      'site/index.html',
+      target,
+      undefined,
+    )
+    expect(String(download.getAttribute('href'))).not.toContain('/api/target-preview/')
+    expect(String(download.getAttribute('href'))).not.toContain('/preview/')
   })
 })

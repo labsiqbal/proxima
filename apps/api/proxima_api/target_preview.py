@@ -29,6 +29,7 @@ from starlette.responses import FileResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import container_registry, file_targets
+from .auth import iso_now
 from .db import connect
 from .preview_proxy import resolve_preview_bind_host
 
@@ -676,8 +677,8 @@ class TargetPreviewManager:
             authenticated = conn.execute(
                 "SELECT 1 FROM auth_sessions "
                 "WHERE token_hash = ? AND revoked_at IS NULL "
-                "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
-                (key[0],),
+                "AND (expires_at IS NULL OR expires_at > ?)",
+                (key[0], iso_now()),
             ).fetchone()
         finally:
             conn.close()
@@ -1001,7 +1002,15 @@ class TargetPreviewManager:
             )
             return
         if query_token:
-            location = scope.get("path") or "/"
+            try:
+                normalized_path = file_targets.normalize_relative_path(
+                    str(scope.get("path") or "").lstrip("/"),
+                    allow_empty=False,
+                )
+            except file_targets.FileTargetError:
+                await self._reject(scope, send, 400, "invalid preview path")
+                return
+            location = f"/{self._encoded_path(normalized_path)}"
             if clean_query:
                 location = f"{location}?{clean_query}"
             secure = scope.get("scheme") == "https"
