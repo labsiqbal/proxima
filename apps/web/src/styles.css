@@ -13351,7 +13351,14 @@ button.moodboard-add-method:hover {
 	color: var(--ui-on-accent);
 }
 .av-title { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
-.av-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-title h2 {
+	margin: 0;
+	overflow: hidden;
+	color: inherit;
+	font-size: var(--text-base);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .av-review-label {
 	padding: var(--space-1) var(--space-2);
 	border: var(--artifact-review-border-width) solid color-mix(in srgb, var(--ui-on-accent) 30%, transparent);
@@ -13477,6 +13484,7 @@ button.moodboard-add-method:hover {
 .av-review-submit { padding: var(--space-3) var(--space-4) var(--space-4); }
 .av-review-submit .primary-button { width: 100%; }
 .av-review-submit p { margin: var(--space-2) 0 0; font-size: var(--text-xs); line-height: 1.45; }
+.av-review-submit .av-handoff-error { color: var(--ui-danger-text); }
 .av-nav {
 	position: fixed;
 	top: 50%;

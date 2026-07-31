@@ -1458,7 +1458,13 @@ chat session and places an editable, path-linked review brief in the normal comp
 Sending it uses the existing chat/run flow, so there is no Lavish poll, external URL,
 or second feedback service in the happy path. Unknown, binary, and directory-like
 paths immediately show the unsupported preview with a download action instead of an
-indefinite loading state.
+indefinite loading state. Artifact Review is a named modal dialog with initial focus,
+a Tab focus trap, Escape close, and trigger-focus restoration on ordinary close. A
+successful feedback handoff validates the producer session and project, closes Review,
+opens that exact scoped Chat, and focuses its composer. Missing producers or projects
+leave Review open with an actionable error. Drafts are isolated per session and each
+project's new-chat scope; if the producing Chat already has unsent text, the owner must
+explicitly append the feedback while preserving both drafts or keep the current draft.
 
 Mermaid fences in Markdown and standalone `.mmd` / `.mermaid` artifacts render as
 rich diagrams. **Edit as whiteboard** converts supported flowchart, sequence, class,

@@ -1,3 +1,4 @@
+import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -31,6 +32,126 @@ beforeEach(() => {
 })
 
 describe('ArtifactViewer v2 review flow', () => {
+  it('is a modal dialog that traps focus, closes with Escape, and restores its trigger', async () => {
+    function Harness() {
+      const [open, setOpen] = React.useState(false)
+      return <>
+        <button type="button" onClick={() => setOpen(true)}>Review artifact</button>
+        {open && <ArtifactViewer
+          token="token"
+          slug="master"
+          items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
+          index={0}
+          onIndex={() => undefined}
+          onClose={() => setOpen(false)}
+        />}
+      </>
+    }
+
+    const view = render(<Harness />)
+    await userEvent.click(view.getByRole('button', { name: 'Review artifact' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Artifact review: Hero' })
+    const close = screen.getByRole('button', { name: 'Close artifact review' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAccessibleDescription('Review this artifact and add editable feedback to its producing chat.')
+    await waitFor(() => expect(close).toHaveFocus())
+
+    const feedback = screen.getByRole('textbox', { name: 'General feedback' })
+    feedback.focus()
+    await userEvent.tab()
+    expect(screen.getByRole('button', { name: 'Annotate' })).toHaveFocus()
+    await userEvent.tab({ shift: true })
+    expect(feedback).toHaveFocus()
+
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Artifact review: Hero' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Review artifact' })).toHaveFocus())
+  })
+
+  it('closes only after a successful feedback handoff', async () => {
+    const successfulHandoff = vi.fn().mockResolvedValue({ ok: true })
+    const failedHandoff = vi.fn().mockResolvedValue({
+      ok: false,
+      message: 'The producing chat is no longer available.',
+    })
+    const onClose = vi.fn()
+    const view = render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={onClose}
+      reviewSessionId={7}
+      onSendFeedback={failedHandoff}
+    />)
+
+    await userEvent.type(screen.getByRole('textbox', { name: 'General feedback' }), 'Use the approved logo.')
+    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('producing chat is no longer available')
+    expect(onClose).not.toHaveBeenCalled()
+
+    view.rerender(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={onClose}
+      reviewSessionId={7}
+      onSendFeedback={successfulHandoff}
+    />)
+    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not treat arrow keys inside feedback fields as artifact navigation', async () => {
+    const onIndex = vi.fn()
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[
+        { type: 'image', title: 'Hero', path: 'artifacts/hero.png' },
+        { type: 'image', title: 'Detail', path: 'artifacts/detail.png' },
+      ]}
+      index={0}
+      onIndex={onIndex}
+      onClose={() => undefined}
+    />)
+
+    const feedback = screen.getByRole('textbox', { name: 'General feedback' })
+    await userEvent.click(feedback)
+    await userEvent.keyboard('{ArrowLeft}{ArrowRight}')
+    expect(onIndex).not.toHaveBeenCalled()
+  })
+
+  it('can hand off feedback for a stale artifact when its producing chat still exists', async () => {
+    fsRead.mockRejectedValue(new Error('gone'))
+    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'doc', title: 'Old report', path: 'reports/gone.md' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={onClose}
+      reviewSessionId={7}
+      onSendFeedback={onSendFeedback}
+    />)
+
+    expect(await screen.findByText('Could not read this file.')).toBeInTheDocument()
+    await userEvent.type(screen.getByRole('textbox', { name: 'General feedback' }), 'Recreate this report.')
+    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(onSendFeedback).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 7,
+      text: expect.stringContaining('Recreate this report.'),
+    }))
+  })
+
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {
     render(<ArtifactViewer
       token="token"
@@ -54,7 +175,7 @@ describe('ArtifactViewer v2 review flow', () => {
   })
 
   it('pins an annotation and returns actionable feedback to the producing chat', async () => {
-    const onSendFeedback = vi.fn()
+    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
     render(<ArtifactViewer
       token="token"
       slug="master"
@@ -87,7 +208,7 @@ describe('ArtifactViewer v2 review flow', () => {
 
   it('opens a Mermaid block as an editable whiteboard and includes its saved path in feedback', async () => {
     fsRead.mockResolvedValue({ content: '# Flow\n\n```mermaid\ngraph LR\n A-->B\n```' })
-    const onSendFeedback = vi.fn()
+    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
     render(<ArtifactViewer
       token="token"
       slug="master"

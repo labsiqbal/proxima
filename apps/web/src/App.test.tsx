@@ -3,7 +3,7 @@ import {
 	createAndStartOpsTask,
 	projectSelectNavigatesToChat,
 	recentSessionForProject,
-	resolveArtifactReviewSession,
+	resolveArtifactReviewTarget,
 	shellModeFromSearch,
 	isDelegateDestination,
 } from "./App";
@@ -105,12 +105,17 @@ describe("Artifact review session handoff", () => {
 		const unrelated = chatSession(9, "Unrelated active chat");
 		const loadSession = vi.fn().mockResolvedValue(producer);
 
-		await expect(resolveArtifactReviewSession({
+		await expect(resolveArtifactReviewTarget({
 			sessions: [unrelated],
 			sessionId: producer.id,
 			fallback: unrelated,
 			loadSession,
-		})).resolves.toBe(producer);
+			projects: [{ slug: "master", name: "Master" }],
+		})).resolves.toEqual({
+			ok: true,
+			session: producer,
+			project: { slug: "master", name: "Master" },
+		});
 		expect(loadSession).toHaveBeenCalledWith(producer.id);
 	});
 
@@ -118,13 +123,70 @@ describe("Artifact review session handoff", () => {
 		const openingChat = chatSession(9, "Opening chat");
 		const loadSession = vi.fn();
 
-		await expect(resolveArtifactReviewSession({
+		await expect(resolveArtifactReviewTarget({
 			sessions: [],
 			sessionId: null,
 			fallback: openingChat,
 			loadSession,
-		})).resolves.toBe(openingChat);
+			projects: [{ slug: "master", name: "Master" }],
+		})).resolves.toMatchObject({ ok: true, session: openingChat });
 		expect(loadSession).not.toHaveBeenCalled();
+	});
+
+	it("resolves a producing chat in another available project", async () => {
+		const producer = { ...chatSession(7, "Client producer"), project_slug: "client" };
+		const project = { slug: "client", name: "Client" };
+
+		await expect(resolveArtifactReviewTarget({
+			sessions: [producer],
+			sessionId: producer.id,
+			fallback: chatSession(9, "Current chat"),
+			loadSession: vi.fn(),
+			projects: [{ slug: "master", name: "Master" }, project],
+		})).resolves.toEqual({ ok: true, session: producer, project });
+	});
+
+	it("fails safely when the producer session no longer exists", async () => {
+		await expect(resolveArtifactReviewTarget({
+			sessions: [],
+			sessionId: 404,
+			fallback: chatSession(9, "Current chat"),
+			loadSession: vi.fn().mockRejectedValue(new Error("not found")),
+			projects: [{ slug: "master", name: "Master" }],
+		})).resolves.toEqual({
+			ok: false,
+			message: "The chat that produced this artifact is no longer available.",
+		});
+	});
+
+	it("fails safely when the producer is not an available chat surface", async () => {
+		const producer = { ...chatSession(7, "Design producer"), mode: "design" };
+
+		await expect(resolveArtifactReviewTarget({
+			sessions: [producer],
+			sessionId: producer.id,
+			fallback: null,
+			loadSession: vi.fn(),
+			projects: [{ slug: "master", name: "Master" }],
+		})).resolves.toEqual({
+			ok: false,
+			message: "The chat that produced this artifact is no longer available.",
+		});
+	});
+
+	it("fails safely when the producing project is unavailable", async () => {
+		const producer = { ...chatSession(7, "Removed project producer"), project_slug: "removed" };
+
+		await expect(resolveArtifactReviewTarget({
+			sessions: [producer],
+			sessionId: producer.id,
+			fallback: null,
+			loadSession: vi.fn(),
+			projects: [{ slug: "master", name: "Master" }],
+		})).resolves.toEqual({
+			ok: false,
+			message: "The project that owns this artifact's chat is no longer available.",
+		});
 	});
 });
 

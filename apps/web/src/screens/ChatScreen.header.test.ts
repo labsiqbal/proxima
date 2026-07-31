@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	AGENT_PICKER_LOCKED_REASON,
+	chatDraftScopeKey,
 	isAgentPickerLocked,
 	isAgentTurnSlashCommand,
 } from "./ChatScreen";
@@ -37,5 +38,18 @@ describe("isAgentPickerLocked", () => {
 		expect(AGENT_PICKER_LOCKED_REASON).toBe(
 			"Agent locked while a run is in progress",
 		);
+	});
+});
+
+describe("chatDraftScopeKey", () => {
+	it("keeps drafts isolated by producing session across projects", () => {
+		expect(chatDraftScopeKey({ id: 7 }, { slug: "master" })).toBe("session:7");
+		expect(chatDraftScopeKey({ id: 9 }, { slug: "client" })).toBe("session:9");
+	});
+
+	it("keeps each project's new-chat draft separate", () => {
+		expect(chatDraftScopeKey(null, { slug: "master" })).toBe("new:master");
+		expect(chatDraftScopeKey(null, { slug: "client" })).toBe("new:client");
+		expect(chatDraftScopeKey(null, null)).toBe("new:unscoped");
 	});
 });

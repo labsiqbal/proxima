@@ -9,6 +9,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4177",
     "test": "vitest run",
     "test:accessibility": "uv run --directory ../api pytest tests/test_projects.py && vitest run src/screens/AuthGate.test.tsx src/components/projects/FolderLinker.test.tsx && node --test ../../scripts/accessibility-audit.test.mjs && npm run build && node ../../scripts/accessibility-audit.mjs",
+    "test:artifact-feedback-browser": "npm run build && node ../../scripts/verify_artifact_feedback_browser.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

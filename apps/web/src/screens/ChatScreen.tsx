@@ -69,6 +69,13 @@ export function isAgentPickerLocked(
 	return busyRun != null;
 }
 
+export function chatDraftScopeKey(
+	session: Pick<ChatSession, "id"> | null,
+	project: Pick<Project, "slug"> | null,
+): string {
+	return session ? `session:${session.id}` : `new:${project?.slug || "unscoped"}`;
+}
+
 function localCommandReply(
 	name: string,
 	props: {
@@ -138,6 +145,7 @@ export function ChatScreen(props: {
 	);
 	const [error, setError] = React.useState("");
 	const [wikiNotice, setWikiNotice] = React.useState("");
+	const [composerDrafts, setComposerDrafts] = React.useState<Record<string, string>>({});
 	const [wikiDraft, setWikiDraft] = React.useState<WikiDraft | null>(null);
 	const [savingWiki, setSavingWiki] = React.useState(false);
 	const seenDraftId = React.useRef(0);
@@ -775,6 +783,14 @@ export function ChatScreen(props: {
 	);
 	const projSlug =
 		activeSession?.project_slug || props.activeProject?.slug || undefined;
+	const composerDraftKey = chatDraftScopeKey(activeSession, props.activeProject);
+	const composerDraft = composerDrafts[composerDraftKey] ?? "";
+	const updateComposerDraft = React.useCallback((next: string) => {
+		setComposerDrafts(current => {
+			if ((current[composerDraftKey] ?? "") === next) return current;
+			return { ...current, [composerDraftKey]: next };
+		});
+	}, [composerDraftKey]);
 	return (
 		<section className="chat-stage code-view">
 			<header className="code-header">
@@ -812,6 +828,8 @@ export function ChatScreen(props: {
 						slug={projSlug}
 						profileId={props.activeProfile?.id ?? null}
 						features={props.features}
+					draftValue={composerDraft}
+					onDraftChange={updateComposerDraft}
 					draftSeed={props.draftSeed}
 					draftSeedNonce={props.draftSeedNonce}
 					onDraftSeedConsumed={props.onDraftSeedConsumed}

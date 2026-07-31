@@ -514,10 +514,23 @@ image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-an
 layer and review panel. Unsaved review notes live browser-side per `(project, path)`;
 unknown, binary, and directory-like paths bypass text loading and render the download
 fallback immediately.
+
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with
 path-linked feedback. The user can edit and send it through `POST /api/sessions/{id}/runs`
-like any other prompt. No external polling process or review URL is involved.
+like any other prompt. A successful handoff first validates that both the producing
+session and its project remain available, then closes Artifact Review, selects that
+scoped project and Chat, and focuses the seeded composer. A missing producer or project
+leaves the review open with an actionable error. Composer drafts are isolated per
+session and per project's new-chat scope, so cross-project navigation preserves the
+source draft. If the producing chat already has unsent text, an explicit dialog offers
+to append the feedback while preserving both drafts or keep the current draft unchanged.
+No external polling process or review URL is involved.
+
+Artifact Review is a modal dialog with a screen-reader name and description. It moves
+initial focus to its close control, traps Tab and Shift+Tab, closes with Escape, and
+restores the element that opened it after an ordinary close. The successful Chat
+handoff deliberately transfers focus to the composer instead of restoring the trigger.
 
 Markdown Mermaid fences and standalone Mermaid files use a lazy renderer. Choosing
 **Edit as whiteboard** lazy-loads `@excalidraw/excalidraw` and

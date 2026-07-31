@@ -3,7 +3,7 @@ import type { OutputLink, Project } from '../types'
 import type { Artifact } from '../api/files'
 import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../api/archive'
 import { Dropdown } from '../components/ui/Dropdown'
-import { ArtifactViewer, type ArtifactReviewFeedback } from '../components/artifacts/ArtifactViewer'
+import { ArtifactViewer, type ArtifactReviewFeedback, type ArtifactReviewHandoffResult } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from '../components/artifacts/archive'
 
@@ -51,7 +51,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
   reviewSessionId?: number | null
-  onSendFeedback?: (feedback: ArtifactReviewFeedback) => void
+  onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
 }) {
   const [project, setProject] = React.useState('')
   const [type, setType] = React.useState('')
