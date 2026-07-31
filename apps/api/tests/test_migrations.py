@@ -153,7 +153,8 @@ def test_v45_adds_task_projection_outbox_and_lifecycle_history(
     db_path = tmp_path / "schema-44.db"
     conn = connect(db_path)
     init_db(conn)
-    run_migrations(conn, str(db_path))
+    through_v45 = [migration for migration in MIGRATIONS if migration[0] <= 45]
+    run_migrations(conn, str(db_path), migrations=through_v45)
     conn.execute("DROP TABLE task_projection_outbox")
     conn.execute(
         "CREATE UNIQUE INDEX uq_master_projections_source_type "
@@ -162,8 +163,16 @@ def test_v45_adds_task_projection_outbox_and_lifecycle_history(
     )
     conn.execute("DELETE FROM schema_migrations WHERE version = 45")
 
-    assert run_migrations(conn, str(db_path)) == [45]
-    assert run_migrations(conn, str(db_path)) == []
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=through_v45,
+    ) == [45]
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=through_v45,
+    ) == []
     assert current_version(conn) == 45
     assert {
         row[1]
@@ -189,6 +198,77 @@ def test_v45_adds_task_projection_outbox_and_lifecycle_history(
         for row in conn.execute("PRAGMA index_list(master_projections)")
     }
     assert "uq_master_projections_source_type" not in projection_indexes
+
+
+def test_v46_orders_task_projection_and_recovery_delivery(tmp_path: Path):
+    db_path = tmp_path / "schema-45.db"
+    conn = connect(db_path)
+    init_db(conn)
+    through_v45 = [migration for migration in MIGRATIONS if migration[0] <= 45]
+    run_migrations(conn, str(db_path), migrations=through_v45)
+    conn.execute("DROP TABLE task_recovery_outbox")
+    conn.execute("DROP TABLE task_projection_outbox")
+    conn.execute("DELETE FROM schema_migrations WHERE version = 45")
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=through_v45,
+    ) == [45]
+
+    assert run_migrations(conn, str(db_path)) == [46]
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) == 46
+    assert {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(task_projection_outbox)"
+        )
+    } == {
+        "id",
+        "job_id",
+        "task_event_id",
+        "projection_epoch",
+        "projection_revision",
+        "task_status",
+        "mutation",
+        "state",
+        "projection_id",
+        "superseded_by_event_id",
+        "failure_code",
+        "attempt_count",
+        "created_at",
+        "updated_at",
+    }
+    assert {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_outbox)"
+        )
+    } == {
+        "id",
+        "job_id",
+        "task_event_id",
+        "projection_revision",
+        "recovery_json",
+        "state",
+        "master_session_id",
+        "message_id",
+        "event_id",
+        "superseded_by_event_id",
+        "failure_code",
+        "attempt_count",
+        "created_at",
+        "updated_at",
+    }
+    assert {
+        row[1] for row in conn.execute("PRAGMA index_list(task_projection_outbox)")
+    } >= {
+        "idx_task_projection_outbox_state",
+        "uq_task_projection_outbox_revision",
+    }
+    assert {
+        row[1] for row in conn.execute("PRAGMA index_list(task_recovery_outbox)")
+    } >= {"idx_task_recovery_outbox_state"}
 
 
 def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
@@ -220,9 +300,10 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
         43,
         44,
         45,
+        46,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 45
+    assert current_version(conn) == 46
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -734,8 +815,9 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         43,
         44,
         45,
+        46,
     ]
-    assert current_version(conn) == 45
+    assert current_version(conn) == 46
     assert conn.execute(
         "SELECT path_identity FROM projects WHERE id = ?",
         (container_id,),
@@ -798,8 +880,9 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         43,
         44,
         45,
+        46,
     ]
-    assert current_version(conn) == 45
+    assert current_version(conn) == 46
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -1023,9 +1106,10 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
         43,
         44,
         45,
+        46,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 45
+    assert current_version(conn) == 46
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -1123,8 +1207,8 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
         [(version, f"schema {version}") for version in range(1, 39)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [39, 40, 41, 42, 43, 44, 45]
-    assert current_version(conn) == 45
+    assert run_migrations(conn, str(db_path)) == [39, 40, 41, 42, 43, 44, 45, 46]
+    assert current_version(conn) == 46
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -1221,7 +1305,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
         [(version, f"schema {version}") for version in range(1, 40)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [40, 41, 42, 43, 44, 45]
+    assert run_migrations(conn, str(db_path)) == [40, 41, 42, 43, 44, 45, 46]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
         "FROM task_delegations WHERE id = 19"
@@ -1348,7 +1432,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
         [(version, f"schema {version}") for version in range(1, 42)],
     )
 
-    assert run_migrations(conn, str(db_path)) == [42, 43, 44, 45]
+    assert run_migrations(conn, str(db_path)) == [42, 43, 44, 45, 46]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(
         "SELECT focus_container_id, target_container_id, target_area_id "

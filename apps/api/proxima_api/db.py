@@ -459,6 +459,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   title TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'queued',
+  projection_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (projection_revision >= 0),
   current_step_idx INTEGER NOT NULL DEFAULT 0,
   input TEXT,
   steps_state TEXT NOT NULL DEFAULT '[]',
@@ -679,14 +681,17 @@ CREATE TABLE IF NOT EXISTS task_projection_outbox (
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   projection_epoch INTEGER NOT NULL DEFAULT 0 CHECK (projection_epoch >= 0),
+  projection_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (projection_revision >= 0),
   task_status TEXT NOT NULL CHECK (
     task_status IN ('queued', 'running', 'review', 'done', 'failed', 'cancelled')
   ),
   mutation TEXT NOT NULL CHECK (length(mutation) BETWEEN 1 AND 80),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (
-    state IN ('pending', 'projected', 'failed_attribution')
+    state IN ('pending', 'projected', 'failed_attribution', 'superseded')
   ),
   projection_id INTEGER REFERENCES master_projections(id) ON DELETE SET NULL,
+  superseded_by_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
   failure_code TEXT CHECK (
     failure_code IS NULL OR failure_code IN (
       'focus_attribution_unavailable',
@@ -700,19 +705,72 @@ CREATE TABLE IF NOT EXISTS task_projection_outbox (
   UNIQUE(task_event_id),
   CHECK (
     (state = 'pending' AND projection_id IS NULL
+      AND superseded_by_event_id IS NULL
       AND (failure_code IS NULL OR failure_code = 'projection_failed'))
     OR
     (state = 'projected' AND projection_id IS NOT NULL
-      AND failure_code IS NULL)
+      AND failure_code IS NULL AND superseded_by_event_id IS NULL)
     OR
     (state = 'failed_attribution' AND projection_id IS NULL
+      AND superseded_by_event_id IS NULL
       AND failure_code IN (
         'focus_attribution_unavailable', 'projection_scope_unavailable'
       ))
+    OR
+    (state = 'superseded' AND projection_id IS NULL
+      AND superseded_by_event_id IS NOT NULL)
   )
 );
 CREATE INDEX IF NOT EXISTS idx_task_projection_outbox_state
   ON task_projection_outbox(state, id);
+CREATE TABLE IF NOT EXISTS task_recovery_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  projection_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (projection_revision >= 0),
+  recovery_json TEXT NOT NULL CHECK (
+    length(recovery_json) BETWEEN 2 AND 16384
+  ),
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (
+    state IN ('pending', 'projected', 'failed_attribution', 'superseded')
+  ),
+  master_session_id INTEGER
+    REFERENCES sessions(id) ON DELETE SET NULL,
+  message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+  event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+  superseded_by_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+  failure_code TEXT CHECK (
+    failure_code IS NULL OR failure_code IN (
+      'focus_attribution_unavailable',
+      'projection_scope_unavailable',
+      'projection_failed'
+    )
+  ),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(task_event_id),
+  CHECK (
+    (state = 'pending' AND message_id IS NULL AND event_id IS NULL
+      AND superseded_by_event_id IS NULL
+      AND (failure_code IS NULL OR failure_code = 'projection_failed'))
+    OR
+    (state = 'projected' AND message_id IS NOT NULL AND event_id IS NOT NULL
+      AND failure_code IS NULL AND superseded_by_event_id IS NULL)
+    OR
+    (state = 'failed_attribution' AND message_id IS NULL AND event_id IS NULL
+      AND superseded_by_event_id IS NULL
+      AND failure_code IN (
+        'focus_attribution_unavailable', 'projection_scope_unavailable'
+      ))
+    OR
+    (state = 'superseded' AND message_id IS NULL AND event_id IS NULL
+      AND superseded_by_event_id IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state
+  ON task_recovery_outbox(state, task_event_id);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.

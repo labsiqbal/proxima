@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
-from typing import Any
+from typing import Any, Mapping
 
 from . import master_focus
 from .event_payloads import encode_bounded_event_payload
@@ -32,6 +33,17 @@ _PROJECTABLE_TASK_STATUSES = {
     "failed",
     "cancelled",
 }
+
+
+class RecoveryAttributionError(ValueError):
+    def __init__(self, code: str):
+        if code not in {
+            "focus_attribution_unavailable",
+            "projection_scope_unavailable",
+        }:
+            raise ValueError("invalid recovery attribution failure")
+        self.code = code
+        super().__init__(code.replace("_", " "))
 
 
 def _as_int(value: Any) -> int:
@@ -130,8 +142,9 @@ def append_task_update(
         if projectable:
             outbox = conn.execute(
                 "INSERT INTO task_projection_outbox("
-                "job_id, task_event_id, projection_epoch, task_status, mutation"
-                ") VALUES (?, ?, ?, ?, ?)",
+                "job_id, task_event_id, projection_epoch, projection_revision, "
+                "task_status, mutation"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     event_id,
@@ -141,6 +154,7 @@ def append_task_update(
                         session_id=session_id,
                         through_event_id=event_id,
                     ),
+                    _as_int(job["projection_revision"]),
                     task_status,
                     mutation,
                 ),
@@ -233,14 +247,11 @@ def _recovery_content(recovery: dict[str, Any]) -> str:
     )
 
 
-def append_master_recovery(
+def _recovery_scope(
     conn: sqlite3.Connection,
     *,
-    recovery: dict[str, Any],
-) -> dict[str, int] | None:
-    """Append one human-readable Master recovery message and SSE event."""
-    safe_recovery = _bounded_recovery(recovery)
-    job_id = _as_int(safe_recovery["job_id"])
+    job_id: int,
+) -> sqlite3.Row:
     row = conn.execute(
         "SELECT j.origin_master_session_id, j.project_id, j.target_area_id, "
         "p.slug AS container_slug, d.origin_focus_epoch_id, "
@@ -253,13 +264,88 @@ def append_master_recovery(
         (job_id,),
     ).fetchone()
     if row is None or row["origin_master_session_id"] is None:
-        return None
+        raise RecoveryAttributionError("projection_scope_unavailable")
     master_session_id = _as_int(row["origin_master_session_id"])
     if not row["origin_focus_captured"] or (
-            row["origin_focus_epoch_id"] is not None
-            and row["epoch_session_id"] != master_session_id
+        row["origin_focus_epoch_id"] is not None
+        and row["epoch_session_id"] != master_session_id
     ):
-        raise ValueError("recovery Master Focus origin is unavailable")
+        raise RecoveryAttributionError("focus_attribution_unavailable")
+    return row
+
+
+def enqueue_master_recovery(
+    conn: sqlite3.Connection,
+    *,
+    recovery: dict[str, Any],
+    task_event_id: int,
+) -> dict[str, Any] | None:
+    safe_recovery = _bounded_recovery(recovery)
+    job_id = _as_int(safe_recovery["job_id"])
+    job = conn.execute(
+        "SELECT origin_master_session_id, projection_revision FROM jobs "
+        "WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if job is None or job["origin_master_session_id"] is None:
+        return None
+    failure_code = None
+    state = "pending"
+    try:
+        _recovery_scope(conn, job_id=job_id)
+    except RecoveryAttributionError as exc:
+        state = "failed_attribution"
+        failure_code = exc.code
+    conn.execute(
+        "UPDATE task_projection_outbox SET state = 'superseded', "
+        "projection_id = NULL, superseded_by_event_id = ?, "
+        "updated_at = CURRENT_TIMESTAMP "
+        "WHERE job_id = ? AND task_event_id < ? "
+        "AND state IN ('pending', 'failed_attribution')",
+        (task_event_id, job_id, task_event_id),
+    )
+    conn.execute(
+        "UPDATE task_recovery_outbox SET state = 'superseded', "
+        "message_id = NULL, event_id = NULL, superseded_by_event_id = ?, "
+        "updated_at = CURRENT_TIMESTAMP "
+        "WHERE job_id = ? AND task_event_id < ? "
+        "AND state IN ('pending', 'failed_attribution')",
+        (task_event_id, job_id, task_event_id),
+    )
+    cursor = conn.execute(
+        "INSERT INTO task_recovery_outbox("
+        "job_id, task_event_id, projection_revision, recovery_json, state, "
+        "master_session_id, failure_code"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            job_id,
+            task_event_id,
+            _as_int(job["projection_revision"]),
+            encode_bounded_event_payload(safe_recovery),
+            state,
+            _as_int(job["origin_master_session_id"]),
+            failure_code,
+        ),
+    )
+    return {
+        "id": _as_int(cursor.lastrowid),
+        "session_id": _as_int(job["origin_master_session_id"]),
+        "state": state,
+        "failure_code": failure_code,
+    }
+
+
+def publish_master_recovery(
+    conn: sqlite3.Connection,
+    *,
+    outbox: Mapping[str, Any],
+) -> dict[str, int]:
+    safe_recovery = _bounded_recovery(
+        json.loads(str(outbox["recovery_json"]))
+    )
+    job_id = _as_int(safe_recovery["job_id"])
+    row = _recovery_scope(conn, job_id=job_id)
+    master_session_id = _as_int(row["origin_master_session_id"])
 
     content = _recovery_content(safe_recovery)
     message = conn.execute(

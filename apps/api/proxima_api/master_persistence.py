@@ -697,6 +697,36 @@ def _authoritative_run_payload(
     return canonicalize_api_timestamps(authoritative)
 
 
+def _projection_repair_payload(
+    conn: sqlite3.Connection,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        job_id = int(payload.get("id"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    row = conn.execute(
+        "SELECT kind, state, failure_code, task_event_id FROM ("
+        "SELECT 'status' AS kind, state, failure_code, task_event_id "
+        "FROM task_projection_outbox WHERE job_id = ? "
+        "AND state IN ('pending', 'failed_attribution') "
+        "UNION ALL "
+        "SELECT 'recovery' AS kind, state, failure_code, task_event_id "
+        "FROM task_recovery_outbox WHERE job_id = ? "
+        "AND state IN ('pending', 'failed_attribution')"
+        ") ORDER BY task_event_id DESC LIMIT 1",
+        (job_id, job_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "kind": str(row["kind"]),
+        "state": str(row["state"]),
+        "failure_code": row["failure_code"],
+        "task_event_id": int(row["task_event_id"]),
+    }
+
+
 def canonical_job_payload(
     payload: Mapping[str, Any],
     *,
@@ -708,6 +738,7 @@ def canonical_job_payload(
     canonicalized only when the job is known to be Master-owned.
     """
     normalized = dict(payload)
+    normalized.pop("projection_revision", None)
     legacy_origin = normalized.pop(LEGACY_ORIGIN_COLUMN, None)
     master_origin = normalized.get(ORIGIN_MASTER_COLUMN)
     if (
@@ -730,4 +761,10 @@ def canonical_job_payload(
         else normalized
     )
     normalized["run_projection"] = project_job_run(projection_payload)
+    if master_origin is not None:
+        normalized["projection_repair"] = (
+            _projection_repair_payload(connection, normalized)
+            if connection is not None
+            else None
+        )
     return normalized

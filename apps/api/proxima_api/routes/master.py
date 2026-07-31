@@ -33,7 +33,7 @@ from ..runner_specs import (
 )
 from ..run_projection import canonicalize_api_timestamps
 from ..schemas import GraphScriptApproveRequest, JobRejectRequest
-from ..task_state_events import append_master_recovery, append_task_update
+from ..task_state_events import append_task_update, enqueue_master_recovery
 
 
 def _as_int(value: Any) -> int:
@@ -548,6 +548,7 @@ def register(app, deps):
         if row["job_id"] != job_id:
             raise HTTPException(status_code=404, detail="checkpoint not found for job")
         notify_sessions: set[int] = set()
+        recovery_delivery: dict[str, Any] = {}
 
         def append_recovery(conn, recovery: dict[str, Any]) -> None:
             task_event = append_task_update(
@@ -557,9 +558,13 @@ def register(app, deps):
                 checkpoint_id=checkpoint_id,
             )
             notify_sessions.add(task_event["session_id"])
-            master_event = append_master_recovery(conn, recovery=recovery)
-            if master_event is not None:
-                notify_sessions.add(master_event["session_id"])
+            recovery_intent = enqueue_master_recovery(
+                conn,
+                recovery=recovery,
+                task_event_id=task_event["event_id"],
+            )
+            if recovery_intent is not None:
+                recovery_delivery.update(recovery_intent)
             conn.execute(
                 "INSERT INTO audit_log("
                 "actor_user_id, action, target_type, target_id, metadata"
@@ -599,6 +604,24 @@ def register(app, deps):
             raise HTTPException(status_code=409 if "running" in detail else 422, detail=detail) from exc
         for session_id in notify_sessions:
             app.state.hub.notify(session_id)
+        projection = getattr(app.state, "master_projection", None)
+        if recovery_delivery and projection is not None:
+            projection.safe_process_recovery_outbox(
+                _as_int(recovery_delivery["id"])
+            )
+        if recovery_delivery:
+            repair = db().execute(
+                "SELECT state, failure_code FROM task_recovery_outbox "
+                "WHERE id = ?",
+                (_as_int(recovery_delivery["id"]),),
+            ).fetchone()
+            result["projection_repair"] = {
+                "outbox_id": _as_int(recovery_delivery["id"]),
+                "state": str(repair["state"]),
+                "failure_code": repair["failure_code"],
+            }
+        else:
+            result["projection_repair"] = None
         return result
 
     @app.put("/api/jobs/{job_id}/checkpoint/{checkpoint_id}/pin")

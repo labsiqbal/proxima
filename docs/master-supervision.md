@@ -49,8 +49,9 @@ messages in the durable Master thread. Review verdict routes write Task state,
 processes that durable delivery intent only after commit, so projection failure
 cannot roll back the Task verdict and Task or Master notifications cannot expose
 uncommitted state. A confirmed checkpoint restore uses the same mutation-coupled
-`task_state_events.py` boundary to append its bounded recovery message and event
-inside the restore transaction. Both boundaries read existing authoritative rows:
+`task_state_events.py` boundary to append a bounded `task_recovery_outbox` intent
+inside the restore transaction. Delivery publishes the recovery message and event
+after commit. Both boundaries read existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
 - `attention_items`
@@ -68,7 +69,9 @@ It writes:
 
 `master_projections` is not lifecycle truth. Its unique owner and projection key
 links a message and event to a source table and row. Task keys include the latest
-checkpoint-recovery event id, so a restored rerun has a new idempotency generation.
+database-maintained transition revision. Parent lifecycle, linear-step, blocker, and
+graph-node changes advance that revision, so a restored rerun and repeated states
+within one run each have a distinct idempotency generation.
 Source table and event type must match, links are owner-scoped, and committed rows
 must have both their message and event. Message, event, and ledger creation is one
 transaction, so rollback cannot leave partial projection state. Message and event
@@ -77,10 +80,14 @@ the historical source identity.
 
 Startup validates the projection and outbox table schemas, indexes, foreign keys,
 Master session ownership, source links, and bounded payload equality. Reconciliation
-after restart processes pending outbox rows and safely retries missing current-state
-projections because an existing generation key produces no second message or event.
-Unavailable legacy Focus is recorded as failed attribution and can be replayed only
-after attribution becomes provable. Each reconciliation candidate has its own
+after restart processes status and recovery rows in strict per-Task event order and
+safely retries missing current-state projections because an existing revision key
+produces no second message or event. Recovery causally supersedes only older
+unpublished rows before emitting its authoritative current transition, preventing
+delayed Failed or Done delivery from overwriting restored Queued state. Unavailable
+legacy Focus is recorded as failed attribution and can be replayed only after
+attribution becomes provable; the Task restore remains committed and no unattributed
+history is published. Each reconciliation candidate has its own
 failure boundary, so one invalid legacy source does not starve later Task, Satpam, or
 Attention repair. A reused key with different ownership or source binding fails
 closed. Raw token, reasoning, and tool delta events are never projected, and

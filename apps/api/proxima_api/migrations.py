@@ -2395,6 +2395,238 @@ def _add_task_projection_outbox(conn: sqlite3.Connection) -> None:
     assert_task_projection_outbox(conn)
 
 
+def _order_task_projection_delivery(conn: sqlite3.Connection) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {"jobs", "events", "messages", "task_projection_outbox"}.issubset(
+        tables
+    ):
+        return
+    job_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "projection_revision" not in job_columns:
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN projection_revision "
+            "INTEGER NOT NULL DEFAULT 0 CHECK (projection_revision >= 0)"
+        )
+    outbox_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_projection_outbox)"
+        ).fetchall()
+    }
+    if not {"projection_revision", "superseded_by_event_id"}.issubset(
+        outbox_columns
+    ):
+        conn.execute(
+            "ALTER TABLE task_projection_outbox "
+            "RENAME TO task_projection_outbox_v44"
+        )
+        conn.execute(
+            """
+            CREATE TABLE task_projection_outbox (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_id INTEGER NOT NULL
+                REFERENCES jobs(id) ON DELETE CASCADE,
+              task_event_id INTEGER NOT NULL
+                REFERENCES events(id) ON DELETE CASCADE,
+              projection_epoch INTEGER NOT NULL DEFAULT 0
+                CHECK (projection_epoch >= 0),
+              projection_revision INTEGER NOT NULL DEFAULT 0
+                CHECK (projection_revision >= 0),
+              task_status TEXT NOT NULL CHECK (
+                task_status IN (
+                  'queued', 'running', 'review', 'done', 'failed', 'cancelled'
+                )
+              ),
+              mutation TEXT NOT NULL CHECK (length(mutation) BETWEEN 1 AND 80),
+              state TEXT NOT NULL DEFAULT 'pending' CHECK (
+                state IN (
+                  'pending', 'projected', 'failed_attribution', 'superseded'
+                )
+              ),
+              projection_id INTEGER
+                REFERENCES master_projections(id) ON DELETE SET NULL,
+              superseded_by_event_id INTEGER
+                REFERENCES events(id) ON DELETE SET NULL,
+              failure_code TEXT CHECK (
+                failure_code IS NULL OR failure_code IN (
+                  'focus_attribution_unavailable',
+                  'projection_scope_unavailable',
+                  'projection_failed'
+                )
+              ),
+              attempt_count INTEGER NOT NULL DEFAULT 0
+                CHECK (attempt_count >= 0),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(task_event_id),
+              CHECK (
+                (state = 'pending' AND projection_id IS NULL
+                  AND superseded_by_event_id IS NULL
+                  AND (
+                    failure_code IS NULL OR failure_code = 'projection_failed'
+                  ))
+                OR
+                (state = 'projected' AND projection_id IS NOT NULL
+                  AND failure_code IS NULL
+                  AND superseded_by_event_id IS NULL)
+                OR
+                (state = 'failed_attribution' AND projection_id IS NULL
+                  AND superseded_by_event_id IS NULL
+                  AND failure_code IN (
+                    'focus_attribution_unavailable',
+                    'projection_scope_unavailable'
+                  ))
+                OR
+                (state = 'superseded' AND projection_id IS NULL
+                  AND superseded_by_event_id IS NOT NULL)
+              )
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO task_projection_outbox("
+            "id, job_id, task_event_id, projection_epoch, projection_revision, "
+            "task_status, mutation, state, projection_id, failure_code, "
+            "attempt_count, created_at, updated_at"
+            ") SELECT id, job_id, task_event_id, projection_epoch, 0, "
+            "task_status, mutation, state, projection_id, failure_code, "
+            "attempt_count, created_at, updated_at "
+            "FROM task_projection_outbox_v44"
+        )
+        conn.execute("DROP TABLE task_projection_outbox_v44")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_projection_outbox_state "
+        "ON task_projection_outbox(state, id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_task_projection_outbox_revision "
+        "ON task_projection_outbox(job_id, projection_revision) "
+        "WHERE projection_revision > 0"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+          projection_revision INTEGER NOT NULL DEFAULT 0
+            CHECK (projection_revision >= 0),
+          recovery_json TEXT NOT NULL CHECK (
+            length(recovery_json) BETWEEN 2 AND 16384
+          ),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (
+            state IN (
+              'pending', 'projected', 'failed_attribution', 'superseded'
+            )
+          ),
+          master_session_id INTEGER
+            REFERENCES sessions(id) ON DELETE SET NULL,
+          message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+          superseded_by_event_id INTEGER
+            REFERENCES events(id) ON DELETE SET NULL,
+          failure_code TEXT CHECK (
+            failure_code IS NULL OR failure_code IN (
+              'focus_attribution_unavailable',
+              'projection_scope_unavailable',
+              'projection_failed'
+            )
+          ),
+          attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(task_event_id),
+          CHECK (
+            (state = 'pending' AND message_id IS NULL AND event_id IS NULL
+              AND superseded_by_event_id IS NULL
+              AND (
+                failure_code IS NULL OR failure_code = 'projection_failed'
+              ))
+            OR
+            (state = 'projected' AND message_id IS NOT NULL
+              AND event_id IS NOT NULL AND failure_code IS NULL
+              AND superseded_by_event_id IS NULL)
+            OR
+            (state = 'failed_attribution' AND message_id IS NULL
+              AND event_id IS NULL AND superseded_by_event_id IS NULL
+              AND failure_code IN (
+                'focus_attribution_unavailable',
+                'projection_scope_unavailable'
+              ))
+            OR
+            (state = 'superseded' AND message_id IS NULL
+              AND event_id IS NULL AND superseded_by_event_id IS NOT NULL)
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state "
+        "ON task_recovery_outbox(state, task_event_id)"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS jobs_projection_revision_update
+        AFTER UPDATE OF status, steps_state, blocked_reason ON jobs
+        WHEN OLD.status IS NOT NEW.status
+          OR OLD.steps_state IS NOT NEW.steps_state
+          OR OLD.blocked_reason IS NOT NEW.blocked_reason
+        BEGIN
+          UPDATE jobs
+          SET projection_revision = OLD.projection_revision + 1
+          WHERE id = NEW.id;
+        END
+        """
+    )
+    if "node_states" in tables:
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS node_states_projection_revision_insert
+            AFTER INSERT ON node_states
+            BEGIN
+              UPDATE jobs
+              SET projection_revision = projection_revision + 1
+              WHERE id = NEW.job_id;
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS node_states_projection_revision_update
+            AFTER UPDATE OF status ON node_states
+            WHEN OLD.status IS NOT NEW.status
+            BEGIN
+              UPDATE jobs
+              SET projection_revision = projection_revision + 1
+              WHERE id = NEW.job_id;
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS node_states_projection_revision_delete
+            AFTER DELETE ON node_states
+            BEGIN
+              UPDATE jobs
+              SET projection_revision = projection_revision + 1
+              WHERE id = OLD.job_id;
+            END
+            """
+        )
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(conn, require_ordered=True)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -2499,6 +2731,11 @@ MIGRATIONS: list[Migration] = [
         45,
         "add durable Task projection outbox and lifecycle generations",
         _add_task_projection_outbox,
+    ),
+    (
+        46,
+        "order Task transition delivery and add recovery projection intents",
+        _order_task_projection_delivery,
     ),
 ]
 

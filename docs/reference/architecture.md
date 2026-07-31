@@ -640,10 +640,17 @@ steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 Satpam rows into the same durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
-retry, reconnect, and restart reconciliation idempotent. Task keys include the latest
-checkpoint recovery event as a lifecycle generation. Review verdict transactions
+retry, reconnect, and restart reconciliation idempotent. A database-maintained Task
+revision advances with parent lifecycle, linear-step, blocker, and graph-node state,
+so repeated transitions such as Running to Review to Running receive distinct keys.
+Review verdict transactions
 write the Task invalidation and `task_projection_outbox` intent together; projection
-delivery happens only after commit and remains replayable if it fails. Projection
+delivery happens only after commit and remains replayable if it fails. Per-Task
+delivery follows durable Task-event order. Checkpoint restore records a bounded
+`task_recovery_outbox` intent and marks only older unpublished status or recovery
+intents as causally superseded before emitting the authoritative Queued recovery
+event. Missing legacy Focus leaves a failed-attribution repair row without rolling
+back Task restoration or publishing unattributed history. Projection
 message, event, and ledger rows then commit together. Startup validates their strict
 owner, source/type, foreign-key, index, complete-link, and bounded payload contract.
 Raw streaming deltas are never projected. Each named event carries the same captured

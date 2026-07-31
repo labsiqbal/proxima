@@ -117,15 +117,21 @@ explicit failed-attribution outbox state instead of publishing an unattributed
 Master message. Mounted Task detail subscribes to the shared invalidation event;
 running polling is not the authority for externally mutable states.
 
-Projection idempotency includes the latest durable checkpoint-restore event. A Task
-restored and run again can therefore emit Started, Review, and Completed once for
-the new lifecycle without colliding with the earlier lifecycle's projection keys.
+Projection idempotency uses a database-maintained monotonic Task revision that
+advances for parent lifecycle, linear-step, blocker, and graph-node changes. Repeated
+states in one lifecycle, including Running to Review to Running, therefore produce
+distinct durable projections while duplicate delivery of one transition remains a
+no-op. Status and recovery outboxes are processed in Task-event order.
 
 Checkpoint restore also appends its audit record and, for a Master-origin Task, one
-human-readable `master.task.recovered` history message/event in the restore
-transaction. It records actor, checkpoint, prior/new status, discarded progress,
-and conflicts through bounded server-owned summaries rather than arbitrary graph
-identifiers. Git preflight completes before the immediate write transaction, then
+bounded `task_recovery_outbox` intent in the restore transaction. Recovery marks
+only older unpublished delivery intents as superseded, linked to the recovery Task
+event, before the authoritative `master.task.recovered` history is published after
+commit. It records actor, checkpoint, prior/new status, discarded progress, and
+conflicts through bounded server-owned summaries rather than arbitrary graph
+identifiers. A legacy Task with unavailable Focus still restores and exposes a
+failed-attribution repair intent, but publishes no unattributed Master history.
+Git preflight completes before the immediate write transaction, then
 the restore rereads checkpoint, conflict, job, run, and node state under that lock.
 All validation and durable writes complete before a job worktree reset. A post-reset
 failure compensates to the original worktree commit and rolls back the database

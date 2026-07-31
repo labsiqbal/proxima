@@ -185,6 +185,14 @@ export const actAttention = (token: string, id: string, action: string) =>
 export const previewCheckpointRestore = (token: string, jobId: number, checkpointId: number) =>
   api<{ checkpoint_id: number; job_id: number; job_title: string; database_scope: string[]; git_refs: MasterCheckpoint['git_refs']; conflicts: { id: number; title: string }[]; can_restore: boolean }>(`/api/jobs/${jobId}/checkpoint/${checkpointId}/restore`, token)
 export const restoreCheckpoint = (token: string, jobId: number, checkpointId: number) =>
-  api<{ restored: string[]; git_restored: string[] }>(`/api/jobs/${jobId}/checkpoint/restore`, token, { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, confirm: true }) })
+  api<{
+    restored: string[]
+    git_restored: string[]
+    projection_repair: {
+      outbox_id: number
+      state: 'pending' | 'projected' | 'failed_attribution'
+      failure_code: string | null
+    } | null
+  }>(`/api/jobs/${jobId}/checkpoint/restore`, token, { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, confirm: true }) })
 export const setCheckpointPinned = (token: string, jobId: number, checkpointId: number, pinned: boolean) =>
   api<MasterCheckpoint>(`/api/jobs/${jobId}/checkpoint/${checkpointId}/pin`, token, { method: 'PUT', body: JSON.stringify({ pinned }) })

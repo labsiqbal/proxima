@@ -555,10 +555,13 @@ retention is FIFO 30, restore previews its impact, requires confirmation, and re
 running/later same-project conflicts or a dirty job-owned worktree. A main-checkout SHA
 is evidence only and is never reset; only an existing job worktree is restorable.
 Restore commits the job, node/run rollback, Task-session `job.update`, audit metadata,
-and a durable human-readable Master recovery entry together. The entry identifies the
-owner, checkpoint, prior/restored state, discarded progress, and conflicting progress
-without copying worktree paths, Task titles, or arbitrary graph identifiers. Recovery
-events use the same 16 KiB durable-event encoder as Master projections. All fallible
+and a durable Master recovery delivery intent together. Delivery appends one
+human-readable entry that identifies the owner, checkpoint, prior/restored state,
+discarded progress, and conflicting progress without copying worktree paths, Task
+titles, or arbitrary graph identifiers. Recovery events use the same 16 KiB
+durable-event encoder as Master projections. Missing legacy Focus leaves the Task
+restored with an explicit repair state and never publishes unattributed history. All
+fallible
 Git checks finish before the immediate write transaction; conflict, job, run, and node
 state are then reread under that lock before any restore write. All fallible database
 writes and worktree checks finish before reset; a failure after reset restores the
@@ -613,18 +616,23 @@ permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
-second message or event and isolates failures per authoritative source row. Task
-projection keys include the latest checkpoint-recovery event, so restored reruns
-emit each lifecycle status exactly once without colliding with earlier history. SSE
+second message or event and isolates failures per authoritative source row. A
+database-maintained Task revision advances for lifecycle, linear-step, blocker, and
+graph-node changes, so every projection-worthy transition has a monotonic idempotency
+key. Status and recovery intents process in Task-event order. Checkpoint recovery
+causally supersedes only older unpublished intents before its authoritative recovery
+event, so delayed Failed or Done delivery cannot overwrite Queued. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
 Owner mutations that happen outside a worker run append a transaction-coupled
 `job.update` to the Task session. Review completion/failure also enqueues a durable
-Master projection outbox row in that same transaction. Projection delivery and Task
-or Master stream notifications happen only after commit. Delivery failure leaves a
-replayable pending row; unavailable legacy Focus becomes explicit failed attribution
-without rolling the Task verdict back or weakening attribution. A mounted Task
+Master projection outbox row in that same transaction, while checkpoint restore
+enqueues its bounded recovery intent. Projection delivery and Task or Master stream
+notifications happen only after commit. Delivery failure leaves a replayable pending
+row; unavailable legacy Focus becomes explicit failed attribution without rolling
+the Task verdict or restore back or weakening attribution. The restore response
+and canonical Task/Fleet job payload expose that durable repair state. A mounted Task
 workspace consumes this one shared invalidation path for review verdicts and
 checkpoint restore instead of waiting for running-only polling. Fleet grouping and
 labels consume the same canonical effective status as its run projection.
