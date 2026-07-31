@@ -291,9 +291,15 @@ describe('GraphCanvas refitting', () => {
     expect(fitted.k).toBeLessThan(0.35)
 
     fireEvent.click(screen.getByLabelText('Zoom in'))
-    const zoomed = readTransform(canvas)
-    expect(zoomed.k).toBeCloseTo(fitted.k * 1.25)
-    expect(zoomed.k).toBeLessThan(0.35)
+    const zoomedIn = readTransform(canvas)
+    expect(zoomedIn.k).toBeCloseTo(fitted.k * 1.25)
+    expect(zoomedIn.k).toBeLessThan(0.35)
+
+    // Zoom-out must still move while below the comfort floor (no ratchet).
+    fireEvent.click(screen.getByLabelText('Zoom out'))
+    const zoomedOut = readTransform(canvas)
+    expect(zoomedOut.k).toBeCloseTo(fitted.k)
+    expect(zoomedOut.k).toBeLessThan(zoomedIn.k)
   })
 
   it('restores preferred zoom after pan while a panel constrains scale', () => {
@@ -338,6 +344,87 @@ describe('GraphCanvas refitting', () => {
       flushFrames()
     })
     expect(readTransform(canvas).k).toBeCloseTo(1.2)
+  })
+
+  it('restores larger fit scale after pan from fit while a panel constrains the viewport', () => {
+    render(<CanvasHarness plan={chain()} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    let canvasRect = rect(960, 480)
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => canvasRect)
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const fitted = readTransform(canvas)
+    expect(fitted.k).toBeCloseTo(1)
+
+    // Stay in fit mode, then open a panel so display k drops.
+    canvasRect = rect(480, 480)
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    expect(readTransform(canvas).k).toBeCloseTo(0.5)
+
+    // Pan promotes focus to manual but must not lock preferred k to 0.5.
+    act(() => {
+      fireEvent.pointerDown(canvas, { button: 0, clientX: 200, clientY: 200 })
+    })
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 240, clientY: 220 })
+      fireEvent.pointerUp(window, { clientX: 240, clientY: 220 })
+    })
+    expect(readTransform(canvas).k).toBeCloseTo(0.5)
+
+    // Closing the panel must restore the larger fit scale, not stay at 0.5.
+    canvasRect = rect(960, 480)
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    expect(readTransform(canvas).k).toBeCloseTo(1)
+  })
+
+  it('defers resize refits during pan and flushes once without mid-gesture thrash', () => {
+    render(<CanvasHarness plan={chain()} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    let canvasRect = rect(960, 480)
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => canvasRect)
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const before = readTransform(canvas)
+    expect(before.k).toBeCloseTo(1)
+
+    act(() => {
+      fireEvent.pointerDown(canvas, { button: 0, clientX: 200, clientY: 200 })
+    })
+
+    canvasRect = rect(480, 480)
+    act(() => {
+      triggerResize()
+      flushFrames()
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 230 })
+    })
+
+    // Mid-pan resize must not rewrite k while the pan origin is still live.
+    const mid = readTransform(canvas)
+    expect(mid.k).toBeCloseTo(before.k)
+    expect(mid.x).toBeCloseTo(before.x + 60)
+    expect(mid.y).toBeCloseTo(before.y + 30)
+    expect(frameQueue.size).toBe(0)
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 230 })
+    })
+    expect(frameQueue.size).toBe(1)
+
+    act(() => flushFrames())
+    const after = readTransform(canvas)
+    expect(after.k).toBeCloseTo(0.5)
   })
 
   it('ignores no-op zoom-out from a deep fit so later space can re-fit upward', () => {

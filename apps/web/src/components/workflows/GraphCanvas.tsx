@@ -161,6 +161,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   const [selectedEdge, setSelectedEdge] = React.useState<string | null>(null)
   const intentRef = React.useRef<CanvasIntent>({ mode: 'fit' })
   const refitFrame = React.useRef(0)
+  const pendingRefit = React.useRef(false)
   const gestureRef = React.useRef<Gesture>(null)
   gestureRef.current = gesture
   const geometryKey = React.useMemo(
@@ -193,7 +194,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
     const previous = intentRef.current
     intentRef.current = previous.mode === 'manual'
       ? { mode: 'manual', k: previous.k, focus }
-      : { mode: 'manual', k: next.k, focus }
+      : { mode: 'manual', k: ZOOM_MAX, focus }
   }, [viewport])
 
   const applyRefit = React.useCallback(() => {
@@ -205,11 +206,18 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   }, [viewport])
 
   const scheduleRefit = React.useCallback(() => {
-    if (gestureRef.current?.kind === 'node') return
+    if (gestureRef.current) {
+      pendingRefit.current = true
+      return
+    }
     if (refitFrame.current) return
     refitFrame.current = requestAnimationFrame(() => {
       refitFrame.current = 0
-      if (gestureRef.current?.kind === 'node') return
+      if (gestureRef.current) {
+        pendingRefit.current = true
+        return
+      }
+      pendingRefit.current = false
       applyRefit()
     })
   }, [applyRefit])
@@ -226,9 +234,10 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
 
   const zoomTo = React.useCallback((nextK: number, focus?: Point) => {
     setView(current => {
-      const zoomMin = Math.min(ZOOM_MIN, current.k)
+      const zoomMin = current.k < ZOOM_MIN ? FIT_ZOOM_MIN : ZOOM_MIN
       const k = Math.min(ZOOM_MAX, Math.max(zoomMin, nextK))
       if (Math.abs(k - current.k) < 0.001) return current
+      if (intentRef.current.mode === 'fit' && current.k < ZOOM_MIN && k < current.k) return current
       const rect = svgRef.current?.getBoundingClientRect()
       const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
       // Keep whatever sits under `at` pinned there while the scale changes.
@@ -252,9 +261,10 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       const rect = element.getBoundingClientRect()
       const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top }
       setView(current => {
-        const zoomMin = Math.min(ZOOM_MIN, current.k)
+        const zoomMin = current.k < ZOOM_MIN ? FIT_ZOOM_MIN : ZOOM_MIN
         const k = Math.min(ZOOM_MAX, Math.max(zoomMin, current.k * Math.exp(-event.deltaY * 0.0015)))
         if (Math.abs(k - current.k) < 0.001) return current
+        if (intentRef.current.mode === 'fit' && current.k < ZOOM_MIN && k < current.k) return current
         const next = {
           k,
           x: focus.x - (focus.x - current.x) * (k / current.k),
@@ -348,8 +358,8 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       }
       setGesture(null)
       setLinkAt(null)
-      if (endedNodeDrag) {
-        gestureRef.current = null
+      gestureRef.current = null
+      if (endedNodeDrag || pendingRefit.current) {
         scheduleRefit()
       }
     }
