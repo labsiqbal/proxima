@@ -36,6 +36,7 @@ from .preview_output import (
 from .process_containment import (
     pid_namespace_argv,
     process_tree_pids,
+    terminate_process_tree,
 )
 from .runners import subprocess_env
 
@@ -661,7 +662,6 @@ class AppManager:
             if effect_lease is not None:
                 effect_lease.release()
             raise
-<<<<<<< HEAD
         except BaseException:
             self._remove_generation_record(
                 slug,
@@ -1144,30 +1144,6 @@ class AppManager:
         )
         app = {
             "generation": generation,
-=======
-        from .container_activity import (
-            GuardedWriterTree,
-            process_start_identity,
-        )
-
-        proc_pid = int(proc.pid) if proc.pid is not None else None
-        proc_start = (
-            process_start_identity(proc_pid)
-            if proc_pid is not None
-            else None
-        )
-        activity = getattr(effect_lease, "_activity", None) or effect_lease
-        writer_tree = GuardedWriterTree.bind(
-            activity,
-            launcher_pid=proc_pid,
-            launcher_start=proc_start,
-        )
-        try:
-            writer_tree.seed_live_members()
-        except Exception:
-            pass
-        self._apps[slug] = {
->>>>>>> 62b87ec (no-mistakes(review): Prove writer-tree exit before lease release)
             "proc": proc,
             "port": port,
             "command": command,
@@ -1178,7 +1154,6 @@ class AppManager:
             "output_version": -1,
             "output_line_cursor": 0,
             "effect_lease": effect_lease,
-<<<<<<< HEAD
             "authority": authority,
             "output_broker": broker,
             "stop_lock": asyncio.Lock(),
@@ -1189,6 +1164,13 @@ class AppManager:
         if app["proc_pid"] is not None:
             from .container_activity import process_start_identity
             app["proc_start_identity"] = process_start_identity(app["proc_pid"])
+        app["writer_tree"] = None
+        if app.get("effect_lease") is not None:
+            app["writer_tree"] = self._writer_tree(app)
+            try:
+                app["writer_tree"].seed_live_members()
+            except Exception:
+                pass
         self._persist_app(slug, app)
         self._apps[slug] = app
         if self.contained and containment_pid_namespace is None:
@@ -1258,14 +1240,8 @@ class AppManager:
                 "The previous supervised preview ended while the API was "
                 "offline. Retry to start a new generation."
             ),
-=======
-            "proc_pid": proc_pid,
-            "proc_start_identity": proc_start,
-            "writer_tree": writer_tree,
->>>>>>> 62b87ec (no-mistakes(review): Prove writer-tree exit before lease release)
         }
 
-<<<<<<< HEAD
     @staticmethod
     def _scope_identity_ended(record: dict[str, Any]) -> bool:
         broker = record.get("broker")
@@ -1289,129 +1265,6 @@ class AppManager:
         return (
             process_start_time(broker_pid) != broker_started
             and process_start_time(process_pid) != process_started
-=======
-    async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
-        assert proc.stdout
-
-        async def _read_log() -> None:
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                app = self._apps.get(slug)
-                if app and app.get("proc") is proc:
-                    text = line.decode("utf-8", "replace").rstrip()
-                    app["log"].append(text)
-                    del app["log"][:-200]
-                    if not app.get("detected_port"):
-                        m = _PORT_RE.search(text) or _PORT_RE2.search(text)
-                        if m:
-                            found = int(m.group(1))
-                            if 1024 <= found <= 65535:
-                                app["detected_port"] = found
-
-        read_task = asyncio.create_task(_read_log())
-        try:
-            # Poll returncode rather than only awaiting wait()/stdout EOF.
-            # Guardians can leave a setsid sentinel holding the pipe write end
-            # after launcher death, and some event-loop waiters stay blocked
-            # until transports drain - neither must delay writer-tree cleanup.
-            while proc.returncode is None:
-                app = self._apps.get(slug)
-                if app is None or app.get("proc") is not proc:
-                    # stop() already took ownership of cleanup.
-                    break
-                wait = getattr(proc, "wait", None)
-                if wait is None:
-                    await asyncio.sleep(0.05)
-                    continue
-                try:
-                    await asyncio.wait_for(wait(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    # Still alive (or waiter stalled); re-check returncode.
-                    continue
-                except Exception:
-                    # wait() itself failed - do not spin forever. Cleanup below
-                    # still proves the writer tree before releasing leases.
-                    break
-        finally:
-            if not read_task.done():
-                read_task.cancel()
-                try:
-                    await read_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-            app = self._apps.get(slug)
-            if app and app.get("proc") is proc:
-                tree = self._writer_tree(app)
-                terminated = False
-                if proc.returncode is not None:
-                    # Launcher exit never implies writer-tree exit. Stop through
-                    # the identity-bound handle (sentinel/job/tree) first.
-                    try:
-                        terminated = await asyncio.to_thread(tree.terminate)
-                    except Exception:
-                        terminated = tree.exited() is True
-                self._finish_effect(app, terminated=bool(terminated))
-                if terminated:
-                    self._apps.pop(slug, None)
-                    self._last_exit[slug] = {
-                        "running": False,
-                        "command": app["command"],
-                        "log": app["log"][-40:],
-                        "exited": True,
-                        "exit_code": int(proc.returncode)
-                        if proc.returncode is not None
-                        else None,
-                    }
-
-    async def stop(self, slug: str) -> None:
-        app = self._apps.pop(slug, None)
-        if not app:
-            return
-        proc = app["proc"]
-        tree = self._writer_tree(app)
-        tree.seed_live_members()
-        tree_done = False
-        try:
-            if IS_WINDOWS and proc.returncode is None and proc.pid is not None:
-                # taskkill /T ends the child tree; fall back to terminate().
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                    check=False,
-                )
-            # Always signal through the identity-bound tree handle. Launcher
-            # returncode alone is not proof - guardians keep writers under a
-            # sentinel/job that outlives a killed launcher.
-            tree_done = await asyncio.to_thread(
-                tree.terminate,
-                grace_seconds=4.0,
-                kill_seconds=2.0,
-            )
-        except Exception:
-            tree_done = False
-        if proc.returncode is None:
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2)
-            except (asyncio.TimeoutError, Exception):
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=1)
-                except Exception:
-                    pass
-        # Reap never upgrades tree proof: launcher death is not tree exit.
-        tree.seed_live_members()
-        tree_done = tree.exited() is True
-        self._finish_effect(
-            app,
-            terminated=bool(tree_done),
->>>>>>> 62b87ec (no-mistakes(review): Prove writer-tree exit before lease release)
         )
 
     @staticmethod
@@ -1889,7 +1742,14 @@ class AppManager:
         self._remove_app_record(slug, app)
         self._clear_reservation(slug, int(app["generation"]))
         self._last_exit[slug] = result
-        self._finish_effect(slug, app, terminated=True)
+        tree = self._writer_tree(app)
+        terminated = True
+        try:
+            if tree.exited() is not True:
+                terminated = bool(tree.terminate())
+        except Exception:
+            terminated = tree.exited() is True
+        self._finish_effect(slug, app, terminated=bool(terminated))
         self._release_retained_effects(slug)
         self._unadopted.discard(slug)
         app["stopped"] = True
@@ -2240,10 +2100,17 @@ class AppManager:
             if self._apps.get(slug) is app:
                 self._apps.pop(slug, None)
             self._remove_app_record(slug, app)
+            tree = self._writer_tree(app)
+            terminated = True
+            try:
+                if tree.exited() is not True:
+                    terminated = bool(tree.terminate())
+            except Exception:
+                terminated = tree.exited() is True
             self._finish_effect(
                 slug,
                 app,
-                terminated=True,
+                terminated=bool(terminated),
             )
             self._release_retained_effects(slug)
             self._unadopted.discard(slug)
@@ -2374,35 +2241,30 @@ class AppManager:
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
-<<<<<<< HEAD
             return self._last_exit.get(slug) or {
                 "state": "stopped",
-=======
-            return self._last_exit.get(slug) or {"running": False}
-        if app["proc"].returncode is not None:
-            tree = self._writer_tree(app)
-            # Launcher exit is not writer-tree exit. Poll path stays non-blocking:
-            # report fail-closed live-tree state and leave termination to
-            # _drain/stop rather than killing on the event-loop status poll.
-            if tree.exited() is not True:
-                eff_port = app.get("detected_port") or app["port"]
-                return {
-                    "running": True,
-                    "ready": False,
-                    "port": eff_port,
-                    "command": app["command"],
-                    "log": app["log"][-40:],
-                    "writer_tree_live": True,
-                }
-            self._apps.pop(slug, None)
-            self._finish_effect(app, terminated=True)
-            # exit_code + exited stay sticky across 2s polls so the UI can say
-            # "Finished" vs "Failed" instead of a bare log dump after a short run.
-            result = {
->>>>>>> 62b87ec (no-mistakes(review): Prove writer-tree exit before lease release)
                 "running": False,
                 "ready": False,
             }
+        if app.get("proc") is not None and app["proc"].returncode is not None:
+            tree = self._writer_tree(app)
+            # Launcher exit is not writer-tree exit. Poll path stays non-blocking:
+            # report fail-closed live-tree state and leave termination to stop.
+            if tree.exited() is not True:
+                eff_port = app.get("detected_port") or app["port"]
+                return {
+                    "state": "running",
+                    "running": True,
+                    "ready": False,
+                    "requested_port": app["port"],
+                    "port": eff_port,
+                    "command": app["command"],
+                    "log": app.get("log", [])[-40:],
+                    "message": (
+                        "The launch leader exited while writer processes may "
+                        "still be alive. Stop proves the identity-bound tree."
+                    ),
+                }
         if app.get("output_error"):
             if app["proc"].returncode is not None and not app["proc"].scope_live:
                 result = self._exited_status(app)

@@ -87,7 +87,15 @@ class _LeaseGroup:
         self._activity = None
         ingress = list(self._ingress)
         self._ingress.clear()
-        if process_exited:
+        # Launcher exit alone is not writer-tree exit. When a tree handle is
+        # present, only release once it proves clear; otherwise retain.
+        tree_clear = True
+        if tree is not None:
+            try:
+                tree_clear = tree.exited() is True
+            except Exception:
+                tree_clear = False
+        if process_exited and tree_clear:
             if activity is not None:
                 activity.release()
             for lease in reversed(ingress):
