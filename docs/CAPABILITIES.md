@@ -758,7 +758,8 @@ Run open the same validated dialog, which applies defaults, omits blank optional
 and refuses missing or type-invalid values before execution. The API repeats that
 validation before claiming the job and freezes the resolved values into the job and
 trigger output. Each field's `{{id}}` is substituted into node text. Schedule seed
-settings (cron, overlap, enabled, default Off) are independent of intake - promoting a
+settings (cron, IANA timezone, overlap, enabled, default Off; UI timezone defaults to the
+browser zone, API/graph omit defaults to UTC) are independent of intake - promoting a
 plan may create a schedule row from those seeds, but unattended ticks and **Run now**
 resolve durable schedule bindings rather than prompting, and never replace the manual Run
 path. Existing graph workflows keep the compatibility

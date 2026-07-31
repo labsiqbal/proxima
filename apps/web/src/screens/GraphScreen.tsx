@@ -1251,21 +1251,45 @@ export function GraphScreen({
     if (busy) return
     setBusy('start')
     setError('')
+    const restoreWantedIfCurrent = (seq: number, jobId: number) => {
+      if (
+        mounted.current
+        && seq === jobLoadSeq.current
+        && wantedJobIdRef.current === jobId
+      ) {
+        wantedJobIdRef.current = focusedJobIdRef.current
+      }
+    }
+    wantedJobIdRef.current = item.id
+    const seq = ++jobLoadSeq.current
     try {
       await flushAutosave()
+      if (!mounted.current || seq !== jobLoadSeq.current || wantedJobIdRef.current !== item.id) {
+        restoreWantedIfCurrent(seq, item.id)
+        return
+      }
       const next = await startGraphJob(token, item.id, input)
-      if (!mounted.current) return
+      if (!mounted.current || seq !== jobLoadSeq.current || wantedJobIdRef.current !== next.id) {
+        restoreWantedIfCurrent(seq, item.id)
+        return
+      }
+      const primed = await primeAutosave(next, readDraftMeta(next.id), {
+        seq,
+        requireWantedId: next.id,
+      })
+      if (!primed || !applyFocusedJob(next)) {
+        restoreWantedIfCurrent(seq, next.id)
+        return
+      }
       setOpeningJobId(null)
       setStage('editor')
-      focusJob(next)
-      if (!await primeAutosave(next, readDraftMeta(next.id), { requireWantedId: next.id })) return
-      if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setSelectedId(null)
       setJobs(current => current.map(row => row.id === next.id ? next : row))
       setRunTarget(null)
       setNotice('Execution started.')
     } catch (cause) {
+      restoreWantedIfCurrent(seq, item.id)
       if (mounted.current) setError(String(cause))
       throw cause
     } finally {

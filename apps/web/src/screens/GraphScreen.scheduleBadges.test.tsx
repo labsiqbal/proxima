@@ -552,6 +552,235 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(await screen.findByRole('button', { name: 'Rename workflow Home draft refreshed' })).toBeInTheDocument()
   })
 
+  it('adopts a home Run draft only after slow prior flush, never with the old plan', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = {
+      ...queuedDraft(77, 'Prior draft'),
+      graph: {
+        nodes: [{ id: 'prior-only', type: 'agent', name: 'Prior step', instruction: 'Old', output_kind: 'text' }],
+        edges: [],
+      },
+    } as never
+    const target = {
+      ...queuedDraft(55, 'Target draft'),
+      graph: {
+        nodes: [{ id: 'target-only', type: 'agent', name: 'Target step', instruction: 'Fresh', output_kind: 'text' }],
+        edges: [],
+      },
+    } as never
+    const started = {
+      ...runningJob(55, 'Target draft'),
+      workflow_id: null,
+      graph: target.graph,
+    } as never
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior, target] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 55) return started
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(startGraphJob).mockImplementation(async () => started)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Prior step, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty prior instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 2' }))
+    const row = (await screen.findByText('Target draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Run' }))
+
+    // Intent is recorded, but focus/plan stay on the prior draft while flush is in flight.
+    await waitFor(() => expect(finishAutosave).toBeTypeOf('function'))
+    expect(startGraphJob).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Target draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Target step/ })).not.toBeInTheDocument()
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'prior-only' ? { ...node, instruction: 'Dirty prior instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+    expect(await screen.findByRole('button', { name: 'Rename workflow Target draft' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Target step/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Prior step/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Execution started.')).toBeInTheDocument()
+  })
+
+  it('abandons a slow home Run draft adopt when a newer open wins focus', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = {
+      ...queuedDraft(77, 'Prior draft'),
+      graph: {
+        nodes: [{ id: 'prior-only', type: 'agent', name: 'Prior step', instruction: 'Old', output_kind: 'text' }],
+        edges: [],
+      },
+    } as never
+    const target = {
+      ...queuedDraft(55, 'Target draft'),
+      graph: {
+        nodes: [{ id: 'target-only', type: 'agent', name: 'Target step', instruction: 'Fresh', output_kind: 'text' }],
+        edges: [],
+      },
+    } as never
+    const started = {
+      ...runningJob(55, 'Target draft'),
+      workflow_id: null,
+      graph: target.graph,
+    } as never
+    const winner = {
+      ...queuedDraft(99, 'Winner draft'),
+      graph: {
+        nodes: [{ id: 'winner-only', type: 'agent', name: 'Winner step', instruction: 'Keep', output_kind: 'text' }],
+        edges: [],
+      },
+    } as never
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior, target, winner] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 55) return started
+      if (jobId === 99) return winner
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId === 77) {
+        const saved = {
+          ...prior,
+          title: body.title ?? prior.title,
+          graph: body.graph ?? prior.graph,
+        }
+        if (!autosaveStarted) {
+          autosaveStarted = true
+          return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+        }
+        return Promise.resolve(saved)
+      }
+      if (jobId === 99) {
+        return Promise.resolve({
+          ...winner,
+          title: body.title ?? winner.title,
+          graph: body.graph ?? winner.graph,
+        })
+      }
+      return Promise.reject(new Error(`unexpected save ${jobId}`))
+    })
+    vi.mocked(startGraphJob).mockImplementation(async () => started)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Prior step, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty prior instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 3' }))
+    const targetRow = (await screen.findByText('Target draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(targetRow).getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(finishAutosave).toBeTypeOf('function'))
+    expect(startGraphJob).not.toHaveBeenCalled()
+
+    // Newer explicit open wins generation while Run draft is still flushing.
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={99}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'prior-only' ? { ...node, instruction: 'Dirty prior instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Winner draft' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Winner step/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Target draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Target step/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('Execution started.')).not.toBeInTheDocument()
+    expect(startGraphJob).not.toHaveBeenCalled()
+  })
+
   function queuedDraft(id: number, title: string) {
     return {
       id,

@@ -125,10 +125,14 @@ def test_docs_describe_single_reusable_workflow_table_not_manual_scheduled_split
     assert "shared **intake contract**" in capabilities
     assert "schedule seed" in capabilities
     assert "durable schedule" in capabilities and "bindings" in capabilities
+    assert "IANA timezone" in capabilities
+    assert "browser zone" in capabilities and "UTC" in capabilities
     workflow_graph = (REPO / "docs" / "workflow-graph.md").read_text(encoding="utf-8")
     assert "shared" in workflow_graph and "intake" in workflow_graph
     assert "schedule seed" in workflow_graph or "schedule seeds" in workflow_graph
     assert "durable" in workflow_graph and "binding" in workflow_graph
+    assert "{cron, timezone, overlap_policy, enabled}" in workflow_graph
+    assert "browser zone" in workflow_graph and "defaults to UTC" in workflow_graph
 
 
 def test_durable_scheduled_workflow_evidence_has_valid_before_after_pngs():

@@ -26,7 +26,8 @@ opens the graph Editor directly.
 - Independent branches execute **in parallel**, bounded by a concurrency budget.
 - An optional **trigger node** is the graph's entry point. It owns the shared
   **intake contract** for manual Run plus optional **schedule seed** settings
-  (cron, overlap, enabled default Off) that promote to independent schedule rows.
+  (cron, IANA timezone, overlap, enabled default Off) that promote to independent
+  schedule rows.
 - A **script node** is a deterministic step (T6): it runs a saved script from the
   project's `scripts/` library as a subprocess — no LLM, no agent — under the same
   node state machine and dispatch budget, gated by a one-time hash-bound approval.
@@ -117,7 +118,7 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
 | `trigger_kind` | Trigger nodes only. Informational label for the entry point; intake and schedule seeds are independent fields on the same trigger. |
 | `inputs` | Shared run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders on every manual **Run**. IDs begin with a letter and contain only letters, numbers, and underscores. |
-| `schedule` | Optional schedule seed: `{cron, overlap_policy, enabled}` (enabled defaults Off) promoted to the workflow's schedule row. Unattended ticks resolve durable bindings rather than replacing intake. |
+| `schedule` | Optional schedule seed: `{cron, timezone, overlap_policy, enabled}` (enabled defaults Off; UI timezone defaults to the browser zone, API/graph omit defaults to UTC) promoted to the workflow's schedule row. Unattended ticks resolve durable bindings rather than replacing intake. |
 | `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
@@ -177,10 +178,11 @@ ordinary typed upstream data rather than through a special case. The trigger alw
 exposes the shared intake-form editor for manual **Run**. Before the job can claim
 `running`, the start API requires every declared required value, validates number and
 URL fields, applies declared defaults, and removes blank optional values. Existing
-job-owned values are preserved. Optional schedule seed fields (cron, overlap, enabled
-default Off) sit beside intake and promote to a schedule row without carrying per-run
-intake values; unattended cadence and **Run now** resolve durable bindings so they never
-prompt a human.
+job-owned values are preserved. Optional schedule seed fields (cron, IANA timezone,
+overlap, enabled default Off; UI defaults timezone to the browser zone, API/graph omit
+defaults to UTC) sit beside intake and promote to a schedule row without carrying
+per-run intake values; unattended cadence and **Run now** resolve durable bindings so
+they never prompt a human.
 
 The point of modelling the entry point as a node is that future webhook and event
 modes can become further `trigger_kind` values here, not a second execution path.
