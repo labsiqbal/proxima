@@ -706,14 +706,18 @@ def register(app, deps):
                     detail="workflow changed while starting; review the saved graph and try again",
                 )
             return graph_job_payload(current)
+
+        def restore_preclaim_queued() -> None:
+            db().execute(
+                "UPDATE jobs SET input=?, status='queued', started_at=NULL, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
+                (input_source, job_id),
+            )
+
         try:
             run_ids = app.state.worker.graph_executor.dispatch_ready(job_id)
         except Exception as exc:
-            db().execute(
-                "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='running'",
-                (job_id,),
-            )
+            restore_preclaim_queued()
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not run_ids:
             # No runs is not automatically a failure: a trigger resolves without a
@@ -724,11 +728,7 @@ def register(app, deps):
                 (job_id,),
             ).fetchone()
             if unfinished:
-                db().execute(
-                    "UPDATE jobs SET status='queued', started_at=NULL, updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='running'",
-                    (job_id,),
-                )
+                restore_preclaim_queued()
                 raise HTTPException(status_code=409, detail="graph job has no dispatchable node")
             state.guarded_transition(
                 db(),

@@ -937,6 +937,105 @@ def test_start_rejects_a_saved_graph_change_during_the_execution_claim(
     assert unchanged["graph"]["nodes"][0]["inputs"] == changed_graph["nodes"][0]["inputs"]
 
 
+def test_start_dispatch_failure_restores_original_input(tmp_path, monkeypatch):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    },
+                    {
+                        "id": "notes",
+                        "label": "Notes",
+                        "kind": "text",
+                        "required": False,
+                    },
+                ],
+            },
+            {"id": "write", "name": "Write", "instruction": "draft", "depends_on": ["trigger"]},
+        ]
+    }
+    job = _create(client, graph)
+    real_dispatch = app.state.worker.graph_executor.dispatch_ready
+    attempts = {"count": 0}
+
+    def flaky_dispatch(job_id):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("missing execution profile")
+        return real_dispatch(job_id)
+
+    monkeypatch.setattr(app.state.worker.graph_executor, "dispatch_ready", flaky_dispatch)
+
+    refused = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week", "notes": "temp"}},
+    )
+    assert refused.status_code == 409
+    assert "missing execution profile" in refused.json()["detail"]
+
+    rolled_back = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert rolled_back["status"] == "queued"
+    assert rolled_back["input"] == {"brief": "launch"}
+    assert rolled_back.get("started_at") in (None, "")
+
+    # Blank optional notes must not keep a polluted freeze from the failed claim.
+    started = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week"}},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["input"] == {"brief": "launch", "campaign": "Launch week"}
+
+
+def test_start_no_dispatchable_node_restores_original_input(tmp_path, monkeypatch):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = {
+        "nodes": [
+            {
+                "id": "trigger",
+                "type": "trigger",
+                "trigger_kind": "manual",
+                "name": "When I run it",
+                "inputs": [
+                    {
+                        "id": "campaign",
+                        "label": "Campaign",
+                        "kind": "text",
+                        "required": True,
+                    }
+                ],
+            },
+            {"id": "write", "name": "Write", "instruction": "draft", "depends_on": ["trigger"]},
+        ]
+    }
+    job = _create(client, graph)
+
+    monkeypatch.setattr(app.state.worker.graph_executor, "dispatch_ready", lambda _job_id: [])
+
+    refused = client.post(
+        f"/api/graph/jobs/{job['id']}/start",
+        json={"input": {"campaign": "Launch week"}},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "graph job has no dispatchable node"
+
+    rolled_back = client.get(f"/api/graph/jobs/{job['id']}").json()
+    assert rolled_back["status"] == "queued"
+    assert rolled_back["input"] == {"brief": "launch"}
+
+
 def test_scheduled_start_preserves_trigger_owned_input(tmp_path):
     app = _app(tmp_path, enabled=True)
     client = _client(app)

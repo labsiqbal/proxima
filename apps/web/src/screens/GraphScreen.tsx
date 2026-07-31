@@ -79,7 +79,7 @@ type DraftTemplateMeta = {
 
 type RunTarget =
   | { kind: 'job'; job: GraphJob }
-  | { kind: 'template'; template: GraphTemplate }
+  | { kind: 'template'; template: GraphTemplate; createdJobId?: number }
 
 function readDraftMeta(jobId: number): DraftTemplateMeta {
   try {
@@ -1057,18 +1057,31 @@ export function GraphScreen({
     setBusy('use-template')
     setError('')
     try {
-      const created = await createGraphJob(token, {
-        title: template.name,
-        graph: template.graph,
-        input,
-        workflow_id: template.id,
-        // Template ownership wins — shell active project is only a fallback for
-        // legacy rows that never stored a project (1 workflow = 1 project).
-        project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
-        profile_id: profileId,
-      })
-      if (!mounted.current) return
-      const next = await startGraphJob(token, created.id, input)
+      const existingId = runTarget?.kind === 'template'
+        && runTarget.template.id === template.id
+        ? runTarget.createdJobId
+        : undefined
+      let jobId = existingId
+      if (jobId == null) {
+        const created = await createGraphJob(token, {
+          title: template.name,
+          graph: template.graph,
+          workflow_id: template.id,
+          // Template ownership wins — shell active project is only a fallback for
+          // legacy rows that never stored a project (1 workflow = 1 project).
+          project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
+          profile_id: profileId,
+        })
+        if (!mounted.current) return
+        jobId = created.id
+        setRunTarget(current => (
+          current?.kind === 'template' && current.template.id === template.id
+            ? { ...current, createdJobId: created.id }
+            : current
+        ))
+        setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
+      }
+      const next = await startGraphJob(token, jobId, input)
       if (!mounted.current) return
       await primeAutosave(next, {
         name: template.name,

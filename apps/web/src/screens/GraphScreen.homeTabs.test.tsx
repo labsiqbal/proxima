@@ -337,14 +337,79 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
     await waitFor(() => {
       expect(createGraphJob).toHaveBeenCalledWith('t', expect.objectContaining({
         workflow_id: 10,
-        input: { campaign: 'Launch week', channel: 'email' },
       }))
+      expect(createGraphJob).toHaveBeenCalledWith(
+        't',
+        expect.not.objectContaining({ input: expect.anything() }),
+      )
       expect(startGraphJob).toHaveBeenCalledWith(
         't',
         21,
         { campaign: 'Launch week', channel: 'email' },
       )
     })
+  })
+
+  it('reuses the created template job when start fails and the dialog is retried', async () => {
+    vi.mocked(createGraphJob).mockResolvedValue({
+      id: 21,
+      title: 'Manual report',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          inputs: [
+            { id: 'campaign', label: 'Campaign', kind: 'text', required: true },
+            { id: 'channel', label: 'Channel', kind: 'text', required: false, default: 'email' },
+          ],
+        }],
+        edges: [],
+      },
+      node_states: [],
+    })
+    vi.mocked(startGraphJob)
+      .mockRejectedValueOnce(new Error('missing execution profile'))
+      .mockResolvedValueOnce({
+        id: 21,
+        title: 'Manual report',
+        status: 'running',
+        engine: 'graph',
+        graph: { nodes: [], edges: [] },
+        node_states: [],
+      })
+
+    render(<GraphScreen {...props} />)
+    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
+    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Launch week' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('missing execution profile')
+    expect(createGraphJob).toHaveBeenCalledTimes(1)
+    expect(startGraphJob).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
+      target: { value: 'Retry launch' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
+
+    await waitFor(() => {
+      expect(startGraphJob).toHaveBeenCalledTimes(2)
+      expect(startGraphJob).toHaveBeenLastCalledWith(
+        't',
+        21,
+        { campaign: 'Retry launch', channel: 'email' },
+      )
+    })
+    expect(createGraphJob).toHaveBeenCalledTimes(1)
   })
 
   it('blocks home draft Run while the open draft is unsaved or invalid', async () => {

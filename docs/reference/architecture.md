@@ -156,8 +156,8 @@ the shared `bind_graph_job_repo_worktree` path, which checks ambiguity before th
 cannot start silently and the scheduler cannot skip the refuse. The target is pinned at
 slice time precisely so it cannot be discovered at runtime. The start route performs
 manual intake resolution before the worktree cut and commits the resolved JSON in the
-same guarded update that claims `running`; a rejected value leaves the queued job and
-its original input unchanged. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+same guarded update that claims `running`; a rejected value or post-claim start failure
+leaves the queued job and its original input unchanged. The gated `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
