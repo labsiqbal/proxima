@@ -359,8 +359,8 @@ attempt cannot overwrite a corrected or rerun node.
 6. Inspect live node state and validated outputs on the canvas.
 7. When paused in review, choose **Approve node**, **Save correction**, or
    **Rerun node**. Complete the final **Approve final result** action.
-8. Saved templates appear in the canvas sidebar; select one to create a fresh queued
-   graph job and review its new frozen snapshot before starting.
+8. Saved templates appear on the Workflows home. Manual Run opens the same validated
+   dialog used by drafts, then creates the job and starts it with the resolved input.
 
 ### Canvas interaction
 
@@ -428,8 +428,8 @@ the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so 
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
 a saved workflow. Workflow rows are split into **Manual (on-demand)** and
 **Scheduled** groups by trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows run with their trigger intake; Scheduled rows show cadence and
-open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
+fallback. Manual rows open the same validated Run dialog used by drafts; Scheduled rows show
+cadence and open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
 action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses

@@ -977,7 +977,8 @@ The gated graph sibling freezes `{nodes,edges}` on a job, stores each node attem
 `graph_node_concurrency`, then by `run_worker_concurrency`) in a fresh hidden ACP
 session per attempt, and passes only explicit typed upstream outputs. Each node may run
 as its own agent. Plan graph edits are allowed only while queued and autosave through a
-debounced PATCH that flushes before navigation, promotion, or Run. The inline title can
+debounced PATCH that flushes before navigation or promotion; Run stays disabled
+until the accepted graph is valid and saved. The inline title can
 be renamed at any stage. Run remains an explicit owner action without reusing approval
 language; final result approval remains the review gate. Review/correction can edit or rerun a node and
 marks every transitive descendant stale before redispatch.
