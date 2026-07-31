@@ -561,12 +561,11 @@ discarded progress, and conflicting progress without copying worktree paths, Tas
 titles, or arbitrary graph identifiers. Recovery events use the same 16 KiB
 durable-event encoder as Master projections. Missing legacy Focus leaves the Task
 restored with an explicit repair state and never publishes unattributed history. All
-fallible
-Git checks finish before the immediate write transaction; conflict, job, run, and node
-state are then reread under that lock before any restore write. All fallible database
-writes and worktree checks finish before reset; a failure after reset restores the
-original worktree commit before the database rollback is returned.
-Normal project Chat uses
+fallible Git checks finish before the immediate write transaction; conflict, job, run,
+and node state are then reread under that lock before any restore write. All fallible
+database writes and worktree checks finish before reset; a failure after reset restores
+the original worktree commit before the database rollback is returned. Normal project
+Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
 active Master work before confirmation. The journal cascades when its session closes.

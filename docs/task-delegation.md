@@ -162,9 +162,10 @@ states.
 `scripts/verify_task_reconciliation_browser.py` exercises mounted review approval,
 mounted checkpoint restore, and durable recovery history in Chromium. Its three
 after screenshots are mandatory and retained under
-`/tmp/no-mistakes-evidence/task-reconciliation` unless an explicit evidence
-directory is configured. Database, workspace, runner profile, and browser profile
-state use a system temporary directory that is removed on interruption.
+`/tmp/no-mistakes-evidence/task-reconciliation` unless
+`PROXIMA_TASK_RECONCILIATION_SCREENSHOTS` points at another evidence directory.
+Database, workspace, runner profile, and browser profile state use a system
+temporary directory that is removed on interruption.
 
 ## Adding another caller
 

@@ -640,52 +640,10 @@ steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 Satpam rows into the same durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
-retry, reconnect, and restart reconciliation idempotent. A database-maintained Task
-generation advances only when the canonical projected state changes. Ordinary step,
-node, timestamp, and same-status progress reuse the current key, while transitions
-such as Running to Review to Running receive distinct keys.
-Review verdict transactions
-write the Task invalidation and `task_projection_outbox` intent together; projection
-delivery happens only after commit and remains replayable if it fails. Per-Task
-delivery follows durable Task-event order. Checkpoint restore records a bounded
-`task_recovery_outbox` intent and marks only obsolete unpublished status intents as
-causally superseded before emitting the authoritative Queued recovery event.
-Recovery audit intents remain append-only. New and still-orderable audits publish
-exactly once in Task-event order. Missing legacy Focus leaves each restore as a
-failed-attribution repair row without rolling back Task restoration or publishing
-unattributed history. Projection schema upgrades retain unpublished predecessors and
-already-projected publication reversals in an immutable per-Task ordering-gap ledger
-without replaying or rewriting original recovery rows. Delivered legacy partial
-correction markers, messages, and events remain immutable, and an exact coverage
-ledger links them to their causal gaps. One active per-Task aggregate intent
-summarizes only still-uncovered bounded gap counts and predecessor/successor
-Task-event ranges, and emits at most one new history marker after ordered outboxes
-and the canonical current Task projection are settled. Still-orderable predecessors
-remain on the normal recovery path.
-The v48 compatibility migration stages every delivered marker row and its exact
-coverage before aggregation. V49 restores only from that evidence and records
-bounded legacy identity loss for databases already damaged before staging existed.
-Source deletion enters one capture path from `BEFORE DELETE` triggers on the job,
-authoritative Task session, Task event, and recovery outbox. It preserves stable
-job, event, and outbox identities plus the exact outbox-to-event map, copies marker,
-gap, and coverage rows into immutable history tables keyed by their original ids,
-and writes or safely completes the Task-source tombstone. Task-session identity
-comes only from `jobs.session_id` or one consistent set of outbox-referenced Task
-events, never generic graph-session membership. If neither survives, it remains
-`NULL` and an immutable bounded loss row records why. Only then may the live
-cascades proceed; later boundaries cannot rewrite captured identity.
-The rationale, alternatives, ordering rules, legacy containment, correction-marker
-trade-offs, and authoritative deletion identity are recorded in
-[ADR-0027](../adr/0027-durable-task-reconciliation-protocol.md).
-Projection message, event, and ledger rows then commit together. Startup validates
-their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
-contract.
-Raw streaming deltas are never projected. Each named event carries the same captured
-Focus and subject attribution committed with its message, so the live projection
-cannot drift before canonical reconciliation. Server-owned summaries omit Task
-titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
-and credentials. The existing session SSE cursor accepts both `after_id` and
-`Last-Event-ID`. See [master-supervision.md](../master-supervision.md).
+retry, reconnect, and restart reconciliation idempotent. Cross-surface Task mutation,
+outbox ordering, recovery history, and deletion identity live in
+[1d. Cross-surface Task reconciliation](#1d-cross-surface-task-reconciliation).
+See [master-supervision.md](../master-supervision.md).
 
 The authenticated application mounts exactly one `MasterStateProvider` above
 `AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
@@ -753,6 +711,58 @@ Stable source keys coalesce Task progress, terminal source keys prevent duplicat
 completion toasts, and raw delta events are ignored. Toasts use polite or assertive
 live regions without stealing focus and preserve the existing optional background
 desktop notification path.
+
+### 1d. Cross-surface Task reconciliation
+
+Externally mutable Task transitions share one authoritative projection path. A
+database-maintained Task generation advances only when the canonical projected state
+changes. Ordinary step, node, timestamp, and same-status progress reuse the current
+key, while transitions such as Running to Review to Running receive distinct keys.
+Review verdict transactions write the Task invalidation and `task_projection_outbox`
+intent together; projection delivery happens only after commit and remains replayable
+if it fails. Per-Task delivery follows durable Task-event order. Checkpoint restore
+records a bounded `task_recovery_outbox` intent and marks only obsolete unpublished
+status intents as causally superseded before emitting the authoritative Queued
+recovery event. Recovery audit intents remain append-only. New and still-orderable
+audits publish exactly once in Task-event order. Missing legacy Focus leaves each
+restore as a failed-attribution repair row without rolling back Task restoration or
+publishing unattributed history. Projection schema upgrades retain unpublished
+predecessors and already-projected publication reversals in an immutable per-Task
+ordering-gap ledger without replaying or rewriting original recovery rows. Delivered
+legacy partial correction markers, messages, and events remain immutable, and an exact
+coverage ledger links them to their causal gaps. One active per-Task aggregate intent
+summarizes only still-uncovered bounded gap counts and predecessor/successor
+Task-event ranges, and emits at most one new history marker after ordered outboxes
+and the canonical current Task projection are settled. Still-orderable predecessors
+remain on the normal recovery path.
+The v48 compatibility migration stages every delivered marker row and its exact
+coverage before aggregation. V49 restores only from that evidence and records
+bounded legacy identity loss for databases already damaged before staging existed.
+Source deletion enters one capture path from `BEFORE DELETE` triggers on the job,
+authoritative Task session, Task event, and recovery outbox. It preserves stable
+job, event, and outbox identities plus the exact outbox-to-event map, copies marker,
+gap, and coverage rows into immutable history tables keyed by their original ids,
+and writes or safely completes the Task-source tombstone. Task-session identity
+comes only from `jobs.session_id` or one consistent set of outbox-referenced Task
+events, never generic graph-session membership. If neither survives, it remains
+`NULL` and an immutable bounded loss row records why. Only then may the live
+cascades proceed; later boundaries cannot rewrite captured identity.
+Job API payloads also attach one `run_projection` and normalize timestamps so Tasks,
+Workflows, Attention, mounted Task detail, Fleet, and expanded nodes read the same
+effective lifecycle. Mounted Task detail consumes Task-session `job.update` for owner
+mutations outside a worker run.
+The rationale, alternatives, ordering rules, legacy containment, correction-marker
+trade-offs, and authoritative deletion identity are recorded in
+[ADR-0027](../adr/0027-durable-task-reconciliation-protocol.md).
+Projection message, event, and ledger rows then commit together. Startup validates
+their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
+contract. Raw streaming deltas are never projected. Each named event carries the same
+captured Focus and subject attribution committed with its message, so the live
+projection cannot drift before canonical reconciliation. Server-owned summaries omit
+Task titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
+and credentials. The existing session SSE cursor accepts both `after_id` and
+`Last-Event-ID`. See [master-supervision.md](../master-supervision.md) and
+[task-delegation.md](../task-delegation.md).
 
 ### 1. Chat turn (the core loop)
 

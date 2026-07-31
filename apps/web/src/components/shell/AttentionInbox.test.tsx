@@ -17,8 +17,13 @@ const item = {
 describe('AttentionInbox', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-31T05:00:30Z'))
     vi.mocked(getAttention).mockResolvedValue({ items: [item], count: 1 })
     vi.mocked(actAttention).mockResolvedValue({ ok: true, id: 'job:4', action: 'approve' })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('hides the trigger when the inbox is empty so it does not look like an active alarm', async () => {
