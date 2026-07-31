@@ -815,6 +815,229 @@ def test_unadopted_stop_recovers_ended_durable_scope(tmp_path):
     asyncio.run(run_case())
 
 
+def test_unadopted_stop_failed_recovery_keeps_single_live_entry(tmp_path):
+    manager = AppManager()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        live = manager._apps["demo"]
+        original_refresh = live["proc"].refresh
+        manager._unadopted.add("demo")
+
+        async def unavailable():
+            raise OutputBrokerUnavailable("supervisor unavailable")
+
+        live["proc"].refresh = unavailable
+
+        first_stop = await manager.stop("demo")
+        assert first_stop["ok"] is False
+        assert first_stop["state"] == "ownership_unknown"
+        assert manager._apps["demo"] is live
+        assert "demo" not in manager._unadopted
+
+        second_stop = await manager.stop("demo")
+        assert second_stop["ok"] is False
+        assert manager._apps["demo"] is live
+        assert "demo" not in manager._unadopted
+
+        with pytest.raises(OutputBrokerUnavailable, match="still live"):
+            await manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        assert manager._apps["demo"] is live
+        assert manager._generations["demo"] == 1
+
+        live["proc"].refresh = original_refresh
+        recovered = await manager.stop("demo")
+        assert recovered["ok"] is True
+        assert "demo" not in manager._apps
+        assert "demo" not in manager._unadopted
+
+    asyncio.run(run_case())
+
+
+def test_reconcile_post_register_snapshot_failure_disposes_generation(
+    monkeypatch,
+    tmp_path,
+):
+    manager = AppManager(state_root=tmp_path / "preview-supervisors")
+    registered: dict[str, object] = {}
+
+    class FakeProc:
+        pid = 4242
+        start_time = 11
+        cgroup = "process-cgroup"
+        managed_cgroup = "process-cgroup"
+        containment_pid_namespace = None
+        returncode = None
+        scope_live = True
+
+        async def refresh(self):
+            return self.returncode
+
+        async def terminate(self):
+            self.returncode = -15
+            self.scope_live = False
+
+        async def kill(self):
+            self.returncode = -9
+            self.scope_live = False
+
+        async def wait(self):
+            return self.returncode
+
+    class FakeBroker:
+        pid = 4241
+
+        def __init__(self):
+            self.disconnected = False
+            self._proc = FakeProc()
+
+        async def has_managed_process(self):
+            return True
+
+        async def managed_process(self):
+            return self._proc
+
+        async def snapshot(self):
+            raise OutputBrokerUnavailable("snapshot failed after register")
+
+        async def disconnect(self):
+            self.disconnected = True
+
+        async def changes(self, **_kwargs):
+            raise OutputBrokerUnavailable("broker gone")
+
+    fake_broker = FakeBroker()
+    record = {
+        "version": 2,
+        "phase": "attached",
+        "profile": "direct",
+        "slug": "demo",
+        "generation": 2,
+        "port": 5180,
+        "command": "sleep 60",
+        "started_at": time.time() - 5,
+        "lineage_token": "snap-fail-token",
+        "contained": False,
+        "broker": {
+            "pid": fake_broker.pid,
+            "start_time": 10,
+            "cgroup": "broker-cgroup",
+            "controller_cgroup": "controller-cgroup",
+            "profile": "direct",
+        },
+        "process": {
+            "pid": fake_broker._proc.pid,
+            "start_time": fake_broker._proc.start_time,
+            "cgroup": fake_broker._proc.cgroup,
+        },
+    }
+
+    async def fake_reconnect(_metadata, timeout=1):
+        return fake_broker
+
+    real_register = manager._register_app
+
+    def tracking_register(**kwargs):
+        app = real_register(**kwargs)
+        registered["app"] = app
+        return app
+
+    monkeypatch.setattr(OutputBroker, "reconnect", staticmethod(fake_reconnect))
+    monkeypatch.setattr(manager, "_register_app", tracking_register)
+    monkeypatch.setattr(manager, "_cgroup_identity", lambda pid: {
+        fake_broker.pid: "broker-cgroup",
+        fake_broker._proc.pid: "process-cgroup",
+        os.getpid(): "controller-cgroup",
+    }.get(pid))
+    monkeypatch.setattr(apprunner, "process_start_time", lambda pid: {
+        fake_broker.pid: 10,
+        fake_broker._proc.pid: fake_broker._proc.start_time,
+    }.get(pid))
+    monkeypatch.setattr(
+        apprunner,
+        "_process_has_lineage",
+        lambda _pid, token: token == "snap-fail-token",
+    )
+    monkeypatch.setattr(manager, "_persist_app", lambda *_a, **_k: None)
+    monkeypatch.setattr(manager, "_remove_app_record", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        manager,
+        "_remove_generation_record",
+        lambda *_a, **_k: None,
+    )
+
+    async def run_case():
+        await manager._reconcile_slug(
+            "demo",
+            [(tmp_path / "demo.2.json", record)],
+            asyncio.get_running_loop().time() + 2,
+        )
+        assert "app" in registered
+        assert "demo" not in manager._apps
+        assert "demo" not in manager._unadopted
+        assert fake_broker._proc.returncode is not None
+        assert fake_broker.disconnected is True
+
+    asyncio.run(run_case())
+
+
+def test_reconcile_never_registers_over_live_app(tmp_path):
+    manager = AppManager()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        live = manager._apps["demo"]
+        manager._unadopted.add("demo")
+
+        called = {"reconcile": 0}
+        original_reconcile = manager._reconcile_slug
+
+        async def tracking_reconcile(*args, **kwargs):
+            called["reconcile"] += 1
+            return await original_reconcile(*args, **kwargs)
+
+        manager._reconcile_slug = tracking_reconcile  # type: ignore[method-assign]
+
+        recovery = await manager._try_recover_unadopted("demo")
+        assert recovery == "adopted"
+        assert called["reconcile"] == 0
+        assert manager._apps["demo"] is live
+        assert "demo" not in manager._unadopted
+
+        with pytest.raises(OutputBrokerUnavailable, match="already owns"):
+            manager._register_app(
+                slug="demo",
+                generation=99,
+                proc=live["proc"],
+                broker=live["output_broker"],
+                port=int(live["port"]),
+                command="should-not-replace",
+                lineage_token="other",
+                effect_lease=None,
+            )
+        assert manager._apps["demo"] is live
+        assert live["command"] != "should-not-replace"
+
+        await manager.stop("demo")
+
+    asyncio.run(run_case())
+
+
 def test_startup_reconciliation_is_concurrent_and_deadline_bounded(
     monkeypatch,
     tmp_path,

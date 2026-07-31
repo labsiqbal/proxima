@@ -1057,6 +1057,11 @@ class AppManager:
         containment_pid_namespace: int | None = None,
         containment_cgroup: str | None = None,
     ) -> dict[str, Any]:
+        existing = self._apps.get(slug)
+        if existing is not None and not existing.get("stopped"):
+            raise OutputBrokerUnavailable(
+                "A live preview generation already owns this project."
+            )
         authority = ProcessAuthority(
             leader_pid=proc.pid,
             process_group=proc.pid if not IS_WINDOWS else None,
@@ -1238,7 +1243,17 @@ class AppManager:
             timeout=max(0, deadline - loop.time()),
         )
         for task in pending:
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
+        for task in pending:
             slug = tasks[task]
+            if slug in self._apps:
+                self._unadopted.discard(slug)
+                continue
+            if slug in self._unadopted:
+                continue
+            if not self._durable_records_for_slug(slug):
+                continue
             candidates = records[slug]
             newest = max(
                 candidates,
@@ -1249,8 +1264,6 @@ class AppManager:
                 newest,
                 "Preview adoption exceeded the startup deadline.",
             )
-            task.cancel()
-        await asyncio.gather(*done, *pending, return_exceptions=True)
 
     async def _reconcile_slug(
         self,
@@ -1258,6 +1271,9 @@ class AppManager:
         candidates: list[tuple[Path, dict[str, Any]]],
         deadline: float,
     ) -> None:
+        if slug in self._apps:
+            self._unadopted.discard(slug)
+            return
         newest = max(
             candidates,
             key=lambda item: int(item[1].get("generation") or 0),
@@ -1301,6 +1317,7 @@ class AppManager:
             return
         path, record = remaining[0]
         broker: OutputBroker | None = None
+        registered: dict[str, Any] | None = None
         try:
             broker_record = record.get("broker")
             if not isinstance(broker_record, dict):
@@ -1424,6 +1441,7 @@ class AppManager:
                 ),
                 containment_cgroup=process_cgroup,
             )
+            registered = app
             if managed_scope_only:
                 app["leader_exited_scope_live"] = True
             snapshot = await broker.snapshot()
@@ -1433,8 +1451,17 @@ class AppManager:
             app["output_version"] = -1
             app["output_line_cursor"] = 0
         except asyncio.CancelledError:
-            if broker is not None:
-                await broker.disconnect()
+            if registered is not None:
+                await self._stop_app(
+                    slug,
+                    registered,
+                    preserve_status=False,
+                )
+            elif broker is not None:
+                try:
+                    await broker.disconnect()
+                except OutputBrokerUnavailable:
+                    pass
             raise
         except (
             KeyError,
@@ -1443,6 +1470,22 @@ class AppManager:
             ValueError,
             OutputBrokerUnavailable,
         ) as exc:
+            if registered is not None:
+                stopped = await self._stop_app(
+                    slug,
+                    registered,
+                    preserve_status=False,
+                )
+                if not stopped:
+                    self._unadopted.discard(slug)
+                    return
+                if self._scope_identity_ended(record):
+                    self._remove_generation_record(
+                        slug,
+                        int(record["generation"]),
+                    )
+                    self._last_exit[slug] = self._ended_scope_status(record)
+                return
             if broker is not None:
                 try:
                     await broker.disconnect()
@@ -1700,6 +1743,9 @@ class AppManager:
         self,
         slug: str,
     ) -> str:
+        if slug in self._apps:
+            self._unadopted.discard(slug)
+            return "adopted"
         candidates = self._durable_records_for_slug(slug)
         if not candidates:
             return "unresolved"
@@ -1710,9 +1756,15 @@ class AppManager:
         try:
             await self._reconcile_slug(slug, candidates, deadline)
         except asyncio.CancelledError:
-            self._unadopted.add(slug)
+            if slug in self._apps:
+                self._unadopted.discard(slug)
+            else:
+                self._unadopted.add(slug)
             raise
         except Exception:
+            if slug in self._apps:
+                self._unadopted.discard(slug)
+                return "adopted"
             self._unadopted.add(slug)
             return "unresolved"
         if slug in self._apps:
@@ -1741,7 +1793,7 @@ class AppManager:
                 )
                 if stopped:
                     return {"ok": True}
-                self._unadopted.add(slug)
+                self._unadopted.discard(slug)
                 status = self.status(slug)
                 message = str(
                     status.get("message")
@@ -1750,6 +1802,21 @@ class AppManager:
                         "preview scope remains unresolved."
                     )
                 )
+                if preserve_status and status.get("state") == "ownership_unknown":
+                    self._last_exit[slug] = {
+                        key: status[key]
+                        for key in status
+                        if key in {
+                            "state",
+                            "running",
+                            "ready",
+                            "requested_port",
+                            "command",
+                            "log",
+                            "message",
+                            "reason",
+                        }
+                    }
                 return {
                     "ok": False,
                     "state": "ownership_unknown",
