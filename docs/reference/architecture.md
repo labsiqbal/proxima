@@ -275,18 +275,23 @@ for targeted previews. It validates the locator and redirects through a short-li
 capability bound to the authoritative Area and authenticated Proxima frame origin.
 Named localhost and apps-domain installs use an Area-specific host whose router
 exposes no application routes. Plain HTTP IP installs use one relay per Area and
-interface. HTTPS entries without an apps domain stay on the existing TLS origin under
-the reserved `/_proxima/file-preview/` gateway. Gateway HTML is opaque and uses
-path-scoped CORS; dedicated Area-host HTML can retain same-origin identity because
-that origin exposes only its validated Area. Worker responses restrict connections,
-Service Worker requests are rejected, active XML formats download, and every file
-still crosses the canonical resolver and realpath jail. The legacy `/api/preview`
+interface. HTTPS remote entries require a TLS-capable Area-specific hostname under
+the configured apps domain. Without one, active preview entry fails with 503 instead
+of falling back to the Proxima origin or a plaintext relay. Passive canonical media
+remains on the authenticated route. The Area host retains
+same-origin identity only because its router exposes the validated Area and no
+application routes, which keeps native module workers functional. Worker responses
+restrict connections, Service Worker requests are rejected, active XML formats
+download, every document-viewable response including PDF receives the exact
+authenticated frame-ancestor policy, and every file still crosses the canonical
+resolver and realpath jail. The legacy `/api/preview`
 route rejects target parameters and upgrades active content to this isolated boundary.
 Main-origin executable responses deny framing, so absolute document navigation cannot
 regain Proxima authority. Embedded requests from same-site, cross-site, or opaque
-preview origins are rejected before route dispatch. Capability query, gateway-path,
-and cookie values are redacted before access logging. Cloudflare tunnel ingress
-changes share one serialized mutation and refreshed-state check.
+preview origins are rejected before route dispatch. Capability query, retired gateway
+path, and cookie values are redacted before access logging for every supported
+Uvicorn entry point. Cloudflare tunnel ingress changes share one cross-process
+desired-state mutation lock and verify the complete refreshed ingress set.
 Markdown resources resolve relative to both the source document directory and its
 target. A validated target context is reused throughout each tree, Archive, or
 message-list request while each path still crosses the realpath jail. Artifact links
@@ -299,7 +304,7 @@ an existing image or frame target survives only when both the layer id and sourc
 remain unchanged, and model-supplied targets are otherwise removed. See
 [ADR-0010](../adr/0010-canonical-file-targets.md),
 [ADR-0011](../adr/0011-area-scoped-artifact-media.md), and
-[ADR-0014](../adr/0014-capability-scoped-file-preview-gateways.md).
+[ADR-0015](../adr/0015-distinct-tls-area-preview-origins.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

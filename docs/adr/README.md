@@ -90,4 +90,5 @@ Supersedes / superseded-by / links to feature docs.
 | [0011](0011-area-scoped-artifact-media.md) | Area-scoped artifact media and preview routing | Accepted |
 | [0012](0012-sandboxed-target-preview-resources.md) | Targeted HTML previews use a sandboxed resource scope | Superseded by ADR-0013 |
 | [0013](0013-area-bound-file-preview-origins.md) | Canonical file previews use Area-bound capability origins | Superseded by ADR-0014 |
-| [0014](0014-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Accepted |
+| [0014](0014-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0015 |
+| [0015](0015-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |

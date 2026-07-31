@@ -26,13 +26,17 @@ PDF = (
 )
 
 
-def _api(tmp_path: Path) -> tuple[TestClient, dict[str, str], Path]:
+def _api(
+    tmp_path: Path,
+    config: dict[str, object] | None = None,
+) -> tuple[TestClient, dict[str, str], Path]:
     app = create_app(
         {
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
             "start_worker": False,
+            **(config or {}),
         }
     )
     api = TestClient(app)
@@ -184,6 +188,10 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         )
         assert preview.status_code == 200, preview.text
         assert preview.content == expected
+        if name == "handout.pdf":
+            assert preview.headers["content-security-policy"] == (
+                "frame-ancestors http://testserver"
+            )
 
     image_target = {
         "project": "identity",
@@ -349,6 +357,14 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         "/api/preview/identity/site/index.html?target=",
         headers=headers,
     ).status_code == 400
+    legacy_pdf = api.get(
+        "/api/preview/identity/handout.pdf",
+        headers=headers,
+    )
+    assert legacy_pdf.status_code == 200
+    assert legacy_pdf.headers["content-security-policy"] == (
+        "frame-ancestors http://testserver"
+    )
     legacy_active = api.get(
         "/api/preview/identity/shadow.html",
         headers=headers,
@@ -404,7 +420,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert explicit.json()["target"] == ops_only
 
 
-def test_https_remote_preview_uses_opaque_capability_gateway(
+def test_https_remote_preview_requires_a_distinct_tls_origin(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -418,6 +434,7 @@ def test_https_remote_preview_uses_opaque_capability_gateway(
         "export const canonical = true",
         encoding="utf-8",
     )
+    (ops / "handout.pdf").write_bytes(PDF)
     area = api.app.state.db.execute(
         "SELECT pa.id FROM project_areas pa "
         "JOIN projects p ON p.id = pa.project_id "
@@ -435,46 +452,94 @@ def test_https_remote_preview_uses_opaque_capability_gateway(
         follow_redirects=False,
     )
 
+    assert entry.status_code == 503
+    assert entry.json()["detail"] == (
+        "dedicated file preview origin is unavailable"
+    )
+    pdf = remote.get(
+        f"/api/target-preview/identity/ops/{area['id']}/handout.pdf",
+        headers=headers,
+    )
+    assert pdf.status_code == 200
+    assert pdf.content == PDF
+    assert pdf.headers["content-security-policy"] == (
+        "frame-ancestors https://100.64.0.2"
+    )
+
+
+def test_https_remote_preview_uses_a_distinct_tls_area_origin(
+    tmp_path: Path,
+):
+    api, headers, root = _api(
+        tmp_path,
+        {"apps_domain": "preview.example.test"},
+    )
+    ops = root / "ops"
+    (ops / "index.html").write_text(
+        '<script>new Worker("worker.js", {type: "module"})</script>',
+        encoding="utf-8",
+    )
+    (ops / "worker.js").write_text(
+        "self.postMessage('canonical')",
+        encoding="utf-8",
+    )
+    area = api.app.state.db.execute(
+        "SELECT pa.id, pa.project_id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    remote = TestClient(
+        api.app,
+        base_url="https://proxima.example.test",
+    )
+    entry = remote.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+
     assert entry.status_code == 307
     location = entry.headers["location"]
     parsed = urlsplit(location)
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "100.64.0.2"
-    assert parsed.path.startswith("/_proxima/file-preview/")
-    assert "__proxima_cap" not in location
+    preview_origin = (
+        f"https://file-{area['project_id']}-ops-{area['id']}."
+        "preview.example.test"
+    )
+    assert f"{parsed.scheme}://{parsed.netloc}" == preview_origin
+    assert parsed.netloc != "proxima.example.test"
+    assert parse_qs(parsed.query)["__proxima_cap"]
 
-    page = remote.get(location)
+    capability_gate = remote.get(location, follow_redirects=False)
+    assert capability_gate.status_code == 307
+    page_url = urljoin(location, capability_gate.headers["location"])
+    page = remote.get(page_url)
     assert page.status_code == 200
     policy = page.headers["content-security-policy"]
-    assert "sandbox allow-scripts;" in policy
-    assert "allow-same-origin" not in policy
-    assert "frame-ancestors https://100.64.0.2" in policy
-    assert page.headers["access-control-allow-origin"] == "null"
+    assert "sandbox allow-scripts allow-same-origin" in policy
+    assert "worker-src 'self' blob:" in policy
+    assert (
+        "frame-ancestors https://proxima.example.test "
+        f"{preview_origin}"
+    ) in policy
 
-    module = remote.get(
-        urljoin(location, "module.js"),
-        headers={"Origin": "null", "Sec-Fetch-Dest": "script"},
-    )
-    assert module.status_code == 200
-    assert module.headers["access-control-allow-origin"] == "null"
-
+    worker_url = urljoin(page_url, "worker.js")
+    assert urlsplit(worker_url).netloc == parsed.netloc
     worker = remote.get(
-        urljoin(location, "module.js"),
-        headers={"Origin": "null", "Sec-Fetch-Dest": "worker"},
+        worker_url,
+        headers={"Sec-Fetch-Dest": "worker"},
     )
-    assert "connect-src https://100.64.0.2/_proxima/file-preview/" in (
-        worker.headers["content-security-policy"]
-    )
+    assert worker.status_code == 200
+    assert "script-src 'self'" in worker.headers[
+        "content-security-policy"
+    ]
+    assert "connect-src 'self'" in worker.headers[
+        "content-security-policy"
+    ]
     service_worker = remote.get(
-        urljoin(location, "module.js"),
+        worker_url,
         headers={"Service-Worker": "script"},
     )
     assert service_worker.status_code == 403
-
-    parts = parsed.path.split("/")
-    parts[3] = f"{parts[3]}x"
-    tampered = parsed._replace(path="/".join(parts)).geturl()
-    assert remote.get(tampered).status_code == 403
 
 
 def test_loopback_preview_uses_a_same_host_relay_origin(

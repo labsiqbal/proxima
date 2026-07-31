@@ -49,6 +49,7 @@ from .updates import (
 )
 from .safe_updates import SafeUpdateCoordinator
 from .maintenance_status import MaintenanceBoundary
+from .logging_config import install_uvicorn_redaction
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -89,6 +90,7 @@ from .routes import (
 from .routes import graph as routes_graph  # pyright: ignore[reportAttributeAccessIssue]
 
 logger = logging.getLogger("proxima.api")
+install_uvicorn_redaction()
 
 
 def _as_int(value: Any) -> int:

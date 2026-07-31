@@ -1303,9 +1303,11 @@ and is not stripped or reinterpreted. `/api/target-preview` validates a canonica
 target, then redirects through a short-lived capability bound to the Area and the
 authenticated Proxima frame origin. Named localhost and apps-domain installs use an
 Area-specific host whose router exposes only that validated Area. Plain HTTP IP
-installs use an Area-specific relay. HTTPS installs without an apps domain use a
-reserved capability path on the existing TLS origin, with an opaque document sandbox
-and narrowly scoped CORS for same-Area modules, module workers, fonts, and fetch.
+installs use an Area-specific relay. HTTPS remote installs require a TLS-capable
+Area-specific hostname under the configured apps domain so native same-Area module
+workers retain real same-origin behavior without gaining Proxima authority. Active
+preview entry fails with 503 when that distinct TLS origin is unavailable. Passive
+canonical media remains on the authenticated route with an exact framing policy.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated
 worker responses restrict outbound connections, Service Worker scripts are rejected,
 external ancestors cannot frame a preview, and embedded same-site or cross-site
@@ -1313,7 +1315,11 @@ requests cannot leave the preview boundary for Proxima routes. Legacy `/api/prev
 path-only and rejects target parameters, but active content is upgraded to the
 canonical boundary instead of executing on the Proxima origin. HTML renders under
 response sandbox policy; XHTML, SVG, and other active XML media download safely.
-Capability values are redacted from query, path, and cookie logs. Design Studio loads
+Every document-viewable response, including PDF, receives the exact authenticated
+frame-ancestor policy. Capability values are redacted from query, path, and cookie
+logs for configured launchers and plain Uvicorn entry points. Cloudflare tunnel
+ingress changes use a cross-process desired-state lock and verify the complete
+refreshed ingress set. Design Studio loads
 targeted canvas and export images from authenticated raw bytes through managed blob
 URLs rather than cross-origin preview URLs. Markdown siblings resolve from the source
 document's Area and directory.
