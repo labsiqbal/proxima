@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getGraphJob, listGraphJobs, listGraphTemplates, startGraphJob } from '../api/graph'
+import { getGraphJob, listGraphJobs, listGraphTemplates, startGraphJob, updateGraphPlan } from '../api/graph'
 import { listSchedules, runScheduleNow } from '../api/schedules'
 import { GraphScreen } from './GraphScreen'
 
@@ -90,6 +90,7 @@ describe('GraphScreen how-it-runs badges', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
     vi.mocked(listGraphJobs).mockResolvedValue({ items: [] })
     vi.mocked(listGraphTemplates).mockResolvedValue({
       items: [
@@ -549,5 +550,173 @@ describe('GraphScreen how-it-runs badges', () => {
     })
     await waitFor(() => expect(gets).toBeGreaterThan(getsAfterStart))
     expect(await screen.findByRole('button', { name: 'Rename workflow Home draft refreshed' })).toBeInTheDocument()
+  })
+
+  function queuedDraft(id: number, title: string) {
+    return {
+      id,
+      project_id: 1,
+      project_slug: 'owner-personal',
+      workflow_id: null,
+      session_id: id,
+      title,
+      status: 'queued',
+      input: {},
+      engine: 'graph',
+      graph: {
+        nodes: [{ id: 'only', type: 'agent', name: 'Only', instruction: 'Draft', output_kind: 'text' }],
+        edges: [],
+      },
+      node_states: [],
+    } as never
+  }
+
+  it('keeps Run now selection when a dirty prior draft autosave flushes during handoff', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 99) return spawned
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Dirty draft' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Dirty draft renamed' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+    expect(finishAutosave).toBeTypeOf('function')
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        title: 'Dirty draft renamed',
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(getGraphJob).mock.calls.filter(call => call[1] === 99)).toHaveLength(1)
+  })
+
+  it('keeps ordinary View open when a dirty prior draft autosave flushes during handoff', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const target = queuedDraft(88, 'Other draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior, target] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 88) return target
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Dirty draft' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), {
+      target: { value: 'Dirty draft renamed' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 2' }))
+    const row = (await screen.findByText('Other draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit' }))
+
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 88))
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        title: 'Dirty draft renamed',
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Other draft' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Dirty draft renamed' })).not.toBeInTheDocument()
   })
 })

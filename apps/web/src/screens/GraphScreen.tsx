@@ -290,10 +290,20 @@ export function GraphScreen({
   const wantedJobIdRef = React.useRef<number | null>(null)
   const draftSeq = React.useRef(0)
 
-  const commitJob = React.useCallback((next: GraphJob | null) => {
+  // Intentional navigation / create / start paths retarget focus.
+  const focusJob = React.useCallback((next: GraphJob | null) => {
     wantedJobIdRef.current = next?.id ?? null
     setJob(next)
   }, [])
+  // Autosave, live poll, and other same-job refreshes must never steal focus.
+  const applyFocusedJob = React.useCallback((next: GraphJob) => {
+    if (wantedJobIdRef.current !== next.id) return false
+    setJob(next)
+    return true
+  }, [])
+  React.useEffect(() => {
+    setRenamingTitle(false)
+  }, [job?.id])
   const saveTimer = React.useRef<number | undefined>(undefined)
   const saveInFlight = React.useRef<Promise<void> | null>(null)
   const pendingSave = React.useRef<{
@@ -367,11 +377,12 @@ export function GraphScreen({
           && latest.title === snapshot.title
           && (!snapshot.graphBody || JSON.stringify(latest.graph) === snapshot.graphBody)
         if (mounted.current && isLatest) {
-          commitJob(next)
-          if (snapshot.graph) setPlan(next.graph)
-          setDraftTitle(next.title)
           setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
-          if (!pendingSave.current) setSaveState('saved')
+          if (applyFocusedJob(next)) {
+            if (snapshot.graph) setPlan(next.graph)
+            setDraftTitle(next.title)
+            if (!pendingSave.current) setSaveState('saved')
+          }
         }
       }
     })()
@@ -380,7 +391,7 @@ export function GraphScreen({
       if (saveInFlight.current === work) saveInFlight.current = null
     }).catch(() => undefined)
     return work
-  }, [commitJob, token])
+  }, [applyFocusedJob, token])
 
   const queueLatestAutosave = React.useCallback((announce = true) => {
     const latest = latestDraft.current
@@ -512,7 +523,7 @@ export function GraphScreen({
         if (!mounted.current || seq !== jobLoadSeq.current) return null
         if (wantedJobIdRef.current !== jobId) return null
       }
-      commitJob(next)
+      if (!applyFocusedJob(next)) return null
       setPlan(next.graph)
       setOpeningJobId(current => (current === next.id ? null : current))
       setJobs(current => {
@@ -546,7 +557,7 @@ export function GraphScreen({
       }
       return null
     }
-  }, [commitJob, token])
+  }, [applyFocusedJob, token])
 
   // Align shell project with the open plan so tools/mentions match ownership;
   // never the reverse (shell must not retarget this plan).
@@ -613,7 +624,7 @@ export function GraphScreen({
     // Read via ref so this callback stays stable when job loads - otherwise the
     // pendingJobId effect re-fires, re-GETs, and can clear the editor mid-edit.
     if (jobIdRef.current !== jobId) {
-      commitJob(null)
+      focusJob(null)
       setPlan(null)
       setSelectedId(null)
     }
@@ -662,7 +673,7 @@ export function GraphScreen({
       if (!mounted.current || seq !== draftSeq.current) return
       setOpeningJobId(null)
       setStage('editor')
-      commitJob(created)
+      focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
       chatJobRef.current = created.id
@@ -849,7 +860,7 @@ export function GraphScreen({
       await deleteGraphJob(token, item.id)
       if (!mounted.current) return
       setJobs(current => current.filter(row => row.id !== item.id))
-      if (job?.id === item.id) { commitJob(null); setPlan(null); setSelectedId(null); setChatOpen(false) }
+      if (job?.id === item.id) { focusJob(null); setPlan(null); setSelectedId(null); setChatOpen(false) }
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
@@ -947,7 +958,7 @@ export function GraphScreen({
       if (!mounted.current) return
       await primeAutosave(created, { ...draftMeta, name: draftTitle })
       if (!mounted.current) return
-      commitJob(created)
+      focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
@@ -982,7 +993,7 @@ export function GraphScreen({
       if (!mounted.current) return
       await primeAutosave(created, {})
       if (!mounted.current) return
-      commitJob(created)
+      focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
       chatJobRef.current = created.id
@@ -1054,9 +1065,10 @@ export function GraphScreen({
       await flushAutosave()
       const next = await action()
       if (!mounted.current) return
+      if (wantedJobIdRef.current !== next.id) return
       await primeAutosave(next)
       if (!mounted.current) return
-      commitJob(next)
+      if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
       if (message) setNotice(message)
@@ -1091,8 +1103,7 @@ export function GraphScreen({
       if (mounted.current) {
         setSavingTemplate(false)
         setJob(current => {
-          if (current?.id !== job.id) return current
-          wantedJobIdRef.current = current.id
+          if (current?.id !== job.id || wantedJobIdRef.current !== job.id) return current
           return { ...current, workflow_id: template.id }
         })
         setJobs(current => current.map(item => item.id === job.id ? { ...item, workflow_id: template.id } : item))
@@ -1124,9 +1135,10 @@ export function GraphScreen({
       await flushAutosave()
       const next = await startGraphJob(token, job.id)
       if (!mounted.current) return
+      if (wantedJobIdRef.current !== next.id) return
       await primeAutosave(next)
       if (!mounted.current) return
-      commitJob(next)
+      if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
       setNotice('Execution started.')
@@ -1177,7 +1189,7 @@ export function GraphScreen({
       setRunTarget(null)
       setOpeningJobId(null)
       setStage('editor')
-      commitJob(next)
+      focusJob(next)
       setPlan(next.graph)
       setSelectedId(null)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
@@ -1211,7 +1223,7 @@ export function GraphScreen({
       if (!mounted.current) return
       setOpeningJobId(null)
       setStage('editor')
-      commitJob(created)
+      focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
@@ -1231,11 +1243,12 @@ export function GraphScreen({
       await flushAutosave()
       const next = await startGraphJob(token, item.id, input)
       if (!mounted.current) return
-      await primeAutosave(next)
-      if (!mounted.current) return
       setOpeningJobId(null)
       setStage('editor')
-      commitJob(next)
+      focusJob(next)
+      await primeAutosave(next)
+      if (!mounted.current || wantedJobIdRef.current !== next.id) return
+      if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setSelectedId(null)
       setJobs(current => current.map(row => row.id === next.id ? next : row))
@@ -1252,7 +1265,7 @@ export function GraphScreen({
   async function prepareDraftTemplate(item: GraphJob) {
     await primeAutosave(item)
     if (!mounted.current) return
-    commitJob(item)
+    focusJob(item)
     setPlan(item.graph)
     setSavingTemplate(true)
   }
