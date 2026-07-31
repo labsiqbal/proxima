@@ -388,7 +388,26 @@ Browser SSE and WebSocket endpoints accept the HttpOnly `proxima_session` cookie
 The legacy `?token=` fallback remains available for compatible clients, but new
 clients should use the cookie because URL credentials can be observed by proxies
 and diagnostics. Proxima's Uvicorn configuration redacts `token` query values from
-both HTTP access logs and WebSocket/error logs before they reach the journal.
+both HTTP access logs and WebSocket/error logs before they reach the journal. Canonical
+file-preview capability values are likewise redacted in query strings, gateway paths,
+and capability cookies.
+
+## Canonical file preview
+
+Canonical file previews bind a short-lived capability to one validated Area and the
+authenticated Proxima frame origin. Named local and apps-domain deployments use an
+Area-only origin. Plain HTTP remote deployments use an Area-only relay. HTTPS remote
+deployments without an apps domain use the existing TLS origin under an opaque,
+capability-scoped gateway that exposes only canonical file reads.
+
+Legacy active files never execute on the Proxima origin. HTML is upgraded to the
+canonical response sandbox, active XML and SVG download, main-origin HTML denies
+framing, worker responses restrict connections, and Service Worker scripts are
+rejected. Fetch Metadata and opaque-origin checks reject embedded requests that try
+to leave the preview boundary for Proxima routes. Same-Area resources still cross
+the canonical resolver and realpath jail.
+Design Studio obtains targeted canvas and export pixels through authenticated raw
+bytes and temporary blob URLs rather than through preview-origin CORS.
 
 ## Project app preview
 

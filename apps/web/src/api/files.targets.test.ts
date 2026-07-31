@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => vi.fn())
 
@@ -8,6 +8,7 @@ vi.mock('./client', () => ({
 
 import {
   deleteSessionArtifact,
+  fetchRawFile,
   previewUrl,
   relativeFileUrl,
 } from './files'
@@ -22,6 +23,10 @@ const target: FileTarget = {
 beforeEach(() => {
   apiMock.mockReset()
   apiMock.mockResolvedValue({ ok: true })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('canonical file URLs', () => {
@@ -56,5 +61,35 @@ describe('canonical file URLs', () => {
     const query = new URLSearchParams(String(url).split('?')[1])
     expect(JSON.parse(query.get('target') || '{}')).toEqual(target)
     expect(query.has('path')).toBe(false)
+  })
+
+  it('fetches canonical raw bytes with owner authentication', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      'canonical-image',
+      { headers: { 'Content-Type': 'image/png' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchRawFile(
+      'owner-token',
+      'identity',
+      'visual.png',
+      {
+        ...target,
+        path: 'visual.png',
+      },
+    )
+    expect(await result.text()).toBe('canonical-image')
+    expect(result.type).toBe('image/png')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    const query = new URLSearchParams(String(url).split('?')[1])
+    expect(JSON.parse(query.get('target') || '{}')).toEqual({
+      ...target,
+      path: 'visual.png',
+    })
+    expect(init).toEqual({
+      headers: { Authorization: 'Bearer owner-token' },
+    })
   })
 })

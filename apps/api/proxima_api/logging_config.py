@@ -7,12 +7,22 @@ from typing import Any
 
 from uvicorn.config import LOGGING_CONFIG
 
-_QUERY_TOKEN = re.compile(r"(?i)([?&]token=)[^&\s\"']*")
+_QUERY_CREDENTIAL = re.compile(
+    r"(?i)([?&](?:token|__proxima_cap|preview_capability)=)[^&\s\"']*"
+)
+_PATH_CAPABILITY = re.compile(
+    r"(?i)(/_proxima/file-preview/)[^/?#\s\"']+"
+)
+_COOKIE_CAPABILITY = re.compile(
+    r"(?i)((?:^|[;\s])proxima_file_preview(?:_[^=;\s]+)?=)[^;\s\"']+"
+)
 
 
 def _redact(value: Any) -> Any:
     if isinstance(value, str):
-        return _QUERY_TOKEN.sub(r"\1[REDACTED]", value)
+        redacted = _QUERY_CREDENTIAL.sub(r"\1[REDACTED]", value)
+        redacted = _PATH_CAPABILITY.sub(r"\1[REDACTED]", redacted)
+        return _COOKIE_CAPABILITY.sub(r"\1[REDACTED]", redacted)
     if isinstance(value, tuple):
         return tuple(_redact(item) for item in value)
     if isinstance(value, dict):

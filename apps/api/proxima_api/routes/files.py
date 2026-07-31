@@ -34,6 +34,10 @@ from ..schemas import (
     FsPathRequest,
     FsRenameRequest,
 )
+from ..target_preview import (
+    is_active_preview_media_type,
+    preview_media_type,
+)
 
 logger = logging.getLogger("proxima.api")
 
@@ -1212,7 +1216,7 @@ def register(app, deps):
         return response
 
     @app.get("/api/preview/{slug}/{file_path:path}")
-    def project_preview(
+    async def project_preview(
         slug: str,
         file_path: str,
         request: Request,
@@ -1233,4 +1237,26 @@ def register(app, deps):
         )
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        return FileResponse(str(resolved.path))  # inline (no attachment) so HTML/CSS/JS render
+        media_type = preview_media_type(resolved.path)
+        if is_active_preview_media_type(media_type):
+            project = visible_project(slug, user)
+            try:
+                preview_url = await app.state.target_previews.issue_url(
+                    request,
+                    int(project["id"]),
+                    resolved.locator,
+                )
+            except (OSError, RuntimeError, httpx.HTTPError) as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="dedicated file preview origin is unavailable",
+                ) from exc
+            response = RedirectResponse(preview_url, status_code=307)
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        return FileResponse(
+            str(resolved.path),
+            media_type=media_type,
+            headers={"X-Content-Type-Options": "nosniff"},
+        )

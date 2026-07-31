@@ -204,7 +204,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
-    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} sandbox={item.target ? 'allow-scripts allow-same-origin' : 'allow-scripts'} />
+    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
     if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
     if (error) return <div className="av-msg muted">{error}</div>
     if (text == null) return <div className="av-msg muted">Loading...</div>

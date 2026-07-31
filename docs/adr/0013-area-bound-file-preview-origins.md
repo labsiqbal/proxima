@@ -1,6 +1,6 @@
 # ADR-0013: Canonical file previews use Area-bound capability origins
 
-- Status: Accepted
+- Status: Superseded by ADR-0014
 - Date: 2026-07-31
 
 ## Context
@@ -82,6 +82,7 @@ not receive same-origin permission.
 
 ## Related
 
+- Superseded by [ADR-0014](0014-capability-scoped-file-preview-gateways.md)
 - Supersedes [ADR-0012](0012-sandboxed-target-preview-resources.md)
 - [ADR-0010](0010-canonical-file-targets.md)
 - [ADR-0011](0011-area-scoped-artifact-media.md)

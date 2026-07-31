@@ -80,12 +80,15 @@ export const listReferenceFiles = (token: string, slug: string) =>
 export const projectWikiAll = (token: string, slug: string) =>
   api<{ notes: { path: string; content: string }[] }>(`/api/projects/${slug}/wiki/all`, token)
 
-// Fetch raw file bytes (any type) as an object URL — for image preview / download.
-export async function fetchRawBlob(token: string, slug: string, path: string, target?: FileTarget): Promise<string> {
+export async function fetchRawFile(token: string, slug: string, path: string, target?: FileTarget): Promise<Blob> {
   const query = target ? `target=${targetParam(target)}` : `path=${q(path)}`
-  const res = await fetch(`/api/projects/${slug}/raw?${query}`, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await fetch(`/api/projects/${q(slug)}/raw?${query}`, { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) throw await responseError(res, `Could not download ${path}`)
-  return URL.createObjectURL(await res.blob())
+  return res.blob()
+}
+
+export async function fetchRawBlob(token: string, slug: string, path: string, target?: FileTarget): Promise<string> {
+  return URL.createObjectURL(await fetchRawFile(token, slug, path, target))
 }
 
 // Upload a user-attached file (image/doc) into the project's uploads/ folder.

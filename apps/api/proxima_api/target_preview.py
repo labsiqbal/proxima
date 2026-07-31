@@ -9,15 +9,20 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import mimetypes
 import secrets
 import socket
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qsl, quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import uvicorn
+from starlette.datastructures import MutableHeaders
+from starlette.requests import Request
 from starlette.responses import FileResponse, RedirectResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import container_registry, file_targets
 from .db import connect
@@ -25,7 +30,26 @@ from .preview_proxy import resolve_preview_bind_host
 
 FILE_PREVIEW_COOKIE = "proxima_file_preview"
 FILE_PREVIEW_TTL_SECONDS = 60 * 60
+FILE_PREVIEW_GATEWAY = "/_proxima/file-preview"
 _CAPABILITY_QUERY = "__proxima_cap"
+_ACTIVE_MEDIA_TYPES = frozenset(
+    {
+        "application/xhtml+xml",
+        "application/xml",
+        "image/svg+xml",
+        "text/html",
+        "text/xml",
+    }
+)
+_HTML_MEDIA_TYPES = frozenset({"text/html"})
+_SCRIPT_MEDIA_TYPES = frozenset(
+    {
+        "application/ecmascript",
+        "application/javascript",
+        "text/ecmascript",
+        "text/javascript",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +59,11 @@ class PreviewArea:
     area_id: int | None
 
     @classmethod
-    def from_locator(cls, project_id: int, locator: file_targets.FileLocator) -> PreviewArea:
+    def from_locator(
+        cls,
+        project_id: int,
+        locator: file_targets.FileLocator,
+    ) -> PreviewArea:
         return cls(
             project_id=project_id,
             kind=locator.area.kind,
@@ -52,26 +80,94 @@ class PreviewArea:
         return f"file-{self.project_id}-{self.kind}-{self.area_id or 0}"
 
 
+def preview_media_type(path: Path | str) -> str:
+    guessed, _ = mimetypes.guess_type(str(path), strict=False)
+    return (guessed or "application/octet-stream").lower()
+
+
+def is_active_preview_media_type(media_type: str) -> bool:
+    return media_type.split(";", 1)[0].strip().lower() in _ACTIVE_MEDIA_TYPES
+
+
+def _encode_payload(payload: dict[str, Any]) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).decode().rstrip("=")
+
+
 def mint_file_preview_token(
     secret: bytes,
     area: PreviewArea,
     *,
     ttl_seconds: int = FILE_PREVIEW_TTL_SECONDS,
+    frame_origin: str = "",
+    gateway_origin: str = "",
 ) -> str:
-    payload = {
-        "expires": int(time.time()) + ttl_seconds,
-        "project": area.project_id,
-        "kind": area.kind,
-        "area": area.area_id,
-        "nonce": secrets.token_urlsafe(12),
-    }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).decode().rstrip("=")
+    encoded = _encode_payload(
+        {
+            "expires": int(time.time()) + ttl_seconds,
+            "project": area.project_id,
+            "kind": area.kind,
+            "area": area.area_id,
+            "nonce": secrets.token_urlsafe(12),
+            "frame_origin": frame_origin,
+            "gateway_origin": gateway_origin,
+        }
+    )
     signature = base64.urlsafe_b64encode(
         hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
     ).decode().rstrip("=")
     return f"{encoded}.{signature}"
+
+
+def _file_preview_token_payload(
+    secret: bytes,
+    token: str,
+    *,
+    now: int | None = None,
+) -> dict[str, Any] | None:
+    try:
+        encoded, signature = token.split(".", 1)
+        expected = base64.urlsafe_b64encode(
+            hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        if not hmac.compare_digest(signature, expected):
+            return None
+        padding = "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("expires") or 0) < (
+            int(time.time()) if now is None else now
+        ):
+            return None
+        return payload
+    except (
+        binascii.Error,
+        OverflowError,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
+        return None
+
+
+def _area_from_payload(payload: dict[str, Any]) -> PreviewArea | None:
+    try:
+        project_id = int(payload.get("project"))
+        kind = str(payload.get("kind") or "")
+        raw_area_id = payload.get("area")
+        area_id = None if raw_area_id is None else int(raw_area_id)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if project_id <= 0 or kind not in file_targets.AREA_KINDS:
+        return None
+    if kind == "container" and area_id is not None:
+        return None
+    if kind != "container" and (area_id is None or area_id <= 0):
+        return None
+    return PreviewArea(project_id=project_id, kind=kind, area_id=area_id)
 
 
 def valid_file_preview_token(
@@ -81,32 +177,72 @@ def valid_file_preview_token(
     *,
     now: int | None = None,
 ) -> bool:
+    payload = _file_preview_token_payload(secret, token, now=now)
+    return payload is not None and _area_from_payload(payload) == area
+
+
+def _normalized_origin(scheme: str, host: str) -> str:
+    scheme = scheme.strip().lower()
+    host = host.strip().lower().rstrip(".")
+    if scheme not in {"http", "https"} or not host:
+        raise ValueError("preview origin is invalid")
+    if any(character in host for character in "\r\n/#?@"):
+        raise ValueError("preview origin is invalid")
+    parsed = urlsplit(f"{scheme}://{host}")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("preview origin is invalid")
+    return f"{scheme}://{parsed.netloc}"
+
+
+def _request_origin(request: Request) -> str:
+    scheme = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+    ).split(",", 1)[0]
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    ).split(",", 1)[0]
+    return _normalized_origin(scheme, host)
+
+
+def _header(scope: Scope, name: str) -> str:
+    encoded = name.lower().encode()
+    for key, value in scope.get("headers", []):
+        if key.lower() == encoded:
+            return value.decode("latin-1")
+    return ""
+
+
+def _scope_origin(scope: Scope) -> str:
+    forwarded_scheme = _header(scope, "x-forwarded-proto")
+    forwarded_host = _header(scope, "x-forwarded-host")
+    scheme = (forwarded_scheme or str(scope.get("scheme") or "http")).split(
+        ",",
+        1,
+    )[0]
+    host = (forwarded_host or _header(scope, "host")).split(",", 1)[0]
+    return _normalized_origin(scheme, host)
+
+
+def _frame_source(origin: str) -> str:
     try:
-        encoded, signature = token.split(".", 1)
-        expected = base64.urlsafe_b64encode(
-            hmac.new(secret, encoded.encode(), hashlib.sha256).digest()
-        ).decode().rstrip("=")
-        if not hmac.compare_digest(signature, expected):
-            return False
-        padding = "=" * (-len(encoded) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
-        return (
-            isinstance(payload, dict)
-            and payload.get("project") == area.project_id
-            and payload.get("kind") == area.kind
-            and payload.get("area") == area.area_id
-            and int(payload.get("expires") or 0)
-            >= (int(time.time()) if now is None else now)
-        )
-    except (
-        binascii.Error,
-        OverflowError,
-        TypeError,
-        ValueError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-    ):
-        return False
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "'none'"
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            return "'none'"
+        return _normalized_origin(parsed.scheme, parsed.netloc)
+    except ValueError:
+        return "'none'"
+
+
+def _is_service_worker_request(scope: Scope) -> bool:
+    return (
+        _header(scope, "service-worker").strip().lower() == "script"
+        or _header(scope, "sec-fetch-dest").strip().lower() == "serviceworker"
+    )
 
 
 class _TargetPreviewServer(uvicorn.Server):
@@ -195,15 +331,24 @@ class TargetPreviewManager:
 
     async def issue_url(
         self,
-        request: Any,
+        request: Request,
         project_id: int,
         locator: file_targets.FileLocator,
     ) -> str:
         if self.maintenance is not None and self.maintenance.fenced():
             raise RuntimeError("dedicated file previews are unavailable")
         area = PreviewArea.from_locator(project_id, locator)
-        token = mint_file_preview_token(self.secret, area)
-        hostname = str(request.url.hostname or "").lower().rstrip(".")
+        frame_origin = _request_origin(request)
+        parsed_origin = urlsplit(frame_origin)
+        hostname = str(parsed_origin.hostname or "")
+        encoded = self._encoded_path(locator.path)
+        query = [
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != _CAPABILITY_QUERY
+        ]
+        suffix = f"?{urlencode(query)}" if query else ""
+
         if self.apps_domain:
             if self.provision_hostname is not None and area not in self._provisioned:
                 lock = self._provision_locks.setdefault(area, asyncio.Lock())
@@ -217,18 +362,30 @@ class TargetPreviewManager:
                             ) from exc
                         self._provisioned.add(area)
             origin = f"https://{area.host_label()}.{self.apps_domain}"
-        elif (
-            hostname in {"localhost", "testserver"}
-            or hostname.endswith(".localhost")
+        elif hostname in {"localhost", "testserver"} or hostname.endswith(
+            ".localhost"
         ):
-            suffix = "testserver" if hostname == "testserver" else "localhost"
-            server = request.scope.get("server") or (None, None)
-            port = server[1]
-            default_port = 443 if request.url.scheme == "https" else 80
-            port_suffix = f":{port}" if port and int(port) != default_port else ""
+            suffix_host = "testserver" if hostname == "testserver" else "localhost"
+            default_port = 443 if parsed_origin.scheme == "https" else 80
+            port_suffix = (
+                f":{parsed_origin.port}"
+                if parsed_origin.port and parsed_origin.port != default_port
+                else ""
+            )
             origin = (
-                f"{request.url.scheme}://{area.host_label()}."
-                f"{suffix}{port_suffix}"
+                f"{parsed_origin.scheme}://{area.host_label()}."
+                f"{suffix_host}{port_suffix}"
+            )
+        elif parsed_origin.scheme == "https":
+            token = mint_file_preview_token(
+                self.secret,
+                area,
+                frame_origin=frame_origin,
+                gateway_origin=frame_origin,
+            )
+            return (
+                f"{frame_origin}{FILE_PREVIEW_GATEWAY}/"
+                f"{quote(token, safe='')}/{encoded}{suffix}"
             )
         else:
             bind_host = (
@@ -241,15 +398,13 @@ class TargetPreviewManager:
                 else self.bind_host
             )
             port = await self._relay_port(area, bind_host)
-            origin = (
-                f"http://{self._format_host(hostname)}:{port}"
-            )
-        encoded = self._encoded_path(locator.path)
-        query = [
-            (key, value)
-            for key, value in request.query_params.multi_items()
-            if key != _CAPABILITY_QUERY
-        ]
+            origin = f"http://{self._format_host(hostname)}:{port}"
+
+        token = mint_file_preview_token(
+            self.secret,
+            area,
+            frame_origin=frame_origin,
+        )
         query.append((_CAPABILITY_QUERY, token))
         return f"{origin}/{encoded}?{urlencode(query)}"
 
@@ -287,8 +442,8 @@ class TargetPreviewManager:
         }
         return port
 
-    def _relay_app(self, area: PreviewArea):
-        async def relay_app(scope, receive, send):
+    def _relay_app(self, area: PreviewArea) -> ASGIApp:
+        async def relay_app(scope: Scope, receive: Receive, send: Send) -> None:
             if scope["type"] != "http":
                 await self._reject(scope, send, 404, "preview route not found")
                 return
@@ -298,8 +453,8 @@ class TargetPreviewManager:
 
     async def _reject(
         self,
-        scope: dict[str, Any],
-        send,
+        scope: Scope,
+        send: Send,
         status: int,
         message: str,
     ) -> None:
@@ -310,7 +465,7 @@ class TargetPreviewManager:
         await response(scope, self._empty_receive, send)
 
     @staticmethod
-    async def _empty_receive() -> dict[str, Any]:
+    async def _empty_receive() -> Message:
         return {
             "type": "http.request",
             "body": b"",
@@ -318,18 +473,16 @@ class TargetPreviewManager:
         }
 
     @staticmethod
-    def _cookie(scope: dict[str, Any], name: str) -> str:
-        for key, value in scope.get("headers", []):
-            if key != b"cookie":
-                continue
-            for part in value.decode("latin-1").split(";"):
-                item = part.strip()
-                if item.startswith(f"{name}="):
-                    return item[len(name) + 1 :]
+    def _cookie(scope: Scope, name: str) -> str:
+        raw = _header(scope, "cookie")
+        for part in raw.split(";"):
+            item = part.strip()
+            if item.startswith(f"{name}="):
+                return item[len(name) + 1 :]
         return ""
 
     @staticmethod
-    def _capability_query(scope: dict[str, Any]) -> tuple[str, str]:
+    def _capability_query(scope: Scope) -> tuple[str, str]:
         pairs = parse_qsl(
             (scope.get("query_string") or b"").decode("latin-1"),
             keep_blank_values=True,
@@ -346,9 +499,9 @@ class TargetPreviewManager:
     async def serve(
         self,
         area: PreviewArea,
-        scope: dict[str, Any],
-        receive,
-        send,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
     ) -> None:
         if self.maintenance is not None and self.maintenance.fenced():
             await self._reject(scope, send, 423, "maintenance write fenced")
@@ -358,10 +511,13 @@ class TargetPreviewManager:
             return
         query_token, clean_query = self._capability_query(scope)
         cookie_name = area.cookie_name()
-        cookie_token = self._cookie(scope, cookie_name)
-        token = query_token or cookie_token
-        if not valid_file_preview_token(self.secret, token, area):
+        token = query_token or self._cookie(scope, cookie_name)
+        payload = _file_preview_token_payload(self.secret, token)
+        if payload is None or _area_from_payload(payload) != area:
             await self._reject(scope, send, 403, "preview capability is invalid")
+            return
+        if _is_service_worker_request(scope):
+            await self._reject(scope, send, 403, "service workers are unavailable")
             return
         if query_token:
             location = scope.get("path") or "/"
@@ -375,17 +531,83 @@ class TargetPreviewManager:
                 max_age=FILE_PREVIEW_TTL_SECONDS,
                 httponly=True,
                 secure=scope.get("scheme") == "https",
-                samesite=(
-                    "none"
-                    if scope.get("scheme") == "https"
-                    else "lax"
-                ),
+                samesite="strict",
             )
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
             await response(scope, receive, send)
             return
-        relative = str(scope.get("path") or "").lstrip("/")
+        await self._serve_file(
+            area,
+            str(scope.get("path") or "").lstrip("/"),
+            scope,
+            receive,
+            send,
+            frame_origin=str(payload.get("frame_origin") or ""),
+        )
+
+    async def serve_gateway(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if self.maintenance is not None and self.maintenance.fenced():
+            await self._reject(scope, send, 423, "maintenance write fenced")
+            return
+        if scope.get("method") not in {"GET", "HEAD"}:
+            await self._reject(scope, send, 405, "preview method not allowed")
+            return
+        prefix = f"{FILE_PREVIEW_GATEWAY}/"
+        path = str(scope.get("path") or "")
+        if not path.startswith(prefix):
+            await self._reject(scope, send, 404, "preview route not found")
+            return
+        token, separator, relative = path[len(prefix) :].partition("/")
+        if not separator or not token or not relative:
+            await self._reject(scope, send, 404, "preview route not found")
+            return
+        payload = _file_preview_token_payload(self.secret, token)
+        area = _area_from_payload(payload or {})
+        try:
+            origin = _scope_origin(scope)
+        except ValueError:
+            origin = ""
+        if (
+            payload is None
+            or area is None
+            or not origin
+            or not hmac.compare_digest(
+                str(payload.get("gateway_origin") or ""),
+                origin,
+            )
+        ):
+            await self._reject(scope, send, 403, "preview capability is invalid")
+            return
+        if _is_service_worker_request(scope):
+            await self._reject(scope, send, 403, "service workers are unavailable")
+            return
+        await self._serve_file(
+            area,
+            relative,
+            scope,
+            receive,
+            send,
+            frame_origin=str(payload.get("frame_origin") or ""),
+            gateway_scope=f"{origin}{prefix}{quote(token, safe='')}/",
+        )
+
+    async def _serve_file(
+        self,
+        area: PreviewArea,
+        relative: str,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        frame_origin: str,
+        gateway_scope: str = "",
+    ) -> None:
         try:
             normalized = file_targets.normalize_relative_path(
                 relative,
@@ -426,32 +648,109 @@ class TargetPreviewManager:
         if not resolved.path.is_file():
             await self._reject(scope, send, 404, "preview file not found")
             return
+
+        media_type = preview_media_type(resolved.path)
+        frame_source = _frame_source(frame_origin)
+        try:
+            preview_source = _frame_source(_scope_origin(scope))
+        except ValueError:
+            preview_source = "'none'"
+        frame_ancestors = " ".join(
+            dict.fromkeys(
+                source
+                for source in (frame_source, preview_source)
+                if source != "'none'"
+            )
+        ) or "'none'"
         headers = {
             "Cache-Control": "private, no-store",
             "Cross-Origin-Opener-Policy": "same-origin",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
         }
-        if resolved.path.suffix.lower() in {".html", ".htm"}:
+        if gateway_scope:
+            headers.update(
+                {
+                    "Access-Control-Allow-Origin": "null",
+                    "Cross-Origin-Resource-Policy": "cross-origin",
+                    "Vary": "Origin",
+                }
+            )
+        if media_type in _HTML_MEDIA_TYPES:
+            if gateway_scope:
+                headers["Content-Security-Policy"] = "; ".join(
+                    (
+                        "sandbox allow-scripts",
+                        "default-src 'none'",
+                        f"script-src 'unsafe-inline' {gateway_scope} blob:",
+                        f"style-src 'unsafe-inline' {gateway_scope}",
+                        f"img-src {gateway_scope} data: blob:",
+                        f"media-src {gateway_scope} blob:",
+                        f"font-src {gateway_scope} data:",
+                        f"connect-src {gateway_scope}",
+                        f"worker-src {gateway_scope} blob:",
+                        f"frame-src {gateway_scope}",
+                        "object-src 'none'",
+                        "base-uri 'none'",
+                        "form-action 'none'",
+                        f"frame-ancestors {frame_ancestors}",
+                    )
+                )
+            else:
+                headers["Content-Security-Policy"] = "; ".join(
+                    (
+                        "sandbox allow-scripts allow-same-origin",
+                        "default-src 'self' data: blob:",
+                        "script-src 'self' 'unsafe-inline' blob:",
+                        "style-src 'self' 'unsafe-inline'",
+                        "img-src 'self' data: blob:",
+                        "media-src 'self' blob:",
+                        "font-src 'self' data:",
+                        "connect-src 'self'",
+                        "worker-src 'self' blob:",
+                        "frame-src 'self'",
+                        "object-src 'none'",
+                        "base-uri 'none'",
+                        "form-action 'none'",
+                        f"frame-ancestors {frame_ancestors}",
+                    )
+                )
+        elif is_active_preview_media_type(media_type):
             headers["Content-Security-Policy"] = "; ".join(
                 (
-                    "sandbox allow-scripts allow-same-origin",
-                    "default-src 'self' data: blob:",
-                    "script-src 'self' 'unsafe-inline' blob:",
-                    "style-src 'self' 'unsafe-inline'",
-                    "img-src 'self' data: blob:",
-                    "media-src 'self' blob:",
-                    "font-src 'self' data:",
-                    "connect-src 'self'",
-                    "worker-src 'self' blob:",
-                    "frame-src 'self'",
+                    "sandbox",
+                    "default-src 'none'",
                     "object-src 'none'",
-                    "base-uri 'none'",
-                    "form-action 'none'",
-                    "navigate-to 'self'",
+                    f"frame-ancestors {frame_ancestors}",
                 )
             )
-        response = FileResponse(str(resolved.path), headers=headers)
+        elif media_type in _SCRIPT_MEDIA_TYPES:
+            connect_source = gateway_scope or "'self'"
+            script_source = gateway_scope or "'self'"
+            headers["Content-Security-Policy"] = "; ".join(
+                (
+                    "default-src 'none'",
+                    f"script-src {script_source}",
+                    f"connect-src {connect_source}",
+                    "worker-src 'none'",
+                    "object-src 'none'",
+                )
+            )
+
+        if is_active_preview_media_type(media_type) and media_type not in _HTML_MEDIA_TYPES:
+            response = FileResponse(
+                str(resolved.path),
+                filename=resolved.path.name,
+                content_disposition_type="attachment",
+                media_type=media_type,
+                headers=headers,
+            )
+        else:
+            response = FileResponse(
+                str(resolved.path),
+                media_type=media_type,
+                headers=headers,
+            )
         await response(scope, receive, send)
 
     async def shutdown(self) -> None:
@@ -469,17 +768,27 @@ class TargetPreviewManager:
 
 
 class TargetPreviewMiddleware:
-    def __init__(self, app: Any, manager: TargetPreviewManager) -> None:
+    def __init__(self, app: ASGIApp, manager: TargetPreviewManager) -> None:
         self.app = app
         self.manager = manager
 
-    async def __call__(self, scope: dict[str, Any], receive, send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in {"http", "websocket"}:
-            host = ""
-            for key, value in scope.get("headers", []):
-                if key == b"host":
-                    host = value.decode("latin-1")
-                    break
+            path = str(scope.get("path") or "")
+            if path == FILE_PREVIEW_GATEWAY or path.startswith(
+                f"{FILE_PREVIEW_GATEWAY}/"
+            ):
+                if scope["type"] != "http":
+                    await self.manager._reject(
+                        scope,
+                        send,
+                        404,
+                        "preview route not found",
+                    )
+                    return
+                await self.manager.serve_gateway(scope, receive, send)
+                return
+            host = _header(scope, "host")
             area = self.manager._host_area(host)
             if area is not None:
                 await self.manager.serve(area, scope, receive, send)
@@ -493,4 +802,45 @@ class TargetPreviewMiddleware:
                     "preview origin is invalid",
                 )
                 return
-        await self.app(scope, receive, send)
+            if label is not None and label.startswith("preview-"):
+                await self.app(scope, receive, send)
+                return
+            fetch_site = _header(scope, "sec-fetch-site").strip().lower()
+            fetch_destination = _header(
+                scope,
+                "sec-fetch-dest",
+            ).strip().lower()
+            if (
+                fetch_site in {"same-site", "cross-site"}
+                and fetch_destination
+                and fetch_destination != "document"
+            ) or _header(scope, "origin").strip().lower() == "null":
+                await self.manager._reject(
+                    scope,
+                    send,
+                    403,
+                    "preview navigation cannot access Proxima",
+                )
+                return
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def guarded_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                if is_active_preview_media_type(
+                    headers.get("content-type", "")
+                ):
+                    policy = headers.get("content-security-policy", "")
+                    if "frame-ancestors" not in policy.lower():
+                        headers["Content-Security-Policy"] = (
+                            f"{policy}; frame-ancestors 'none'"
+                            if policy
+                            else "frame-ancestors 'none'"
+                        )
+                    headers["X-Frame-Options"] = "DENY"
+                    headers["X-Content-Type-Options"] = "nosniff"
+            await send(message)
+
+        await self.app(scope, receive, guarded_send)
