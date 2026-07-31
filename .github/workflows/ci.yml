@@ -57,7 +57,7 @@ jobs:
           node-version: 20
       - name: Install Chrome
         id: chrome
-        uses: browser-actions/setup-chrome@9ffc9ce4183e2bb421a52b1ebd1860eeabce138e # v1.7.3
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
         with:
           chrome-version: stable
           install-dependencies: true

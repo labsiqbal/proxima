@@ -1242,28 +1242,6 @@ export function GraphScreen({
     })
   }
 
-  async function runCurrentPlan() {
-    if (!job || busy || scheduleHandoffRef.current) return
-    setBusy('start')
-    setError('')
-    setNotice('')
-    try {
-      await flushAutosave()
-      const next = await startGraphJob(token, job.id)
-      if (!mounted.current) return
-      if (wantedJobIdRef.current !== next.id) return
-      if (!await primeAutosave(next, readDraftMeta(next.id), { requireWantedId: next.id })) return
-      if (!applyFocusedJob(next)) return
-      setPlan(next.graph)
-      setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
-      setNotice('Execution started.')
-    } catch (cause) {
-      if (mounted.current) setError(String(cause))
-    } finally {
-      releaseOwnedBusy('start')
-    }
-  }
-
   async function createFromTemplate(template: GraphTemplate, input?: Record<string, string>) {
     if (busy || scheduleHandoffRef.current) return
     setBusy('use-template')
