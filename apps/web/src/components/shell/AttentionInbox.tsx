@@ -74,11 +74,11 @@ export function AttentionInbox({
                 compact
                 onChanged={load}
                 onOpenJob={(jobId, engine) => {
-                  setOpen(false)
+                  onOpenChange(false)
                   onOpenTarget({ view: 'task', job_id: jobId, engine })
                 }}
                 onOpenMaster={originMessageId => {
-                  setOpen(false)
+                  onOpenChange(false)
                   onOpenTarget({
                     view: 'master',
                     origin_message_id: originMessageId ?? undefined,

@@ -67,13 +67,19 @@ const decisionItem = {
   decision,
 }
 
-function InboxHarness({ onOpenChange = vi.fn() }: { onOpenChange?: (open: boolean) => void }) {
+function InboxHarness({
+  onOpenChange = vi.fn(),
+  onOpenTarget = vi.fn(),
+}: {
+  onOpenChange?: (open: boolean) => void
+  onOpenTarget?: React.ComponentProps<typeof AttentionInbox>['onOpenTarget']
+}) {
   const [open, setOpen] = React.useState(false)
   return (
     <AttentionInbox
       token="token"
       open={open}
-      onOpenTarget={vi.fn()}
+      onOpenTarget={onOpenTarget}
       onOpenChange={next => {
         setOpen(next)
         onOpenChange(next)
@@ -156,7 +162,7 @@ describe('AttentionInbox', () => {
       count: 1,
     })
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<InboxHarness />)
 
     await user.click(await screen.findByRole('button', { name: '1 attention item' }))
 
@@ -171,7 +177,7 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<InboxHarness onOpenTarget={openTarget} />)
     await user.click(
       await screen.findByRole('button', { name: '1 attention item' }),
     )
@@ -204,7 +210,7 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<InboxHarness onOpenTarget={openTarget} />)
     await user.click(
       await screen.findByRole('button', { name: '1 attention item' }),
     )
@@ -234,7 +240,7 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<InboxHarness onOpenTarget={openTarget} />)
     await user.click(
       await screen.findByRole('button', { name: '1 attention item' }),
     )
@@ -255,7 +261,7 @@ describe('AttentionInbox', () => {
       count: 1,
     })
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<InboxHarness />)
     await user.click(
       await screen.findByRole('button', { name: '1 attention item' }),
     )
