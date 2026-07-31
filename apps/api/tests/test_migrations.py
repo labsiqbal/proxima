@@ -491,9 +491,9 @@ def test_v48_retains_published_successor_ordering_gap(tmp_path: Path):
         recovery_json=_recovery_payload(ids["job_id"], 2),
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     gap = dict(
         conn.execute(
             "SELECT id, task_event_id, recovery_json, state, "
@@ -630,7 +630,7 @@ def test_v48_keeps_unpublished_recoveries_strictly_orderable(
             ),
         )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
     assert [
         tuple(row)
         for row in conn.execute(
@@ -727,9 +727,9 @@ def test_v50_schema_separates_markers_and_recovery_coverage(
         "schema-46-final-contract.db",
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     assert {
         row[1]
         for row in conn.execute(
@@ -908,7 +908,7 @@ def test_v49_detects_reversals_and_aggregates_corrections_per_task(
         ).fetchall()
     ]
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
     assert run_migrations(conn, str(db_path)) == []
     assert [
         tuple(row)
@@ -1074,7 +1074,7 @@ def test_v50_preserves_multiple_delivered_v47_markers_before_v48(
     conn.commit()
 
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
     assert run_migrations(conn, str(db_path)) == []
     after_corrections = [
         tuple(row)
@@ -1179,7 +1179,7 @@ def test_v50_recovers_multiple_delivered_markers_from_v48_history(
         ).fetchall()
     ] == sorted(correction_ids)
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53]
     assert [
         int(row["id"])
         for row in conn.execute(
@@ -1253,7 +1253,7 @@ def test_v50_records_pre_staging_identity_loss_without_inventing_markers(
     )
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging")
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53]
     assert conn.execute(
         "SELECT COUNT(*) FROM task_recovery_corrections"
     ).fetchone()[0] == 0
@@ -1297,7 +1297,7 @@ def test_recovery_audit_identity_survives_task_source_deletion(
         for index, correction_id in enumerate(correction_ids, start=1)
     ]
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1433,7 +1433,7 @@ def test_recovery_source_identity_survives_event_and_later_cascades(
         "recovery-source-event-cascade.db",
     )
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1558,7 +1558,7 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
         (ids["job_id"],),
     ).fetchone()[0] == 0
 
-    assert run_migrations(conn, str(db_path)) == [52]
+    assert run_migrations(conn, str(db_path)) == [52, 53]
     assert run_migrations(conn, str(db_path)) == []
     tombstone = dict(
         conn.execute(
@@ -1599,6 +1599,11 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
         )
         for outbox_id, task_event_id in source_before
     ]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM task_recovery_session_identity_losses "
+        "WHERE job_id = ?",
+        (ids["job_id"],),
+    ).fetchone()[0] == 0
     with pytest.raises(
         sqlite3.IntegrityError,
         match="recovery history tombstone identity is immutable",
@@ -1609,6 +1614,175 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
             "WHERE job_id = ?",
             (ids["job_id"],),
         )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v53_repairs_v51_node_session_guess_from_event_provenance(
+    tmp_path: Path,
+):
+    conn, db_path, ids, _ = _v48_correction_database(
+        tmp_path,
+        "recovery-source-v51-node-guess.db",
+    )
+    init_db(conn)
+    through_v52 = [
+        migration for migration in MIGRATIONS if migration[0] <= 52
+    ]
+    assert run_migrations(
+        conn,
+        str(db_path),
+        migrations=through_v52,
+    ) == [49, 50, 51, 52]
+    owner_id = int(
+        conn.execute(
+            "SELECT owner_user_id FROM sessions WHERE id = ?",
+            (ids["task_session_id"],),
+        ).fetchone()[0]
+    )
+    node_session_id = int(
+        conn.execute(
+            "INSERT INTO sessions(title, owner_user_id, job_id) "
+            "VALUES ('Graph node', ?, ?)",
+            (owner_id, ids["job_id"]),
+        ).lastrowid
+    )
+    conn.execute(
+        "UPDATE jobs SET session_id = NULL WHERE id = ?",
+        (ids["job_id"],),
+    )
+    conn.execute(
+        "DELETE FROM sessions WHERE id = ?",
+        (node_session_id,),
+    )
+    assert conn.execute(
+        "SELECT task_session_id FROM task_recovery_history_tombstones "
+        "WHERE job_id = ?",
+        (ids["job_id"],),
+    ).fetchone()[0] == node_session_id
+
+    assert run_migrations(conn, str(db_path)) == [53]
+    assert run_migrations(conn, str(db_path)) == []
+    assert conn.execute(
+        "SELECT task_session_id FROM task_recovery_history_tombstones "
+        "WHERE job_id = ?",
+        (ids["job_id"],),
+    ).fetchone()[0] == ids["task_session_id"]
+    assert dict(
+        conn.execute(
+            "SELECT job_id, reason, observed_task_session_id "
+            "FROM task_recovery_session_identity_losses "
+            "WHERE job_id = ?",
+            (ids["job_id"],),
+        ).fetchone()
+    ) == {
+        "job_id": ids["job_id"],
+        "reason": "unverified_v51_session_discarded",
+        "observed_task_session_id": node_session_id,
+    }
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v53_never_promotes_mixed_graph_sessions_to_task_identity(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "recovery-source-v52-mixed-nodes.db"
+    conn = connect(db_path)
+    init_db(conn)
+    through_v52 = [
+        migration for migration in MIGRATIONS if migration[0] <= 52
+    ]
+    run_migrations(conn, str(db_path), migrations=through_v52)
+    owner_id = int(
+        conn.execute(
+            "INSERT INTO users(username, os_user) "
+            "VALUES ('mixed-owner', 'mixed-owner')"
+        ).lastrowid
+    )
+    job_id = int(
+        conn.execute(
+            "INSERT INTO jobs(title, status, created_by) "
+            "VALUES ('Mixed graph recovery', 'queued', ?)",
+            (owner_id,),
+        ).lastrowid
+    )
+    node_session_ids = [
+        int(
+            conn.execute(
+                "INSERT INTO sessions(title, owner_user_id, job_id) "
+                "VALUES (?, ?, ?)",
+                (f"Node {index}", owner_id, job_id),
+            ).lastrowid
+        )
+        for index in (1, 2)
+    ]
+    source_ids: list[tuple[int, int, int]] = []
+    for seq, session_id in enumerate(node_session_ids, start=1):
+        task_event_id = int(
+            conn.execute(
+                "INSERT INTO events(session_id, seq, type, payload) "
+                "VALUES (?, ?, 'job.update', '{}')",
+                (session_id, seq),
+            ).lastrowid
+        )
+        outbox_id = int(
+            conn.execute(
+                "INSERT INTO task_recovery_outbox("
+                "job_id, task_event_id, recovery_json"
+                ") VALUES (?, ?, '{}')",
+                (job_id, task_event_id),
+            ).lastrowid
+        )
+        source_ids.append((outbox_id, task_event_id, session_id))
+
+    conn.execute(
+        "DELETE FROM sessions WHERE id = ?",
+        (node_session_ids[0],),
+    )
+    assert conn.execute(
+        "SELECT task_session_id FROM task_recovery_history_tombstones "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == node_session_ids[0]
+
+    assert run_migrations(conn, str(db_path)) == [53]
+    assert conn.execute(
+        "SELECT task_session_id FROM task_recovery_history_tombstones "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] is None
+    assert dict(
+        conn.execute(
+            "SELECT reason, observed_task_session_id "
+            "FROM task_recovery_session_identity_losses "
+            "WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    ) == {
+        "reason": "unverified_v51_session_discarded",
+        "observed_task_session_id": node_session_ids[0],
+    }
+    assert [
+        tuple(row)
+        for row in conn.execute(
+            "SELECT recovery_outbox_id, task_event_id, task_session_id "
+            "FROM task_recovery_source_history "
+            "WHERE job_id = ? ORDER BY recovery_outbox_id",
+            (job_id,),
+        ).fetchall()
+    ] == source_ids
+
+    conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    assert conn.execute(
+        "SELECT task_session_id FROM task_recovery_history_tombstones "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM task_recovery_session_identity_losses "
+        "WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 1
+    assert run_migrations(conn, str(db_path)) == []
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -1786,10 +1960,10 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
 
     assert run_migrations(conn, str(db_path)) == [
         32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-        49, 50, 51, 52,
+        49, 50, 51, 52, 53,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -2285,9 +2459,9 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
     assert run_migrations(conn, str(db_path)) == [
         28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
         44,
-        45, 46, 47, 48, 49, 50, 51, 52
+        45, 46, 47, 48, 49, 50, 51, 52, 53
     ]
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -2330,9 +2504,9 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
 
     assert run_migrations(conn, str(db_path)) == [
         29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-        46, 47, 48, 49, 50, 51, 52
+        46, 47, 48, 49, 50, 51, 52, 53
     ]
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -2546,10 +2720,10 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
     assert run_migrations(conn, str(db_path)) == [
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52
+        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -2648,9 +2822,9 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52
+        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
     ]
-    assert current_version(conn) == 52
+    assert current_version(conn) == 53
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -2748,7 +2922,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
     ]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
@@ -2877,7 +3051,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52
+        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
     ]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(

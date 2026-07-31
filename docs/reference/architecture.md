@@ -666,11 +666,17 @@ The v48 compatibility migration stages every delivered marker row and its exact
 coverage before aggregation. V49 restores only from that evidence and records
 bounded legacy identity loss for databases already damaged before staging existed.
 Source deletion enters one capture path from `BEFORE DELETE` triggers on the job,
-Task session, Task event, and recovery outbox. It preserves stable session, job,
-event, and outbox identities plus the exact outbox-to-event map, copies marker, gap,
-and coverage rows into immutable history tables keyed by their original ids, and
-writes or safely completes the Task-source tombstone. Only then may the live
+authoritative Task session, Task event, and recovery outbox. It preserves stable
+job, event, and outbox identities plus the exact outbox-to-event map, copies marker,
+gap, and coverage rows into immutable history tables keyed by their original ids,
+and writes or safely completes the Task-source tombstone. Task-session identity
+comes only from `jobs.session_id` or one consistent set of outbox-referenced Task
+events, never generic graph-session membership. If neither survives, it remains
+`NULL` and an immutable bounded loss row records why. Only then may the live
 cascades proceed; later boundaries cannot rewrite captured identity.
+The rationale, alternatives, ordering rules, legacy containment, correction-marker
+trade-offs, and authoritative deletion identity are recorded in
+[ADR-0027](../adr/0027-durable-task-reconciliation-protocol.md).
 Projection message, event, and ledger rows then commit together. Startup validates
 their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
 contract.

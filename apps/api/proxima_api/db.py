@@ -1031,6 +1031,17 @@ CREATE TABLE IF NOT EXISTS task_recovery_source_history (
   PRIMARY KEY (job_id, recovery_outbox_id),
   UNIQUE(job_id, task_event_id)
 );
+CREATE TABLE IF NOT EXISTS task_recovery_session_identity_losses (
+  job_id INTEGER PRIMARY KEY,
+  reason TEXT NOT NULL CHECK (
+    reason IN (
+      'authoritative_task_session_unavailable',
+      'unverified_v51_session_discarded'
+    )
+  ),
+  observed_task_session_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS task_recovery_ordering_gap_history (
   id INTEGER PRIMARY KEY,
   job_id INTEGER NOT NULL,
@@ -1091,6 +1102,18 @@ CREATE TRIGGER IF NOT EXISTS task_recovery_source_history_delete_immutable
 BEFORE DELETE ON task_recovery_source_history
 BEGIN
   SELECT RAISE(ABORT, 'recovery source history is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_session_identity_losses_immutable
+BEFORE UPDATE ON task_recovery_session_identity_losses
+BEGIN
+  SELECT RAISE(ABORT, 'recovery session identity loss is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_session_identity_losses_delete_immutable
+BEFORE DELETE ON task_recovery_session_identity_losses
+BEGIN
+  SELECT RAISE(ABORT, 'recovery session identity loss is immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gap_history_immutable
 BEFORE UPDATE ON task_recovery_ordering_gap_history

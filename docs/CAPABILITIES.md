@@ -642,7 +642,10 @@ or outbox `BEFORE DELETE` boundary. It records the exact outbox-to-event map, th
 tombstones and archives the correction, gap, and coverage rows before live cascades,
 preserving their stable ids and surviving Master message/event links. Repeated
 boundaries can complete missing legacy tombstone fields and expand captured ranges,
-but cannot replace identity already preserved. SSE
+but only `jobs.session_id` or one consistent set of outbox-referenced Task events
+can establish Task-session identity. Generic graph-session membership is never used.
+If neither source remains, the tombstone keeps `NULL` and an immutable bounded loss
+row records the unavailable identity. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).

@@ -147,8 +147,11 @@ the stable Task session, job, Task-event, and recovery-outbox identity at the
 job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map and
 recovery gap, marker, and coverage ids are archived behind a source tombstone before
 live foreign-key cascades, while Master messages and events remain linked. A later
-boundary may safely complete a partial legacy tombstone, but cannot rewrite captured
-identity.
+boundary may safely complete a partial legacy tombstone only from
+`jobs.session_id` or a consistent set of outbox-referenced Task events. Arbitrary
+graph-session membership is not Task-session provenance. Without authoritative
+provenance the identity remains `NULL` and an immutable bounded loss row records the
+reason.
 Git preflight completes before the immediate write transaction, then
 the restore rereads checkpoint, conflict, job, run, and node state under that lock.
 All validation and durable writes complete before a job worktree reset. A post-reset

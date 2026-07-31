@@ -102,8 +102,10 @@ session, job, Task-event, and recovery-outbox identity at the
 job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map,
 marker, gap, and coverage identity are archived behind a stable tombstone before the
 live source cascades; surviving Master message and event links remain coherent.
-Repeated boundaries may complete missing legacy tombstone fields without rewriting
-identity already captured.
+Repeated boundaries may complete missing legacy tombstone fields only from
+`jobs.session_id` or a consistent set of outbox-referenced Task events. They never
+promote generic graph-session membership. Missing authoritative provenance remains
+`NULL` and is retained as an immutable bounded session-identity loss.
 Unavailable legacy Focus is recorded as failed attribution and can be replayed only
 after attribution becomes provable; the Task restore remains committed and no
 unattributed history is published. Each reconciliation candidate has its own
