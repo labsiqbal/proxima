@@ -1318,9 +1318,11 @@ a capability-bearing iframe or frame navigation; the clean frame may use the
 validated host-scoped cookie and remains bound by the signed frame ancestor.
 Top-level document navigation is rejected before same-origin or capability trust,
 including a clean URL with an ambient Area cookie. Same-origin non-document
-resources and proven frame navigations remain available. Malformed-entry,
-missing-entry-metadata, and cross-origin subresource requests are rejected before
-file service. Named-local HTTP uses a Secure
+resources and proven frame navigations remain available. Resource requests must
+match an explicit browser-valid mode and destination tuple; fetch and XHR may use
+the `empty` destination token with `cors`, `no-cors`, or `same-origin`. Missing,
+unknown, contradictory, active-document, malformed-entry, and cross-origin
+subresource metadata is rejected before file service. Named-local HTTP uses a Secure
 `SameSite=None` cookie under the browser's trustworthy-localhost exception; plain
 HTTP relays use `SameSite=Strict`.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated

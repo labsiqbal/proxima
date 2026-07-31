@@ -50,6 +50,41 @@ _SCRIPT_MEDIA_TYPES = frozenset(
         "text/javascript",
     }
 )
+_SAME_ORIGIN_RESOURCE_FETCH_METADATA = frozenset(
+    {
+        ("cors", "empty"),
+        ("cors", "audio"),
+        ("cors", "audioworklet"),
+        ("cors", "font"),
+        ("cors", "image"),
+        ("cors", "json"),
+        ("cors", "manifest"),
+        ("cors", "paintworklet"),
+        ("cors", "script"),
+        ("cors", "sharedworker"),
+        ("cors", "style"),
+        ("cors", "text"),
+        ("cors", "track"),
+        ("cors", "video"),
+        ("cors", "worker"),
+        ("no-cors", "empty"),
+        ("no-cors", "audio"),
+        ("no-cors", "image"),
+        ("no-cors", "manifest"),
+        ("no-cors", "script"),
+        ("no-cors", "style"),
+        ("no-cors", "track"),
+        ("no-cors", "video"),
+        ("same-origin", "empty"),
+        ("same-origin", "audioworklet"),
+        ("same-origin", "paintworklet"),
+        ("same-origin", "script"),
+        ("same-origin", "serviceworker"),
+        ("same-origin", "sharedworker"),
+        ("same-origin", "style"),
+        ("same-origin", "worker"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -205,12 +240,16 @@ def _request_origin(request: Request) -> str:
     return _normalized_origin(scheme, host)
 
 
-def _header(scope: Scope, name: str) -> str:
+def _optional_header(scope: Scope, name: str) -> str | None:
     encoded = name.lower().encode()
     for key, value in scope.get("headers", []):
         if key.lower() == encoded:
             return value.decode("latin-1")
-    return ""
+    return None
+
+
+def _header(scope: Scope, name: str) -> str:
+    return _optional_header(scope, name) or ""
 
 
 def _capability_query(scope: Scope) -> tuple[str, str]:
@@ -230,27 +269,36 @@ def _capability_query(scope: Scope) -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class _PreviewFetchMetadata:
-    site: str
-    mode: str
-    destination: str
+    site: str | None
+    mode: str | None
+    destination: str | None
     opaque_origin: bool
 
     @classmethod
     def from_scope(cls, scope: Scope) -> _PreviewFetchMetadata:
+        site = _optional_header(scope, "sec-fetch-site")
+        mode = _optional_header(scope, "sec-fetch-mode")
+        destination = _optional_header(scope, "sec-fetch-dest")
         return cls(
-            site=_header(scope, "sec-fetch-site").strip().lower(),
-            mode=_header(scope, "sec-fetch-mode").strip().lower(),
-            destination=_header(
-                scope,
-                "sec-fetch-dest",
-            ).strip().lower(),
+            site=site.strip().lower() if site is not None else None,
+            mode=mode.strip().lower() if mode is not None else None,
+            destination=(
+                destination.strip().lower()
+                if destination is not None
+                else None
+            ),
             opaque_origin=(
                 _header(scope, "origin").strip().lower() == "null"
             ),
         )
 
     def admits_area_request(self, *, capability_present: bool) -> bool:
-        if self.opaque_origin:
+        if (
+            self.opaque_origin
+            or self.site is None
+            or self.mode is None
+            or self.destination is None
+        ):
             return False
         if self.destination == "document":
             return False
@@ -266,7 +314,10 @@ class _PreviewFetchMetadata:
                 )
             )
         if self.site == "same-origin":
-            return True
+            return (
+                self.mode,
+                self.destination,
+            ) in _SAME_ORIGIN_RESOURCE_FETCH_METADATA
         return False
 
 

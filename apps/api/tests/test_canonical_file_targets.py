@@ -55,6 +55,104 @@ def _clean_capability_url(url: str) -> str:
     )
 
 
+@pytest.mark.parametrize(
+    ("mode", "destinations"),
+    [
+        (
+            "cors",
+            (
+                "empty",
+                "audio",
+                "audioworklet",
+                "font",
+                "image",
+                "json",
+                "manifest",
+                "paintworklet",
+                "script",
+                "sharedworker",
+                "style",
+                "text",
+                "track",
+                "video",
+                "worker",
+            ),
+        ),
+        (
+            "no-cors",
+            (
+                "empty",
+                "audio",
+                "image",
+                "manifest",
+                "script",
+                "style",
+                "track",
+                "video",
+            ),
+        ),
+        (
+            "same-origin",
+            (
+                "empty",
+                "audioworklet",
+                "paintworklet",
+                "script",
+                "serviceworker",
+                "sharedworker",
+                "style",
+                "worker",
+            ),
+        ),
+    ],
+)
+def test_same_origin_preview_metadata_allows_resource_tuples(
+    mode: str,
+    destinations: tuple[str, ...],
+) -> None:
+    for destination in destinations:
+        metadata = target_preview._PreviewFetchMetadata(
+            site="same-origin",
+            mode=mode,
+            destination=destination,
+            opaque_origin=False,
+        )
+        assert metadata.admits_area_request(capability_present=True)
+
+
+@pytest.mark.parametrize(
+    ("mode", "destination"),
+    [
+        (None, None),
+        (None, "script"),
+        ("cors", None),
+        ("", ""),
+        ("cors", ""),
+        ("invalid", "script"),
+        ("websocket", "empty"),
+        ("navigate", "empty"),
+        ("navigate", "document"),
+        ("navigate", "script"),
+        ("cors", "document"),
+        ("cors", "iframe"),
+        ("cors", "invalid"),
+        ("no-cors", "worker"),
+        ("same-origin", "image"),
+    ],
+)
+def test_same_origin_preview_metadata_rejects_invalid_resource_tuples(
+    mode: str | None,
+    destination: str | None,
+) -> None:
+    metadata = target_preview._PreviewFetchMetadata(
+        site="same-origin",
+        mode=mode,
+        destination=destination,
+        opaque_origin=False,
+    )
+    assert not metadata.admits_area_request(capability_present=True)
+
+
 def _api(
     tmp_path: Path,
     config: dict[str, object] | None = None,
@@ -352,11 +450,15 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     clean_query = parse_qs(urlsplit(isolated_url).query)
     assert clean_query == {"cache": ["7"]}
 
-    same_origin_metadata = {"Sec-Fetch-Site": "same-origin"}
+    same_origin_frame_metadata = {
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
     without_capability = TestClient(api.app)
     missing_cookie = without_capability.get(
         isolated_url,
-        headers=same_origin_metadata,
+        headers=same_origin_frame_metadata,
     )
     assert missing_cookie.status_code == 403
     assert missing_cookie.text == "preview capability is invalid"
@@ -369,7 +471,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         ):
             pass
 
-    page = api.get(isolated_url, headers=same_origin_metadata)
+    page = api.get(isolated_url, headers=same_origin_frame_metadata)
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
     preview_policy = page.headers["content-security-policy"]
@@ -406,6 +508,45 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert clean_frame.status_code == 200
     assert "Ops page" in clean_frame.text
 
+    for invalid_resource_metadata in (
+        {"Sec-Fetch-Site": "same-origin"},
+        {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+        },
+        {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Dest": "",
+        },
+        {
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "",
+        },
+        {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "invalid",
+            "Sec-Fetch-Dest": "script",
+        },
+        {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "worker",
+        },
+        {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "document",
+        },
+    ):
+        rejected_resource = api.get(
+            isolated_url,
+            headers=invalid_resource_metadata,
+        )
+        assert rejected_resource.status_code == 403
+        assert rejected_resource.text == (
+            "preview request metadata is invalid"
+        )
+
     nested_asset = api.get(
         urljoin(isolated_url, "theme.css"),
         headers={
@@ -418,22 +559,35 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert nested_asset.text == "body { color: canonical-ops; }"
     module = api.get(
         urljoin(isolated_url, "module.js"),
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "script",
+        },
     )
     worker = api.get(
         urljoin(isolated_url, "worker.js"),
         headers={
-            **same_origin_metadata,
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "same-origin",
             "Sec-Fetch-Dest": "worker",
         },
     )
     font = api.get(
         urljoin(isolated_url, "font.woff2"),
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "font",
+        },
     )
     fetched = api.get(
         urljoin(isolated_url, "data.json"),
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        },
     )
     assert module.status_code == 200
     assert module.headers["content-type"].startswith(
@@ -447,7 +601,9 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     service_worker = api.get(
         urljoin(isolated_url, "worker.js"),
         headers={
-            **same_origin_metadata,
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "same-origin",
+            "Sec-Fetch-Dest": "serviceworker",
             "Service-Worker": "script",
         },
     )
@@ -460,7 +616,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     ):
         active = api.get(
             urljoin(isolated_url, active_name),
-            headers=same_origin_metadata,
+            headers=same_origin_frame_metadata,
         )
         assert active.status_code == 200
         assert active.headers["content-type"].startswith(media_type)
@@ -541,11 +697,19 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert urlsplit(escaped_navigation).hostname == capability_host
     assert api.get(
         escaped_navigation,
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "image",
+        },
     ).status_code == 404
     assert api.get(
         urljoin(isolated_url, "/api/health"),
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        },
     ).status_code == 404
 
     invalid_area = api.get(
@@ -822,7 +986,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         headers={
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "",
+            "Sec-Fetch-Dest": "empty",
         },
     )
     assert data.status_code == 200
@@ -850,7 +1014,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
             {
                 "Sec-Fetch-Site": "cross-site",
                 "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Dest": "",
+                "Sec-Fetch-Dest": "empty",
             },
         ),
     ):
@@ -861,6 +1025,8 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         worker_url,
         headers={
             "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "same-origin",
+            "Sec-Fetch-Dest": "serviceworker",
             "Service-Worker": "script",
         },
     )

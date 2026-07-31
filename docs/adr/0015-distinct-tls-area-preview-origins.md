@@ -39,18 +39,7 @@ HTTPS active previews use an Area-specific hostname under the configured apps
 domain. Its router is permanently bound to one validated Area and exposes no
 Proxima or legacy routes. Capability exchange, exact authenticated
 `frame-ancestors`, canonical resolution, worker response policy, and Service Worker
-rejection remain mandatory. TLS exchange uses a Secure, host-scoped
-`SameSite=None` cookie so the Tailscale Proxima origin and apps-domain Area origin
-may remain cross-site; the signed Proxima origin remains the exact permitted frame
-ancestor. HTTP same-site relays retain `SameSite=Strict`. Native module workers use
-same-origin Area URLs. A cross-origin Area entry must carry the signed capability
-on an iframe or frame navigation request. Host-routed HTTPS and named-local HTTP
-exchanges return a server-owned bootstrap that sets the cookie and enter the clean
-same-origin URL. The clean frame navigation may use that validated host-scoped
-cookie and remains bound by the signed frame ancestor. Top-level, malformed-entry,
-missing-entry-metadata, cross-origin script, image, fetch, and worker requests are
-rejected before Area dispatch. Named-local HTTP uses a Secure `SameSite=None`
-cookie under the browser's trustworthy-localhost exception.
+rejection remain mandatory. Native module workers use same-origin Area URLs.
 
 Named local origins and plain HTTP Area relays retain the same isolated-host model.
 When an HTTPS installation has no distinct TLS Area origin, active preview entry

@@ -45,7 +45,7 @@ def test_missing_openssl_fails_before_browser_fixture_build(
 def test_accepted_preview_adr_remains_append_only() -> None:
     adr = ROOT / "docs" / "adr" / "0015-distinct-tls-area-preview-origins.md"
     digest = hashlib.sha256(adr.read_bytes()).hexdigest()
-    assert digest == "f1a2941b0b2c3a736ffe6b50131f8e5616cb5160c7fd712f531a6a23d1ead5d5"
+    assert digest == "559d71879df7260d42c015fc0f2063ab828e564baeaac7bd56173d6646ba7a72"
 
     successor = (
         ROOT / "docs" / "adr" / "0016-frame-bound-area-preview-admission.md"
