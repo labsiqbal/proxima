@@ -653,8 +653,14 @@ causally superseded before emitting the authoritative Queued recovery event.
 Recovery audit intents remain append-only and publish exactly once in Task-event
 order. Missing legacy Focus leaves each restore as a failed-attribution repair row
 without rolling back Task restoration or publishing unattributed history. Projection
-message, event, and ledger rows then commit together. Startup validates their strict
-owner, source/type, foreign-key, index, complete-link, and bounded payload contract.
+schema upgrades classify an unpublished predecessor with an already-published
+successor as an immutable `legacy_ordering_gap` linked to that successor. A separate
+idempotent correction intent emits one bounded history marker only after ordered
+outboxes and the canonical current Task projection are settled; still-orderable
+predecessors remain on the normal recovery path.
+Projection message, event, and ledger rows then commit together. Startup validates
+their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
+contract.
 Raw streaming deltas are never projected. Each named event carries the same captured
 Focus and subject attribution committed with its message, so the live projection
 cannot drift before canonical reconciliation. Server-owned summaries omit Task

@@ -736,6 +736,65 @@ CREATE TABLE IF NOT EXISTS task_recovery_outbox (
     length(recovery_json) BETWEEN 2 AND 16384
   ),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (
+    state IN (
+      'pending', 'projected', 'failed_attribution', 'legacy_ordering_gap'
+    )
+  ),
+  master_session_id INTEGER
+    REFERENCES sessions(id) ON DELETE SET NULL,
+  message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+  event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+  ordering_successor_id INTEGER
+    REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+  failure_code TEXT CHECK (
+    failure_code IS NULL OR failure_code IN (
+      'focus_attribution_unavailable',
+      'projection_scope_unavailable',
+      'projection_failed'
+    )
+  ),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(task_event_id),
+  CHECK (
+    (state = 'pending' AND message_id IS NULL AND event_id IS NULL
+      AND ordering_successor_id IS NULL
+      AND (failure_code IS NULL OR failure_code = 'projection_failed'))
+    OR
+    (state = 'projected' AND message_id IS NOT NULL AND event_id IS NOT NULL
+      AND ordering_successor_id IS NULL AND failure_code IS NULL)
+    OR
+    (state = 'failed_attribution' AND message_id IS NULL AND event_id IS NULL
+      AND ordering_successor_id IS NULL
+      AND failure_code IN (
+        'focus_attribution_unavailable', 'projection_scope_unavailable'
+      ))
+    OR
+    (state = 'legacy_ordering_gap' AND message_id IS NULL
+      AND event_id IS NULL AND ordering_successor_id IS NOT NULL
+      AND ordering_successor_id != id AND failure_code IS NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state
+  ON task_recovery_outbox(state, task_event_id);
+CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gap_immutable
+BEFORE UPDATE ON task_recovery_outbox
+WHEN OLD.state = 'legacy_ordering_gap'
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery ordering gap is immutable');
+END;
+CREATE TABLE IF NOT EXISTS task_recovery_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  successor_outbox_id INTEGER NOT NULL
+    REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+  gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+  first_task_event_id INTEGER NOT NULL CHECK (first_task_event_id > 0),
+  last_task_event_id INTEGER NOT NULL CHECK (
+    last_task_event_id >= first_task_event_id
+  ),
+  state TEXT NOT NULL DEFAULT 'pending' CHECK (
     state IN ('pending', 'projected', 'failed_attribution')
   ),
   master_session_id INTEGER
@@ -752,7 +811,7 @@ CREATE TABLE IF NOT EXISTS task_recovery_outbox (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(task_event_id),
+  UNIQUE(successor_outbox_id),
   CHECK (
     (state = 'pending' AND message_id IS NULL AND event_id IS NULL
       AND (failure_code IS NULL OR failure_code = 'projection_failed'))
@@ -766,8 +825,8 @@ CREATE TABLE IF NOT EXISTS task_recovery_outbox (
       ))
   )
 );
-CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state
-  ON task_recovery_outbox(state, task_event_id);
+CREATE INDEX IF NOT EXISTS idx_task_recovery_corrections_state
+  ON task_recovery_corrections(state, id);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.

@@ -713,9 +713,17 @@ def _projection_repair_payload(
         "UNION ALL "
         "SELECT 'recovery' AS kind, state, failure_code, task_event_id "
         "FROM task_recovery_outbox WHERE job_id = ? "
-        "AND state IN ('pending', 'failed_attribution')"
+        "AND state IN ('pending', 'failed_attribution') "
+        "UNION ALL "
+        "SELECT 'recovery_history' AS kind, correction.state, "
+        "correction.failure_code, successor.task_event_id "
+        "FROM task_recovery_corrections AS correction "
+        "JOIN task_recovery_outbox AS successor "
+        "ON successor.id = correction.successor_outbox_id "
+        "WHERE correction.job_id = ? "
+        "AND correction.state IN ('pending', 'failed_attribution')"
         ") ORDER BY task_event_id DESC LIMIT 1",
-        (job_id, job_id),
+        (job_id, job_id, job_id),
     ).fetchone()
     if row is None:
         return None

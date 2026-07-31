@@ -2839,6 +2839,234 @@ def _separate_task_projection_generations(conn: sqlite3.Connection) -> None:
     )
 
 
+def _preserve_legacy_recovery_ordering_gaps(
+    conn: sqlite3.Connection,
+) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {
+        "jobs",
+        "events",
+        "task_recovery_outbox",
+    }.issubset(tables):
+        return
+    recovery_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_outbox)"
+        ).fetchall()
+    }
+    if "ordering_successor_id" not in recovery_columns:
+        if "task_recovery_corrections" in tables:
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_corrections LIMIT 1"
+            ).fetchone():
+                raise RuntimeError(
+                    "Task recovery corrections predate their schema"
+                )
+            conn.execute("DROP TABLE task_recovery_corrections")
+        conn.execute(
+            "ALTER TABLE task_recovery_outbox "
+            "RENAME TO task_recovery_outbox_v46"
+        )
+        conn.execute(
+            """
+            CREATE TABLE task_recovery_outbox (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+              task_event_id INTEGER NOT NULL
+                REFERENCES events(id) ON DELETE CASCADE,
+              recovery_json TEXT NOT NULL CHECK (
+                length(recovery_json) BETWEEN 2 AND 16384
+              ),
+              state TEXT NOT NULL DEFAULT 'pending' CHECK (
+                state IN (
+                  'pending', 'projected', 'failed_attribution',
+                  'legacy_ordering_gap'
+                )
+              ),
+              master_session_id INTEGER
+                REFERENCES sessions(id) ON DELETE SET NULL,
+              message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+              event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+              ordering_successor_id INTEGER
+                REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+              failure_code TEXT CHECK (
+                failure_code IS NULL OR failure_code IN (
+                  'focus_attribution_unavailable',
+                  'projection_scope_unavailable',
+                  'projection_failed'
+                )
+              ),
+              attempt_count INTEGER NOT NULL DEFAULT 0
+                CHECK (attempt_count >= 0),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(task_event_id),
+              CHECK (
+                (state = 'pending' AND message_id IS NULL
+                  AND event_id IS NULL AND ordering_successor_id IS NULL
+                  AND (
+                    failure_code IS NULL OR failure_code = 'projection_failed'
+                  ))
+                OR
+                (state = 'projected' AND message_id IS NOT NULL
+                  AND event_id IS NOT NULL
+                  AND ordering_successor_id IS NULL
+                  AND failure_code IS NULL)
+                OR
+                (state = 'failed_attribution' AND message_id IS NULL
+                  AND event_id IS NULL
+                  AND ordering_successor_id IS NULL
+                  AND failure_code IN (
+                    'focus_attribution_unavailable',
+                    'projection_scope_unavailable'
+                  ))
+                OR
+                (state = 'legacy_ordering_gap' AND message_id IS NULL
+                  AND event_id IS NULL
+                  AND ordering_successor_id IS NOT NULL
+                  AND ordering_successor_id != id
+                  AND failure_code IS NULL)
+              )
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO task_recovery_outbox("
+            "id, job_id, task_event_id, recovery_json, state, "
+            "master_session_id, message_id, event_id, failure_code, "
+            "attempt_count, created_at, updated_at"
+            ") SELECT id, job_id, task_event_id, recovery_json, state, "
+            "master_session_id, message_id, event_id, failure_code, "
+            "attempt_count, created_at, updated_at "
+            "FROM task_recovery_outbox_v46"
+        )
+        conn.execute("DROP TABLE task_recovery_outbox_v46")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state "
+        "ON task_recovery_outbox(state, task_event_id)"
+    )
+    conn.execute(
+        """
+        UPDATE task_recovery_outbox AS predecessor
+        SET state = 'legacy_ordering_gap',
+            ordering_successor_id = (
+              SELECT successor.id
+              FROM task_recovery_outbox AS successor
+              WHERE successor.job_id = predecessor.job_id
+                AND successor.task_event_id > predecessor.task_event_id
+                AND successor.state = 'projected'
+              ORDER BY successor.task_event_id
+              LIMIT 1
+            ),
+            failure_code = NULL
+        WHERE predecessor.state IN ('pending', 'failed_attribution')
+          AND EXISTS (
+            SELECT 1
+            FROM task_recovery_outbox AS successor
+            WHERE successor.job_id = predecessor.job_id
+              AND successor.task_event_id > predecessor.task_event_id
+              AND successor.state = 'projected'
+          )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gap_immutable
+        BEFORE UPDATE ON task_recovery_outbox
+        WHEN OLD.state = 'legacy_ordering_gap'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'legacy recovery ordering gap is immutable'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_corrections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          successor_outbox_id INTEGER NOT NULL
+            REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+          gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+          first_task_event_id INTEGER NOT NULL
+            CHECK (first_task_event_id > 0),
+          last_task_event_id INTEGER NOT NULL CHECK (
+            last_task_event_id >= first_task_event_id
+          ),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (
+            state IN ('pending', 'projected', 'failed_attribution')
+          ),
+          master_session_id INTEGER
+            REFERENCES sessions(id) ON DELETE SET NULL,
+          message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+          failure_code TEXT CHECK (
+            failure_code IS NULL OR failure_code IN (
+              'focus_attribution_unavailable',
+              'projection_scope_unavailable',
+              'projection_failed'
+            )
+          ),
+          attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(successor_outbox_id),
+          CHECK (
+            (state = 'pending' AND message_id IS NULL AND event_id IS NULL
+              AND (
+                failure_code IS NULL OR failure_code = 'projection_failed'
+              ))
+            OR
+            (state = 'projected' AND message_id IS NOT NULL
+              AND event_id IS NOT NULL AND failure_code IS NULL)
+            OR
+            (state = 'failed_attribution' AND message_id IS NULL
+              AND event_id IS NULL AND failure_code IN (
+                'focus_attribution_unavailable',
+                'projection_scope_unavailable'
+              ))
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_recovery_corrections_state "
+        "ON task_recovery_corrections(state, id)"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO task_recovery_corrections("
+        "job_id, successor_outbox_id, gap_count, first_task_event_id, "
+        "last_task_event_id, master_session_id"
+        ") SELECT gap.job_id, gap.ordering_successor_id, COUNT(*), "
+        "MIN(gap.task_event_id), MAX(gap.task_event_id), "
+        "successor.master_session_id "
+        "FROM task_recovery_outbox AS gap "
+        "JOIN task_recovery_outbox AS successor "
+        "ON successor.id = gap.ordering_successor_id "
+        "WHERE gap.state = 'legacy_ordering_gap' "
+        "GROUP BY gap.job_id, gap.ordering_successor_id, "
+        "successor.master_session_id"
+    )
+
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(
+        conn,
+        require_ordered=True,
+        require_state_generation=True,
+        require_legacy_ordering=True,
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -2953,6 +3181,11 @@ MIGRATIONS: list[Migration] = [
         47,
         "separate Task status generations from append-only recovery audits",
         _separate_task_projection_generations,
+    ),
+    (
+        48,
+        "preserve legacy recovery ordering gaps and correct their history",
+        _preserve_legacy_recovery_ordering_gaps,
     ),
 ]
 

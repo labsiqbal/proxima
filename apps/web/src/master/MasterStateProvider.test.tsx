@@ -494,6 +494,45 @@ describe('MasterStateProvider', () => {
     )
   })
 
+  it('retains current Task status when legacy recovery history is corrected', async () => {
+    renderProvider()
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const source = FakeEventSource.instances[0]
+    act(() => source.open())
+    act(() => {
+      source.emit('master.task.completed', {
+        id: 13,
+        seq: 2,
+        type: 'master.task.completed',
+        run_id: null,
+        session_id: 9,
+        payload: fleetProjectionPayload(55, 7),
+        created_at: '2026-07-27T10:01:00Z',
+      })
+      source.emit('master.task.recovery_history_corrected', {
+        id: 14,
+        seq: 3,
+        type: 'master.task.recovery_history_corrected',
+        run_id: null,
+        session_id: 9,
+        payload: {
+          ...fleetProjectionPayload(56, 7),
+          gap_count: 1,
+          first_task_event_id: 30,
+          last_task_event_id: 30,
+          successor_task_event_id: 31,
+        },
+        created_at: '2026-07-27T10:02:00Z',
+      })
+    })
+
+    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:done')
+    expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
+      'Retained 1 earlier checkpoint recovery audit for Task #7 as a legacy ordering gap before Task event #31.',
+    )
+    expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('14')
+  })
+
   it('applies a restored rerun after an earlier matching lifecycle', async () => {
     renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))

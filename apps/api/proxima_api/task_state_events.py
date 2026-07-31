@@ -483,3 +483,158 @@ def publish_master_recovery(
         "event_id": event_id,
         "message_id": message_id,
     }
+
+
+def publish_master_recovery_correction(
+    conn: sqlite3.Connection,
+    *,
+    correction: Mapping[str, Any],
+) -> dict[str, int]:
+    correction_id = _as_int(correction["id"])
+    row = conn.execute(
+        "SELECT c.*, successor.task_event_id AS successor_task_event_id, "
+        "successor.master_session_id AS successor_master_session_id, "
+        "successor.message_id AS successor_message_id, "
+        "successor.event_id AS successor_event_id, "
+        "event.session_id AS successor_event_session_id, "
+        "event.type AS successor_event_type, "
+        "event.payload AS successor_event_payload "
+        "FROM task_recovery_corrections AS c "
+        "JOIN task_recovery_outbox AS successor "
+        "ON successor.id = c.successor_outbox_id "
+        "JOIN events AS event ON event.id = successor.event_id "
+        "WHERE c.id = ? AND successor.state = 'projected'",
+        (correction_id,),
+    ).fetchone()
+    if row is None:
+        raise RecoveryAttributionError("projection_scope_unavailable")
+    master_session_id = _as_int(row["successor_master_session_id"])
+    if _as_int(row["successor_event_session_id"]) != master_session_id or str(
+        row["successor_event_type"]
+    ) != "master.task.recovered":
+        raise RecoveryAttributionError("projection_scope_unavailable")
+    try:
+        successor_payload = json.loads(str(row["successor_event_payload"]))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RecoveryAttributionError(
+            "projection_scope_unavailable"
+        ) from exc
+    if not isinstance(successor_payload, dict):
+        raise RecoveryAttributionError("projection_scope_unavailable")
+    try:
+        successor_task_id = _as_int(successor_payload.get("task_id"))
+        successor_message_id = _as_int(
+            successor_payload.get("message_id")
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RecoveryAttributionError(
+            "projection_scope_unavailable"
+        ) from exc
+    if (
+        successor_task_id != _as_int(row["job_id"])
+        or successor_message_id != _as_int(row["successor_message_id"])
+    ):
+        raise RecoveryAttributionError("projection_scope_unavailable")
+    focus_epoch_id = successor_payload.get("focus_epoch_id")
+    subject_container_id = successor_payload.get("subject_container_id")
+    focus_container_id = successor_payload.get("focus_container_id")
+    try:
+        focus_epoch_id = (
+            None if focus_epoch_id is None else _as_int(focus_epoch_id)
+        )
+        subject_container_id = (
+            None
+            if subject_container_id is None
+            else _as_int(subject_container_id)
+        )
+        focus_container_id = (
+            None
+            if focus_container_id is None
+            else _as_int(focus_container_id)
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RecoveryAttributionError(
+            "focus_attribution_unavailable"
+        ) from exc
+    if focus_epoch_id is None:
+        if focus_container_id is not None:
+            raise RecoveryAttributionError("focus_attribution_unavailable")
+    else:
+        epoch = conn.execute(
+            "SELECT master_session_id, container_id "
+            "FROM master_focus_epochs WHERE id = ?",
+            (focus_epoch_id,),
+        ).fetchone()
+        if epoch is None or (
+            _as_int(epoch["master_session_id"]) != master_session_id
+            or _as_int(epoch["container_id"]) != focus_container_id
+        ):
+            raise RecoveryAttributionError("focus_attribution_unavailable")
+    job_id = _as_int(row["job_id"])
+    gap_count = _as_int(row["gap_count"])
+    first_task_event_id = _as_int(row["first_task_event_id"])
+    last_task_event_id = _as_int(row["last_task_event_id"])
+    successor_task_event_id = _as_int(row["successor_task_event_id"])
+    noun = "audit" if gap_count == 1 else "audits"
+    pronoun = "It was" if gap_count == 1 else "They were"
+    gap_label = (
+        "a legacy ordering gap"
+        if gap_count == 1
+        else "legacy ordering gaps"
+    )
+    content = (
+        f"Retained {gap_count} earlier checkpoint recovery {noun} for "
+        f"Task #{job_id} as {gap_label} before Task event "
+        f"#{successor_task_event_id}. {pronoun} not replayed because the "
+        "later recovery had already been published."
+    )
+    message = conn.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'assistant', ?, 'Master')",
+        (master_session_id, content),
+    )
+    message_id = _as_int(message.lastrowid)
+    master_focus.stamp_message(
+        conn,
+        message_id=message_id,
+        focus_epoch_id=focus_epoch_id,
+        subject_container_id=subject_container_id,
+    )
+    job = conn.execute(
+        "SELECT project_id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if job is None:
+        raise RecoveryAttributionError("projection_scope_unavailable")
+    payload = {
+        "message_id": message_id,
+        "task_id": job_id,
+        "gap_count": gap_count,
+        "first_task_event_id": first_task_event_id,
+        "last_task_event_id": last_task_event_id,
+        "successor_task_event_id": successor_task_event_id,
+        "focus_epoch_id": focus_epoch_id,
+        "focus_container_id": focus_container_id,
+        "subject_container_id": subject_container_id,
+    }
+    event = conn.execute(
+        "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) "
+        "VALUES (NULL, ?, ?, ?, "
+        "'master.task.recovery_history_corrected', ?)",
+        (
+            master_session_id,
+            job["project_id"],
+            _next_session_seq(conn, master_session_id),
+            encode_bounded_event_payload(payload),
+        ),
+    )
+    event_id = _as_int(event.lastrowid)
+    conn.execute(
+        "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (master_session_id,),
+    )
+    return {
+        "session_id": master_session_id,
+        "event_id": event_id,
+        "message_id": message_id,
+    }

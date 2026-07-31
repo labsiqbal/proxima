@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 42 tables. Applied migration version: **47**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 43 tables. Applied migration version: **48**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`knowledge_rebuild_intents`](#knowledge_rebuild_intents), [`master_focus_epochs`](#master_focus_epochs), [`master_focus_state`](#master_focus_state), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_focus`](#message_focus), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`self_update_runs`](#self_update_runs), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`task_projection_outbox`](#task_projection_outbox), [`task_recovery_outbox`](#task_recovery_outbox), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`knowledge_rebuild_intents`](#knowledge_rebuild_intents), [`master_focus_epochs`](#master_focus_epochs), [`master_focus_state`](#master_focus_state), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_focus`](#message_focus), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`self_update_runs`](#self_update_runs), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`task_projection_outbox`](#task_projection_outbox), [`task_recovery_corrections`](#task_recovery_corrections), [`task_recovery_outbox`](#task_recovery_outbox), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -720,6 +720,28 @@ SQLite (WAL mode). 42 tables. Applied migration version: **47**. This is the exa
 **Indexes:** `uq_task_projection_outbox_revision` - UNIQUE (job_id, projection_revision); `idx_task_projection_outbox_state` - (state, id)
 
 
+### task_recovery_corrections
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
+| `successor_outbox_id` | INTEGER | NO |  | → `task_recovery_outbox.id` (ON DELETE CASCADE) |
+| `gap_count` | INTEGER | NO |  |  |
+| `first_task_event_id` | INTEGER | NO |  |  |
+| `last_task_event_id` | INTEGER | NO |  |  |
+| `state` | TEXT | NO | `'pending'` |  |
+| `master_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
+| `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
+| `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
+| `failure_code` | TEXT | yes |  |  |
+| `attempt_count` | INTEGER | NO | `0` |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+| `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+**Indexes:** `idx_task_recovery_corrections_state` - (state, id)
+
+
 ### task_recovery_outbox
 
 | Column | Type | Null | Default | Key / FK |
@@ -732,6 +754,7 @@ SQLite (WAL mode). 42 tables. Applied migration version: **47**. This is the exa
 | `master_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
 | `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
 | `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
+| `ordering_successor_id` | INTEGER | yes |  | → `task_recovery_outbox.id` (ON DELETE CASCADE) |
 | `failure_code` | TEXT | yes |  |  |
 | `attempt_count` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |

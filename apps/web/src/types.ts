@@ -426,7 +426,7 @@ export type RunProjection = {
 	duration_seconds: number | null;
 };
 export type ProjectionRepair = {
-	kind: "status" | "recovery";
+	kind: "status" | "recovery" | "recovery_history";
 	state: "pending" | "failed_attribution";
 	failure_code: string | null;
 	task_event_id: number;

@@ -102,6 +102,22 @@ function safeProjectionContent(
       : 'No conflicting progress was present.'
     return `${actor} restored Task #${taskId} from checkpoint #${checkpointId}: ${title(prior)} to ${title(restored)}. ${discardedText} ${conflictText}`
   }
+  if (
+    type === 'master.task.recovery_history_corrected'
+    && taskId != null
+  ) {
+    const gapCount = positiveInteger(payload.gap_count)
+    const successorTaskEventId = positiveInteger(
+      payload.successor_task_event_id,
+    )
+    if (gapCount == null || successorTaskEventId == null) return null
+    const noun = gapCount === 1 ? 'audit' : 'audits'
+    const pronoun = gapCount === 1 ? 'It was' : 'They were'
+    const gapLabel = gapCount === 1
+      ? 'a legacy ordering gap'
+      : 'legacy ordering gaps'
+    return `Retained ${gapCount} earlier checkpoint recovery ${noun} for Task #${taskId} as ${gapLabel} before Task event #${successorTaskEventId}. ${pronoun} not replayed because the later recovery had already been published.`
+  }
   const satpamLabels: Record<string, string> = {
     'master.satpam.steered': 'steered',
     'master.satpam.restart_queued': 'needs approval to restart',

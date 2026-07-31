@@ -902,6 +902,163 @@ def test_multiple_pending_checkpoint_recoveries_publish_once_in_event_order(
     ]
 
 
+def test_legacy_recovery_gap_corrects_after_current_task_projection(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="legacy-recovery-ordering-gap",
+        tasks=[{
+            "key": "task",
+            "title": "Repair legacy recovery order",
+            "brief": "Keep current Task status authoritative",
+        }],
+    )
+    job_id = jobs[0]["id"]
+    checkpoint = create_checkpoint(app.state.db, job_id)
+    task_session_id = app.state.db.execute(
+        "SELECT session_id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["session_id"]
+    predecessor_seq = app.state.db.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events "
+        "WHERE session_id = ?",
+        (task_session_id,),
+    ).fetchone()["seq"]
+    predecessor_event_id = app.state.db.execute(
+        "INSERT INTO events(session_id, seq, type, payload) "
+        "VALUES (?, ?, 'job.update', ?)",
+        (
+            task_session_id,
+            predecessor_seq,
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "mutation": "checkpoint_restored",
+                }
+            ),
+        ),
+    ).lastrowid
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed', finished_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    restored = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+    assert restored.status_code == 200
+    successor = app.state.db.execute(
+        "SELECT * FROM task_recovery_outbox WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    gap_id = app.state.db.execute(
+        "INSERT INTO task_recovery_outbox("
+        "job_id, task_event_id, recovery_json, state, master_session_id, "
+        "ordering_successor_id"
+        ") VALUES (?, ?, ?, 'legacy_ordering_gap', ?, ?)",
+        (
+            job_id,
+            predecessor_event_id,
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "checkpoint_id": checkpoint["id"],
+                    "actor": {"id": 1, "username": "owner"},
+                    "prior_status": "failed",
+                    "restored_status": "queued",
+                    "discarded_progress": [],
+                    "conflicting_progress": [],
+                }
+            ),
+            desk["session"]["id"],
+            successor["id"],
+        ),
+    ).lastrowid
+    correction_id = app.state.db.execute(
+        "INSERT INTO task_recovery_corrections("
+        "job_id, successor_outbox_id, gap_count, first_task_event_id, "
+        "last_task_event_id, master_session_id"
+        ") VALUES (?, ?, 1, ?, ?, ?)",
+        (
+            job_id,
+            successor["id"],
+            predecessor_event_id,
+            predecessor_event_id,
+            desk["session"]["id"],
+        ),
+    ).lastrowid
+    assert client.get(f"/api/jobs/{job_id}").json()["projection_repair"] == {
+        "kind": "recovery_history",
+        "state": "pending",
+        "failure_code": None,
+        "task_event_id": successor["task_event_id"],
+    }
+
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'done', finished_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    append_task_update(
+        app.state.db,
+        job_id=job_id,
+        mutation="owner_completed",
+    )
+    app.state.master_projection.reconcile()
+    app.state.master_projection.reconcile()
+
+    assert app.state.db.execute(
+        "SELECT state FROM task_recovery_outbox WHERE id = ?",
+        (gap_id,),
+    ).fetchone()["state"] == "legacy_ordering_gap"
+    assert dict(
+        app.state.db.execute(
+            "SELECT state, failure_code, attempt_count "
+            "FROM task_recovery_corrections WHERE id = ?",
+            (correction_id,),
+        ).fetchone()
+    ) == {
+        "state": "projected",
+        "failure_code": None,
+        "attempt_count": 1,
+    }
+    events = _projection_events(client, desk["session"]["id"])
+    assert [event["type"] for event in events] == [
+        "master.task.recovered",
+        "master.task.completed",
+        "master.task.recovery_history_corrected",
+    ]
+    correction_event = events[-1]
+    container_id = app.state.db.execute(
+        "SELECT project_id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["project_id"]
+    assert correction_event["payload"] == {
+        "message_id": correction_event["payload"]["message_id"],
+        "task_id": job_id,
+        "gap_count": 1,
+        "first_task_event_id": predecessor_event_id,
+        "last_task_event_id": predecessor_event_id,
+        "successor_task_event_id": successor["task_event_id"],
+        "focus_epoch_id": correction_event["payload"]["focus_epoch_id"],
+        "focus_container_id": correction_event["payload"][
+            "focus_container_id"
+        ],
+        "subject_container_id": container_id,
+    }
+    assert len(json.dumps(correction_event["payload"]).encode("utf-8")) < 2048
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "done"
+    assert client.get(
+        f"/api/jobs/{job_id}"
+    ).json()["projection_repair"] is None
+
+
 def test_final_approval_commits_outbox_and_replays_projection_failure(
     tmp_path: Path,
     monkeypatch,
