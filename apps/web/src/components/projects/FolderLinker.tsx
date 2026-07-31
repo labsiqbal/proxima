@@ -1,6 +1,5 @@
 import React from 'react'
-import { ApiError } from '../../api/client'
-import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
+import { apiErrorDetail, browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
 import type { DirectoryBrowse } from '../../api/projects'
 import type { Project } from '../../types'
 
@@ -58,7 +57,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       })
       .catch(e => {
         if (mountedRef.current && seq === loadSeq.current) {
-          reportError(e instanceof Error ? e.message : String(e), 'path')
+          reportError(apiErrorDetail(e), linkProjectErrorField(e) ?? 'path')
           setLoading(false)
         }
       })
@@ -132,10 +131,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
             : apiField === 'path'
               ? 'path'
               : mode === 'create' ? 'folder' : 'path'
-        const message = e instanceof ApiError && e.detail
-          ? e.detail
-          : e instanceof Error ? e.message : String(e)
-        reportError(message, field)
+        reportError(apiErrorDetail(e), field)
       }
     } finally {
       if (mountedRef.current && seq === actionSeq.current) setBusy(false)

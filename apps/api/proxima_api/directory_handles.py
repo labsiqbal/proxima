@@ -170,6 +170,22 @@ class PosixDirectoryBackend:
             return False
         return f"posix:{info.st_dev}:{info.st_ino}" == child.identity
 
+    def _clear_directory(self, handle: DirectoryHandle) -> None:
+        for entry in list(self.list_names(handle)):
+            try:
+                info = os.stat(entry, dir_fd=handle.raw, follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                child = self.open_child(handle, entry)
+                try:
+                    self._clear_directory(child)
+                finally:
+                    self.close(child)
+                os.rmdir(entry, dir_fd=handle.raw)
+            else:
+                os.unlink(entry, dir_fd=handle.raw)
+
     def remove_owned(
         self,
         parent: DirectoryHandle,
@@ -195,6 +211,7 @@ class PosixDirectoryBackend:
                 except OSError:
                     pass
                 continue
+            self._clear_directory(child)
             os.rmdir(quarantine, dir_fd=parent.raw)
             return
 
@@ -573,15 +590,10 @@ class WindowsDirectoryBackend:
         finally:
             self.close(visible)
 
-    def remove_owned(
-        self,
-        parent: DirectoryHandle,
-        name: str,
-        child: DirectoryHandle,
-    ) -> None:
+    def _delete_handle(self, handle: DirectoryHandle, name: str) -> None:
         deletion = _FileDispositionInformation(DeleteFile=True)
         if not self.kernel32.SetFileInformationByHandle(
-            wintypes.HANDLE(child.raw),
+            wintypes.HANDLE(handle.raw),
             4,
             ctypes.byref(deletion),
             ctypes.sizeof(deletion),
@@ -589,6 +601,69 @@ class WindowsDirectoryBackend:
             error = ctypes.get_last_error()
             if error not in (2, 3):
                 raise OSError(error, ctypes.FormatError(error), name)
+
+    def _open_file(self, parent: DirectoryHandle, name: str) -> DirectoryHandle:
+        text = ctypes.create_unicode_buffer(name)
+        unicode_name = _UnicodeString(
+            Length=len(name.encode("utf-16-le")),
+            MaximumLength=(len(name) + 1) * 2,
+            Buffer=ctypes.cast(text, wintypes.LPWSTR),
+        )
+        attributes = _ObjectAttributes(
+            Length=ctypes.sizeof(_ObjectAttributes),
+            RootDirectory=wintypes.HANDLE(parent.raw),
+            ObjectName=ctypes.pointer(unicode_name),
+            Attributes=0x40,
+            SecurityDescriptor=None,
+            SecurityQualityOfService=None,
+        )
+        io_status = _IoStatusBlock()
+        result = wintypes.HANDLE()
+        status = int(self.ntdll.NtCreateFile(
+            ctypes.byref(result),
+            0x00100000 | 0x00010000 | 0x00000080,
+            ctypes.byref(attributes),
+            ctypes.byref(io_status),
+            None,
+            0,
+            0x7,
+            1,
+            0x40 | 0x00200000,
+            None,
+            0,
+        ))
+        if status < 0:
+            self._raise_status(status, name)
+        raw = self._value(result)
+        return DirectoryHandle(raw=raw, identity="")
+
+    def _clear_directory(self, handle: DirectoryHandle) -> None:
+        for entry in list(self.list_names(handle)):
+            try:
+                child = self.open_child(handle, entry)
+            except OSError:
+                file_handle = self._open_file(handle, entry)
+                try:
+                    self._delete_handle(file_handle, entry)
+                finally:
+                    self.close(file_handle)
+                continue
+            try:
+                self._clear_directory(child)
+                self._delete_handle(child, entry)
+            finally:
+                self.close(child)
+
+    def remove_owned(
+        self,
+        parent: DirectoryHandle,
+        name: str,
+        child: DirectoryHandle,
+    ) -> None:
+        if not self.entry_is_owned(parent, name, child):
+            return
+        self._clear_directory(child)
+        self._delete_handle(child, name)
 
     def close(self, handle: DirectoryHandle) -> None:
         if handle.closed:

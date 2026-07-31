@@ -872,6 +872,103 @@ def test_link_mkdir_removes_dir_on_unexpected_error(tmp_path: Path, monkeypatch)
     assert not target.exists()
 
 
+def test_link_mkdir_rolls_back_nonempty_tree_after_ops_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Post-publish ops provisioning failures must recursively remove the owned tree."""
+    parent = tmp_path / "code"
+    parent.mkdir()
+    c, h = _link_client(tmp_path)
+    target = parent / "ops-fail"
+    original = container_registry.migrate_container_ops
+    should_fail = {"value": True}
+
+    def fail_after_ops(conn, project_id):
+        result = original(conn, project_id)
+        assert target.is_dir()
+        assert (target / "ops").is_dir()
+        assert (target / "ops" / "container.md").is_file()
+        if should_fail["value"]:
+            raise RuntimeError("simulated post-ops failure")
+        return result
+
+    monkeypatch.setattr(
+        "proxima_api.routes.projects.container_registry.migrate_container_ops",
+        fail_after_ops,
+    )
+    with pytest.raises(RuntimeError, match="simulated post-ops failure"):
+        _post_link(
+            c,
+            h,
+            {"path": str(target), "name": "Ops Fail", "mkdir": True},
+        )
+
+    assert not target.exists()
+    leftovers = [path.name for path in parent.iterdir()]
+    assert leftovers == []
+    with sqlite3.connect(tmp_path / "h.db") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM projects WHERE slug = 'ops-fail'"
+        ).fetchone()[0] == 0
+
+    should_fail["value"] = False
+    retry = _post_link(
+        c,
+        h,
+        {"path": str(target), "name": "Ops Fail", "mkdir": True},
+    )
+    assert retry.status_code == 201, retry.text
+    assert target.is_dir()
+    assert (target / "ops" / "container.md").is_file()
+
+
+def test_link_mkdir_post_ops_rollback_skips_replacement(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Owned-tree rollback must not delete a same-name replacement after publish."""
+    parent = tmp_path / "code"
+    parent.mkdir()
+    c, h = _link_client(tmp_path)
+    target = parent / "replaced-after-ops"
+    moved = parent / "moved-owned-after-ops"
+    replacement_marker = "replacement-keep"
+
+    def replace_owned_then_fail(conn, project_id):
+        original(conn, project_id)
+        assert target.is_dir()
+        assert (target / "ops").is_dir()
+        target.rename(moved)
+        target.mkdir()
+        (target / "keep.txt").write_text(replacement_marker, encoding="utf-8")
+        raise RuntimeError("simulated replacement race after ops")
+
+    original = container_registry.migrate_container_ops
+
+    monkeypatch.setattr(
+        "proxima_api.routes.projects.container_registry.migrate_container_ops",
+        replace_owned_then_fail,
+    )
+    with pytest.raises(RuntimeError, match="simulated replacement race after ops"):
+        _post_link(
+            c,
+            h,
+            {"path": str(target), "name": "Replaced After Ops", "mkdir": True},
+        )
+
+    assert target.is_dir()
+    assert (target / "keep.txt").read_text(encoding="utf-8") == replacement_marker
+    assert not moved.exists()
+    assert not any(
+        path.name.startswith(".proxima-remove-") for path in parent.iterdir()
+    )
+    with sqlite3.connect(tmp_path / "h.db") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM projects WHERE slug = 'replaced-after-ops'"
+        ).fetchone()[0] == 0
+
+
 def test_symlink_root_id_survives_canonical_browse_and_link(tmp_path: Path):
     real = tmp_path / "real"
     real.mkdir()

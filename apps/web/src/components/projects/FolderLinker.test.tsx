@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FolderLinker } from './FolderLinker'
-import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
+import { apiErrorDetail, browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
 import { ApiError } from '../../api/client'
 import type { Project } from '../../types'
 
@@ -42,8 +42,16 @@ describe('FolderLinker', () => {
 
   it('renders a focused retry target when initial browsing fails', async () => {
     const user = userEvent.setup()
+    const loadError = new ApiError(
+      403,
+      'GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots',
+      '/api/fs/dirs?path=',
+      'GET',
+      'path',
+      'No readable folder is available inside the allowed roots',
+    )
     vi.mocked(browseDirs)
-      .mockRejectedValueOnce(new Error('No readable folder is available inside the allowed roots'))
+      .mockRejectedValueOnce(loadError)
       .mockResolvedValueOnce(dirs)
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)
 
@@ -52,10 +60,13 @@ describe('FolderLinker', () => {
       name: 'Folder browser. Retry folders',
     })
     expect(alert).toHaveTextContent('No readable folder is available inside the allowed roots')
+    expect(alert).not.toHaveTextContent('/api/fs/dirs')
+    expect(alert).toHaveTextContent(apiErrorDetail(loadError))
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(retry).toHaveFocus()
     expect(retry).toHaveAttribute('aria-invalid', 'true')
     expect(retry).not.toHaveAttribute('aria-describedby')
+    expect(linkProjectErrorField(loadError)).toBe('path')
 
     await user.keyboard('{Enter}')
 
@@ -66,6 +77,75 @@ describe('FolderLinker', () => {
     expect(selected).not.toHaveAttribute('aria-invalid')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(browseDirs).toHaveBeenLastCalledWith('tok', '', '')
+  })
+
+  it('announces only the structured detail when refresh browsing fails', async () => {
+    const user = userEvent.setup()
+    const refreshError = new ApiError(
+      403,
+      'GET /api/fs/dirs?path=%2Fhome%2Fuser%2Fcode failed (403): No readable folder is available inside the allowed roots',
+      '/api/fs/dirs?path=%2Fhome%2Fuser%2Fcode',
+      'GET',
+      'path',
+      'No readable folder is available inside the allowed roots',
+    )
+    vi.mocked(browseDirs)
+      .mockResolvedValueOnce(dirs)
+      .mockRejectedValueOnce(refreshError)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    const selected = await screen.findByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    await user.click(selected)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('No readable folder is available inside the allowed roots')
+    expect(alert).not.toHaveTextContent('/api/fs/dirs')
+    expect(alert).toHaveTextContent(apiErrorDetail(refreshError))
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(selected).toHaveFocus()
+    expect(selected).toHaveAttribute('aria-invalid', 'true')
+    expect(linkProjectErrorField(refreshError)).toBe('path')
+  })
+
+  it('announces only the structured detail for no-readable-ancestor recovery failures', async () => {
+    const user = userEvent.setup()
+    const ancestorError = new ApiError(
+      403,
+      'GET /api/fs/dirs?path=%2Fmissing failed (403): No readable folder is available inside the allowed roots',
+      '/api/fs/dirs?path=%2Fmissing',
+      'GET',
+      'path',
+      'No readable folder is available inside the allowed roots',
+    )
+    vi.mocked(browseDirs)
+      .mockResolvedValueOnce(dirs)
+      .mockRejectedValueOnce(ancestorError)
+      .mockResolvedValueOnce(dirs)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    await user.click(screen.getByRole('button', { name: '↑ ..' }))
+
+    const alert = await screen.findByRole('alert')
+    const selected = screen.getByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    expect(alert).toHaveTextContent('No readable folder is available inside the allowed roots')
+    expect(alert).not.toHaveTextContent('GET /api/fs/dirs')
+    expect(alert).not.toHaveTextContent('failed (403)')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(selected).toHaveFocus()
+    expect(selected).toHaveAttribute('aria-invalid', 'true')
+
+    await user.click(selected)
+    const recovered = await screen.findByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    expect(recovered).toHaveFocus()
+    expect(recovered).not.toHaveAttribute('aria-invalid')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('links the current folder in link mode', async () => {
