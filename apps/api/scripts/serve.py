@@ -48,15 +48,20 @@ def default_data_dir() -> Path:
 
 workspace_root = Path(env_path("PROXIMA_WORKSPACE_ROOT", default_data_dir()))
 web_dist = Path(env_path("PROXIMA_WEB_DIST", REPO_ROOT / "apps/web/dist"))
-projectctl = Path(env_path("PROXIMA_PROJECTCTL", REPO_ROOT / "infra/scripts/projectctl"))
+projectctl = Path(
+    env_path("PROXIMA_PROJECTCTL", REPO_ROOT / "infra/scripts/projectctl")
+)
 
 app = create_app(
     {
         "database_path": env_path("PROXIMA_DB_PATH", workspace_root / "proxima.db"),
         "workspace_root": str(workspace_root),
-        "hermes_profiles_root": env_path("PROXIMA_HERMES_PROFILES_ROOT", workspace_root / "hermes-profiles"),
+        "hermes_profiles_root": env_path(
+            "PROXIMA_HERMES_PROFILES_ROOT", workspace_root / "hermes-profiles"
+        ),
         "projectctl_path": str(projectctl),
-        "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split() or None,
+        "projectctl_command": os.environ.get("PROXIMA_PROJECTCTL_COMMAND", "").split()
+        or None,
         # Off by default (single-user $HOME install). The /srv multi-user root
         # deployment sets PROXIMA_MANAGE_OS_ACL=1 to enable ownership/ACL ops.
         "manage_os_acl": env_bool("PROXIMA_MANAGE_OS_ACL", False),
@@ -68,33 +73,41 @@ app = create_app(
         "bundled_skills_dir": os.environ.get("PROXIMA_BUNDLED_SKILLS_DIR") or None,
         "run_timeout_seconds": env_int("PROXIMA_RUN_TIMEOUT_SECONDS", 900),
         "run_continuation_limit": env_int(
-            "PROXIMA_RUN_CONTINUATION_LIMIT", int(DEFAULT_CONFIG["run_continuation_limit"])
+            "PROXIMA_RUN_CONTINUATION_LIMIT",
+            int(DEFAULT_CONFIG["run_continuation_limit"]),
         ),
         "max_upload_bytes": env_int("PROXIMA_MAX_UPLOAD_MB", 100) * 1024 * 1024,
         "run_worker_poll_interval_ms": env_int("PROXIMA_RUN_WORKER_POLL_MS", 250),
         # Graph fan-out is bounded by both of these: the graph budget decides how
         # many nodes are dispatched, the worker decides how many actually execute.
         "run_worker_concurrency": env_int(
-            "PROXIMA_RUN_WORKER_CONCURRENCY", int(DEFAULT_CONFIG["run_worker_concurrency"])
+            "PROXIMA_RUN_WORKER_CONCURRENCY",
+            int(DEFAULT_CONFIG["run_worker_concurrency"]),
         ),
         "start_worker": env_bool("PROXIMA_START_WORKER", True),
         "graph_node_concurrency": env_int(
-            "PROXIMA_GRAPH_NODE_CONCURRENCY", int(DEFAULT_CONFIG["graph_node_concurrency"])
+            "PROXIMA_GRAPH_NODE_CONCURRENCY",
+            int(DEFAULT_CONFIG["graph_node_concurrency"]),
         ),
         "graph_query_max_depth": env_int(
-            "PROXIMA_GRAPH_QUERY_MAX_DEPTH", int(DEFAULT_CONFIG["graph_query_max_depth"])
+            "PROXIMA_GRAPH_QUERY_MAX_DEPTH",
+            int(DEFAULT_CONFIG["graph_query_max_depth"]),
         ),
         "graph_query_timeout_ms": env_int(
-            "PROXIMA_GRAPH_QUERY_TIMEOUT_MS", int(DEFAULT_CONFIG["graph_query_timeout_ms"])
+            "PROXIMA_GRAPH_QUERY_TIMEOUT_MS",
+            int(DEFAULT_CONFIG["graph_query_timeout_ms"]),
         ),
         "graph_query_token_budget": env_int(
-            "PROXIMA_GRAPH_QUERY_TOKEN_BUDGET", int(DEFAULT_CONFIG["graph_query_token_budget"])
+            "PROXIMA_GRAPH_QUERY_TOKEN_BUDGET",
+            int(DEFAULT_CONFIG["graph_query_token_budget"]),
         ),
         "graph_query_result_limit": env_int(
-            "PROXIMA_GRAPH_QUERY_RESULT_LIMIT", int(DEFAULT_CONFIG["graph_query_result_limit"])
+            "PROXIMA_GRAPH_QUERY_RESULT_LIMIT",
+            int(DEFAULT_CONFIG["graph_query_result_limit"]),
         ),
         "graph_build_timeout_seconds": env_int(
-            "PROXIMA_GRAPH_BUILD_TIMEOUT_SECONDS", int(DEFAULT_CONFIG["graph_build_timeout_seconds"])
+            "PROXIMA_GRAPH_BUILD_TIMEOUT_SECONDS",
+            int(DEFAULT_CONFIG["graph_build_timeout_seconds"]),
         ),
         "graph_max_bytes": env_int(
             "PROXIMA_GRAPH_MAX_BYTES", int(DEFAULT_CONFIG["graph_max_bytes"])
@@ -109,14 +122,28 @@ app = create_app(
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME") or "owner",
         # Point claude-code runner at live ~/.claude (full skills/plugins/rules/memory).
         "claude_live_home": env_bool("PROXIMA_CLAUDE_LIVE_HOME", False),
-        "link_roots": [p for p in os.environ.get("PROXIMA_LINK_ROOTS", os.path.expanduser("~")).split(":") if p],
+        "link_roots": [
+            p
+            for p in os.environ.get(
+                "PROXIMA_LINK_ROOTS", os.path.expanduser("~")
+            ).split(":")
+            if p
+        ],
         # Per-app remote preview: <slug>.<apps_domain> rides the tunnel; cf_* creds
         # let the app create/remove that hostname. Unset ⇒ local-only preview.
         "apps_domain": os.environ.get("PROXIMA_APPS_DOMAIN") or None,
         # Interface for per-app preview relay ports (remote preview without an apps
         # domain). Default "auto": the tailnet interface if present, else loopback -
         # never 0.0.0.0 unless explicitly set. "off" disables relays.
-        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
+        "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND")
+        or DEFAULT_CONFIG["preview_bind_host"],
+        "preview_profile": (
+            os.environ.get("PROXIMA_PREVIEW_PROFILE")
+            or DEFAULT_CONFIG["preview_profile"]
+        ),
+        "preview_scope_state_root": (
+            os.environ.get("PROXIMA_PREVIEW_SCOPE_STATE_ROOT") or None
+        ),
         # Browser-tab label (e.g. "STAGING") so staging/prod tabs aren't confused.
         "env_name": (os.environ.get("PROXIMA_ENV_NAME") or "").strip() or None,
         "cf_api_token": os.environ.get("PROXIMA_CF_API_TOKEN") or None,
@@ -126,18 +153,27 @@ app = create_app(
         "cf_zone_id": os.environ.get("PROXIMA_CF_ZONE_ID") or None,
         # Release update check — PROXIMA_UPDATE_CHECK=0 disables the periodic
         # phone-home; PROXIMA_UPDATE_REPO points forks at their own releases.
-        "update_check": env_bool("PROXIMA_UPDATE_CHECK", bool(DEFAULT_CONFIG["update_check"])),
-        "update_repo": os.environ.get("PROXIMA_UPDATE_REPO") or DEFAULT_CONFIG["update_repo"],
-        "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
+        "update_check": env_bool(
+            "PROXIMA_UPDATE_CHECK", bool(DEFAULT_CONFIG["update_check"])
+        ),
+        "update_repo": os.environ.get("PROXIMA_UPDATE_REPO")
+        or DEFAULT_CONFIG["update_repo"],
+        "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or None,
         "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", True),
         "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
-        "feature_master_orchestrator": env_bool("PROXIMA_FEATURE_MASTER_ORCHESTRATOR", False),
+        "feature_master_orchestrator": env_bool(
+            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", False
+        ),
         **safe_update_config_from_env(),
         # On by default since slice 4 (review UI); the env var is the escape hatch.
         "feature_repo_worktrees": env_bool("PROXIMA_FEATURE_REPO_WORKTREES", True),
         # systemd --user unit Diagnostics reads via journalctl (CLI + staging use the same env).
-        "service_name": (os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]).strip()
-            or DEFAULT_CONFIG["service_name"],
+        "service_name": (
+            os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]
+        ).strip()
+        or DEFAULT_CONFIG["service_name"],
     }
 )
 

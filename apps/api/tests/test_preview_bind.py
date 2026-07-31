@@ -1,13 +1,15 @@
 """LAN-hardening regressions for the preview surface (audit F1 + F2).
 
-The relay's default bind must never be 0.0.0.0: "auto" resolves to the tailnet
-interface when the host has one, else loopback, and only an explicit
-PROXIMA_PREVIEW_BIND can widen that. Separately, a dev server that binds beyond
-loopback is directly reachable by LAN/tailnet devices with no auth (the gated
-relay does not protect it), so the app runner must detect and surface it.
+The relay's default bind must never be 0.0.0.0: "auto" uses one port on
+loopback plus the tailnet interface when present, and only an explicit
+PROXIMA_PREVIEW_BIND can widen that. Separately, a dev server that binds
+beyond loopback is directly reachable by LAN/tailnet devices with no auth,
+so the app runner must detect and surface it.
 """
+
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import ipaddress
 import socket
@@ -20,6 +22,7 @@ from proxima_api.preview_proxy import (
     PreviewRelayManager,
     TAILNET_IPV4_NET,
     resolve_preview_bind_host,
+    resolve_preview_bind_hosts,
     tailnet_address,
 )
 
@@ -28,6 +31,10 @@ def test_resolve_auto_prefers_tailnet_address(monkeypatch):
     monkeypatch.setattr(preview_proxy, "tailnet_address", lambda: "100.101.102.103")
     assert resolve_preview_bind_host("auto") == "100.101.102.103"
     assert resolve_preview_bind_host("AUTO") == "100.101.102.103"
+    assert resolve_preview_bind_hosts("auto") == (
+        "127.0.0.1",
+        "100.101.102.103",
+    )
 
 
 def test_resolve_auto_falls_back_to_loopback_never_wildcard(monkeypatch):
@@ -51,12 +58,35 @@ def test_relay_manager_resolves_auto(monkeypatch):
     monkeypatch.setattr(preview_proxy, "tailnet_address", lambda: "100.101.102.103")
     relays = PreviewRelayManager("auto", port_for=lambda slug: None)
     assert relays.enabled and relays.bind_host == "100.101.102.103"
+    assert relays.bind_hosts == ("127.0.0.1", "100.101.102.103")
 
     monkeypatch.setattr(preview_proxy, "tailnet_address", lambda: None)
     relays = PreviewRelayManager("auto", port_for=lambda slug: None)
     assert relays.enabled and relays.bind_host == "127.0.0.1"
 
     assert PreviewRelayManager("off", port_for=lambda slug: None).enabled is False
+
+
+def test_auto_relay_uses_one_port_on_loopback_and_tailnet(monkeypatch):
+    monkeypatch.setattr(preview_proxy, "tailnet_address", lambda: "127.0.0.2")
+    relays = PreviewRelayManager(
+        "auto",
+        port_for=lambda _slug: None,
+        validate_token=lambda _token: False,
+    )
+
+    async def run_case():
+        try:
+            port = await relays.start("demo")
+            await asyncio.sleep(0.05)
+            assert isinstance(port, int)
+            for host in ("127.0.0.1", "127.0.0.2"):
+                with socket.create_connection((host, port), timeout=1):
+                    pass
+        finally:
+            await relays.shutdown()
+
+    asyncio.run(run_case())
 
 
 def test_tailnet_address_is_cgnat_or_absent():

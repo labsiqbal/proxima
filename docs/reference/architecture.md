@@ -58,7 +58,7 @@ Owner ── Profile ── Runner ── Project / Workspace
 │  MasterSupervisor budgeted unattended queue starter (no stuck-run authority)    │
 │  Scheduler     60s loop; materializes due cron jobs                            │
 │  AcpManager    one ACP subprocess per (runner, home, cwd)                      │
-│  AppManager    per-project dev-server processes  ── PreviewProxy (subdomains)  │
+│  AppManager    project generations + supervisors ── PreviewProxy (subdomains) │
 │                                                  ── PreviewRelay (per-app port)│
 │  Terminal      PTY shell over WebSocket                                         │
 └───────────────────────────────┬───────────────────────────────────────────────┘
@@ -82,7 +82,10 @@ queue starter), `graph_context.py` (scoped Graphify adapter),
 `graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
 `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
-`apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
+`apprunner.py` + `preview_proxy.py` + `preview_output.py` (project generations,
+proxy, reconnectable supervisor client, and delta log protocol) with
+`preview_output_broker.py` as the per-app launch/output supervisor,
+`image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
@@ -1101,32 +1104,91 @@ an owner-facing reason instead of running unisolated.
 ### 8. Run & Preview app
 
 `POST /api/projects/{slug}/app/start` → `AppManager` launches one owner-confirmed dev
-process for the project with a filtered environment. If an unrelated process already owns
-the requested port, start returns a conflict and never signals or terminates that process.
-On Linux, readiness maps the listening socket back to the managed process group, closing
-the race where a foreign listener could otherwise appear as this app's preview. A preview only works served
+process for the project with a filtered environment. The requested port is only a
+candidate. Status is a discriminated state:
+`stopped | starting | ready | port_conflict | ownership_unknown | exited`.
+Only `ready` carries a proxy target. An uncontained launch requires Linux procfs
+evidence that every listener socket belongs to its managed process group. A contained
+launch instead requires every socket owner to match the exact launch-specific PID
+namespace and lineage marker reported at start and retain positive live process-group
+or ancestry evidence. Appview, relay, and preview subdomain paths repeat the applicable
+proof on a fresh server-side socket before sending HTTP or WebSocket bytes. Starting,
+conflict, ownership-unknown, and exited states return a non-proxy response. An existing
+relay remains available to return that safe response until Stop releases it.
+
+If an unrelated process owns the candidate before start, start returns a structured
+HTTP 409 conflict. If it claims the port after preflight but before the managed app
+binds, status becomes the sticky terminal `port_conflict` state and Proxima signals
+only its own managed process group. It never reaches, signals, or terminates the
+foreign listener. Missing or incomplete procfs evidence fails closed as
+`ownership_unknown`. An uncontained child that detaches into another process group is
+also ownership-unknown. When a scope is unadopted, Stop tries authenticated recovery
+from durable supervisor evidence and otherwise returns HTTP 409 with an
+ownership-unknown message instead of claiming success; start refuses a replacement
+generation while that authority stays unresolved. Once `AppManager.start` accepts a
+launch, it owns the ingress effect lease through cancel and failed-spawn cleanup. Bubblewrap reports the exact launch-specific namespace
+identity at start; every contained socket owner must match it and carry the ephemeral
+launch marker. The marker alone never grants authority. It keeps an observed
+descendant that is later reparented ownership-unknown instead of becoming a
+foreign-port conflict.
+
+A preview only works served
 root-relative on its own origin (absolute asset paths, HMR WebSocket to the page
-origin), so the transport depends on the vantage. Locally the iframe uses the other
-loopback hostname, avoiding host-cookie reuse across ports. Remotely,
-`PreviewRelayManager` starts a per-app listener on the Proxima host
+origin), so `PreviewRelayManager` starts a per-app listener on the Proxima host for
+local and remote browsers
 (`preview_port` in app status; interface via `preview_bind_host` /
-`PROXIMA_PREVIEW_BIND`, default `auto` = the Tailscale interface if the host has one,
-else loopback - never `0.0.0.0` unless set explicitly; `off` disables) - the app's own
+`PROXIMA_PREVIEW_BIND`, default `auto` = one shared port bound separately on loopback
+and the Tailscale interface when present, otherwise loopback only - never `0.0.0.0`
+unless set explicitly; `off` disables) - the app's own
 origin by port. The relay guards only its own port: the dev server itself is defaulted
 onto loopback (suggested commands bind `127.0.0.1`, `HOST=127.0.0.1` in the child env)
 and app status flags `broad_bind` when its port is found listening beyond loopback,
 because that listener is LAN/tailnet-reachable with no auth. A self-exit is reaped into
 a sticky `{exited, exit_code, log, command}` status (kept until the next start) so the
-UI can distinguish Finished vs Failed after short-lived commands. When
+UI can distinguish Finished vs Failed after short-lived commands; its relay returns
+HTTP 503 until Stop or the next start. A start that has no listener after 15 seconds
+becomes a prolonged-start warning with Stop and log controls instead of spinning
+forever. The bounded 40-line status buffer and Logs toggle remain available while
+starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
+the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
+including terminal shutdown output, remains available for the stopped/retry
+state. A launch-time supervisor creates the process and owns its child pipe, so the
+API never has to transfer process or output ownership. It drains all currently
+available bytes before returning the final snapshot. Complete
+lines use a bounded ring and the pending partial line has its own fixed byte bound, so
+newline-free streams cannot grow memory without limit. Periodic status polling uses
+a version and completed-line cursor, so an unchanged log returns constant-size
+metadata instead of retransmitting the ring. If an uncontained child keeps stdout
+open, the supervisor continues fixed-size reads after the API disconnects and exits
+only after EOF and an empty managed app cgroup. Packaged Linux installs create a
+delegated, launch-specific app cgroup beneath
+each socket-activated profile supervisor outside the API cgroup. The broker remains in
+the unit root and process-only unit teardown cannot signal an app that escaped its
+managed cgroup. A durable pending record precedes supervisor creation; atomic
+broker-attached and app-attached phases bind the profile, protocol, supervisor
+PID/start time, app PID/start time, app cgroup, and lineage. Restart adoption requires
+every field to match. Startup and shutdown reconcile app generations concurrently
+within aggregate service deadlines. Unit migrations scan same-user procfs first and
+refuse while an older protocol process or a pre-protocol preview identified by API
+lineage or service-cgroup membership remains live. Windows uses a detached breakaway supervisor
+when supported. Supervisor setup failure occurs
+before app spawn and produces a recoverable `output_sink_unavailable` stopped state;
+a later disconnect retains fail-closed authority instead of claiming an unverified
+stop.
+Conflict feedback keeps the candidate port visible with Stop, retry, and
+change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
 `preview-<slug>.<apps_domain>` subdomain. Both share one proxy engine
 (`preview_proxy.py`): HTTP + WebSocket forwarding with Host rewritten to
 `127.0.0.1:<dev port>`, gated by a one-hour, signed `proxima_preview` capability that
 is unrelated to the owner API session (minted host-scoped by `POST /api/preview-auth`,
-so the browser also sends it to relay ports — cookies ignore ports). Proxy paths remove
+so the browser also sends it to relay ports because cookies ignore ports). Capability
+authentication runs before target resolution or procfs ownership work. Proxy paths remove
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
+See ADR-0014 through ADR-0026 for the focused binding, authentication, authority,
+cleanup, framing, supervision, restart-adoption, and profile-isolation decisions.
 
 ### 9. Update check and candidate gate plus disabled switch fixture
 

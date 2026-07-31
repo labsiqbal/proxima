@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import sys
+
+
+@dataclass(frozen=True)
+class ProcessInfo:
+    pid: int
+    ppid: int
+    environment: set[bytes]
+    command: bytes
+    cgroup: str | None
+
+
+def _environment(pid: int) -> set[bytes] | None:
+    try:
+        return set(Path(f"/proc/{pid}/environ").read_bytes().split(b"\0"))
+    except OSError:
+        return None
+
+
+def _value(environment: set[bytes], key: str) -> str | None:
+    prefix = key.encode() + b"="
+    for item in environment:
+        if item.startswith(prefix):
+            return item[len(prefix) :].decode("utf-8", "replace")
+    return None
+
+
+def _process_info(entry: Path) -> ProcessInfo | None:
+    pid = int(entry.name)
+    environment = _environment(pid)
+    if environment is None:
+        return None
+    try:
+        command = entry.joinpath("cmdline").read_bytes()
+        stat = entry.joinpath("stat").read_text(encoding="utf-8")
+        ppid = int(stat.rsplit(") ", 1)[1].split()[1])
+        cgroup = entry.joinpath("cgroup").read_text(encoding="utf-8")
+    except (IndexError, OSError, ValueError):
+        return None
+    return ProcessInfo(
+        pid=pid,
+        ppid=ppid,
+        environment=environment,
+        command=command,
+        cgroup=cgroup,
+    )
+
+
+def _is_api(command: bytes) -> bool:
+    return b"/apps/api/scripts/serve.py" in command or (
+        b"uvicorn" in command and b"proxima_api.main" in command
+    )
+
+
+def _is_descendant(
+    pid: int,
+    roots: set[int],
+    processes: dict[int, ProcessInfo],
+) -> bool:
+    seen: set[int] = set()
+    current = pid
+    while current > 1 and current not in seen:
+        if current in roots:
+            return True
+        seen.add(current)
+        process = processes.get(current)
+        if process is None:
+            return False
+        current = process.ppid
+    return current in roots
+
+
+def _cgroup_path(identity: str | None) -> str | None:
+    if identity is None:
+        return None
+    return next(
+        (
+            line[3:].rstrip("/")
+            for line in identity.splitlines()
+            if line.startswith("0::/")
+        ),
+        None,
+    )
+
+
+def _same_service_cgroup(
+    identity: str | None,
+    api_cgroups: set[str],
+) -> bool:
+    path = _cgroup_path(identity)
+    return path is not None and any(
+        path == root or path.startswith(root + "/") for root in api_cgroups
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--protocol", required=True)
+    args = parser.parse_args()
+    survivors: list[int] = []
+    unverifiable: list[int] = []
+    processes: dict[int, ProcessInfo] = {}
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError as exc:
+        print(
+            f"Legacy preview verification requires readable procfs: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            if entry.stat().st_uid != os.geteuid():
+                continue
+        except OSError:
+            continue
+        process = _process_info(entry)
+        if process is None:
+            if entry.exists():
+                unverifiable.append(pid)
+            continue
+        processes[pid] = process
+    api_pids = {pid for pid, process in processes.items() if _is_api(process.command)}
+    api_cgroups = {
+        path for pid in api_pids if (path := _cgroup_path(processes[pid].cgroup))
+    }
+    for pid, process in processes.items():
+        environment = process.environment
+        lineage = _value(environment, "PROXIMA_APP_LINEAGE")
+        authority_protocol = _value(
+            environment,
+            "PROXIMA_PREVIEW_AUTHORITY_PROTOCOL",
+        )
+        broker_protocol = _value(
+            environment,
+            "PROXIMA_OUTPUT_BROKER_PROTOCOL",
+        )
+        legacy_app = lineage is not None and authority_protocol != args.protocol
+        legacy_unmarked_app = (
+            authority_protocol is None
+            and _value(environment, "PORT") is not None
+            and (
+                _is_descendant(pid, api_pids, processes)
+                or _same_service_cgroup(process.cgroup, api_cgroups)
+            )
+        )
+        legacy_broker = (
+            b"proxima_api.preview_output_broker" in process.command
+            and broker_protocol != args.protocol
+        )
+        if legacy_app or legacy_unmarked_app or legacy_broker:
+            survivors.append(pid)
+    if survivors:
+        print(
+            "Legacy previews are still active: "
+            + ", ".join(str(pid) for pid in sorted(survivors)),
+            file=sys.stderr,
+        )
+        print(
+            "Stop every preview in Proxima and rerun the upgrade. "
+            "No service units were replaced.",
+            file=sys.stderr,
+        )
+        return 1
+    if unverifiable:
+        print(
+            "Legacy preview verification could not inspect: "
+            + ", ".join(str(pid) for pid in sorted(unverifiable)),
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

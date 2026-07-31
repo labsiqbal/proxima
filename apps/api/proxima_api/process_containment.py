@@ -12,28 +12,36 @@ def pid_namespace_argv(
     *,
     cwd: str,
     label: str,
+    info_fd: int | None = None,
 ) -> list[str]:
     bwrap = shutil.which("bwrap")
     if os.name != "posix" or bwrap is None:
         raise RuntimeError(f"{label} containment is unavailable")
-    return [
+    command = [
         bwrap,
         "--die-with-parent",
         "--unshare-pid",
         "--as-pid-1",
-        "--bind",
-        "/",
-        "/",
-        "--dev-bind",
-        "/dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--chdir",
-        cwd,
-        "--",
-        *argv,
     ]
+    if info_fd is not None:
+        command.extend(["--info-fd", str(info_fd)])
+    command.extend(
+        [
+            "--bind",
+            "/",
+            "/",
+            "--dev-bind",
+            "/dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--chdir",
+            cwd,
+            "--",
+            *argv,
+        ]
+    )
+    return command
 
 
 async def terminate_and_verify(
@@ -58,8 +66,6 @@ async def terminate_and_verify(
         try:
             await asyncio.wait_for(process.wait(), timeout=timeout)
         except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"{label} process did not exit after kill"
-            ) from exc
+            raise RuntimeError(f"{label} process did not exit after kill") from exc
     if process.returncode is None:
         raise RuntimeError(f"{label} process exit was not verified")

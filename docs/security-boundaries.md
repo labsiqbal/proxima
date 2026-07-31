@@ -394,17 +394,79 @@ both HTTP access logs and WebSocket/error logs before they reach the journal.
 
 Run & Preview remains an explicit owner-power action. Its subprocess receives a
 filtered environment (additional names require `PROXIMA_APP_ENV_ALLOWLIST`) but runs as
-the service OS user. Preview transport is isolated from owner credentials: local direct
-preview switches between `localhost` and `127.0.0.1`, remote preview uses a short-lived
-preview-only capability, reverse proxies strip Cookie/Authorization and upstream
-`Set-Cookie`, and same-origin generated HTML is rendered without `allow-same-origin`.
+the service OS user. Preview transport is isolated from owner credentials: local and
+remote previews use a short-lived preview-only capability, reverse proxies strip
+Cookie/Authorization and upstream `Set-Cookie`, and same-origin generated HTML is
+rendered without `allow-same-origin`.
 
-Remote preview without an apps domain opens one **relay listener per running app**.
+The requested dev-server port is never a preview authority. It is a candidate until
+procfs maps every listening socket back to the managed process group. Appview, relay,
+and subdomain paths then open an upstream connection and map its server-side socket
+back to that managed group before sending HTTP or WebSocket bytes.
+A pre-existing listener produces a structured port conflict before spawn. A listener
+that wins after preflight produces the same sticky terminal conflict and only the
+managed process group is signaled. Starting, conflict, ownership-unknown, and exited
+states have no proxy target, so requests receive a non-proxy response and foreign
+content is never sampled. Existing relays remain safe HTTP 503 responders through
+terminal states until Stop releases them.
+
+This proof deliberately fails closed. Hosts without usable procfs, incomplete
+socket-owner visibility, and uncontained descendants that detach into another process
+group report `ownership_unknown`; their listener is not previewed. Each launch receives
+an ephemeral lineage marker so a detached owner remains identifiable after reparenting
+without becoming trusted. For a contained launch, every socket owner must carry that
+marker, match the exact launch-specific PID namespace identity reported by Bubblewrap,
+and retain positive live process-group or ancestry evidence to the managed leader.
+Marker and namespace evidence without live lineage remains ownership-unknown. Proxima
+registers the provisional process and begins output draining immediately after spawn
+while namespace proof completes asynchronously; readiness stays fail closed until it
+completes.
+Provisional cleanup belongs to AppManager rather than the start request. Cancellation
+can return immediately, while the manager-owned task completes the in-flight spawn and
+reaps only the process Proxima created. A monotonic per-project generation is written
+durably before broker creation or process spawn. Atomic pending, broker-attached, and
+app-attached phases let restart recover only exact authority. A retry waits for the
+matching cancelled generation to settle, and stale cleanup cannot replace or remove
+newer authority. Startup and shutdown reconcile project generations concurrently under
+fixed aggregate deadlines.
+
+A preview supervisor launches the app and owns its child pipe. It keeps a
+bounded complete-line ring and separately bounded partial-line tail, drains all
+currently available bytes before returning an atomic final snapshot, and continues
+discarding detached output until EOF after the API disconnects. It stays available
+until the launch-specific app cgroup is empty. Routine polling uses
+versioned line deltas; only explicit finalization requests the full bounded snapshot.
+Packaged Linux services obtain profile-specific supervisors from socket-activated
+systemd units outside the API service cgroup. Each supervisor creates a delegated,
+launch-specific child cgroup and moves the app into it before owner code executes.
+The broker remains in the unit root and unit teardown signals only that broker
+process. Processes still proven inside the app cgroup are managed; a process that
+escapes it remains untrusted and is not signaled. Production and staging have
+different sockets, protocol identities, state roots, and executables. The API service
+uses `KillMode=process` and a declared stop timeout, while app generations stop
+concurrently. If the API restarts before cleanup finishes, it adopts only an exact
+durable supervisor, process, app cgroup, profile, protocol, and lineage proof.
+Before replacing supervision units, update procedures scan same-user procfs state.
+Older protocol markers and pre-protocol preview port environments combined with API
+lineage or service-cgroup membership refuse the migration until those previews stop.
+Incomplete proof remains
+`ownership_unknown` and is neither proxied nor signaled. Windows uses a detached
+breakaway supervisor when supported. If durable ownership cannot be established,
+the launch transaction is rolled back and status reports the recoverable
+`output_sink_unavailable` reason. This policy preserves the ownership boundary
+instead of treating a successful TCP handshake as ownership evidence. See
+[ADR-0016](adr/0016-live-containment-lineage-gates-preview-authority.md) and
+[ADR-0024](adr/0024-preview-generations-use-durable-launch-phases.md) through
+[ADR-0026](adr/0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md).
+
+Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
-interface when the host is on a tailnet, otherwise loopback - never `0.0.0.0`. Tailnet
-devices can reach previews out of the box; untrusted plain-LAN devices cannot. The
-listener answers 403 without the preview capability and closes with the app; what it
-exposes when authorized is the previewed dev server, never the Proxima API or owner
+interface and loopback share one port when the host is on a tailnet, otherwise it binds
+loopback only - never `0.0.0.0`. Local and tailnet devices can reach previews out of
+the box; untrusted plain-LAN devices cannot. The
+listener answers 403 without the preview capability and 503 without an
+ownership-verified ready target; what it exposes when authorized and ready is the
+previewed dev server, never the Proxima API or owner
 session. Operators may set an explicit interface instead - including `0.0.0.0`, which
 deliberately exposes the relay ports to every device on the LAN - or `127.0.0.1`/`off`
 for strict loopback-only installs. If no tailnet address is found, `auto` falls back to

@@ -42,6 +42,18 @@ def test_install_user_dry_run_has_no_side_effects(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "Dry run complete; no files or services changed." in result.stdout
+    assert "write " in result.stdout
+    assert "proxima-preview-output.socket" in result.stdout
+    assert "proxima-preview-output@.service" in result.stdout
+    assert "enable --now proxima-preview-output.socket" in result.stdout
+    assert "check-preview-drained" in result.stdout
+    assert "stop proxima.service" in result.stdout
+    assert result.stdout.index("stop proxima.service") < result.stdout.index(
+        "check-preview-drained"
+    )
+    assert result.stdout.index("check-preview-drained") < result.stdout.index(
+        "Installing systemd user units"
+    )
     assert not call_log.exists()
     assert not (config_home / "proxima" / "proxima.env").exists()
     assert not (config_home / "systemd" / "user").exists()

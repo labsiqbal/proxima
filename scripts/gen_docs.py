@@ -21,6 +21,7 @@ the api venv if the bare interpreter can't import ``proxima_api``:
 """
 from __future__ import annotations
 
+import ast
 import re
 import sqlite3
 import sys
@@ -41,28 +42,6 @@ _GENERATED_FOOTER = re.compile(r"\n---\n_Generated [^\n]+\._\n?$")
 
 # --------------------------------------------------------------------------- API
 
-# Matches e.g.  @app.get("/api/sessions")   or   @app.websocket("/api/ws/...")
-# (any receiver name — routes use `app`, but stay tolerant of aliases.)
-_DECORATOR = re.compile(
-    r"""^\s*@\w+\.(?P<method>get|post|put|patch|delete|head|options|websocket|api_route)\(\s*
-        (?P<q>['"])(?P<path>[^'"]+)(?P=q)""",
-    re.VERBOSE,
-)
-_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(?P<name>\w+)\s*\(")
-
-
-def _first_doc_line(lines: list[str], def_idx: int) -> str:
-    """Return the first line of the handler's docstring, if any (else '')."""
-    for j in range(def_idx, min(def_idx + 6, len(lines))):
-        m = re.search(r'"""(.*)', lines[j])
-        if m:
-            text = m.group(1).strip()
-            if text.endswith('"""'):
-                text = text[:-3].strip()
-            return text
-    return ""
-
-
 def _collect_endpoints() -> dict[str, list[dict]]:
     """file label -> [ {methods, path, name, doc} ] parsed from decorators."""
     out: dict[str, list[dict]] = {}
@@ -70,33 +49,43 @@ def _collect_endpoints() -> dict[str, list[dict]]:
     for f in files:
         if f.name == "__init__.py":
             continue
-        lines = f.read_text().splitlines()
         rows: list[dict] = []
-        i = 0
-        while i < len(lines):
-            m = _DECORATOR.match(lines[i])
-            if not m:
-                i += 1
-                continue
-            # Stack consecutive decorators (a handler can carry several methods).
-            methods = []
-            path = m.group("path")
-            while i < len(lines):
-                mm = _DECORATOR.match(lines[i])
-                if mm and mm.group("path") == path:
-                    methods.append("WS" if mm.group("method") == "websocket" else mm.group("method").upper())
-                    i += 1
+        tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
+        handlers = sorted(
+            (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ),
+            key=lambda node: node.lineno,
+        )
+        for handler in handlers:
+            routes: dict[str, list[str]] = {}
+            for decorator in handler.decorator_list:
+                if (
+                    not isinstance(decorator, ast.Call)
+                    or not isinstance(decorator.func, ast.Attribute)
+                    or decorator.func.attr
+                    not in (*HTTP_METHODS, "websocket", "api_route")
+                    or not decorator.args
+                    or not isinstance(decorator.args[0], ast.Constant)
+                    or not isinstance(decorator.args[0].value, str)
+                ):
                     continue
-                break
-            # Find the handler def that follows the decorator stack.
-            name, doc = "", ""
-            for j in range(i, min(i + 4, len(lines))):
-                dm = _DEF.match(lines[j])
-                if dm:
-                    name = dm.group("name")
-                    doc = _first_doc_line(lines, j)
-                    break
-            rows.append({"methods": methods, "path": path, "name": name, "doc": doc})
+                method = decorator.func.attr
+                label = "WS" if method == "websocket" else method.upper()
+                routes.setdefault(decorator.args[0].value, []).append(label)
+            docstring = ast.get_docstring(handler, clean=True) or ""
+            doc = docstring.splitlines()[0].strip() if docstring else ""
+            for path, methods in routes.items():
+                rows.append(
+                    {
+                        "methods": methods,
+                        "path": path,
+                        "name": handler.name,
+                        "doc": doc,
+                    }
+                )
         if rows:
             label = "main.py (app-level)" if f.name == "main.py" else f"routes/{f.name}"
             out[label] = rows

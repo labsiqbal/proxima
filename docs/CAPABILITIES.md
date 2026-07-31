@@ -1202,27 +1202,80 @@ tool on the right rail, from an app-type artifact, or from the recipe test bench
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
 environment. The preview must be served root-relative on its own origin (SPA HTML uses
 absolute asset paths and HMR opens a WebSocket to the page origin), so each vantage gets
-one: local direct preview uses the other loopback hostname so the Proxima cookie is not
-sent across ports; remote preview uses the app's **preview relay port** on the Proxima
-host (reported as `preview_port` in app status; bind interface via
-`PROXIMA_PREVIEW_BIND`, default `auto` = the tailnet interface or loopback, never
-`0.0.0.0`; `off` disables) or, with an apps domain configured, the
+one: local and remote preview use the app's **preview relay port** on the Proxima host
+(reported as `preview_port` in app status; bind interface via
+`PROXIMA_PREVIEW_BIND`, default `auto` = the same port on loopback plus the tailnet
+interface when present, otherwise loopback only, never `0.0.0.0`; `off` disables) or,
+with an apps domain configured, the
 `preview-<slug>.<apps_domain>` subdomain. Relay and subdomain proxy share one engine:
 HTTP + WebSocket forwarding, Host rewritten to the local dev port (Vite-style
 allowed-host checks pass), gated by a short-lived preview-only cookie — never the owner
-API token — and they strip cookies/auth before forwarding and strip upstream
+API token. Authentication completes before target resolution or procfs scanning, and
+the proxies strip cookies/auth before forwarding and strip upstream
 `Set-Cookie`. Same-origin fallback and generated HTML use an opaque iframe sandbox.
 This is credential-leak mitigation, not OS/container isolation; the command still runs
 as the Proxima service user. The relay only guards its own port: detected-app
 suggestions bind `127.0.0.1`, `HOST=127.0.0.1` is defaulted into the dev-server env,
 and app status reports `broad_bind` (surfaced as a UI warning) when the dev server is
 found listening beyond loopback - that port is LAN/tailnet-reachable with no auth.
-If another process already owns the selected port, start returns a clear conflict without
-stopping or signaling that process. Linux readiness also verifies that a listening port is
-owned by the managed process group, so an unrelated preview cannot win a bind race and be
-shown in Proxima. When a command self-exits (short script, crash, or non-server entry point), status keeps
+The selected port is only a candidate. App status uses the structured
+`stopped | starting | ready | port_conflict | ownership_unknown | exited` contract,
+and appview, relay, and preview-subdomain paths open a connection and verify its
+server-side socket before sending HTTP or WebSocket bytes. A pre-existing listener
+returns a structured
+conflict without stopping or signaling it. Linux procfs verification also closes the
+post-preflight bind race: if an unrelated listener wins, the managed command is
+signaled by its recorded process group, the foreign listener remains untouched, and
+the conflict stays visible with logs, Stop, retry, and change-port actions. Unavailable
+procfs evidence and uncontained detached descendants fail closed as
+`ownership_unknown`. For a contained launch, every socket owner must carry the
+launch marker and match the exact launch-specific PID namespace reported by
+Bubblewrap, and retain positive live process-group or ancestry evidence to the
+managed leader. Marker plus namespace without live lineage never grants
+authority. The managed process and stdout are registered immediately after
+spawn while containment proof completes asynchronously, and preview stays fail
+closed until that proof is available. Cancellation cleanup is registered in a
+manager-owned task before the request returns and is reconciled at shutdown, so
+repeated request cancellation cannot abandon the provisional process. Each project
+has a monotonic lifecycle generation. An immediate retry waits for cancellation
+cleanup of the prior generation, and cleanup can mutate only its own generation.
+A start with no listener after 15 seconds shows an actionable prolonged-start warning
+with Stop and logs instead of an infinite spinner. When a command self-exits (short
+script, crash, or non-server entry point), status keeps
 a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
-vs Failed with the log and a next-step hint instead of a silent bare dump.
+vs Failed with the log and a next-step hint instead of a silent bare dump. Logs remain
+toggleable in stopped, starting, ready, conflict, ownership-unknown, and exited states.
+The existing bounded 40-line status buffer survives preview Reload and explicit Stop,
+so stopped/retry feedback shows the most recent command output, including terminal
+shutdown lines drained before the stopped snapshot. The exited relay
+returns HTTP 503 until Stop or the next start releases or replaces that listener.
+A launch-time supervisor starts the app and owns stdout, keeps the complete-line ring
+and partial-line byte tail bounded, and drains all currently available bytes before
+returning an atomic final snapshot. Routine polling transfers only versioned line
+deltas. If a detached child keeps stdout open, the supervisor continues fixed-size
+reads until EOF after the API disconnects and stays alive until its managed app cgroup
+is empty. Packaged Linux installs give each app a
+delegated, launch-specific cgroup beneath its profile-specific socket-activated
+supervisor outside the API cgroup. Broker unit teardown targets only the broker
+process, while Stop may signal processes still proven inside the exact app cgroup.
+Production and staging use separate sockets, protocol identities, state roots, and
+checkout executables. A durable pending generation exists before supervisor creation,
+then atomically gains broker and app identity. Startup and shutdown reconcile project
+generations concurrently under aggregate deadlines. A restarted API adopts only exact
+durable supervisor, process, app cgroup, profile, protocol, and lineage evidence;
+anything incomplete remains ownership-unknown and is not signaled. Stop on an
+unadopted scope attempts authenticated reconnect/cleanup when durable evidence
+allows it; otherwise it returns a non-success recoverable ownership-unknown
+result and keeps blocking replacement generations until that scope resolves.
+Start hands the ingress effect lease to `AppManager` and keeps it held through
+cancel or failed-spawn cleanup until terminal authenticated disposal. Unit upgrades scan
+same-user procfs first and refuse while an older protocol process or a pre-protocol
+preview identified by API lineage or service-cgroup membership remains live.
+Supported Windows hosts use detached breakaway supervisors. If durable ownership is
+unavailable, start fails before app spawn with a recoverable
+`output_sink_unavailable` stopped state. Stop retains the last available log, and a
+later supervisor disconnect preserves fail-closed authority.
+
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

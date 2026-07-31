@@ -3,9 +3,10 @@
 Extracted verbatim from main.py (no behavior change) so the route handlers and
 the request contracts live in separate, smaller files.
 """
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,6 +26,30 @@ class AppStartRequest(BaseModel):
     command: str = Field(min_length=1)
     port: int = 5180
     dir: str = ""
+
+
+class AppStatusResponse(BaseModel):
+    state: Literal[
+        "stopped",
+        "starting",
+        "ready",
+        "port_conflict",
+        "ownership_unknown",
+        "exited",
+    ]
+    running: bool
+    ready: bool
+    requested_port: int | None = None
+    port: int | None = None
+    preview_port: int | None = None
+    command: str | None = None
+    log: list[str] = Field(default_factory=list)
+    message: str | None = None
+    reason: Literal["output_sink_unavailable"] | None = None
+    prolonged_start: bool | None = None
+    exited: bool | None = None
+    exit_code: int | None = None
+    broad_bind: bool | None = None
 
 
 class PermissionResponse(BaseModel):
@@ -378,7 +403,9 @@ class ImageGenRequest(BaseModel):
     prompt: str = Field(min_length=1)
     size: str = "1024x1024"
     model: str | None = None
-    image: str | None = None  # relative project path of an existing asset, for edit/manipulate
+    image: str | None = (
+        None  # relative project path of an existing asset, for edit/manipulate
+    )
     # Multiple source/reference images (relative project paths) to edit/compose into
     # one — providers that advertise referenceImages (e.g. codex) honour all of them;
     # single-image providers use the first. Takes precedence over `image` when set.
@@ -392,7 +419,7 @@ class WikiDraftRequest(BaseModel):
 class WikiCommitRequest(BaseModel):
     path: str
     content: str
-    mode: str = "new"   # 'new' | 'append' | 'overwrite'
+    mode: str = "new"  # 'new' | 'append' | 'overwrite'
 
 
 class ChatSendRequest(BaseModel):

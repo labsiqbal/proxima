@@ -81,6 +81,7 @@ The installer:
 - installs web dependencies and builds the PWA
 - writes `~/.config/proxima/proxima.env`
 - installs a systemd user service named `proxima`
+- installs a socket-activated per-preview supervisor
 - installs a daily backup timer
 
 Open the configured local URL after install. The default packaged bind is
@@ -88,6 +89,9 @@ Open the configured local URL after install. The default packaged bind is
 
 For a system-wide Linux service under `/opt`, `/etc`, and `/var/lib`, follow the
 complete manual procedure in [`infra/systemd/README.md`](../infra/systemd/README.md).
+Production and staging require separate supervisor sockets, protocol identities,
+state roots, and checkout-specific units. The documented update sequence installs
+and verifies those units before restarting either API profile.
 `scripts/install-local` only copies/builds the application and creates the CLI and
 config; it does not create a service account or install/enable systemd units, so it
 is not a complete managed-service installer.
@@ -195,9 +199,10 @@ Notes:
   hatch and should remain off when opening unfamiliar projects.
 - Uploads default to 100 MB per file; adjust `PROXIMA_MAX_UPLOAD_MB` if needed.
 - `PROXIMA_PREVIEW_BIND` is the interface for per-app preview relay ports (Run &
-  Preview from a remote browser without an apps domain). Default `auto`: the
-  Tailscale interface when the host is on a tailnet, otherwise loopback - never
-  `0.0.0.0`, so previews reach your tailnet devices without also reaching every
+  Preview from a remote browser without an apps domain). Default `auto`: one
+  shared port binds separately on loopback and the Tailscale interface when the
+  host is on a tailnet, otherwise loopback only - never `0.0.0.0`, so previews
+  reach local and tailnet devices without also reaching every
   device on the home LAN. The ports are gated by a short-lived preview capability
   either way. Set an explicit interface (e.g. `0.0.0.0` to deliberately include
   the LAN) or `127.0.0.1`/`off` for strict loopback-only installs. Firewalled

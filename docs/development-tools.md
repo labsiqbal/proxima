@@ -38,11 +38,19 @@ cd apps/api && .venv/bin/python -m pytest -q tests
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
 npm --prefix apps/web run test:accessibility
+python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
 ```
 
 `test:accessibility` owns the disposable auth/onboarding browser pass. Details and
 evidence live in [ui-shell.md](ui-shell.md#validation) and
 [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md).
+
+The preview browser verifier builds the web app, installs its pinned Astro
+dependency inside a disposable fixture, authenticates a real headless browser,
+uses Astro as both the managed app and the pre-existing/rebound foreign listener,
+proves foreign request bytes remain empty and the foreign process survives, and
+records conflict, ready, and stopped/rebound screenshots in the selected evidence
+directory.
 
 Current local environment note:
 
@@ -97,6 +105,8 @@ apps/api/proxima_api/route_deps.py    shared route dependencies (current_user, e
 apps/api/proxima_api/worker.py        run orchestration (RunWorker); run_*.py helpers
 apps/api/proxima_api/scheduler.py     cron scheduler loop
 apps/api/proxima_api/acp.py           ACP subprocess manager (agent runners)
+apps/api/proxima_api/preview_output.py preview supervisor client + delta log protocol
+apps/api/proxima_api/preview_output_broker.py per-app launch/output supervisor
 apps/api/proxima_api/frontend_static.py  static PWA serving
 apps/api/proxima_api/db.py            SQLite schema + migrate_existing
 apps/api/proxima_api/migrations.py    versioned migrations

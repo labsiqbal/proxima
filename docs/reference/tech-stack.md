@@ -18,7 +18,7 @@ it ships no model and no credentials of its own.
 | ASGI server | **Uvicorn** (`>=0.30`) | entrypoint `proxima_api.main:app` |
 | Data validation | **Pydantic v2** (`>=2.8`) | request models in `schemas.py` |
 | JSON contracts | **jsonschema** (`>=4.23`) | validates graph-node output schemas before execution |
-| HTTP client | **httpx** (`>=0.27`) | outbound calls (image providers, Cloudflare, proxy) |
+| HTTP client | **httpx** (`>=0.27`) + **httpcore** (`>=1.0,<2.0`) | outbound calls; httpcore supplies the connection-bound preview ownership hook |
 | WebSockets | **websockets** (`>=16`) | terminal + session event streams |
 | Uploads | **python-multipart** | file upload endpoints |
 | Runner config parsing | **PyYAML** + **TomlKit** | filter per-profile Hermes YAML and Codex/Grok TOML MCP selections while preserving unrelated settings |
@@ -64,9 +64,11 @@ migrations in `migrations.py`. See [database.md](database.md) for the full schem
   Fleet registry, SQLite Live state, one Knowledge graph, and/or one Code graph
   with budgets, provenance, and cross-Container isolation.
 - **Terminal** (`terminal.py`) — a PTY-backed shell exposed over WebSocket.
-- **App runner + preview proxy** (`apprunner.py`, `preview_proxy.py`) — launch an
-  owner-confirmed project dev server with a filtered env and reverse-proxy it using
-  preview-only credentials that are stripped before requests reach project code.
+- **App runner + preview proxy** (`apprunner.py`, `preview_output.py`,
+  `preview_output_broker.py`, `preview_proxy.py`) - reserve each project
+  lifecycle by generation, launch its dev server through a profile-specific
+  supervisor, and reverse-proxy only a currently ownership-verified connection.
+  Supervisor output uses bounded, versioned deltas and an atomic final snapshot.
 
 ## Frontend — `apps/web`
 
@@ -98,9 +100,10 @@ fetch wrappers to the backend), `src/hooks`, `src/lib`, `src/theme.ts` (6 themes
   `~/.local/share/proxima/` (DB, workspace, per-profile agent homes, backups)
   and `~/.config/proxima/proxima.env` (config). See
   [architecture.md](architecture.md#runtime--repo-split).
-- **Process management** — runs as a **systemd** user service (see
-  `docs/installation.md`). A staging clone can run side-by-side on its own port,
-  database, and venv.
+- **Process management** - runs as a **systemd** user service (see
+  `docs/installation.md`). Socket-activated per-preview supervisors own app
+  scopes outside the API service lifecycle. A staging clone runs side-by-side on
+  its own API port, supervisor socket and protocol, data, checkout, and venv.
 - **Deployment profiles** — production uses `proxima.service` on port `8765` for
   `proxima.minarflow.com`; staging uses `proxima-staging.service` on port `8767` for
   `proxima-staging.minarflow.com`. Config and data roots are isolated.

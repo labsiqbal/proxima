@@ -92,18 +92,46 @@ export const fileUrl = (slug: string, path: string) =>
   `/api/preview/${encodeURIComponent(slug)}/${path.split('/').map(encodeURIComponent).join('/')}`
 
 // Run & preview a project app (managed dev server). preview_port is the app's
-// credential-stripping relay listener — the preview origin for remote clients.
-export type AppStatus = {
+// credential-stripping relay listener - the isolated preview origin for local
+// and remote clients when no apps-domain subdomain applies.
+export type AppLifecycleState =
+  | 'stopped'
+  | 'starting'
+  | 'ready'
+  | 'port_conflict'
+  | 'ownership_unknown'
+  | 'exited'
+
+type AppStatusBase = {
+  state: AppLifecycleState
   running: boolean
-  ready?: boolean
+  ready: boolean
+  requested_port?: number
   port?: number
   preview_port?: number
   command?: string
   log?: string[]
-  exited?: boolean
+  message?: string
+  reason?: 'output_sink_unavailable'
   /** Present when the managed process self-exited (sticky until next start). */
+  exited?: boolean
   exit_code?: number
   broad_bind?: boolean
+}
+
+export type AppStatus = AppStatusBase & (
+  | { state: 'stopped'; running: false; ready: false }
+  | { state: 'starting'; running: true; ready: false; prolonged_start: boolean }
+  | { state: 'ready'; running: true; ready: true; port: number }
+  | { state: 'port_conflict'; running: false; ready: false; requested_port: number }
+  | { state: 'ownership_unknown'; running: true; ready: false }
+  | { state: 'exited'; running: false; ready: false; exited: true; exit_code: number }
+)
+
+export type AppPortConflictDetail = {
+  state: 'port_conflict'
+  port: number
+  message: string
 }
 
 /** Plain-language summary after a managed app process self-exits without staying up. */

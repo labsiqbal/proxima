@@ -20,7 +20,9 @@ def test_generated_doc_footer_does_not_create_phantom_drift(tmp_path: Path):
     assert generator._write_generated(output, "# Reference\n", "2026-07-30 00:00 UTC")
     first = output.read_text(encoding="utf-8")
 
-    assert not generator._write_generated(output, "# Reference\n", "2026-07-30 00:01 UTC")
+    assert not generator._write_generated(
+        output, "# Reference\n", "2026-07-30 00:01 UTC"
+    )
     assert output.read_text(encoding="utf-8") == first
 
     assert generator._write_generated(output, "# Changed\n", "2026-07-30 00:02 UTC")
@@ -31,3 +33,12 @@ def test_generated_doc_footer_does_not_create_phantom_drift(tmp_path: Path):
     output.write_text("# Changed\n", encoding="utf-8")
     assert generator._write_generated(output, "# Changed\n", "2026-07-30 00:03 UTC")
     assert "_Generated 2026-07-30 00:03 UTC._" in output.read_text(encoding="utf-8")
+
+
+def test_multiline_route_decorator_is_in_generated_api_reference():
+    generator = _generator_module()
+
+    endpoints = generator._collect_endpoints()
+    rendered = generator._render_api(endpoints)
+
+    assert "| GET | `/api/projects/{slug}/app/status` | `app_status` |" in rendered

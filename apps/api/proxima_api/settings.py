@@ -108,12 +108,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bundled_skills_dir": None,
     # Interface the per-app preview relay listens on. "auto" (default) binds the
     # Tailscale interface when the host is on a tailnet, else loopback - never
-    # 0.0.0.0: tailnet devices can reach previews, untrusted plain-LAN devices
-    # cannot (relays are gated by the proxima_preview capability cookie either
-    # way, so a reachable port is a 403 wall, not an open app). Operators can
+    # 0.0.0.0: loopback and tailnet devices can reach previews, untrusted
+    # plain-LAN devices cannot (relays are gated by the proxima_preview
+    # capability cookie either way, so a reachable port is a 403 wall, not an
+    # open app). Operators can
     # still set an explicit interface (including 0.0.0.0) via
     # PROXIMA_PREVIEW_BIND, or "off" for strict loopback-only installs.
     "preview_bind_host": "auto",
+    "preview_profile": "direct",
+    "preview_scope_state_root": None,
     # systemd --user unit name for Diagnostics journal (without .service).
     # Staging/preview installs set PROXIMA_SERVICE_NAME so debug logs match the
     # real unit instead of always reading proxima.service.
@@ -143,12 +146,18 @@ def safe_update_config_from_env(
         "safe_update_fence_path": fence or None,
     }
     if _bool_flag(source.get("PROXIMA_CANDIDATE_MODE", "0")):
-        result.update({
-            "candidate_mode": True,
-            "candidate_release_id": source.get("PROXIMA_CANDIDATE_RELEASE_ID") or None,
-            "candidate_commit": source.get("PROXIMA_CANDIDATE_COMMIT") or None,
-            "candidate_asset_manifest_digest": source.get("PROXIMA_CANDIDATE_ASSET_MANIFEST_DIGEST") or None,
-        })
+        result.update(
+            {
+                "candidate_mode": True,
+                "candidate_release_id": source.get("PROXIMA_CANDIDATE_RELEASE_ID")
+                or None,
+                "candidate_commit": source.get("PROXIMA_CANDIDATE_COMMIT") or None,
+                "candidate_asset_manifest_digest": source.get(
+                    "PROXIMA_CANDIDATE_ASSET_MANIFEST_DIGEST"
+                )
+                or None,
+            }
+        )
     return result
 
 
@@ -156,10 +165,18 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     workspace_root = Path(cfg["workspace_root"])
     cfg["workspace_root"] = str(workspace_root)
-    cfg["hermes_profiles_root"] = str(Path(cfg.get("hermes_profiles_root") or workspace_root / "hermes-profiles"))
-    cfg["projectctl_path"] = str(Path(cfg.get("projectctl_path") or repo_root() / "infra/scripts/projectctl"))
-    cfg["source_hermes_home"] = str(Path(cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")))
-    cfg["bundled_skills_dir"] = str(Path(cfg.get("bundled_skills_dir") or repo_root() / "bundled-skills"))
+    cfg["hermes_profiles_root"] = str(
+        Path(cfg.get("hermes_profiles_root") or workspace_root / "hermes-profiles")
+    )
+    cfg["projectctl_path"] = str(
+        Path(cfg.get("projectctl_path") or repo_root() / "infra/scripts/projectctl")
+    )
+    cfg["source_hermes_home"] = str(
+        Path(cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes"))
+    )
+    cfg["bundled_skills_dir"] = str(
+        Path(cfg.get("bundled_skills_dir") or repo_root() / "bundled-skills")
+    )
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
     cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
     cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
@@ -169,7 +186,9 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cfg["feature_safe_self_update"] = _bool_flag(cfg.get("feature_safe_self_update"))
     cfg["candidate_mode"] = _bool_flag(cfg.get("candidate_mode"))
-    cfg["safe_update_maintenance_mode"] = _bool_flag(cfg.get("safe_update_maintenance_mode"))
+    cfg["safe_update_maintenance_mode"] = _bool_flag(
+        cfg.get("safe_update_maintenance_mode")
+    )
     if cfg["candidate_mode"]:
         # Candidate configuration is controller-owned. Do not honour a supplied
         # link root or source profile home because either could expose the owner
@@ -212,6 +231,16 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
     cfg["service_name"] = raw_service.removesuffix(".service")
+    raw_profile = str(cfg.get("preview_profile") or cfg["service_name"]).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", raw_profile):
+        raise ValueError("preview profile identity is invalid")
+    cfg["preview_profile"] = raw_profile
+    cfg["preview_scope_state_root"] = str(
+        Path(
+            cfg.get("preview_scope_state_root")
+            or workspace_root / "preview-supervisors"
+        )
+    )
     return cfg
 
 
