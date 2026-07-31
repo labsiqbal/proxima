@@ -350,13 +350,16 @@ moving anything and uses atomic no-clobber creation and rename primitives for on
 known Ops-owned paths on the same filesystem. Creation and rename operate relative
 to stable no-follow directory descriptors and revalidate root identity before the
 durable database switch, so replacing a parent cannot redirect a move. Generated
-documents prefer anonymous same-filesystem temporary storage; the fallback has a
-deterministic manifest-bound name and hash, is excluded from owner scans only when
-exact, and is cleaned only after its ownership is revalidated. A durable `moving`
-marker supports restart after any completed rename. Older moving markers upgrade in
-memory and are persisted at the current version only when legacy and physical
-document state identifies one safe continuation; ambiguous candidates remain
-untouched for owner intervention.
+documents prefer anonymous same-filesystem temporary storage; the fallback has an
+unpredictable manifest-bound name and durably advances through planned, created,
+ready, published, and complete phases. Device and inode identity proves which
+partial artifact Proxima may resume or clean, while unknown files remain owner
+content. Every manifest entry binds the opened top-level inode plus descendant file
+and directory identities, and descriptor-relative no-follow hashing rejects swaps
+even when replacement bytes match. A durable `moving` marker supports restart after
+any completed rename. Older moving markers upgrade in memory and are persisted at
+the current version only when legacy and physical document state identifies one safe
+continuation; ambiguous candidates remain untouched for owner intervention.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
@@ -369,10 +372,19 @@ same-filesystem migration routine used at startup. Immediately before every mani
 application, that boundary rechecks current code-Area ownership plus path type,
 symlink, hash, and filesystem constraints, including ownership of the complete
 physical Ops root and an exact match for any existing manifest-bound
-`ops/container.md`. Migration planning, apply, durable state updates, supported Area
-and Files mutations, and complete Project purge share a cross-process per-Container
-lock. Virtual roots are resolved only after acquiring that lock, and late
-destinations fail without replacement. A repaired already-physical layout with open migration Attention
+`ops/container.md`. Migration planning, apply, durable state updates, and short-lived
+filesystem mutations share a cross-process per-Container mutation lock. Design,
+Moodboard, chat-media publication, uploads, and turn restore use that same
+root-resolution boundary. Agent runs, project terminals, and preview apps retain a
+shared activity lease for their complete mutation-capable lifetime; migration and
+complete Project purge require exclusive quiescence. Upload request bodies are
+staged before synchronous publication. Virtual roots are resolved only after
+acquiring the appropriate boundary, and late destinations fail without replacement.
+Root-repository exclusion traverses `.git/info/exclude` relative to the already-open
+Container descriptor. Fresh Windows Container creation uses stable no-reparse
+handles and a relative no-clobber file create, while unsafe legacy migration remains
+fail-closed when an equivalent move primitive is unavailable. A repaired
+already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
 without moving content. It does not add merge, overwrite, delete, cross-device move,
 symlink-following, or content-authority behavior.

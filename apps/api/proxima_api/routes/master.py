@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException
 
 from .. import (
     app_settings,
+    container_registry,
     features,
     master_decisions,
     master_focus,
@@ -654,7 +655,8 @@ def register(app, deps):
 
     def _message_journal(message_id: int, user: dict[str, Any]):
         row = db().execute(
-            "SELECT m.id, s.id AS session_id, s.owner_user_id, s.mode, p.path AS project_path "
+                "SELECT m.id, s.id AS session_id, s.owner_user_id, s.mode, "
+                "p.id AS project_id, p.path AS project_path "
             "FROM messages m JOIN sessions s ON s.id = m.session_id "
             "LEFT JOIN projects p ON p.id = s.project_id WHERE m.id = ?",
             (message_id,),
@@ -677,24 +679,32 @@ def register(app, deps):
     def restore_chat_turn(message_id: int, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)):
         row = _message_journal(message_id, user)
         try:
-            result = turn_restore.restore(
-                db(), message_id, root=Path(row["project_path"]),
-                confirmed=payload.get("confirm") is True,
-                accept_active_master=payload.get("accept_active_master") is True,
-                accept_active_alpha=(
-                    payload.get("accept_active_alpha")
-                    if isinstance(payload.get("accept_active_alpha"), bool)
-                    else None
-                ),
-            )
+            with container_registry.container_mutation_lock(
+                db(),
+                int(row["project_id"]),
+            ):
+                result = turn_restore.restore(
+                    db(), message_id, root=Path(row["project_path"]),
+                    confirmed=payload.get("confirm") is True,
+                    accept_active_master=payload.get("accept_active_master") is True,
+                    accept_active_alpha=(
+                        payload.get("accept_active_alpha")
+                        if isinstance(payload.get("accept_active_alpha"), bool)
+                        else None
+                    ),
+                )
+                db().execute(
+                    "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+                    "VALUES (?, 'chat.turn.restore', 'message', ?, ?)",
+                    (
+                        user["id"],
+                        str(message_id),
+                        json.dumps({"paths": result["paths"]}),
+                    ),
+                )
         except turn_restore.TurnRestoreError as exc:
             detail = str(exc)
             raise HTTPException(status_code=409 if "Master" in detail or "active" in detail else 422, detail=detail) from exc
-        db().execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-            "VALUES (?, 'chat.turn.restore', 'message', ?, ?)",
-            (user["id"], str(message_id), json.dumps({"paths": result["paths"]})),
-        )
         return result
 
     def _attention_items(user: dict[str, Any]) -> list[dict[str, Any]]:

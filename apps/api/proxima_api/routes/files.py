@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -46,6 +48,19 @@ from ..target_preview import (
 )
 
 logger = logging.getLogger("proxima.api")
+
+
+class _LeaseGroup:
+    def __init__(self, *leases: Any) -> None:
+        self._leases = list(leases)
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        for lease in reversed(self._leases):
+            lease.release()
 
 
 def register(app, deps):
@@ -344,56 +359,65 @@ def register(app, deps):
         dir: str = "uploads",
         user: dict[str, Any] = Depends(current_user),
     ):
-        with _project_mutation(slug, user):
-            name = Path(file.filename or "file").name or "file"
-            folder = (dir or "uploads").strip("/") or "uploads"
-            root = _virtual_root(slug, folder, user)
-            try:
-                target = fsapi.resolve_in_project(root, f"{folder}/{name}")
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"cannot create upload directory: {exc.strerror}",
-                ) from exc
-            # Stream from UploadFile's spool instead of copying the whole upload into
-            # RAM. Exclusive creation also makes same-name concurrent uploads de-dupe
-            # safely instead of racing between exists() and write_bytes().
-            stem, suffix, index = target.stem, target.suffix, 0
-            max_bytes = int(cfg.get("max_upload_bytes") or 100 * 1024 * 1024)
-            while True:
-                candidate = (
-                    target if index == 0 else target.parent / f"{stem}-{index}{suffix}"
-                )
-                try:
-                    written = 0
-                    with candidate.open("xb") as output:
-                        while chunk := await file.read(1024 * 1024):
-                            written += len(chunk)
-                            if written > max_bytes:
-                                raise HTTPException(
-                                    status_code=413,
-                                    detail=f"upload exceeds {max_bytes // (1024 * 1024)} MB limit",
-                                )
-                            output.write(chunk)
-                    target = candidate
-                    break
-                except FileExistsError:
-                    index += 1
-                except HTTPException:
-                    candidate.unlink(missing_ok=True)
-                    raise
-                except OSError as exc:
-                    candidate.unlink(missing_ok=True)
+        name = Path(file.filename or "file").name or "file"
+        folder = (dir or "uploads").strip("/") or "uploads"
+        max_bytes = int(cfg.get("max_upload_bytes") or 100 * 1024 * 1024)
+        written = 0
+        # Stage the full upload outside the project mutation lock so a slow client
+        # cannot hold Container writers while bytes are still arriving.
+        with tempfile.SpooledTemporaryFile(
+            max_size=min(max_bytes, 8 * 1024 * 1024),
+            mode="w+b",
+        ) as staged:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
                     raise HTTPException(
-                        status_code=400, detail=f"cannot write upload: {exc.strerror}"
+                        status_code=413,
+                        detail=f"upload exceeds {max_bytes // (1024 * 1024)} MB limit",
+                    )
+                staged.write(chunk)
+            staged.seek(0)
+            with _project_mutation(slug, user):
+                root = _virtual_root(slug, folder, user)
+                try:
+                    target = fsapi.resolve_in_project(root, f"{folder}/{name}")
+                except fsapi.FsError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"cannot create upload directory: {exc.strerror}",
                     ) from exc
-            rel = f"{folder}/{target.name}"
-            _audit_fs(user, "file.upload", slug, rel)
+                # Exclusive creation de-dupes same-name concurrent uploads safely
+                # instead of racing between exists() and write_bytes().
+                stem, suffix, index = target.stem, target.suffix, 0
+                while True:
+                    candidate = (
+                        target
+                        if index == 0
+                        else target.parent / f"{stem}-{index}{suffix}"
+                    )
+                    try:
+                        with candidate.open("xb") as output:
+                            shutil.copyfileobj(staged, output, 1024 * 1024)
+                        target = candidate
+                        break
+                    except FileExistsError:
+                        index += 1
+                        staged.seek(0)
+                    except OSError as exc:
+                        candidate.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"cannot write upload: {exc.strerror}",
+                        ) from exc
+                rel = f"{folder}/{target.name}"
+                _audit_fs(user, "file.upload", slug, rel)
         return {"path": rel, "name": target.name}
+
 
 
     # ── Image-generation provider settings ────────────────────────────────
@@ -969,16 +993,34 @@ def register(app, deps):
         payload: AppStartRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        root = _project_root(slug, user)
-        cwd = root
-        if payload.dir:
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            activity_lease = container_registry.acquire_container_activity_lease(
+                db(),
+                project,
+            )
             try:
-                cwd = fsapi.resolve_in_project(root, payload.dir)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if not cwd.is_dir():
-                raise HTTPException(status_code=400, detail="folder not found")
-        effect_lease = maintenance.background_lease()
+                root = _project_root(slug, user)
+                cwd = root
+                if payload.dir:
+                    try:
+                        cwd = fsapi.resolve_in_project(root, payload.dir)
+                    except fsapi.FsError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    if not cwd.is_dir():
+                        raise HTTPException(status_code=400, detail="folder not found")
+            except BaseException:
+                activity_lease.release()
+                raise
+        try:
+            maintenance_lease = maintenance.background_lease()
+        except BaseException:
+            activity_lease.release()
+            raise
+        effect_lease = _LeaseGroup(
+            maintenance_lease,
+            activity_lease,
+        )
         try:
             await app.state.app_manager.start(
                 slug,
@@ -988,6 +1030,7 @@ def register(app, deps):
                 effect_lease=effect_lease,
             )
         except apprunner.PortInUseError as exc:
+            effect_lease.release()
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -997,6 +1040,7 @@ def register(app, deps):
                 },
             ) from exc
         except apprunner.OutputBrokerUnavailable as exc:
+            effect_lease.release()
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -1005,6 +1049,9 @@ def register(app, deps):
                     "message": str(exc),
                 },
             ) from exc
+        except BaseException:
+            effect_lease.release()
+            raise
         # Preview relay: the app's own remote-reachable origin (best-effort; the
         # app still runs without it and localhost preview needs no relay).
         try:
@@ -1020,6 +1067,7 @@ def register(app, deps):
             )
         _audit_fs(user, "app.start", slug, f"{payload.dir or '.'}: {payload.command}")
         return {"ok": True}
+
 
     @app.post("/api/projects/{slug}/app/stop")
     async def app_stop(slug: str, user: dict[str, Any] = Depends(current_user)):

@@ -35,7 +35,12 @@ from .maintenance_status import IngressLease
 from . import state
 from . import turn_restore
 from .artifacts import scan_project_artifacts
-from .container_registry import container_root, ops_root
+from .container_registry import (
+    acquire_container_activity_lease,
+    container_mutation_lock,
+    container_root,
+    ops_root,
+)
 from .message_reviews import parse_review_output, review_payload
 from .master_tool_broker import (
     MASTER_TOOL_RESULT_BYTES,
@@ -1187,6 +1192,7 @@ class RunWorker:
         turn_before: dict[str, dict[str, Any]] | None = None
         turn_root: Path | None = None
         tool_write_event_seen = False
+        project_activity_lease = None
         try:
             mode_row = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
             session_mode = (mode_row["mode"] if mode_row else None) or "chat"
@@ -1206,7 +1212,23 @@ class RunWorker:
             # script runner, never through a runner/ACP session. Everything
             # below this point is agent-session machinery it must not touch.
             if str(run.get("kind") or "") == SCRIPT_NODE_RUN_KIND:
-                await self.script_runner.execute(run)
+                script_activity_lease = None
+                if project_id:
+                    script_project = db.execute(
+                        "SELECT id, path FROM projects WHERE id = ?",
+                        (project_id,),
+                    ).fetchone()
+                    if script_project and script_project["path"]:
+                        with container_mutation_lock(db, script_project):
+                            script_activity_lease = acquire_container_activity_lease(
+                                db,
+                                script_project,
+                            )
+                try:
+                    await self.script_runner.execute(run)
+                finally:
+                    if script_activity_lease is not None:
+                        script_activity_lease.release()
                 return
             hermes_home = run["hermes_home"] or ""
             spec = runner_spec(run["runner_id"])
@@ -1240,11 +1262,15 @@ class RunWorker:
                     (project_id,),
                 ).fetchone()
                 if row and row["path"]:
-                    project_container = container_root(row)
-                    cwd = str(project_container)
-                    project_name, project_slug = row["name"], row["slug"]
-                    project_ops = ops_root(db, row)
-                    project_wiki = project_ops / "wiki"
+                    with container_mutation_lock(db, row):
+                        project_activity_lease = acquire_container_activity_lease(
+                            db, row
+                        )
+                        project_container = container_root(row)
+                        cwd = str(project_container)
+                        project_name, project_slug = row["name"], row["slug"]
+                        project_ops = ops_root(db, row)
+                        project_wiki = project_ops / "wiki"
             # Ops-owned work runs in the physical Ops Area. General chat keeps its
             # Container cwd for compatibility. A project-less job gets scratch.
             jrow = db.execute(
@@ -1979,6 +2005,8 @@ class RunWorker:
             detail = format_rpc_error(str(exc)[-2000:])
             self._fail_run_exception(run, detail)
         finally:
+            if project_activity_lease is not None:
+                project_activity_lease.release()
             if hb_task:
                 hb_task.cancel()
                 with suppress(asyncio.CancelledError):

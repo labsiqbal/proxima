@@ -104,12 +104,16 @@ def _prepare_completed_filesystem_move(
         conn,
         container_registry.get_container(conn, container_id),
     )
-    container_registry._upsert_marker(conn, container_id, "moving", manifest)
     strategy, content, _ = container_registry._manifest_container_doc(manifest)
     assert strategy == "generate"
     assert content is not None
     (root / "ops").mkdir()
-    (root / "ops" / "container.md").write_text(content, encoding="utf-8")
+    document = root / "ops" / "container.md"
+    document.write_text(content, encoding="utf-8")
+    recovery = manifest["container_doc"]["recovery_temp"]
+    recovery["phase"] = "complete"
+    recovery["identity"] = container_registry._stat_identity(document.lstat())
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
     (root / "wiki").rename(root / "ops" / "wiki")
     return manifest
 
@@ -927,22 +931,26 @@ def test_retry_serializes_late_area_registration_before_manifest_apply(
     assert migrate_container_ops(api.app.state.db, container_id) is False
     monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
-    real_hash_entry = container_registry._hash_entry
+    real_snapshot_at = container_registry._entry_snapshot_at
     apply_entered = threading.Event()
     release_apply = threading.Event()
     artifact_hashes = 0
 
-    def pause_manifest_apply(path: Path):
+    def pause_manifest_apply(directory_fd: int, name: str):
         nonlocal artifact_hashes
-        result = real_hash_entry(path)
-        if path == root / "artifacts":
+        result = real_snapshot_at(directory_fd, name)
+        if name == "artifacts":
             artifact_hashes += 1
             if artifact_hashes == 2:
                 apply_entered.set()
                 assert release_apply.wait(timeout=5)
         return result
 
-    monkeypatch.setattr(container_registry, "_hash_entry", pause_manifest_apply)
+    monkeypatch.setattr(
+        container_registry,
+        "_entry_snapshot_at",
+        pause_manifest_apply,
+    )
     area_finished = threading.Event()
 
     def add_area():
@@ -1022,6 +1030,91 @@ def test_container_mutation_lock_excludes_another_process(tmp_path: Path):
     assert acquired.read_text(encoding="utf-8") == "acquired"
 
 
+def test_retry_waits_for_active_container_process_lease(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "active-process-lease"
+    container_id = _legacy_container(conn, root, "active-process-lease")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    with container_registry.container_mutation_lock(conn, container_id):
+        lease = container_registry.acquire_container_activity_lease(
+            conn,
+            container_id,
+        )
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    try:
+        assert finished.wait(timeout=0.25) is False
+    finally:
+        lease.release()
+    thread.join(timeout=5)
+
+    assert finished.is_set()
+    assert result == [True]
+    assert (root / "ops" / "wiki" / "keep.md").is_file()
+
+
+def test_container_activity_lease_excludes_quiescence_in_another_process(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "multi-process-activity"
+    container_id = _legacy_container(conn, root, "multi-process-activity")
+    database = tmp_path / "proxima.db"
+    attempted = tmp_path / "activity-attempted"
+    acquired = tmp_path / "activity-acquired"
+    script = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import container_quiescence_lock",
+            "from proxima_api.db import connect",
+            "db_path, container_id, attempted, acquired = sys.argv[1:]",
+            "Path(attempted).write_text('attempted', encoding='utf-8')",
+            "with container_quiescence_lock(connect(db_path), int(container_id)):",
+            "    Path(acquired).write_text('acquired', encoding='utf-8')",
+        )
+    )
+    api_root = Path(__file__).resolve().parents[1]
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(database),
+                str(container_id),
+                str(attempted),
+                str(acquired),
+            ],
+            cwd=api_root,
+        )
+        deadline = time.monotonic() + 5
+        while not attempted.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert attempted.exists()
+        time.sleep(0.2)
+        assert not acquired.exists()
+    finally:
+        lease.release()
+
+    assert process.wait(timeout=5) == 0
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
 def test_generated_container_doc_creation_never_clobbers_late_content(
     tmp_path: Path,
     monkeypatch,
@@ -1083,7 +1176,7 @@ def test_manifest_rename_never_clobbers_late_destination(
 
 @pytest.mark.parametrize(
     "stage",
-    ("before_temp", "after_temp_write", "after_publish"),
+    ("before_temp", "after_create", "after_ready", "after_publish"),
 )
 def test_generated_document_recovers_each_owned_write_stage(
     tmp_path: Path,
@@ -1101,16 +1194,21 @@ def test_generated_document_recovers_each_owned_write_stage(
     recovery = planned["recovery_temp"]
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
     (root / "ops").mkdir()
-    if stage in {"after_temp_write", "after_publish"}:
-        (root / "ops" / recovery["path"]).write_text(
-            planned["content"],
-            encoding="utf-8",
+    recovery_path = root / "ops" / recovery["path"]
+    if stage in {"after_create", "after_ready", "after_publish"}:
+        recovery_path.write_bytes(
+            b"" if stage == "after_create" else planned["content"].encode()
+        )
+        recovery["phase"] = "created" if stage == "after_create" else "ready"
+        recovery["identity"] = container_registry._stat_identity(recovery_path.lstat())
+        container_registry._upsert_marker(
+            conn,
+            container_id,
+            "moving",
+            manifest,
         )
     if stage == "after_publish":
-        (root / "ops" / "container.md").write_text(
-            planned["content"],
-            encoding="utf-8",
-        )
+        (root / "ops" / "container.md").hardlink_to(recovery_path)
 
     assert migrate_container_ops(conn, container_id) is True
     assert (root / "ops" / "container.md").read_text(
@@ -1143,11 +1241,10 @@ def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
     upgraded = json.loads(marker["manifest_json"])
     assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
     assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
-    assert upgraded["container_doc"]["recovery_temp"] == (
-        container_registry._planned_recovery_temp(
-            upgraded["container_doc"]["sha256"]
-        )
-    )
+    recovery = upgraded["container_doc"]["recovery_temp"]
+    assert recovery["path"].startswith(container_registry.RECOVERY_TEMP_PREFIX)
+    assert recovery["phase"] == "complete"
+    assert recovery["identity"]
 
 
 def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path):
@@ -1170,6 +1267,79 @@ def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path)
     assert not (root / "ops" / "container.md").exists()
 
 
+def test_recovery_temp_spoof_with_exact_bytes_is_preserved(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "spoofed-recovery-temp"
+    container_id = _legacy_container(conn, root, "spoofed-recovery-temp")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    recovery = planned["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    spoof = root / "ops" / recovery["path"]
+    spoof.write_text(planned["content"], encoding="utf-8")
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert spoof.read_text(encoding="utf-8") == planned["content"]
+    assert not (root / "ops" / "container.md").exists()
+
+
+def test_unproven_generated_document_with_exact_bytes_is_preserved(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "unproven-generated-document"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "unproven-generated-document",
+    )
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    target = root / "ops" / "container.md"
+    target.write_text(planned["content"], encoding="utf-8")
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert target.read_text(encoding="utf-8") == planned["content"]
+    assert (root / "wiki").is_dir()
+
+
+def test_recovery_artifact_intent_is_unpredictable_and_manifest_bound(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    first_root = tmp_path / "recovery-intent-first"
+    second_root = tmp_path / "recovery-intent-second"
+    first_id = _legacy_container(conn, first_root, "recovery-intent-first")
+    second_id = _legacy_container(
+        conn,
+        second_root,
+        "recovery-intent-second",
+    )
+    first = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, first_id),
+    )["container_doc"]["recovery_temp"]
+    second = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, second_id),
+    )["container_doc"]["recovery_temp"]
+
+    assert first["path"] != second["path"]
+    assert first["phase"] == second["phase"] == "planned"
+    assert first["identity"] is second["identity"] is None
+
+
 def test_retry_serializes_virtual_file_write_before_root_resolution(
     tmp_path: Path,
     monkeypatch,
@@ -1185,10 +1355,10 @@ def test_retry_serializes_virtual_file_write_before_root_resolution(
     release_apply = threading.Event()
     real_exclude = container_registry.exclude_ops_from_root_repo
 
-    def pause_before_database_switch(path: Path):
+    def pause_before_database_switch(path: Path, **kwargs):
         apply_entered.set()
         assert release_apply.wait(timeout=5)
-        return real_exclude(path)
+        return real_exclude(path, **kwargs)
 
     monkeypatch.setattr(
         container_registry,
@@ -1246,10 +1416,10 @@ def test_retry_serializes_complete_project_purge(
     release_apply = threading.Event()
     real_exclude = container_registry.exclude_ops_from_root_repo
 
-    def pause_before_database_switch(path: Path):
+    def pause_before_database_switch(path: Path, **kwargs):
         apply_entered.set()
         assert release_apply.wait(timeout=5)
-        return real_exclude(path)
+        return real_exclude(path, **kwargs)
 
     monkeypatch.setattr(
         container_registry,
@@ -1298,6 +1468,70 @@ def test_retry_serializes_complete_project_purge(
     ).fetchone() is None
 
 
+def test_retry_serializes_design_writer_before_root_resolution(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-design-writer"
+    container_id = _owned_api_legacy(api, root, "serialized-design-writer")
+    image = root / "artifacts" / "media" / "images" / "source.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path, **kwargs):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    design_finished = threading.Event()
+
+    def create_design():
+        try:
+            return api.post(
+                "/api/projects/serialized-design-writer/designs/from-image",
+                headers=headers,
+                json={"path": "artifacts/media/images/source.png"},
+            )
+        finally:
+            design_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-design-writer/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        design_future = pool.submit(create_design)
+        design_was_blocked = not design_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        design = design_future.result(timeout=5)
+
+    assert design_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert design.status_code == 200, design.text
+    scene = root / "ops" / design.json()["path"] / "scene.json"
+    assert scene.is_file()
+
+
 def test_parent_symlink_swap_cannot_redirect_manifest_move(
     tmp_path: Path,
     monkeypatch,
@@ -1329,6 +1563,73 @@ def test_parent_symlink_swap_cannot_redirect_manifest_move(
     assert migrate_container_ops(conn, container_id) is False
     assert not (outside / "design.md").exists()
     assert (parked / "design.md").read_bytes() == b"legacy design"
+
+
+def test_manifest_move_rejects_same_content_inode_swap(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "inode-swap"
+    container_id = _legacy_container(conn, root, "inode-swap")
+    source = root / "design.md"
+    source.write_bytes(b"owner design")
+    parked = root / "design-original.md"
+    real_rename = container_registry._rename_noreplace
+    swapped = False
+
+    def swap_inode_then_rename(*args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            source.rename(parked)
+            source.write_bytes(b"owner design")
+        return real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_rename_noreplace",
+        swap_inode_then_rename,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert source.read_bytes() == b"owner design"
+    assert parked.read_bytes() == b"owner design"
+    assert not (root / "ops" / "design.md").exists()
+
+
+def test_git_exclude_uses_opened_root_after_path_replacement(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "exclude-root-swap"
+    parked = tmp_path / "exclude-root-parked"
+    outside = tmp_path / "exclude-outside"
+    container_id = _legacy_container(conn, root, "exclude-root-swap")
+    (root / "wiki").mkdir()
+    (root / ".git" / "info").mkdir(parents=True)
+    (outside / ".git" / "info").mkdir(parents=True)
+    real_exclude = container_registry._exclude_ops_from_root_repo_at
+    swapped = False
+
+    def replace_root_then_exclude(root_fd: int):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            root.rename(parked)
+            root.symlink_to(outside, target_is_directory=True)
+        return real_exclude(root_fd)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_exclude_ops_from_root_repo_at",
+        replace_root_then_exclude,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert "/ops/" in (parked / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert not (outside / ".git" / "info" / "exclude").exists()
 
 
 def test_migration_detail_exposes_unavailable_root_inspectability(tmp_path: Path):
@@ -1586,6 +1887,51 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     script.write_text("# Description: build the report\n", encoding="utf-8")
     assert scripts_library.scan_catalog(root / "ops") == [
         {"rel_path": "report.sh", "description": "build the report"}
+    ]
+
+
+def test_fresh_container_uses_windows_no_reparse_boundary(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "windows-fresh"
+    root.mkdir()
+    called: list[tuple[Path, str, tuple[str, ...]]] = []
+
+    def create_windows(
+        container: Path,
+        name: str,
+        starter_dirs: tuple[str, ...],
+    ) -> Path:
+        called.append((container, name, starter_dirs))
+        physical = container / "ops"
+        physical.mkdir()
+        (physical / "container.md").write_text("owned", encoding="utf-8")
+        return physical
+
+    monkeypatch.setattr(
+        container_registry,
+        "_platform_is_windows",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_create_physical_ops_root_windows",
+        create_windows,
+    )
+
+    physical = container_registry.create_physical_ops_root(
+        root,
+        "Windows",
+    )
+
+    assert physical == root.absolute() / "ops"
+    assert called == [
+        (
+            root.absolute(),
+            "Windows",
+            container_registry.DEFAULT_STARTER_DIRS,
+        )
     ]
 
 

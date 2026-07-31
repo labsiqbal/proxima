@@ -20,6 +20,7 @@ from .capabilities import apply_capabilities, parse_selection
 from .container_registry import (
     ContainerBoundaryError,
     compatibility_project_payload,
+    container_quiescence_lock,
     container_mutation_lock,
     container_root,
     ops_root,
@@ -512,7 +513,8 @@ def build_route_deps(
 
     def _purge_project(project: dict[str, Any]) -> None:
         with container_mutation_lock(db(), project):
-            _purge_project_locked(project)
+            with container_quiescence_lock(db(), project):
+                _purge_project_locked(project)
 
     def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.

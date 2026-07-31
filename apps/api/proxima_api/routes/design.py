@@ -11,6 +11,7 @@ import json
 import mimetypes
 import secrets
 import time
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -36,6 +37,12 @@ def register(app, deps):
     profile_for_user = deps["profile_for_user"]
     visible_project = deps["visible_project"]
 
+    @contextmanager
+    def _project_mutation(slug: str, user: dict[str, Any]):
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            yield project
+
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         db().execute(
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
@@ -58,7 +65,6 @@ def register(app, deps):
         """
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
-        root = _ops_root(slug, user)
         raw_url = str(data.get("url") or "").strip()
         image_path = str(data.get("imagePath") or "").strip()
         if not raw_url and not image_path:
@@ -69,6 +75,7 @@ def register(app, deps):
         site_name = str(data.get("siteName") or "").strip()[:120]
         favicon_url = ""
         url = ""
+        preview_image: tuple[bytes | None, str] | None = None
         if raw_url:
             try:
                 preview = moodboard.fetch_link_preview(raw_url)
@@ -79,19 +86,19 @@ def register(app, deps):
             site_name = site_name or preview["siteName"]
             favicon_url = preview["faviconUrl"]
             warning = preview["warning"]
-            image_path = moodboard.cache_preview_image(
-                root,
-                item_id,
+            preview_image = (
                 preview.get("imageBytes"),
                 str(preview.get("imageMime") or ""),
-            ) or ""
+            )
         else:
-            try:
-                source = moodboard.validate_local_image(root, image_path)
-            except (ValueError, fsapi.FsError, OSError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            title = title or source.stem
-            site_name = site_name or "Uploaded screenshot"
+            with _project_mutation(slug, user):
+                root = _ops_root(slug, user)
+                try:
+                    source = moodboard.validate_local_image(root, image_path)
+                except (ValueError, fsapi.FsError, OSError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                title = title or source.stem
+                site_name = site_name or "Uploaded screenshot"
         created = moodboard.now_iso()
         item = {
             "id": item_id,
@@ -107,16 +114,35 @@ def register(app, deps):
             "createdAt": created,
             "updatedAt": created,
         }
-        try:
-            moodboard.append_item(root, item)
-        except ValueError as exc:
-            if image_path and image_path.startswith(f"{moodboard.IMAGE_DIR}/") and raw_url:
-                try:
-                    fsapi.resolve_in_project(root, image_path).unlink(missing_ok=True)
-                except (OSError, fsapi.FsError):
-                    pass
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            if preview_image is not None:
+                image_path = (
+                    moodboard.cache_preview_image(
+                        root,
+                        item_id,
+                        preview_image[0],
+                        preview_image[1],
+                    )
+                    or ""
+                )
+                item["imagePath"] = image_path or None
+            try:
+                moodboard.append_item(root, item)
+            except ValueError as exc:
+                if (
+                    image_path
+                    and image_path.startswith(f"{moodboard.IMAGE_DIR}/")
+                    and raw_url
+                ):
+                    try:
+                        fsapi.resolve_in_project(root, image_path).unlink(
+                            missing_ok=True
+                        )
+                    except (OSError, fsapi.FsError):
+                        pass
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
         return {"item": item, "warning": warning or None}
 
     @app.patch("/api/projects/{slug}/design/moodboard/{item_id}")
@@ -133,22 +159,36 @@ def register(app, deps):
             patch["useAsReference"] = bool(data.get("useAsReference"))
         if not patch:
             raise HTTPException(status_code=400, detail="No editable Moodboard fields were provided.")
-        root = _ops_root(slug, user)
-        item = moodboard.patch_item(root, item_id, patch)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            item = moodboard.patch_item(root, item_id, patch)
+            if item is not None:
+                _audit_fs(
+                    user,
+                    "design.moodboard.update",
+                    slug,
+                    moodboard.STORE_PATH,
+                )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
-        _audit_fs(user, "design.moodboard.update", slug, moodboard.STORE_PATH)
         return {"item": item}
 
     @app.delete("/api/projects/{slug}/design/moodboard/{item_id}")
     def remove_moodboard_item(slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)):
         """Delete a Moodboard card and its private cached/uploaded image."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _ops_root(slug, user)
-        item = moodboard.delete_item(root, item_id)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            item = moodboard.delete_item(root, item_id)
+            if item is not None:
+                _audit_fs(
+                    user,
+                    "design.moodboard.delete",
+                    slug,
+                    moodboard.STORE_PATH,
+                )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
-        _audit_fs(user, "design.moodboard.delete", slug, moodboard.STORE_PATH)
         return {"ok": True, "id": item_id}
 
     @app.post("/api/projects/{slug}/design/brand-guide")
@@ -234,39 +274,39 @@ def register(app, deps):
             target = ""
         if not rel and target == "":
             raise HTTPException(status_code=400, detail="path is required")
-        try:
-            project = visible_project(slug, user)
-            resolved = file_targets.resolve_request(
-                db(),
-                project,
-                path=rel,
-                target=target,
+        with _project_mutation(slug, user) as project:
+            try:
+                resolved = file_targets.resolve_request(
+                    db(),
+                    project,
+                    path=rel,
+                    target=target,
+                )
+            except (
+                container_registry.ContainerBoundaryError,
+                file_targets.FileTargetError,
+            ) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if resolved.locator.area.kind != "ops":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Design Studio image sources must belong to the Ops Area",
+                )
+            source = resolved.path
+            rel = resolved.locator.path
+            root = resolved.root
+            if not source.is_file():
+                raise HTTPException(status_code=404, detail=f"file not found: {rel}")
+            design_id, scene = design_scenes.scene_for_image(
+                rel,
+                design_scenes.image_dims(source),
+                payload.get("title"),
+                resolved.locator.payload(),
             )
-        except (
-            container_registry.ContainerBoundaryError,
-            file_targets.FileTargetError,
-        ) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if resolved.locator.area.kind != "ops":
-            raise HTTPException(
-                status_code=400,
-                detail="Design Studio image sources must belong to the Ops Area",
-            )
-        source = resolved.path
-        rel = resolved.locator.path
-        root = resolved.root
-        if not source.is_file():
-            raise HTTPException(status_code=404, detail=f"file not found: {rel}")
-        design_id, scene = design_scenes.scene_for_image(
-            rel,
-            design_scenes.image_dims(source),
-            payload.get("title"),
-            resolved.locator.payload(),
-        )
-        d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-        _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
+            d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
+            _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
         return {"ok": True, "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}"}
 
     @app.post("/api/projects/{slug}/design/image")
@@ -275,21 +315,31 @@ def register(app, deps):
         provider (Settings); save the result into the project's shared design
         asset library and return its path."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _ops_root(slug, user)
         prov = media_settings.resolve_image_gen(db())
         # Source/reference images — the multi-image list wins over the single `image`.
         src_paths = payload.images if payload.images else ([payload.image] if payload.image else [])
         sources: list[tuple[bytes, str]] = []
-        for rel in src_paths:
-            try:
-                src = fsapi.resolve_in_project(root, rel)
-                if not src.is_file():
-                    raise fsapi.FsError(f"source image does not exist: {rel}")
-                sources.append((src.read_bytes(), mimetypes.guess_type(src.name)[0] or "application/octet-stream"))
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"cannot read source image: {exc.strerror}") from exc
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            for rel in src_paths:
+                try:
+                    src = fsapi.resolve_in_project(root, rel)
+                    if not src.is_file():
+                        raise fsapi.FsError(f"source image does not exist: {rel}")
+                    sources.append(
+                        (
+                            src.read_bytes(),
+                            mimetypes.guess_type(src.name)[0]
+                            or "application/octet-stream",
+                        )
+                    )
+                except fsapi.FsError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"cannot read source image: {exc.strerror}",
+                    ) from exc
         caps = image_providers.get_provider(prov.get("provider")).capabilities or {}
         # Edit/reference requests need an edit-capable provider. When the selected one
         # is text-to-image only, fall back to xAI OAuth (single image) if connected.
@@ -305,11 +355,6 @@ def register(app, deps):
         image_bytes = sources[0][0] if sources else None
         image_mime = sources[0][1] if sources else None
         extra_images = sources[1:] or None
-        target = fsapi.resolve_in_project(root, f"artifacts/design/_assets/gen-{int(time.time())}.png")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        i = 1
-        while target.exists():
-            target = target.parent / f"gen-{int(time.time())}-{i}.png"; i += 1
         model = payload.model or prov.get("model")
         if not model and prov.get("provider") in {"auto", "higgsfield"}:
             model = media_settings.resolve_higgsfield_settings(db()).get("imageModel")
@@ -330,9 +375,19 @@ def register(app, deps):
             raise HTTPException(status_code=502, detail="provider returned no image data")
         # Every provider returns bytes — persist them here (the out_path shortcut was
         # dead: generate() never wrote files itself).
-        target.write_bytes(raw)
-        rel = f"artifacts/design/_assets/{target.name}"
-        _audit_fs(user, "design.image", slug, rel)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            target = fsapi.resolve_in_project(
+                root, f"artifacts/design/_assets/gen-{int(time.time())}.png"
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            i = 1
+            while target.exists():
+                target = target.parent / f"gen-{int(time.time())}-{i}.png"
+                i += 1
+            target.write_bytes(raw)
+            rel = f"artifacts/design/_assets/{target.name}"
+            _audit_fs(user, "design.image", slug, rel)
         return {"path": rel, "name": target.name}
 
     @app.get("/api/projects/{slug}/design/image-models")

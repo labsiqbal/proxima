@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import stat
 import sys
@@ -19,7 +20,7 @@ import threading
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .auth import iso_now
 from .directory_handles import directory_backend
@@ -29,7 +30,7 @@ _directory_backend = directory_backend()
 
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
-OPS_MIGRATION_VERSION = 3
+OPS_MIGRATION_VERSION = 4
 KNOWN_OPS_DIRS = (
     "wiki",
     "artifacts",
@@ -50,6 +51,7 @@ RECOVERY_TEMP_PREFIX = ".proxima-ops-migration-container-"
 _CONTAINER_LOCKS_GUARD = threading.Lock()
 _CONTAINER_LOCKS: dict[str, Any] = {}
 _CONTAINER_LOCK_DEPTH = threading.local()
+_CONTAINER_ACTIVITY_STATES: dict[str, "_ContainerActivityState"] = {}
 
 
 class ContainerBoundaryError(ValueError):
@@ -58,6 +60,10 @@ class ContainerBoundaryError(ValueError):
 
 class OpsMigrationCollision(ContainerBoundaryError):
     """A legacy Ops layout cannot be moved without owner intervention."""
+
+
+def _platform_is_windows() -> bool:
+    return os.name == "nt"
 
 
 def _database_path(conn: sqlite3.Connection) -> Path | None:
@@ -69,7 +75,7 @@ def _database_path(conn: sqlite3.Connection) -> Path | None:
     return None
 
 
-def _acquire_file_lock(path: Path) -> int:
+def _acquire_file_lock(path: Path, *, shared: bool = False) -> int:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.parent.is_symlink() or not path.parent.is_dir():
         raise ContainerBoundaryError("Container mutation lock directory is unsafe")
@@ -85,15 +91,121 @@ def _acquire_file_lock(path: Path) -> int:
                 os.write(fd, b"\0")
                 os.fsync(fd)
             os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            _windows_lock_file(
+                msvcrt.get_osfhandle(fd),
+                shared=shared,
+            )
         else:
             import fcntl
 
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
     except Exception:
         os.close(fd)
         raise
     return fd
+
+
+class _ContainerActivityState:
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.readers = 0
+        self.writer = False
+
+    def acquire(self, *, shared: bool) -> None:
+        with self.condition:
+            if shared:
+                while self.writer:
+                    self.condition.wait()
+                self.readers += 1
+                return
+            while self.writer or self.readers:
+                self.condition.wait()
+            self.writer = True
+
+    def release(self, *, shared: bool) -> None:
+        with self.condition:
+            if shared:
+                self.readers -= 1
+            else:
+                self.writer = False
+            self.condition.notify_all()
+
+
+class ContainerActivityLease:
+    def __init__(
+        self,
+        state: _ContainerActivityState,
+        *,
+        shared: bool,
+        fd: int | None,
+    ) -> None:
+        self._state = state
+        self._shared = shared
+        self._fd = fd
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            if self._fd is not None:
+                _release_file_lock(self._fd)
+        finally:
+            self._state.release(shared=self._shared)
+
+
+def _container_lock_key(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> tuple[dict[str, Any], str, Path | None]:
+    data = get_container(conn, container)
+    database = _database_path(conn)
+    if database is None:
+        return data, f"memory:{data['id']}:{data['path']}", None
+    key = f"{database}:{data['id']}"
+    lock_dir = database.parent / f".{database.name}.container-locks"
+    return data, key, lock_dir
+
+
+def acquire_container_activity_lease(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    shared: bool = True,
+) -> ContainerActivityLease:
+    _, key, lock_dir = _container_lock_key(conn, container)
+    with _CONTAINER_LOCKS_GUARD:
+        state = _CONTAINER_ACTIVITY_STATES.setdefault(
+            key,
+            _ContainerActivityState(),
+        )
+    state.acquire(shared=shared)
+    try:
+        fd = (
+            _acquire_file_lock(
+                lock_dir / f"{key.rsplit(':', 1)[-1]}.activity.lock",
+                shared=shared,
+            )
+            if lock_dir is not None
+            else None
+        )
+    except Exception:
+        state.release(shared=shared)
+        raise
+    return ContainerActivityLease(state, shared=shared, fd=fd)
+
+
+@contextmanager
+def container_quiescence_lock(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> Iterator[None]:
+    lease = acquire_container_activity_lease(conn, container, shared=False)
+    try:
+        yield
+    finally:
+        lease.release()
 
 
 def _release_file_lock(fd: int) -> None:
@@ -102,7 +214,7 @@ def _release_file_lock(fd: int) -> None:
             import msvcrt
 
             os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            _windows_unlock_file(msvcrt.get_osfhandle(fd))
         else:
             import fcntl
 
@@ -111,23 +223,81 @@ def _release_file_lock(fd: int) -> None:
         os.close(fd)
 
 
+def _windows_overlapped_type():
+    from ctypes import wintypes
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("internal", ctypes.c_size_t),
+            ("internal_high", ctypes.c_size_t),
+            ("offset", wintypes.DWORD),
+            ("offset_high", wintypes.DWORD),
+            ("event", wintypes.HANDLE),
+        ]
+
+    return Overlapped
+
+
+def _windows_lock_file(handle: int, *, shared: bool) -> None:
+    from ctypes import wintypes
+
+    overlapped = _windows_overlapped_type()()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    lock_file = kernel32.LockFileEx
+    lock_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(type(overlapped)),
+    ]
+    lock_file.restype = wintypes.BOOL
+    flags = 0 if shared else 0x00000002
+    if not lock_file(
+        ctypes.c_void_p(handle),
+        flags,
+        0,
+        1,
+        0,
+        ctypes.byref(overlapped),
+    ):
+        error = ctypes.get_last_error()
+        raise OSError(error, os.strerror(error))
+
+
+def _windows_unlock_file(handle: int) -> None:
+    from ctypes import wintypes
+
+    overlapped = _windows_overlapped_type()()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    unlock_file = kernel32.UnlockFileEx
+    unlock_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(type(overlapped)),
+    ]
+    unlock_file.restype = wintypes.BOOL
+    if not unlock_file(
+        ctypes.c_void_p(handle),
+        0,
+        1,
+        0,
+        ctypes.byref(overlapped),
+    ):
+        error = ctypes.get_last_error()
+        raise OSError(error, os.strerror(error))
+
+
 @contextmanager
 def container_mutation_lock(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> Iterator[None]:
-    data = get_container(conn, container)
-    database = _database_path(conn)
-    if database is None:
-        key = f"memory:{data['id']}:{data['path']}"
-        lock_path = None
-    else:
-        key = f"{database}:{data['id']}"
-        lock_path = (
-            database.parent
-            / f".{database.name}.container-locks"
-            / f"{int(data['id'])}.lock"
-        )
+    data, key, lock_dir = _container_lock_key(conn, container)
+    lock_path = lock_dir / f"{int(data['id'])}.lock" if lock_dir is not None else None
     with _CONTAINER_LOCKS_GUARD:
         local_lock = _CONTAINER_LOCKS.setdefault(key, threading.RLock())
     with local_lock:
@@ -395,10 +565,17 @@ def _container_doc_text(name: str) -> str:
     )
 
 
-def _planned_recovery_temp(expected_hash: str) -> dict[str, str]:
+def _planned_recovery_temp(
+    expected_hash: str,
+    *,
+    token: str | None = None,
+) -> dict[str, Any]:
+    token = token or secrets.token_hex(16)
     return {
-        "path": f"{RECOVERY_TEMP_PREFIX}{expected_hash[:16]}.tmp",
+        "path": f"{RECOVERY_TEMP_PREFIX}{token}.tmp",
         "sha256": expected_hash,
+        "phase": "planned",
+        "identity": None,
     }
 
 
@@ -428,6 +605,228 @@ def _directory_fd_path(fd: int) -> Path:
 
 def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _stat_identity(value: os.stat_result) -> dict[str, int]:
+    return {
+        "device": int(value.st_dev),
+        "inode": int(value.st_ino),
+    }
+
+
+def _valid_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and isinstance(value.get("device"), int)
+        and isinstance(value.get("inode"), int)
+    )
+
+
+def _identity_matches(value: Any, current: os.stat_result) -> bool:
+    return (
+        _valid_identity(value)
+        and int(value["device"]) == int(current.st_dev)
+        and int(value["inode"]) == int(current.st_ino)
+    )
+
+
+def _windows_open_directory(path: Path) -> tuple[int, tuple[int, int]]:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        0x0080,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x02000000 | 0x00200000,
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if handle == invalid:
+        raise OSError(ctypes.get_last_error(), f"cannot open directory: {path}")
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time_low", wintypes.DWORD),
+            ("creation_time_high", wintypes.DWORD),
+            ("access_time_low", wintypes.DWORD),
+            ("access_time_high", wintypes.DWORD),
+            ("write_time_low", wintypes.DWORD),
+            ("write_time_high", wintypes.DWORD),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    information = ByHandleFileInformation()
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    if not get_information(handle, ctypes.byref(information)):
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(handle)
+        raise OSError(error, f"cannot inspect directory: {path}")
+    if not information.attributes & 0x00000010 or information.attributes & 0x00000400:
+        kernel32.CloseHandle(handle)
+        raise ContainerBoundaryError(
+            f"directory is missing or is a reparse point: {path}"
+        )
+    identity = (
+        int(information.volume_serial),
+        (int(information.file_index_high) << 32) | int(information.file_index_low),
+    )
+    return int(handle), identity
+
+
+def _windows_close_handle(handle: int) -> None:
+    ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(ctypes.c_void_p(handle))
+
+
+def _windows_create_file_at(
+    parent_handle: int,
+    name: str,
+    content: bytes,
+) -> None:
+    from ctypes import wintypes
+    import msvcrt
+
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.USHORT),
+            ("maximum_length", wintypes.USHORT),
+            ("buffer", wintypes.LPWSTR),
+        ]
+
+    class ObjectAttributes(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.ULONG),
+            ("root_directory", wintypes.HANDLE),
+            ("object_name", ctypes.POINTER(UnicodeString)),
+            ("attributes", wintypes.ULONG),
+            ("security_descriptor", wintypes.LPVOID),
+            ("security_qos", wintypes.LPVOID),
+        ]
+
+    class IoStatusBlock(ctypes.Structure):
+        _fields_ = [
+            ("status", wintypes.LPVOID),
+            ("information", ctypes.c_size_t),
+        ]
+
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    buffer = ctypes.create_unicode_buffer(name)
+    unicode_name = UnicodeString(
+        len(name.encode("utf-16-le")),
+        len(name.encode("utf-16-le")) + 2,
+        ctypes.cast(buffer, wintypes.LPWSTR),
+    )
+    attributes = ObjectAttributes(
+        ctypes.sizeof(ObjectAttributes),
+        ctypes.c_void_p(parent_handle),
+        ctypes.pointer(unicode_name),
+        0x00000040,
+        None,
+        None,
+    )
+    status_block = IoStatusBlock()
+    handle = wintypes.HANDLE()
+    status = ntdll.NtCreateFile(
+        ctypes.byref(handle),
+        0x40000000 | 0x00100000 | 0x00000080,
+        ctypes.byref(attributes),
+        ctypes.byref(status_block),
+        None,
+        0x00000080,
+        0x00000001 | 0x00000002 | 0x00000004,
+        2,
+        0x00000020 | 0x00000040 | 0x00200000,
+        None,
+        0,
+    )
+    if status < 0:
+        raise FileExistsError(name)
+    fd = msvcrt.open_osfhandle(int(handle.value), os.O_WRONLY)
+    try:
+        _write_all(fd, content)
+    finally:
+        os.close(fd)
+
+
+def _create_physical_ops_root_windows(
+    container: Path,
+    name: str,
+    starter_dirs: tuple[str, ...],
+) -> Path:
+    physical = container / OPS_RELPATH
+    physical.mkdir(mode=0o700, exist_ok=True)
+    root_handle, root_identity = _windows_open_directory(container)
+    physical_handle: int | None = None
+    try:
+        physical_handle, physical_identity = _windows_open_directory(physical)
+        for dirname in starter_dirs:
+            rel = _safe_rel_path(dirname)
+            target = physical.joinpath(*rel.parts)
+            target.mkdir(parents=True, exist_ok=True)
+            child_handle, _ = _windows_open_directory(target)
+            _windows_close_handle(child_handle)
+            check_handle, check_identity = _windows_open_directory(physical)
+            _windows_close_handle(check_handle)
+            if check_identity != physical_identity:
+                raise ContainerBoundaryError(
+                    "physical Ops root changed during creation"
+                )
+        document = _container_doc_text(name).encode("utf-8")
+        try:
+            _windows_create_file_at(
+                physical_handle,
+                CONTAINER_DOC,
+                document,
+            )
+        except FileExistsError:
+            document_path = physical / CONTAINER_DOC
+            if (
+                document_path.is_symlink()
+                or not document_path.is_file()
+                or document_path.read_bytes() != document
+            ):
+                raise ContainerBoundaryError(
+                    "ops/container.md exists with unexpected content or type"
+                ) from None
+        check_root, current_root_identity = _windows_open_directory(container)
+        check_physical, current_physical_identity = _windows_open_directory(physical)
+        _windows_close_handle(check_root)
+        _windows_close_handle(check_physical)
+        if (
+            current_root_identity != root_identity
+            or current_physical_identity != physical_identity
+        ):
+            raise ContainerBoundaryError("Container root changed during creation")
+    finally:
+        if physical_handle is not None:
+            _windows_close_handle(physical_handle)
+        _windows_close_handle(root_handle)
+    _reject_symlinks(physical)
+    return physical
 
 
 def _revalidate_root_identity(root: Path, root_fd: int) -> None:
@@ -498,17 +897,12 @@ def _path_state_at(directory_fd: int, name: str) -> str:
 
 
 def _hash_file_at(directory_fd: int, name: str) -> str:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    fd = os.open(name, flags, dir_fd=directory_fd)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise OpsMigrationCollision(f"{name} is not a regular file")
-        digest = hashlib.sha256()
-        while chunk := os.read(fd, 1024 * 1024):
-            digest.update(chunk)
-        return digest.hexdigest()
-    finally:
-        os.close(fd)
+    digest, _ = _read_stable_file_at(
+        directory_fd,
+        name,
+        display=name,
+    )
+    return digest
 
 
 def _write_all(fd: int, content: bytes) -> None:
@@ -561,6 +955,7 @@ def _unlink_exact_file_at(
     parent_fd: int,
     name: str,
     expected_hash: str,
+    expected_identity: Mapping[str, Any],
 ) -> None:
     flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     fd = os.open(name, flags, dir_fd=parent_fd)
@@ -577,6 +972,7 @@ def _unlink_exact_file_at(
         if (
             digest.hexdigest() != expected_hash
             or not _same_identity(opened, current)
+            or not _identity_matches(expected_identity, opened)
         ):
             raise OpsMigrationCollision(
                 "container.md recovery file has ambiguous ownership"
@@ -591,18 +987,26 @@ def _atomic_write_if_missing(
     text: str,
     *,
     expected_hash: str | None = None,
-    recovery_temp: Mapping[str, str] | None = None,
+    recovery_temp: dict[str, Any] | None = None,
     parent_fd: int | None = None,
+    persist_recovery: Callable[[], None] | None = None,
 ) -> None:
     content = text.encode("utf-8")
     digest = hashlib.sha256(content).hexdigest()
     expected_hash = expected_hash or digest
     if digest != expected_hash:
         raise OpsMigrationCollision("planned container.md content hash is invalid")
-    recovery = dict(recovery_temp or _planned_recovery_temp(expected_hash))
-    if recovery != _planned_recovery_temp(expected_hash):
+    recovery = recovery_temp or _planned_recovery_temp(expected_hash)
+    if not _valid_recovery_temp(recovery, expected_hash):
         raise OpsMigrationCollision("planned container.md recovery file is invalid")
     recovery_name = recovery["path"]
+
+    def advance(phase: str, identity: Mapping[str, Any]) -> None:
+        recovery["phase"] = phase
+        recovery["identity"] = dict(identity)
+        if persist_recovery is not None:
+            persist_recovery()
+
     owns_parent_fd = parent_fd is None
     if parent_fd is None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -615,22 +1019,55 @@ def _atomic_write_if_missing(
                 raise OpsMigrationCollision(
                     f"{path.name} exists with unexpected content or type"
                 )
-            if recovery_state != "missing":
-                if not _exact_regular_hash_at(
-                    parent_fd, recovery_name, expected_hash
-                ):
+            target_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if persist_recovery is None:
+                return
+            if recovery["phase"] not in {"ready", "published", "complete"}:
+                raise OpsMigrationCollision(
+                    "existing generated container.md has ambiguous ownership"
+                )
+            if not _identity_matches(recovery["identity"], target_stat):
+                if recovery["phase"] != "ready" or recovery_state == "missing":
                     raise OpsMigrationCollision(
-                        "container.md recovery file has ambiguous ownership"
+                        "existing generated container.md has ambiguous ownership"
                     )
+                recovery_stat = os.stat(
+                    recovery_name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not _identity_matches(
+                    recovery["identity"], recovery_stat
+                ) or not _same_identity(recovery_stat, target_stat):
+                    raise OpsMigrationCollision(
+                        "existing generated container.md has ambiguous ownership"
+                    )
+                advance("published", _stat_identity(target_stat))
+            if recovery_state != "missing":
                 _unlink_exact_file_at(
                     parent_fd,
                     recovery_name,
                     expected_hash,
+                    recovery["identity"],
                 )
                 os.fsync(parent_fd)
+            advance("complete", _stat_identity(target_stat))
             return
         if recovery_state != "missing":
-            if not _exact_regular_hash_at(parent_fd, recovery_name, expected_hash):
+            if recovery["phase"] == "planned":
+                raise OpsMigrationCollision(
+                    "container.md recovery file has ambiguous ownership"
+                )
+            recovery_stat = os.stat(
+                recovery_name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if not _identity_matches(recovery["identity"], recovery_stat):
                 raise OpsMigrationCollision(
                     "container.md recovery file has ambiguous ownership"
                 )
@@ -649,6 +1086,12 @@ def _atomic_write_if_missing(
                     _write_all(anonymous_fd, content)
                     _publish_anonymous_file(anonymous_fd, parent_fd, path.name)
                     os.fsync(parent_fd)
+                    target_stat = os.stat(
+                        path.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    advance("complete", _stat_identity(target_stat))
                     return
                 except FileExistsError:
                     if _exact_regular_hash_at(
@@ -685,9 +1128,36 @@ def _atomic_write_if_missing(
                 dir_fd=parent_fd,
             )
             try:
+                recovery_identity = _stat_identity(os.fstat(recovery_fd))
+                os.fsync(parent_fd)
+                advance("created", recovery_identity)
+            finally:
+                os.close(recovery_fd)
+        if recovery["phase"] == "created":
+            flags = os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+            recovery_fd = os.open(
+                recovery_name,
+                flags,
+                dir_fd=parent_fd,
+            )
+            try:
+                if not _identity_matches(recovery["identity"], os.fstat(recovery_fd)):
+                    raise OpsMigrationCollision(
+                        "container.md recovery file has ambiguous ownership"
+                    )
+                os.ftruncate(recovery_fd, 0)
                 _write_all(recovery_fd, content)
             finally:
                 os.close(recovery_fd)
+            advance("ready", recovery["identity"])
+        if recovery["phase"] != "ready" or not _exact_regular_hash_at(
+            parent_fd,
+            recovery_name,
+            expected_hash,
+        ):
+            raise OpsMigrationCollision(
+                "container.md recovery file has ambiguous ownership"
+            )
         try:
             os.link(
                 recovery_name,
@@ -701,8 +1171,25 @@ def _atomic_write_if_missing(
                 raise OpsMigrationCollision(
                     f"{path.name} appeared with unexpected content"
                 )
-        _unlink_exact_file_at(parent_fd, recovery_name, expected_hash)
         os.fsync(parent_fd)
+        target_stat = os.stat(
+            path.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if not _identity_matches(recovery["identity"], target_stat):
+            raise OpsMigrationCollision(
+                "published container.md has ambiguous ownership"
+            )
+        advance("published", _stat_identity(target_stat))
+        _unlink_exact_file_at(
+            parent_fd,
+            recovery_name,
+            expected_hash,
+            recovery["identity"],
+        )
+        os.fsync(parent_fd)
+        advance("complete", _stat_identity(target_stat))
     finally:
         if owns_parent_fd:
             os.close(parent_fd)
@@ -714,7 +1201,18 @@ def _rename_noreplace(
     *,
     source_dir_fd: int | None = None,
     destination_dir_fd: int | None = None,
+    expected_identity: Mapping[str, Any] | None = None,
 ) -> None:
+    if source_dir_fd is not None and expected_identity is not None:
+        current_source = os.stat(
+            source.name,
+            dir_fd=source_dir_fd,
+            follow_symlinks=False,
+        )
+        if not _identity_matches(expected_identity, current_source):
+            raise OpsMigrationCollision(
+                f"source identity changed before move: {source.name}"
+            )
     source_bytes = os.fsencode(source.name if source_dir_fd is not None else source)
     destination_bytes = os.fsencode(
         destination.name if destination_dir_fd is not None else destination
@@ -802,6 +1300,14 @@ def create_physical_ops_root(
     raw_root = Path(root)
     if raw_root.is_symlink():
         raise ContainerBoundaryError("Container root cannot be a symlink")
+    if _platform_is_windows():
+        if not raw_root.is_dir():
+            raise ContainerBoundaryError("Container root is missing")
+        return _create_physical_ops_root_windows(
+            raw_root.absolute(),
+            name,
+            starter_dirs,
+        )
     container = raw_root.resolve()
     if not container.is_dir():
         raise ContainerBoundaryError("Container root is missing")
@@ -838,57 +1344,429 @@ def create_physical_ops_root(
     return physical
 
 
-def exclude_ops_from_root_repo(root: Path) -> None:
-    """Keep physical Ops content out of a root repo's local git status."""
-    git_dir = Path(root) / ".git"
-    if git_dir.is_symlink() or not git_dir.is_dir():
-        return
-    exclude = git_dir / "info" / "exclude"
+def _exclude_ops_from_root_repo_at(root_fd: int) -> None:
+    git_fd: int | None = None
+    info_fd: int | None = None
+    exclude_fd: int | None = None
     try:
-        if exclude.is_symlink():
+        git_fd = os.open(".git", _directory_open_flags(), dir_fd=root_fd)
+        try:
+            os.mkdir("info", mode=0o700, dir_fd=git_fd)
+            os.fsync(git_fd)
+        except FileExistsError:
+            pass
+        info_fd = os.open("info", _directory_open_flags(), dir_fd=git_fd)
+        flags = (
+            os.O_CREAT
+            | os.O_RDWR
+            | os.O_APPEND
+            | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        exclude_fd = os.open("exclude", flags, 0o600, dir_fd=info_fd)
+        current = os.fstat(exclude_fd)
+        if not stat.S_ISREG(current.st_mode) or current.st_size > 4 * 1024 * 1024:
             return
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        lines = existing.splitlines()
-        if "/ops/" in lines:
+        existing = b""
+        while chunk := os.read(exclude_fd, 1024 * 1024):
+            existing += chunk
+        text = existing.decode("utf-8", errors="surrogateescape")
+        if "/ops/" in text.splitlines():
             return
-        prefix = "" if not existing or existing.endswith("\n") else "\n"
-        exclude.write_text(f"{existing}{prefix}/ops/\n", encoding="utf-8")
+        prefix = "" if not text or text.endswith("\n") else "\n"
+        addition = f"{prefix}/ops/\n".encode(
+            "utf-8",
+            errors="surrogateescape",
+        )
+        _write_all(exclude_fd, addition)
+        os.fsync(info_fd)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return
+    finally:
+        if exclude_fd is not None:
+            os.close(exclude_fd)
+        if info_fd is not None:
+            os.close(info_fd)
+        if git_fd is not None:
+            os.close(git_fd)
+
+
+def exclude_ops_from_root_repo(
+    root: Path,
+    *,
+    root_fd: int | None = None,
+) -> None:
+    """Keep physical Ops content out of a root repo's local git status."""
+    if root_fd is not None:
+        _exclude_ops_from_root_repo_at(root_fd)
+        return
+    if os.name != "posix":
+        return
+    try:
+        opened_root = os.open(root, _directory_open_flags())
     except OSError:
         return
+    try:
+        _revalidate_root_identity(Path(root), opened_root)
+        _exclude_ops_from_root_repo_at(opened_root)
+        _revalidate_root_identity(Path(root), opened_root)
+    except (ContainerBoundaryError, OSError):
+        return
+    finally:
+        os.close(opened_root)
 
 
 def _hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+    snapshot = _entry_snapshot(path)
+    if snapshot["kind"] != "file":
+        raise OpsMigrationCollision(f"{path.name} is not a regular file")
+    return str(snapshot["sha256"])
+
+
+def _hash_entry(path: Path) -> tuple[str, list[dict[str, Any]]]:
+    snapshot = _entry_snapshot(path)
+    return str(snapshot["sha256"]), list(snapshot["files"])
+
+
+def _read_stable_file_at(
+    directory_fd: int,
+    name: str,
+    *,
+    display: str,
+) -> tuple[str, os.stat_result]:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise OpsMigrationCollision(
+                f"legacy Ops path has an unsupported entry: {display}"
+            )
+        digest = hashlib.sha256()
+        while chunk := os.read(fd, 1024 * 1024):
             digest.update(chunk)
-    return digest.hexdigest()
+        after = os.fstat(fd)
+        if (
+            not _same_identity(before, after)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+        ):
+            raise OpsMigrationCollision(
+                f"legacy Ops path changed while being inspected: {display}"
+            )
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if not _same_identity(after, named):
+            raise OpsMigrationCollision(
+                f"legacy Ops path changed while being inspected: {display}"
+            )
+        return digest.hexdigest(), after
+    finally:
+        os.close(fd)
 
 
-def _hash_entry(path: Path) -> tuple[str, list[dict[str, str]]]:
-    if path.is_symlink():
-        raise OpsMigrationCollision(f"legacy Ops path is a symlink: {path.name}")
-    if path.is_file():
-        digest = _hash_file(path)
-        return digest, [{"path": path.name, "sha256": digest}]
-    if not path.is_dir():
-        raise OpsMigrationCollision(f"legacy Ops path has an unsupported type: {path.name}")
-    files: list[dict[str, str]] = []
+def _entry_snapshot_at(
+    directory_fd: int,
+    name: str,
+) -> dict[str, Any]:
+    initial = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    if stat.S_ISLNK(initial.st_mode):
+        raise OpsMigrationCollision(f"legacy Ops path is a symlink: {name}")
+    if stat.S_ISREG(initial.st_mode):
+        digest, opened = _read_stable_file_at(
+            directory_fd,
+            name,
+            display=name,
+        )
+        identity = _stat_identity(opened)
+        return {
+            "kind": "file",
+            "sha256": digest,
+            "files": [
+                {
+                    "path": name,
+                    "sha256": digest,
+                    "identity": identity,
+                }
+            ],
+            "nodes": [
+                {
+                    "path": ".",
+                    "kind": "file",
+                    "identity": identity,
+                }
+            ],
+            "identity": identity,
+        }
+    if not stat.S_ISDIR(initial.st_mode):
+        raise OpsMigrationCollision(f"legacy Ops path has an unsupported type: {name}")
+    root_fd = os.open(
+        name,
+        _directory_open_flags(),
+        dir_fd=directory_fd,
+    )
+    try:
+        root_before = os.fstat(root_fd)
+        files: list[dict[str, Any]] = []
+        nodes: list[dict[str, Any]] = [
+            {
+                "path": ".",
+                "kind": "directory",
+                "identity": _stat_identity(root_before),
+            }
+        ]
+        aggregate = hashlib.sha256()
+
+        def walk(parent_fd: int, prefix: str) -> None:
+            for child_name in sorted(os.listdir(parent_fd)):
+                rel = f"{prefix}/{child_name}" if prefix else child_name
+                child = os.stat(
+                    child_name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(child.st_mode):
+                    raise OpsMigrationCollision(
+                        f"legacy Ops path contains a symlink: {name}/{rel}"
+                    )
+                if stat.S_ISDIR(child.st_mode):
+                    child_fd = os.open(
+                        child_name,
+                        _directory_open_flags(),
+                        dir_fd=parent_fd,
+                    )
+                    try:
+                        opened = os.fstat(child_fd)
+                        if not _same_identity(child, opened):
+                            raise OpsMigrationCollision(
+                                f"legacy Ops path changed while being inspected: {name}/{rel}"
+                            )
+                        nodes.append(
+                            {
+                                "path": rel,
+                                "kind": "directory",
+                                "identity": _stat_identity(opened),
+                            }
+                        )
+                        aggregate.update(f"D\0{rel}\0".encode())
+                        walk(child_fd, rel)
+                        current = os.stat(
+                            child_name,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                        if not _same_identity(opened, current):
+                            raise OpsMigrationCollision(
+                                f"legacy Ops path changed while being inspected: {name}/{rel}"
+                            )
+                    finally:
+                        os.close(child_fd)
+                    continue
+                if not stat.S_ISREG(child.st_mode):
+                    raise OpsMigrationCollision(
+                        f"legacy Ops path has an unsupported entry: {name}/{rel}"
+                    )
+                digest, opened = _read_stable_file_at(
+                    parent_fd,
+                    child_name,
+                    display=f"{name}/{rel}",
+                )
+                identity = _stat_identity(opened)
+                files.append(
+                    {
+                        "path": rel,
+                        "sha256": digest,
+                        "identity": identity,
+                    }
+                )
+                nodes.append(
+                    {
+                        "path": rel,
+                        "kind": "file",
+                        "identity": identity,
+                    }
+                )
+                aggregate.update(f"F\0{rel}\0{digest}\0".encode())
+
+        walk(root_fd, "")
+        root_after = os.fstat(root_fd)
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not _same_identity(root_before, root_after)
+            or not _same_identity(root_after, named)
+            or root_before.st_mtime_ns != root_after.st_mtime_ns
+            or root_before.st_ctime_ns != root_after.st_ctime_ns
+        ):
+            raise OpsMigrationCollision(
+                f"legacy Ops path changed while being inspected: {name}"
+            )
+        return {
+            "kind": "directory",
+            "sha256": aggregate.hexdigest(),
+            "files": files,
+            "nodes": nodes,
+            "identity": _stat_identity(root_after),
+        }
+    finally:
+        os.close(root_fd)
+
+
+def _entry_snapshot(path: Path) -> dict[str, Any]:
+    if _platform_is_windows():
+        return _entry_snapshot_windows(path)
+    parent_fd = os.open(path.parent, _directory_open_flags())
+    try:
+        return _entry_snapshot_at(parent_fd, path.name)
+    finally:
+        os.close(parent_fd)
+
+
+def _entry_snapshot_windows(path: Path) -> dict[str, Any]:
+    initial = path.lstat()
+    if (
+        stat.S_ISLNK(initial.st_mode)
+        or getattr(
+            initial,
+            "st_file_attributes",
+            0,
+        )
+        & 0x00000400
+    ):
+        raise OpsMigrationCollision(f"legacy Ops path is a reparse point: {path.name}")
+    if stat.S_ISREG(initial.st_mode):
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            opened = os.fstat(fd)
+            if not _same_identity(initial, opened):
+                raise OpsMigrationCollision(
+                    f"legacy Ops path changed while being inspected: {path.name}"
+                )
+            digest = hashlib.sha256()
+            while chunk := os.read(fd, 1024 * 1024):
+                digest.update(chunk)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+        if (
+            not _same_identity(opened, after)
+            or opened.st_size != after.st_size
+            or opened.st_mtime_ns != after.st_mtime_ns
+        ):
+            raise OpsMigrationCollision(
+                f"legacy Ops path changed while being inspected: {path.name}"
+            )
+        identity = _stat_identity(after)
+        value = digest.hexdigest()
+        return {
+            "kind": "file",
+            "sha256": value,
+            "files": [
+                {
+                    "path": path.name,
+                    "sha256": value,
+                    "identity": identity,
+                }
+            ],
+            "nodes": [
+                {
+                    "path": ".",
+                    "kind": "file",
+                    "identity": identity,
+                }
+            ],
+            "identity": identity,
+        }
+    if not stat.S_ISDIR(initial.st_mode):
+        raise OpsMigrationCollision(
+            f"legacy Ops path has an unsupported type: {path.name}"
+        )
+    files: list[dict[str, Any]] = []
+    nodes: list[dict[str, Any]] = [
+        {
+            "path": ".",
+            "kind": "directory",
+            "identity": _stat_identity(initial),
+        }
+    ]
     aggregate = hashlib.sha256()
-    for child in sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix()):
+    for child in sorted(
+        path.rglob("*"),
+        key=lambda item: item.relative_to(path).as_posix(),
+    ):
         rel = child.relative_to(path).as_posix()
-        if child.is_symlink():
-            raise OpsMigrationCollision(f"legacy Ops path contains a symlink: {path.name}/{rel}")
-        if child.is_dir():
+        current = child.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or getattr(
+                current,
+                "st_file_attributes",
+                0,
+            )
+            & 0x00000400
+        ):
+            raise OpsMigrationCollision(
+                f"legacy Ops path contains a reparse point: {path.name}/{rel}"
+            )
+        identity = _stat_identity(current)
+        if stat.S_ISDIR(current.st_mode):
+            nodes.append(
+                {
+                    "path": rel,
+                    "kind": "directory",
+                    "identity": identity,
+                }
+            )
             aggregate.update(f"D\0{rel}\0".encode())
             continue
-        if not child.is_file():
-            raise OpsMigrationCollision(f"legacy Ops path has an unsupported entry: {path.name}/{rel}")
-        digest = _hash_file(child)
-        files.append({"path": rel, "sha256": digest})
+        if not stat.S_ISREG(current.st_mode):
+            raise OpsMigrationCollision(
+                f"legacy Ops path has an unsupported entry: {path.name}/{rel}"
+            )
+        child_snapshot = _entry_snapshot_windows(child)
+        digest = child_snapshot["sha256"]
+        files.append(
+            {
+                "path": rel,
+                "sha256": digest,
+                "identity": child_snapshot["identity"],
+            }
+        )
+        nodes.append(
+            {
+                "path": rel,
+                "kind": "file",
+                "identity": child_snapshot["identity"],
+            }
+        )
         aggregate.update(f"F\0{rel}\0{digest}\0".encode())
-    return aggregate.hexdigest(), files
+    current_root = path.lstat()
+    if (
+        not _same_identity(initial, current_root)
+        or initial.st_mtime_ns != current_root.st_mtime_ns
+    ):
+        raise OpsMigrationCollision(
+            f"legacy Ops path changed while being inspected: {path.name}"
+        )
+    return {
+        "kind": "directory",
+        "sha256": aggregate.hexdigest(),
+        "files": files,
+        "nodes": nodes,
+        "identity": _stat_identity(current_root),
+    }
+
+
+def _snapshot_matches(
+    snapshot: Mapping[str, Any],
+    entry: Mapping[str, Any],
+) -> bool:
+    return (
+        snapshot.get("kind") == entry.get("kind")
+        and snapshot.get("sha256") == entry.get("sha256")
+        and snapshot.get("identity") == entry.get("identity")
+        and snapshot.get("files") == entry.get("files")
+        and snapshot.get("nodes") == entry.get("nodes")
+    )
 
 
 def _manifest_digest(manifest: dict[str, Any]) -> str:
@@ -947,13 +1825,15 @@ def _build_manifest(
             raise OpsMigrationCollision(f"legacy Ops directory has an unexpected type: {name}")
         if not expected_dir and not source.is_file():
             raise OpsMigrationCollision(f"legacy Ops file has an unexpected type: {name}")
-        digest, files = _hash_entry(source)
+        snapshot = _entry_snapshot(source)
         entries.append(
             {
                 "name": name,
                 "kind": "directory" if expected_dir else "file",
-                "sha256": digest,
-                "files": files,
+                "sha256": snapshot["sha256"],
+                "files": snapshot["files"],
+                "nodes": snapshot["nodes"],
+                "identity": snapshot["identity"],
             }
         )
     owner_doc = next(
@@ -1107,13 +1987,9 @@ def _apply_manifest(
             raise OpsMigrationCollision(
                 f"Ops migration path has an unexpected type: {name}"
             )
-        current = (
-            stable_root / name
-            if source_exists
-            else stable_physical / name
-        )
-        digest, _ = _hash_entry(current)
-        if digest != entry["sha256"]:
+        current_fd = root_fd if source_exists else physical_fd
+        snapshot = _entry_snapshot_at(current_fd, name)
+        if not _snapshot_matches(snapshot, entry):
             raise OpsMigrationCollision(
                 f"content changed after migration planning: {name}"
             )
@@ -1130,13 +2006,14 @@ def _apply_manifest(
                 destination,
                 source_dir_fd=root_fd,
                 destination_dir_fd=physical_fd,
+                expected_identity=entry["identity"],
             )
             os.fsync(root_fd)
             os.fsync(physical_fd)
             _revalidate_root_identity(root, root_fd)
             _revalidate_physical_identity(root_fd, physical_fd)
-            moved_digest, _ = _hash_entry(stable_physical / name)
-            if moved_digest != entry["sha256"]:
+            moved_snapshot = _entry_snapshot_at(physical_fd, name)
+            if not _snapshot_matches(moved_snapshot, entry):
                 raise OpsMigrationCollision(
                     f"content hash changed during move: {name}"
                 )
@@ -1568,7 +2445,7 @@ def _path_device(path: Path) -> int:
 
 def _physical_ops_state(
     path: Path,
-    internal_files: Mapping[str, str] | None = None,
+    internal_files: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     state = _path_state(path)
     entries: list[dict[str, str]] = []
@@ -1576,19 +2453,26 @@ def _physical_ops_state(
         try:
             with os.scandir(path) as children:
                 for child in sorted(children, key=lambda item: item.name.casefold()):
-                    expected_internal_hash = (
+                    expected_internal = (
                         internal_files.get(child.name)
                         if internal_files is not None
                         else None
                     )
                     exact_internal_file = False
-                    if expected_internal_hash is not None:
+                    if expected_internal is not None:
                         try:
                             exact_internal_file = (
                                 child.is_file(follow_symlinks=False)
                                 and not child.is_symlink()
-                                and _hash_file(Path(child.path))
-                                == expected_internal_hash
+                                and _identity_matches(
+                                    expected_internal["identity"],
+                                    child.stat(follow_symlinks=False),
+                                )
+                                and (
+                                    expected_internal["phase"] == "created"
+                                    or _hash_file(Path(child.path))
+                                    == expected_internal["sha256"]
+                                )
                             )
                         except OSError:
                             exact_internal_file = False
@@ -1651,12 +2535,18 @@ def _upgrade_manifest(
     version = manifest.get("version")
     if version == OPS_MIGRATION_VERSION:
         return dict(manifest)
-    if version not in {1, 2}:
+    if version not in {1, 2, 3}:
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an unsupported version"
         )
     upgraded = json.loads(json.dumps(manifest))
-    if version == 2:
+    root = Path(str(upgraded.get("container_root") or ""))
+    physical = Path(str(upgraded.get("ops_root") or ""))
+    entries = upgraded.get("entries")
+    if not isinstance(entries, list):
+        raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
+
+    if version in {2, 3}:
         planned = upgraded.get("container_doc")
         if not isinstance(planned, dict):
             raise OpsMigrationCollision(
@@ -1681,104 +2571,162 @@ def _upgrade_manifest(
                 raise OpsMigrationCollision(
                     "stored Ops migration manifest has an invalid generated container.md"
                 )
+            prior_recovery = planned.get("recovery_temp")
+            if isinstance(prior_recovery, Mapping):
+                prior_path = str(prior_recovery.get("path") or "")
+                if prior_path and _path_state(physical / prior_path) != "missing":
+                    raise OpsMigrationCollision(
+                        "legacy recovery artifact has ambiguous ownership"
+                    )
+            if _path_state(physical / CONTAINER_DOC) != "missing":
+                raise OpsMigrationCollision(
+                    "existing generated container.md has no durable ownership identity"
+                )
             planned["recovery_temp"] = _planned_recovery_temp(expected_hash)
         elif planned.get("recovery_temp") is not None:
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid owner container.md"
             )
-        upgraded["version"] = OPS_MIGRATION_VERSION
-        return upgraded
-
-    entries = upgraded.get("entries")
-    if not isinstance(entries, list):
-        raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
-    if any(
-        isinstance(entry, Mapping) and entry.get("name") == CONTAINER_DOC
-        for entry in entries
-    ):
-        raise OpsMigrationCollision(
-            "version 1 Ops migration manifest has ambiguous container.md ownership"
-        )
-    root = Path(str(upgraded.get("container_root") or ""))
-    physical = Path(str(upgraded.get("ops_root") or ""))
-    legacy_doc = root / CONTAINER_DOC
-    physical_doc = physical / CONTAINER_DOC
-    legacy_state = _path_state(legacy_doc)
-    physical_state = _path_state(physical_doc)
-    if legacy_state not in {"missing", "file"}:
-        raise OpsMigrationCollision(
-            "legacy container.md is not an unambiguous regular file"
-        )
-    if physical_state not in {"missing", "file"}:
-        raise OpsMigrationCollision(
-            "ops/container.md is not an unambiguous regular file"
-        )
-    if legacy_state == "file" and physical_state == "file":
-        raise OpsMigrationCollision(
-            "both legacy and physical container.md exist; owner intervention is required"
-        )
-
-    prior = upgraded.get("container_doc")
-    if isinstance(prior, Mapping):
-        content = prior.get("content")
-        expected_hash = prior.get("sha256")
-        if (
-            prior.get("path") != CONTAINER_DOC
-            or not isinstance(content, str)
-            or not isinstance(expected_hash, str)
-            or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
+    else:
+        if any(
+            isinstance(entry, Mapping) and entry.get("name") == CONTAINER_DOC
+            for entry in entries
         ):
             raise OpsMigrationCollision(
-                "stored Ops migration manifest has an invalid planned container.md"
+                "version 1 Ops migration manifest has ambiguous container.md ownership"
             )
-        if legacy_state == "file":
+        legacy_doc = root / CONTAINER_DOC
+        physical_doc = physical / CONTAINER_DOC
+        legacy_state = _path_state(legacy_doc)
+        physical_state = _path_state(physical_doc)
+        if legacy_state not in {"missing", "file"}:
             raise OpsMigrationCollision(
-                "legacy container.md appeared after migration planning"
+                "legacy container.md is not an unambiguous regular file"
             )
-        if physical_state == "file" and _hash_file(physical_doc) != expected_hash:
+        if physical_state not in {"missing", "file"}:
             raise OpsMigrationCollision(
-                "ops/container.md changed after migration planning"
+                "ops/container.md is not an unambiguous regular file"
             )
-        planned_doc: dict[str, Any] = {
-            "path": CONTAINER_DOC,
-            "strategy": "generate",
-            "content": content,
-            "sha256": expected_hash,
-            "recovery_temp": _planned_recovery_temp(expected_hash),
-        }
-    elif legacy_state == "file":
-        digest, files = _hash_entry(legacy_doc)
-        entries.append(
-            {
-                "name": CONTAINER_DOC,
-                "kind": "file",
-                "sha256": digest,
-                "files": files,
+        if legacy_state == "file" and physical_state == "file":
+            raise OpsMigrationCollision(
+                "both legacy and physical container.md exist; owner intervention is required"
+            )
+
+        prior = upgraded.get("container_doc")
+        if isinstance(prior, Mapping):
+            content = prior.get("content")
+            expected_hash = prior.get("sha256")
+            if (
+                prior.get("path") != CONTAINER_DOC
+                or not isinstance(content, str)
+                or not isinstance(expected_hash, str)
+                or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
+            ):
+                raise OpsMigrationCollision(
+                    "stored Ops migration manifest has an invalid planned container.md"
+                )
+            if legacy_state == "file":
+                raise OpsMigrationCollision(
+                    "version 1 generated container.md ownership is ambiguous"
+                )
+            recovery = _planned_recovery_temp(expected_hash)
+            if physical_state == "file":
+                if _hash_file(physical_doc) != expected_hash:
+                    raise OpsMigrationCollision(
+                        "version 1 generated container.md content is ambiguous"
+                    )
+                recovery["phase"] = "complete"
+                recovery["identity"] = _stat_identity(physical_doc.lstat())
+            planned_doc: dict[str, Any] = {
+                "path": CONTAINER_DOC,
+                "strategy": "generate",
+                "content": content,
+                "sha256": expected_hash,
+                "recovery_temp": recovery,
             }
-        )
-        planned_doc = {
-            "path": CONTAINER_DOC,
-            "strategy": "move",
-            "sha256": digest,
-        }
-    else:
-        content = _container_doc_text(
-            str(container.get("name") or container.get("slug") or "Container")
-        )
-        expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if physical_state == "file" and _hash_file(physical_doc) != expected_hash:
-            raise OpsMigrationCollision(
-                "existing ops/container.md has ambiguous authority"
+        elif legacy_state == "file":
+            snapshot = _entry_snapshot(legacy_doc)
+            entries.append(
+                {
+                    "name": CONTAINER_DOC,
+                    "kind": "file",
+                    "sha256": snapshot["sha256"],
+                    "files": snapshot["files"],
+                    "nodes": snapshot["nodes"],
+                    "identity": snapshot["identity"],
+                }
             )
-        planned_doc = {
-            "path": CONTAINER_DOC,
-            "strategy": "generate",
-            "content": content,
-            "sha256": expected_hash,
-            "recovery_temp": _planned_recovery_temp(expected_hash),
-        }
+            planned_doc = {
+                "path": CONTAINER_DOC,
+                "strategy": "move",
+                "sha256": snapshot["sha256"],
+            }
+        else:
+            content = _container_doc_text(
+                str(container.get("name") or container.get("slug") or "Container")
+            )
+            expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            recovery = _planned_recovery_temp(expected_hash)
+            if physical_state == "file":
+                if _hash_file(physical_doc) != expected_hash:
+                    raise OpsMigrationCollision(
+                        "version 1 generated container.md content is ambiguous"
+                    )
+                recovery["phase"] = "complete"
+                recovery["identity"] = _stat_identity(physical_doc.lstat())
+            planned_doc = {
+                "path": CONTAINER_DOC,
+                "strategy": "generate",
+                "content": content,
+                "sha256": expected_hash,
+                "recovery_temp": recovery,
+            }
+        upgraded["container_doc"] = planned_doc
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid entry"
+            )
+        name = str(entry.get("name") or "")
+        source = root / name
+        destination = physical / name
+        source_exists = _path_state(source) != "missing"
+        destination_exists = _path_state(destination) != "missing"
+        if source_exists == destination_exists:
+            raise OpsMigrationCollision(
+                f"legacy manifest path has ambiguous ownership: {name}"
+            )
+        snapshot = _entry_snapshot(source if source_exists else destination)
+        old_files = entry.get("files")
+        if (
+            snapshot["kind"] != entry.get("kind")
+            or snapshot["sha256"] != entry.get("sha256")
+            or not isinstance(old_files, list)
+            or [
+                {
+                    "path": item.get("path"),
+                    "sha256": item.get("sha256"),
+                }
+                for item in snapshot["files"]
+            ]
+            != [
+                {
+                    "path": item.get("path"),
+                    "sha256": item.get("sha256"),
+                }
+                for item in old_files
+                if isinstance(item, Mapping)
+            ]
+        ):
+            raise OpsMigrationCollision(
+                f"legacy manifest content is no longer unambiguous: {name}"
+            )
+        entry["files"] = snapshot["files"]
+        entry["nodes"] = snapshot["nodes"]
+        entry["identity"] = snapshot["identity"]
+
     upgraded["version"] = OPS_MIGRATION_VERSION
-    upgraded["container_doc"] = planned_doc
     return upgraded
 
 
@@ -1816,8 +2764,8 @@ def _manifest_container_doc(
             not isinstance(content, str)
             or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
             or doc_entries
-            or not isinstance(recovery_temp, Mapping)
-            or dict(recovery_temp) != _planned_recovery_temp(expected_hash)
+            or not isinstance(recovery_temp, dict)
+            or not _valid_recovery_temp(recovery_temp, expected_hash)
         ):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid generated container.md"
@@ -1841,17 +2789,41 @@ def _manifest_container_doc(
 
 def _manifest_recovery_temp(
     manifest: Mapping[str, Any],
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     strategy, _, expected_hash = _manifest_container_doc(manifest)
     if strategy != "generate":
         return None
     planned = manifest["container_doc"]
-    recovery = dict(planned["recovery_temp"])
-    if recovery != _planned_recovery_temp(expected_hash):
+    recovery = planned["recovery_temp"]
+    if not isinstance(recovery, dict) or not _valid_recovery_temp(
+        recovery, expected_hash
+    ):
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an invalid recovery file"
         )
     return recovery
+
+
+def _valid_recovery_temp(
+    recovery: Mapping[str, Any],
+    expected_hash: str,
+) -> bool:
+    path = recovery.get("path")
+    phase = recovery.get("phase")
+    identity = recovery.get("identity")
+    return (
+        isinstance(path, str)
+        and path.startswith(RECOVERY_TEMP_PREFIX)
+        and path.endswith(".tmp")
+        and "/" not in path
+        and "\\" not in path
+        and recovery.get("sha256") == expected_hash
+        and phase in {"planned", "created", "ready", "published", "complete"}
+        and (
+            (phase == "planned" and identity is None)
+            or (phase != "planned" and _valid_identity(identity))
+        )
+    )
 
 
 def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
@@ -1877,10 +2849,33 @@ def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
             or not isinstance(digest, str)
             or len(digest) != 64
             or any(character not in "0123456789abcdef" for character in digest)
+            or not _valid_identity(entry.get("identity"))
+            or not isinstance(entry.get("files"), list)
+            or not isinstance(entry.get("nodes"), list)
         ):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid entry"
             )
+        for node in entry["nodes"]:
+            if (
+                not isinstance(node, Mapping)
+                or not isinstance(node.get("path"), str)
+                or node.get("kind") not in {"directory", "file"}
+                or not _valid_identity(node.get("identity"))
+            ):
+                raise OpsMigrationCollision(
+                    "stored Ops migration manifest has an invalid inode binding"
+                )
+        for file_entry in entry["files"]:
+            if (
+                not isinstance(file_entry, Mapping)
+                or not isinstance(file_entry.get("path"), str)
+                or not isinstance(file_entry.get("sha256"), str)
+                or not _valid_identity(file_entry.get("identity"))
+            ):
+                raise OpsMigrationCollision(
+                    "stored Ops migration manifest has an invalid file binding"
+                )
         seen.add(name)
 
 
@@ -1949,13 +2944,26 @@ def _validated_retry_manifest(
         if recovery_temp is not None:
             recovery_path = physical / recovery_temp["path"]
             recovery_state = _path_state(recovery_path)
-            if recovery_state != "missing" and (
-                recovery_state != "file"
-                or _hash_file(recovery_path) != recovery_temp["sha256"]
-            ):
-                raise OpsMigrationCollision(
-                    "container.md recovery file has ambiguous ownership"
-                )
+            if recovery_state != "missing":
+                if recovery_state != "file" or recovery_temp["phase"] == "planned":
+                    raise OpsMigrationCollision(
+                        "container.md recovery file has ambiguous ownership"
+                    )
+                recovery_stat = recovery_path.lstat()
+                if not _identity_matches(
+                    recovery_temp["identity"],
+                    recovery_stat,
+                ):
+                    raise OpsMigrationCollision(
+                        "container.md recovery file has ambiguous ownership"
+                    )
+                if (
+                    recovery_temp["phase"] != "created"
+                    and _hash_file(recovery_path) != recovery_temp["sha256"]
+                ):
+                    raise OpsMigrationCollision(
+                        "container.md recovery file has ambiguous ownership"
+                    )
 
     container_doc_strategy, _, expected_container_doc_hash = _manifest_container_doc(
         manifest
@@ -1971,6 +2979,29 @@ def _validated_retry_manifest(
         and _hash_file(container_doc_path) != expected_container_doc_hash
     ):
         raise OpsMigrationCollision("ops/container.md changed after migration planning")
+    if container_doc_state == "file" and container_doc_strategy == "generate":
+        assert recovery_temp is not None
+        target_stat = container_doc_path.lstat()
+        if recovery_temp["phase"] not in {
+            "ready",
+            "published",
+            "complete",
+        } or not _identity_matches(recovery_temp["identity"], target_stat):
+            if (
+                recovery_temp["phase"] != "ready"
+                or _path_state(physical / recovery_temp["path"]) != "file"
+            ):
+                raise OpsMigrationCollision(
+                    "existing generated container.md has ambiguous ownership"
+                )
+            recovery_stat = (physical / recovery_temp["path"]).lstat()
+            if not _identity_matches(
+                recovery_temp["identity"],
+                recovery_stat,
+            ) or not _same_identity(recovery_stat, target_stat):
+                raise OpsMigrationCollision(
+                    "existing generated container.md has ambiguous ownership"
+                )
     if (
         container_doc_strategy == "generate"
         and _path_state(root / CONTAINER_DOC) != "missing"
@@ -2007,8 +3038,8 @@ def _validated_retry_manifest(
             raise OpsMigrationCollision(
                 f"Ops migration path has an unexpected type: {name}"
             )
-        digest, _ = _hash_entry(current)
-        if digest != entry.get("sha256"):
+        snapshot = _entry_snapshot(current)
+        if not _snapshot_matches(snapshot, entry):
             raise OpsMigrationCollision(
                 f"content changed after migration planning: {name}"
             )
@@ -2091,7 +3122,7 @@ def inspect_ops_migration(
             }
         except (TypeError, ValueError):
             pass
-    internal_files: dict[str, str] = {}
+    internal_files: dict[str, Mapping[str, Any]] = {}
     if (
         physical is not None
         and stored_manifest is not None
@@ -2107,12 +3138,20 @@ def inspect_ops_migration(
             try:
                 exact_recovery = (
                     _path_state(recovery_path) == "file"
-                    and _hash_file(recovery_path) == recovery_temp["sha256"]
+                    and recovery_temp["phase"] != "planned"
+                    and _identity_matches(
+                        recovery_temp["identity"],
+                        recovery_path.lstat(),
+                    )
+                    and (
+                        recovery_temp["phase"] == "created"
+                        or _hash_file(recovery_path) == recovery_temp["sha256"]
+                    )
                 )
             except OSError:
                 exact_recovery = False
             if exact_recovery:
-                internal_files[recovery_temp["path"]] = recovery_temp["sha256"]
+                internal_files[recovery_temp["path"]] = recovery_temp
     physical_ops = (
         _physical_ops_state(physical, internal_files)
         if physical is not None
@@ -2368,6 +3407,12 @@ def _migrate_container_ops_locked(
                     expected_hash=expected_container_doc_hash,
                     recovery_temp=recovery_temp,
                     parent_fd=physical_fd,
+                    persist_recovery=lambda: _upsert_marker(
+                        conn,
+                        int(data["id"]),
+                        "moving",
+                        manifest,
+                    ),
                 )
                 if (
                     _hash_file_at(physical_fd, CONTAINER_DOC)
@@ -2390,7 +3435,7 @@ def _migrate_container_ops_locked(
                 raise OpsMigrationCollision(
                     "ops/container.md changed during migration"
                 )
-            exclude_ops_from_root_repo(root)
+            exclude_ops_from_root_repo(root, root_fd=root_fd)
             _revalidate_root_identity(root, root_fd)
             _revalidate_physical_identity(root_fd, physical_fd)
             conn.execute("BEGIN")
@@ -2431,7 +3476,8 @@ def migrate_container_ops(
 ) -> bool:
     """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
     with container_mutation_lock(conn, container):
-        return _migrate_container_ops_locked(conn, container)
+        with container_quiescence_lock(conn, container):
+            return _migrate_container_ops_locked(conn, container)
 
 
 def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:

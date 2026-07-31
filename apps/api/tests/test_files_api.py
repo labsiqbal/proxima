@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
 
-from proxima_api import app_settings
+from proxima_api import app_settings, container_registry
 from proxima_api.main import create_app
 
 
@@ -182,6 +185,66 @@ def test_upload_streams_content_and_deduplicates_names(tmp_path):
     project_root = Path(c.get("/api/projects", headers=headers).json()["projects"][0]["path"])
     assert (project_root / "ops" / first.json()["path"]).read_bytes() == content
     assert (project_root / "ops" / second.json()["path"]).read_bytes() == b"second"
+
+
+def test_upload_stages_async_body_before_container_publish_lock(
+    tmp_path,
+    monkeypatch,
+):
+    c = client(tmp_path)
+    headers = setup_project(c, tmp_path)
+    project = c.app.state.db.execute(
+        "SELECT id, path FROM projects WHERE slug = 'demo'"
+    ).fetchone()
+    read_entered = threading.Event()
+    release_read = threading.Event()
+    real_read = UploadFile.read
+    delayed = False
+
+    async def delayed_read(self, size=-1):
+        nonlocal delayed
+        if self.filename == "slow.bin" and not delayed:
+            delayed = True
+            read_entered.set()
+            assert release_read.wait(timeout=5)
+        return await real_read(self, size)
+
+    monkeypatch.setattr(UploadFile, "read", delayed_read)
+    lock_acquired = threading.Event()
+
+    def take_lock():
+        with container_registry.container_mutation_lock(
+            c.app.state.db,
+            project,
+        ):
+            lock_acquired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        upload_future = pool.submit(
+            lambda: c.post(
+                "/api/projects/demo/upload",
+                headers=headers,
+                files={
+                    "file": (
+                        "slow.bin",
+                        b"staged",
+                        "application/octet-stream",
+                    )
+                },
+            )
+        )
+        assert read_entered.wait(timeout=5)
+        lock_future = pool.submit(take_lock)
+        lock_was_free = lock_acquired.wait(timeout=0.5)
+        release_read.set()
+        response = upload_future.result(timeout=5)
+        lock_future.result(timeout=5)
+
+    assert lock_was_free is True
+    assert response.status_code == 200, response.text
+    assert (
+        Path(project["path"]) / "ops" / response.json()["path"]
+    ).read_bytes() == b"staged"
 
 
 def test_upload_limit_rejects_and_removes_partial_file(tmp_path):

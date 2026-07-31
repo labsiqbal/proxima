@@ -1403,6 +1403,7 @@ def register(app, deps):
             await websocket.close(code=4401)
             return
         cwd = str(Path(cfg["workspace_root"]))
+        activity_lease = None
         if project:
             try:
                 p = visible_project(project, user)
@@ -1416,10 +1417,21 @@ def register(app, deps):
             if not p.get("path"):
                 await websocket.close(code=4404)
                 return
-            cwd = str(_project_root(project, user))
+            with container_registry.container_mutation_lock(db(), p):
+                activity_lease = container_registry.acquire_container_activity_lease(
+                    db(),
+                    p,
+                )
+                try:
+                    cwd = str(_project_root(project, user))
+                except BaseException:
+                    activity_lease.release()
+                    raise
         session_lease = maintenance.acquire()
         if not session_lease.acquired or maintenance.fenced():
             session_lease.release()
+            if activity_lease is not None:
+                activity_lease.release()
             await websocket.close(code=4423)
             return
         try:
@@ -1432,6 +1444,8 @@ def register(app, deps):
             term.start()
         except Exception:
             session_lease.release()
+            if activity_lease is not None:
+                activity_lease.release()
             raise
         loop = asyncio.get_event_loop()
 
@@ -1499,8 +1513,12 @@ def register(app, deps):
                 await out_task
             if terminated:
                 session_lease.release()
+                if activity_lease is not None:
+                    activity_lease.release()
             else:
                 maintenance.retain(session_lease)
+                if activity_lease is not None:
+                    maintenance.retain(activity_lease)
 
     @app.websocket("/api/ws/sessions/{session_id}")
     async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):
