@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from proxima_api import preview_output
+from proxima_api import preview_output, preview_output_broker
 from proxima_api.apprunner import AppManager
 from proxima_api.preview_output import (
     BROKER_PROFILE_ENV,
@@ -25,6 +25,7 @@ from proxima_api.preview_output import (
     OutputBroker,
     OutputBrokerUnavailable,
 )
+from proxima_api.preview_output_broker import PreviewSupervisor
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -120,10 +121,7 @@ def test_broker_serializes_polling_with_final_snapshot() -> None:
             contained=False,
         )
 
-        polls = [
-            asyncio.create_task(broker.snapshot())
-            for _ in range(12)
-        ]
+        polls = [asyncio.create_task(broker.snapshot()) for _ in range(12)]
         await asyncio.wait_for(process.wait(), timeout=5)
         final = await broker.snapshot()
         await asyncio.gather(*polls)
@@ -209,36 +207,25 @@ def test_broker_survives_api_disconnect_until_detached_writer_eof(
 
 
 def test_packaged_systemd_profiles_isolate_preview_supervisors() -> None:
-    production = (
-        ROOT / "infra" / "systemd" / "proxima.service.example"
-    ).read_text(encoding="utf-8")
+    production = (ROOT / "infra" / "systemd" / "proxima.service.example").read_text(
+        encoding="utf-8"
+    )
     staging = (
         ROOT / "infra" / "systemd" / "proxima-staging.service.example"
     ).read_text(encoding="utf-8")
     broker = (
-        ROOT
-        / "infra"
-        / "systemd"
-        / "proxima-preview-output@.service.example"
+        ROOT / "infra" / "systemd" / "proxima-preview-output@.service.example"
     ).read_text(encoding="utf-8")
     broker_socket = (
         ROOT / "infra" / "systemd" / "proxima-preview-output.socket"
     ).read_text(encoding="utf-8")
     staging_broker = (
-        ROOT
-        / "infra"
-        / "systemd"
-        / "proxima-staging-preview-output@.service.example"
+        ROOT / "infra" / "systemd" / "proxima-staging-preview-output@.service.example"
     ).read_text(encoding="utf-8")
     staging_socket = (
-        ROOT
-        / "infra"
-        / "systemd"
-        / "proxima-staging-preview-output.socket"
+        ROOT / "infra" / "systemd" / "proxima-staging-preview-output.socket"
     ).read_text(encoding="utf-8")
-    user_installer = (ROOT / "scripts" / "install-user").read_text(
-        encoding="utf-8"
-    )
+    user_installer = (ROOT / "scripts" / "install-user").read_text(encoding="utf-8")
 
     assert "Requires=proxima-preview-output.socket" in production
     assert "Requires=proxima-staging-preview-output.socket" in staging
@@ -249,25 +236,128 @@ def test_packaged_systemd_profiles_isolate_preview_supervisors() -> None:
         assert "output-broker" not in service
     assert "/run/proxima-preview-output.sock" in production
     assert "/run/proxima-staging-preview-output.sock" in staging
-    assert "supervisor-v1:production" in production
-    assert "supervisor-v1:staging" in staging
+    assert "supervisor-v2:production" in production
+    assert "supervisor-v2:staging" in staging
     assert "/var/lib/proxima/preview-supervisors" in production
     assert "/var/lib/proxima-staging/preview-supervisors" in staging
     assert "ExecStart=/opt/proxima/scripts/proxima output-broker" in broker
     assert (
-        "ExecStart=/opt/proxima-staging/scripts/proxima output-broker"
-        in staging_broker
+        "ExecStart=/opt/proxima-staging/scripts/proxima output-broker" in staging_broker
     )
     assert "StandardInput=socket" in broker
-    assert "KillMode=control-group" in broker
-    assert "KillMode=control-group" in staging_broker
+    assert "Delegate=yes" in broker
+    assert "Delegate=yes" in staging_broker
+    assert "KillMode=process" in broker
+    assert "KillMode=process" in staging_broker
     assert "Accept=yes" in broker_socket
     assert "Accept=yes" in staging_socket
     assert "proxima-preview-output@.service" in user_installer
     assert "PROXIMA_OUTPUT_BROKER_SOCKET=%t/" in user_installer
     assert "PROXIMA_OUTPUT_BROKER_PROTOCOL=" in user_installer
     assert "PROXIMA_PREVIEW_SCOPE_STATE_ROOT=" in user_installer
+    assert "check-preview-drained" in user_installer
     assert "KillMode=process" in user_installer
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="launch cgroups require Linux",
+)
+def test_supervisor_signals_only_launch_specific_app_cgroup(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_cgroup = tmp_path / "app"
+    nested = app_cgroup / "nested"
+    nested.mkdir(parents=True)
+    app_cgroup.joinpath("cgroup.procs").write_text(
+        "101\n",
+        encoding="ascii",
+    )
+    app_cgroup.joinpath("cgroup.kill").write_text("", encoding="ascii")
+    nested.joinpath("cgroup.procs").write_text(
+        "102\n",
+        encoding="ascii",
+    )
+    signaled: list[tuple[int, int]] = []
+
+    class Process:
+        pid = 101
+
+        @staticmethod
+        def poll():
+            return None
+
+    supervisor = PreviewSupervisor.__new__(PreviewSupervisor)
+    supervisor.process = Process()
+    supervisor.app_cgroup = app_cgroup
+    supervisor.app_cgroup_identity = "0::/managed\n"
+    supervisor.process_status = lambda: {"pid": 101}
+    monkeypatch.setattr(
+        preview_output_broker,
+        "_cgroup_identity",
+        lambda pid: (
+            "0::/managed\n"
+            if pid == 101
+            else ("0::/managed/nested\n" if pid == 102 else "0::/escaped\n")
+        ),
+    )
+    monkeypatch.setattr(
+        preview_output_broker,
+        "_pidfd_open",
+        lambda pid: pid + 1000,
+    )
+    monkeypatch.setattr(
+        preview_output_broker,
+        "_pidfd_send_signal",
+        lambda pidfd, sig: signaled.append((pidfd - 1000, sig)),
+    )
+
+    assert supervisor._signal("term") == {"pid": 101}
+    assert signaled == [(101, signal.SIGTERM), (102, signal.SIGTERM)]
+    assert all(pid != 999 for pid, _sig in signaled)
+    assert supervisor._signal("kill") == {"pid": 101}
+    assert app_cgroup.joinpath("cgroup.kill").read_text(encoding="ascii") == "1"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="launcher handshake requires POSIX")
+def test_app_launcher_waits_for_verified_cgroup_release(tmp_path: Path) -> None:
+    cgroup_procs = tmp_path / "cgroup.procs"
+    result = tmp_path / "owner-code-ran"
+    ready_read, ready_write = os.pipe()
+    release_read, release_write = os.pipe()
+    launcher = ROOT / "apps" / "api" / "proxima_api" / "preview_app_launcher.py"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(launcher),
+            str(cgroup_procs),
+            str(ready_write),
+            str(release_read),
+            sys.executable,
+            "-c",
+            f"from pathlib import Path; Path({str(result)!r}).write_text('ran')",
+        ],
+        pass_fds=(ready_write, release_read),
+    )
+    os.close(ready_write)
+    os.close(release_read)
+    try:
+        assert os.read(ready_read, 1) == b"1"
+        assert cgroup_procs.read_text(encoding="ascii") == "0"
+        assert not result.exists()
+        os.write(release_write, b"1")
+        process.wait(timeout=5)
+        assert process.returncode == 0
+        assert result.read_text(encoding="utf-8") == "ran"
+    finally:
+        os.close(ready_read)
+        os.close(release_write)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_delta_polling_is_constant_size_when_log_is_unchanged() -> None:
@@ -386,9 +476,7 @@ def test_supervisor_profile_mismatch_fails_closed(monkeypatch) -> None:
 
 
 def test_system_wide_upgrade_migrates_and_probes_supervisor_first() -> None:
-    guide = (ROOT / "infra" / "systemd" / "README.md").read_text(
-        encoding="utf-8"
-    )
+    guide = (ROOT / "infra" / "systemd" / "README.md").read_text(encoding="utf-8")
     update = guide.split("## Updates and ownership", 1)[1]
 
     assert update.index("proxima-preview-output.socket") < update.index(
@@ -401,7 +489,96 @@ def test_system_wide_upgrade_migrates_and_probes_supervisor_first() -> None:
         "systemctl restart proxima.service"
     )
     assert "proxima-staging-preview-output" in update
-    assert "supervisor-v1:staging" in update
+    assert "supervisor-v2:staging" in update
+    assert update.index("systemctl stop proxima.service") < update.index(
+        "check-preview-drained"
+    )
+    assert update.index("check-preview-drained") < update.index(
+        "systemctl daemon-reload"
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs check requires POSIX")
+def test_upgrade_preflight_refuses_legacy_preview_process(
+    tmp_path: Path,
+) -> None:
+    helper = ROOT / "scripts" / "check-preview-drained"
+    environment = {
+        **os.environ,
+        "PROXIMA_APP_LINEAGE": "legacy",
+        "PROXIMA_PREVIEW_AUTHORITY_PROTOCOL": ("proxima-preview-supervisor-v1:user"),
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        env=environment,
+    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "--protocol",
+                "proxima-preview-supervisor-v2:user",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 1
+        assert str(process.pid) in result.stderr
+        assert "No service units were replaced" in result.stderr
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs check requires POSIX")
+def test_upgrade_preflight_refuses_unmarked_legacy_preview_child(
+    tmp_path: Path,
+) -> None:
+    helper = ROOT / "scripts" / "check-preview-drained"
+    child_pid_path = tmp_path / "child.pid"
+    api_code = (
+        "import os, pathlib, subprocess, sys, time\n"
+        "environment = dict(os.environ)\n"
+        "environment['PORT'] = '4321'\n"
+        "environment['HOST'] = '127.0.0.1'\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)'], env=environment)\n"
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid))\n"
+        "time.sleep(60)\n"
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            api_code,
+            "/opt/proxima/apps/api/scripts/serve.py",
+        ],
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not child_pid_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "--protocol",
+                "proxima-preview-supervisor-v2:production",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 1
+        assert str(child_pid) in result.stderr
+        assert "No service units were replaced" in result.stderr
+    finally:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=5)
 
 
 @pytest.mark.skipif(
@@ -449,14 +626,13 @@ def test_systemd_broker_survives_real_api_restart_and_stop(
     )
     env = os.environ.copy()
     api_root = str(Path(__file__).resolve().parents[1])
-    env["PYTHONPATH"] = (
-        api_root
-        + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["PYTHONPATH"] = api_root + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
     )
     env[BROKER_SOCKET_ENV] = socket_path
     env[BROKER_PROTOCOL_ENV] = os.environ.get(
         "PROXIMA_TEST_SYSTEMD_BROKER_PROTOCOL",
-        "proxima-preview-supervisor-v1:user",
+        "proxima-preview-supervisor-v2:user",
     )
     env[BROKER_PROFILE_ENV] = os.environ.get(
         "PROXIMA_TEST_SYSTEMD_BROKER_PROFILE",
@@ -497,13 +673,17 @@ def test_systemd_broker_survives_real_api_restart_and_stop(
             while not state_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             states.append(json.loads(state_path.read_text(encoding="utf-8")))
-            api_cgroup = Path(
-                f"/proc/{states[-1]['api']}/cgroup"
-            ).read_text(encoding="utf-8")
-            broker_cgroup = Path(
-                f"/proc/{states[-1]['broker']}/cgroup"
-            ).read_text(encoding="utf-8")
+            api_cgroup = Path(f"/proc/{states[-1]['api']}/cgroup").read_text(
+                encoding="utf-8"
+            )
+            broker_cgroup = Path(f"/proc/{states[-1]['broker']}/cgroup").read_text(
+                encoding="utf-8"
+            )
+            app_cgroup = Path(f"/proc/{states[-1]['child']}/cgroup").read_text(
+                encoding="utf-8"
+            )
             assert api_cgroup != broker_cgroup
+            assert app_cgroup != broker_cgroup
             if expected == 1:
                 assert systemctl("restart", unit).returncode == 0
 
@@ -542,7 +722,7 @@ def test_systemd_restart_adopts_exact_supervised_app(
     socket_path = os.environ["PROXIMA_TEST_SYSTEMD_BROKER_SOCKET"]
     protocol = os.environ.get(
         "PROXIMA_TEST_SYSTEMD_BROKER_PROTOCOL",
-        "proxima-preview-supervisor-v1:user",
+        "proxima-preview-supervisor-v2:user",
     )
     profile = os.environ.get(
         "PROXIMA_TEST_SYSTEMD_BROKER_PROFILE",
@@ -621,9 +801,10 @@ def test_systemd_restart_adopts_exact_supervised_app(
         while not adoption_result.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert adoption_result.exists()
-        assert json.loads(adoption_result.read_text())["pid"] == json.loads(
-            first_state.read_text()
-        )["pid"]
+        assert (
+            json.loads(adoption_result.read_text())["pid"]
+            == json.loads(first_state.read_text())["pid"]
+        )
     finally:
         systemctl("stop", unit)
         systemctl("reset-failed", unit)

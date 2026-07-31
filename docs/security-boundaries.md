@@ -423,31 +423,41 @@ while namespace proof completes asynchronously; readiness stays fail closed unti
 completes.
 Provisional cleanup belongs to AppManager rather than the start request. Cancellation
 can return immediately, while the manager-owned task completes the in-flight spawn and
-reaps only the process Proxima created. A monotonic per-project generation reserves
-the lifecycle before broker creation or process spawn. A retry waits for the matching
-cancelled generation to settle, and stale cleanup cannot replace or remove newer
-authority. Shutdown reconciles project generations concurrently.
+reaps only the process Proxima created. A monotonic per-project generation is written
+durably before broker creation or process spawn. Atomic pending, broker-attached, and
+app-attached phases let restart recover only exact authority. A retry waits for the
+matching cancelled generation to settle, and stale cleanup cannot replace or remove
+newer authority. Startup and shutdown reconcile project generations concurrently under
+fixed aggregate deadlines.
 
 A preview supervisor launches the app and owns its child pipe. It keeps a
 bounded complete-line ring and separately bounded partial-line tail, drains all
 currently available bytes before returning an atomic final snapshot, and continues
-discarding detached output until EOF after the API disconnects. Routine polling uses
+discarding detached output until EOF after the API disconnects. It stays available
+until the launch-specific app cgroup is empty. Routine polling uses
 versioned line deltas; only explicit finalization requests the full bounded snapshot.
 Packaged Linux services obtain profile-specific supervisors from socket-activated
-systemd units outside the API service cgroup, and the app remains inside that
-supervisor unit. Production and staging have different sockets, protocol identities,
-state roots, and executables. The API service uses `KillMode=process` and a declared
-stop timeout, while app generations stop concurrently. If the API restarts before
-cleanup finishes, it adopts only an exact durable supervisor, process, cgroup,
-profile, protocol, and lineage proof. Incomplete proof remains
+systemd units outside the API service cgroup. Each supervisor creates a delegated,
+launch-specific child cgroup and moves the app into it before owner code executes.
+The broker remains in the unit root and unit teardown signals only that broker
+process. Processes still proven inside the app cgroup are managed; a process that
+escapes it remains untrusted and is not signaled. Production and staging have
+different sockets, protocol identities, state roots, and executables. The API service
+uses `KillMode=process` and a declared stop timeout, while app generations stop
+concurrently. If the API restarts before cleanup finishes, it adopts only an exact
+durable supervisor, process, app cgroup, profile, protocol, and lineage proof.
+Before replacing supervision units, update procedures scan same-user procfs state.
+Older protocol markers and pre-protocol preview port environments combined with API
+lineage or service-cgroup membership refuse the migration until those previews stop.
+Incomplete proof remains
 `ownership_unknown` and is neither proxied nor signaled. Windows uses a detached
 breakaway supervisor when supported. If durable ownership cannot be established,
 the launch transaction is rolled back and status reports the recoverable
 `output_sink_unavailable` reason. This policy preserves the ownership boundary
 instead of treating a successful TCP handshake as ownership evidence. See
 [ADR-0016](adr/0016-live-containment-lineage-gates-preview-authority.md) and
-[ADR-0020](adr/0020-preview-lifecycles-use-project-generations.md) through
-[ADR-0023](adr/0023-preview-supervisor-profiles-are-isolated.md).
+[ADR-0024](adr/0024-preview-generations-use-durable-launch-phases.md) through
+[ADR-0026](adr/0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale

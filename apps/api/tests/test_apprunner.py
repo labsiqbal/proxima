@@ -52,7 +52,9 @@ def test_app_runner_keeps_exit_log_across_status_polls(tmp_path):
 
     async def run_case():
         try:
-            await manager.start("demo", str(tmp_path), "bash -lc 'echo boom-fail; exit 7'", 5180)
+            await manager.start(
+                "demo", str(tmp_path), "bash -lc 'echo boom-fail; exit 7'", 5180
+            )
             status = None
             for _ in range(40):
                 status = manager.status("demo")
@@ -100,9 +102,7 @@ def test_app_runner_keeps_bounded_log_after_explicit_stop(tmp_path):
         assert status["running"] is False
         assert status["command"].endswith("sleep 60")
         assert status["requested_port"] == port
-        assert status["log"] == [
-            f"line-{number}" for number in range(20, 60)
-        ]
+        assert status["log"] == [f"line-{number}" for number in range(20, 60)]
         assert manager.status("demo") == status
 
     asyncio.run(run_case())
@@ -183,10 +183,7 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                 f"os.execv({sys.executable!r}, "
                 f"[{sys.executable!r}, '-c', {managed!r}])"
             )
-            command = (
-                f"exec {shlex.quote(sys.executable)} "
-                f"-c {shlex.quote(launcher)}"
-            )
+            command = f"exec {shlex.quote(sys.executable)} -c {shlex.quote(launcher)}"
             await manager.start("demo", str(tmp_path), command, port)
             for _ in range(100):
                 if child_pid_file.is_file():
@@ -199,9 +196,7 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                     break
                 await asyncio.sleep(0.01)
             assert output_ready_file.is_file()
-            managed_group = (
-                manager._apps["demo"]["authority"].process_group
-            )
+            managed_group = manager._apps["demo"]["authority"].process_group
             assert managed_group is not None
             for _ in range(100):
                 if os.getpgid(child_pid) != managed_group:
@@ -225,8 +220,7 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
             assert write_result_file.read_text() == "success"
             assert manager.status("demo")["log"] == status["log"]
             assert not any(
-                "after-stop" in line
-                for line in manager.status("demo")["log"]
+                "after-stop" in line for line in manager.status("demo")["log"]
             )
             os.kill(child_pid, 0)
         finally:
@@ -271,10 +265,7 @@ def test_detached_output_sink_survives_event_loop_shutdown_and_reaps(
         "os.execv(sys.executable, "
         "[sys.executable, '-c', 'import time; time.sleep(60)'])"
     )
-    command = (
-        f"exec {shlex.quote(sys.executable)} "
-        f"-c {shlex.quote(launcher_code)}"
-    )
+    command = f"exec {shlex.quote(sys.executable)} -c {shlex.quote(launcher_code)}"
     service_code = f"""
 import asyncio
 from pathlib import Path
@@ -337,10 +328,7 @@ time.sleep(60)
 
         write_trigger_file.write_text("write")
         deadline = time.monotonic() + 4
-        while (
-            not write_result_file.is_file()
-            and time.monotonic() < deadline
-        ):
+        while not write_result_file.is_file() and time.monotonic() < deadline:
             time.sleep(0.02)
         assert write_result_file.read_text() == "success"
 
@@ -497,6 +485,267 @@ def test_cancelled_start_reserves_generation_before_immediate_retry(
         assert app["proc"].returncode is not None
         assert retry_pid > 0
         assert not manager._cleanup_tasks
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process broker requires POSIX")
+def test_launch_phases_are_durable_before_broker_and_app_spawn(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+    phases: list[str] = []
+
+    async def observed_broker():
+        record = json.loads(next(state_root.glob("*.json")).read_text(encoding="utf-8"))
+        phases.append(record["phase"])
+        broker = await OutputBroker.open()
+        original_spawn = broker.spawn
+
+        async def observed_spawn(*args, **kwargs):
+            record = json.loads(
+                next(state_root.glob("*.json")).read_text(encoding="utf-8")
+            )
+            phases.append(record["phase"])
+            return await original_spawn(*args, **kwargs)
+
+        broker.spawn = observed_spawn
+        return broker
+
+    manager = AppManager(
+        output_broker_factory=observed_broker,
+        state_root=state_root,
+    )
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        record = json.loads(next(state_root.glob("*.json")).read_text(encoding="utf-8"))
+        assert phases == ["pending", "broker_attached"]
+        assert record["phase"] == "attached"
+        assert record["process"]["pid"] == manager._apps["demo"]["proc"].pid
+        await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs adoption requires POSIX")
+def test_restart_completes_broker_attached_spawn_phase(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+    first = AppManager(state_root=state_root)
+
+    async def run_case():
+        lineage = "broker-attached-lineage"
+        record = first._persist_reservation(
+            slug="demo",
+            generation=1,
+            port=_free_port(),
+            command="sleep 60",
+            lineage_token=lineage,
+            started_at=time.time(),
+        )
+        broker = await OutputBroker.open()
+        first._persist_broker_reservation(record, broker.metadata)
+        environment = {
+            **os.environ,
+            "PROXIMA_APP_LINEAGE": lineage,
+        }
+        spawned = await broker.spawn(
+            ["bash", "-lc", "sleep 60"],
+            cwd=str(tmp_path),
+            env=environment,
+            contained=False,
+        )
+        await broker.disconnect()
+
+        restarted = AppManager(state_root=state_root)
+        await restarted.reconcile()
+
+        adopted = restarted._apps["demo"]
+        assert adopted["proc"].pid == spawned.pid
+        durable = json.loads(
+            next(state_root.glob("*.json")).read_text(encoding="utf-8")
+        )
+        assert durable["phase"] == "attached"
+        assert durable["process"]["pid"] == spawned.pid
+        await restarted.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process broker requires POSIX")
+def test_restart_terminally_reconciles_broker_attached_without_process(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+    first = AppManager(state_root=state_root)
+
+    async def run_case():
+        record = first._persist_reservation(
+            slug="demo",
+            generation=1,
+            port=_free_port(),
+            command="sleep 60",
+            lineage_token="broker-only-lineage",
+            started_at=time.time(),
+        )
+        broker = await OutputBroker.open()
+        first._persist_broker_reservation(record, broker.metadata)
+
+        restarted = AppManager(state_root=state_root)
+        await restarted.reconcile()
+
+        assert "demo" not in restarted._unadopted
+        assert restarted.status("demo")["state"] == "stopped"
+        assert not list(state_root.glob("*.json"))
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process broker requires POSIX")
+def test_cancelled_spawn_persistence_failure_reaps_matching_generation(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+    manager = AppManager(state_root=state_root)
+    original_spawn = OutputBroker.spawn
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    spawned = {}
+
+    async def delayed_spawn(broker, *args, **kwargs):
+        proc = await original_spawn(broker, *args, **kwargs)
+        spawned["proc"] = proc
+        entered.set()
+        await release.wait()
+        return proc
+
+    monkeypatch.setattr(OutputBroker, "spawn", delayed_spawn)
+    monkeypatch.setattr(
+        manager,
+        "_persist_app",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("state root full")),
+    )
+
+    async def run_case():
+        task = asyncio.create_task(
+            manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        await asyncio.wait_for(manager.shutdown(), timeout=7)
+        assert spawned["proc"].returncode is not None
+        assert not list(state_root.glob("*.json"))
+        assert "demo" not in manager._apps
+
+    asyncio.run(run_case())
+
+
+def test_failed_stop_is_retryable_and_blocks_replacement(tmp_path):
+    manager = AppManager()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        app = manager._apps["demo"]
+        original_refresh = app["proc"].refresh
+
+        async def unavailable():
+            raise OutputBrokerUnavailable("supervisor unavailable")
+
+        app["proc"].refresh = unavailable
+        await manager.stop("demo")
+        assert "stop_task" not in app
+        with pytest.raises(OutputBrokerUnavailable, match="still live"):
+            await manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        assert manager._apps["demo"] is app
+        assert manager._generations["demo"] == 1
+
+        app["proc"].refresh = original_refresh
+        await manager.stop("demo")
+        assert "demo" not in manager._apps
+
+    asyncio.run(run_case())
+
+
+def test_startup_reconciliation_is_concurrent_and_deadline_bounded(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    state_root.mkdir()
+    for generation in range(1, 17):
+        slug = f"demo-{generation}"
+        (state_root / f"{slug}.{generation}.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "phase": "broker_attached",
+                    "profile": "direct",
+                    "slug": slug,
+                    "generation": generation,
+                    "port": 40000 + generation,
+                    "command": "sleep 60",
+                    "broker": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+    manager = AppManager(state_root=state_root)
+
+    async def slow_reconcile(_slug, _candidates, _deadline):
+        await asyncio.sleep(0.1)
+
+    monkeypatch.setattr(manager, "_reconcile_slug", slow_reconcile)
+
+    async def run_case():
+        started = time.monotonic()
+        await manager.reconcile()
+        assert time.monotonic() - started < 0.4
+
+        monkeypatch.setattr(apprunner, "RECONCILE_DEADLINE_SECONDS", 0.05)
+
+        async def stuck_reconcile(_slug, _candidates, _deadline):
+            await asyncio.sleep(60)
+
+        monkeypatch.setattr(manager, "_reconcile_slug", stuck_reconcile)
+        await manager.reconcile()
+        assert manager._unadopted
+        assert all(
+            manager.status(slug)["state"] == "ownership_unknown"
+            for slug in manager._unadopted
+        )
 
     asyncio.run(run_case())
 
@@ -752,9 +1001,7 @@ def test_output_broker_launch_failure_is_recoverable_before_spawn(
     tmp_path,
 ):
     async def unavailable():
-        raise OutputBrokerUnavailable(
-            "Windows breakaway preview output is unavailable"
-        )
+        raise OutputBrokerUnavailable("Windows breakaway preview output is unavailable")
 
     manager = AppManager(output_broker_factory=unavailable)
 
@@ -928,8 +1175,7 @@ def test_fast_strict_port_exit_is_a_sticky_conflict(tmp_path, monkeypatch):
     async def run_case():
         try:
             command = (
-                f"{shlex.quote(sys.executable)} -m http.server "
-                "$PORT --bind 127.0.0.1"
+                f"{shlex.quote(sys.executable)} -m http.server $PORT --bind 127.0.0.1"
             )
             await manager.start("demo", str(tmp_path), command, port)
             status = {}
@@ -964,7 +1210,9 @@ def test_app_runner_reports_ready_when_port_accepts_connections():
 
     async def run_case():
         try:
-            await manager.start("demo", ".", f"python3 -m http.server {port} --bind 127.0.0.1", port)
+            await manager.start(
+                "demo", ".", f"python3 -m http.server {port} --bind 127.0.0.1", port
+            )
             for _ in range(40):
                 status = manager.status("demo")
                 if status.get("ready"):
@@ -1027,7 +1275,9 @@ def test_app_runner_fails_closed_when_procfs_cannot_prove_listener_ownership(
         try:
             port = _free_port()
             await manager.start("demo", str(tmp_path), "sleep 60", port)
-            monkeypatch.setattr(apprunner, "_port_open", lambda candidate: candidate == port)
+            monkeypatch.setattr(
+                apprunner, "_port_open", lambda candidate: candidate == port
+            )
             monkeypatch.setattr(
                 apprunner,
                 "_listening_socket_inodes",
@@ -1078,6 +1328,11 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
         "_pid_namespace_id",
         lambda _pid: 4242,
     )
+    monkeypatch.setattr(
+        apprunner,
+        "_process_cgroup_identity",
+        lambda _pid: "0::/managed\n",
+    )
     uncontained = apprunner.ProcessAuthority(
         leader_pid=leader_pid,
         process_group=leader_pid,
@@ -1091,6 +1346,7 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
         lineage_token="launch-token",
         containment_required=True,
         containment_pid_namespace=None,
+        containment_cgroup="0::/managed\n",
     )
     exact_proof = apprunner.ProcessAuthority(
         leader_pid=leader_pid,
@@ -1098,20 +1354,48 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
         lineage_token="launch-token",
         containment_required=True,
         containment_pid_namespace=4242,
+        containment_cgroup="0::/managed\n",
     )
 
-    assert apprunner._listener_ownership(
-        5180,
-        authority=uncontained,
-    ) == apprunner.PortOwnership.DETACHED
-    assert apprunner._listener_ownership(
-        5180,
-        authority=missing_proof,
-    ) == apprunner.PortOwnership.DETACHED
-    assert apprunner._listener_ownership(
-        5180,
-        authority=exact_proof,
-    ) == apprunner.PortOwnership.VERIFIED
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=uncontained,
+        )
+        == apprunner.PortOwnership.DETACHED
+    )
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=missing_proof,
+        )
+        == apprunner.PortOwnership.DETACHED
+    )
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=exact_proof,
+        )
+        == apprunner.PortOwnership.VERIFIED
+    )
+
+    monkeypatch.setattr(
+        apprunner,
+        "_process_cgroup_identity",
+        lambda pid: "0::/escaped\n" if pid == detached_pid else "0::/managed\n",
+    )
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=exact_proof,
+        )
+        == apprunner.PortOwnership.DETACHED
+    )
+    monkeypatch.setattr(
+        apprunner,
+        "_process_cgroup_identity",
+        lambda _pid: "0::/managed\n",
+    )
 
     monkeypatch.setattr(
         apprunner,
@@ -1121,10 +1405,13 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
             detached_pid: (1, detached_pid, {listener_inode}),
         },
     )
-    assert apprunner._listener_ownership(
-        5180,
-        authority=exact_proof,
-    ) == apprunner.PortOwnership.DETACHED
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=exact_proof,
+        )
+        == apprunner.PortOwnership.DETACHED
+    )
 
     monkeypatch.setattr(
         apprunner,
@@ -1139,10 +1426,13 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
         "_process_has_lineage",
         lambda _pid, _token: False,
     )
-    assert apprunner._listener_ownership(
-        5180,
-        authority=exact_proof,
-    ) == apprunner.PortOwnership.DETACHED
+    assert (
+        apprunner._listener_ownership(
+            5180,
+            authority=exact_proof,
+        )
+        == apprunner.PortOwnership.DETACHED
+    )
 
 
 def test_uncontained_detached_listener_is_not_a_preview(tmp_path):

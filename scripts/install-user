@@ -8,6 +8,7 @@ CONFIG_FILE="${PROXIMA_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/proxima/proxima
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 DATA_DIR="${PROXIMA_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/proxima}"
 DRY_RUN=0
+DRAINED_SERVICE=0
 
 case "${1:-}" in
   "") ;;
@@ -25,8 +26,29 @@ run() {
   fi
 }
 
+restore_drained_service() {
+  local status=$?
+  if [[ "$status" != 0 && "$DRAINED_SERVICE" == 1 ]]; then
+    systemctl --user start proxima.service >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap restore_drained_service EXIT
+
 command -v uv  >/dev/null 2>&1 || { echo "missing: uv"  >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "missing: npm" >&2; exit 1; }
+
+echo "==> Draining the installed preview manager"
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "+ if active: systemctl --user stop proxima.service"
+elif systemctl --user is-active --quiet proxima.service; then
+  systemctl --user stop proxima.service
+  DRAINED_SERVICE=1
+fi
+
+echo "==> Verifying legacy previews are drained"
+run "$ROOT/scripts/check-preview-drained" \
+  --protocol proxima-preview-supervisor-v2:user
 
 echo "==> Building backend deps"
 if [[ "$DRY_RUN" == 1 ]]; then
@@ -101,14 +123,15 @@ Description=Proxima preview supervisor
 Type=simple
 WorkingDirectory=$ROOT
 Environment=PATH=$SVC_PATH
-Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:user
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v2:user
 Environment=PROXIMA_PREVIEW_PROFILE=user
 Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=$DATA_DIR/preview-supervisors
 ExecStart=$ROOT/scripts/proxima output-broker --systemd-socket
 StandardInput=socket
 StandardOutput=null
 StandardError=journal
-KillMode=control-group
+Delegate=yes
+KillMode=process
 TimeoutStopSec=10s
 EOF
 fi
@@ -128,7 +151,7 @@ Type=simple
 WorkingDirectory=$ROOT
 Environment=PATH=$SVC_PATH
 Environment=PROXIMA_OUTPUT_BROKER_SOCKET=%t/proxima/preview-output.sock
-Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:user
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v2:user
 Environment=PROXIMA_PREVIEW_PROFILE=user
 Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=$DATA_DIR/preview-supervisors
 ExecStart=$ROOT/scripts/proxima serve
@@ -179,6 +202,7 @@ run systemctl --user enable proxima.service
 # restart (not just enable --now) so re-running this to UPDATE actually loads
 # the new code — enable --now is a no-op on an already-running unit.
 run systemctl --user restart proxima.service
+DRAINED_SERVICE=0
 run systemctl --user enable --now proxima-backup.timer
 # Keep the service running even when you're not logged in (best-effort).
 if [[ "$DRY_RUN" == 1 ]]; then

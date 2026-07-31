@@ -1,6 +1,6 @@
 # ADR-0021: Preview supervisors own app scopes
 
-- Status: Accepted
+- Status: Superseded by ADR-0025
 - Date: 2026-07-31
 
 ## Context

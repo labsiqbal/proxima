@@ -19,6 +19,7 @@ from .preview_output import (
     BROKER_PROTOCOL_ENV,
     BROKER_STATE_ROOT_ENV,
     BrokerLog,
+    cgroup_is_within,
     process_start_time,
 )
 from .process_containment import pid_namespace_argv
@@ -79,8 +80,7 @@ def _send_json(
     try:
         control.settimeout(5)
         control.sendall(
-            json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            + b"\n"
+            json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
         )
         return True
     except OSError:
@@ -94,30 +94,65 @@ def _send_json(
 
 def _cgroup_identity(pid: int) -> str | None:
     try:
-        return Path(f"/proc/{int(pid)}/cgroup").read_text(
-            encoding="utf-8"
-        )
+        return Path(f"/proc/{int(pid)}/cgroup").read_text(encoding="utf-8")
     except OSError:
         return None
+
+
+def _pidfd_open(pid: int) -> int:
+    native = getattr(os, "pidfd_open", None)
+    if native is not None:
+        return int(native(pid))
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "pidfd_open", None)
+    if function is None:
+        raise OSError("pidfd_open is unavailable")
+    function.argtypes = [ctypes.c_int, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    result = int(function(pid, 0))
+    if result < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return result
+
+
+def _pidfd_send_signal(pidfd: int, signal_number: int) -> None:
+    native = getattr(signal, "pidfd_send_signal", None)
+    if native is not None:
+        native(pidfd, signal_number)
+        return
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "pidfd_send_signal", None)
+    if function is None:
+        raise OSError("pidfd_send_signal is unavailable")
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_uint,
+    ]
+    function.restype = ctypes.c_int
+    result = int(function(pidfd, signal_number, None, 0))
+    if result < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
 
 
 class PreviewSupervisor:
     def __init__(self, initial_control: socket.socket) -> None:
         self.protocol = (
-            os.environ.get(BROKER_PROTOCOL_ENV, "").strip()
-            or BROKER_PROTOCOL
+            os.environ.get(BROKER_PROTOCOL_ENV, "").strip() or BROKER_PROTOCOL
         )
-        self.profile = (
-            os.environ.get(BROKER_PROFILE_ENV, "").strip()
-            or "direct"
-        )
+        self.profile = os.environ.get(BROKER_PROFILE_ENV, "").strip() or "direct"
         self.session_id = secrets.token_urlsafe(18)
         self.token = secrets.token_urlsafe(32)
         self.initial_control = initial_control
         self.controller_cgroup = self._peer_cgroup(initial_control)
-        self.listener, self.endpoint, self.socket_path = (
-            self._reconnect_listener()
-        )
+        self.listener, self.endpoint, self.socket_path = self._reconnect_listener()
         self.process: subprocess.Popen[bytes] | None = None
         self.process_start_time: int | None = None
         self.read_fd: int | None = None
@@ -125,6 +160,8 @@ class PreviewSupervisor:
         self.info_fd: int | None = None
         self.info_buffer = bytearray()
         self.containment_pid_namespace: int | None = None
+        self.app_cgroup: Path | None = None
+        self.app_cgroup_identity: str | None = None
         self.log = BrokerLog()
         self.eof = False
 
@@ -208,7 +245,70 @@ class PreviewSupervisor:
             "returncode": self.process.poll(),
             "containment_pid_namespace": self.containment_pid_namespace,
             "cgroup": _cgroup_identity(self.process.pid),
+            "app_cgroup": (
+                str(self.app_cgroup) if self.app_cgroup is not None else None
+            ),
+            "scope_live": bool(self._app_cgroup_pids()),
+            "managed_cgroup": self.app_cgroup_identity,
         }
+
+    def _app_cgroup_pids(self) -> set[int]:
+        if self.app_cgroup is None:
+            return set()
+        pending = [self.app_cgroup]
+        pids: set[int] = set()
+        while pending:
+            current = pending.pop()
+            try:
+                pending.extend(path for path in current.iterdir() if path.is_dir())
+                pids.update(
+                    int(raw_pid)
+                    for raw_pid in current.joinpath("cgroup.procs")
+                    .read_text(encoding="ascii")
+                    .split()
+                )
+            except (OSError, ValueError):
+                continue
+        return pids
+
+    def _remove_app_cgroup(self) -> None:
+        if self.app_cgroup is None:
+            return
+        try:
+            descendants = sorted(
+                (path for path in self.app_cgroup.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            )
+        except OSError:
+            descendants = []
+        for path in [*descendants, self.app_cgroup]:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+
+    def _prepare_app_cgroup(self) -> Path | None:
+        if not sys.platform.startswith("linux"):
+            return None
+        identity = _cgroup_identity(os.getpid())
+        if not isinstance(identity, str):
+            return None
+        unified = next(
+            (line[3:] for line in identity.splitlines() if line.startswith("0::/")),
+            None,
+        )
+        if unified is None:
+            return None
+        root = Path("/sys/fs/cgroup") / unified.lstrip("/")
+        target = root / f"preview-app-{self.session_id}"
+        try:
+            target.mkdir(mode=0o700)
+        except FileExistsError:
+            return None
+        except OSError:
+            return None
+        return target
 
     def _spawn(self, command: dict[str, Any]) -> dict[str, object]:
         if self.process is not None:
@@ -236,6 +336,10 @@ class PreviewSupervisor:
         extra: dict[str, Any]
         launch_argv = list(argv)
         containment_write_fd: int | None = None
+        cgroup_ready_read_fd: int | None = None
+        cgroup_ready_write_fd: int | None = None
+        cgroup_release_read_fd: int | None = None
+        cgroup_release_write_fd: int | None = None
         if os.name == "nt":
             extra = {
                 "creationflags": getattr(
@@ -247,11 +351,12 @@ class PreviewSupervisor:
         else:
             extra = {"start_new_session": True}
         try:
+            self.app_cgroup = self._prepare_app_cgroup()
+            if os.environ.get("INVOCATION_ID") and self.app_cgroup is None:
+                return {"error": "Launch-specific preview cgroup is unavailable"}
             if contained:
                 if os.name != "posix":
-                    return {
-                        "error": "Preview containment is unavailable"
-                    }
+                    return {"error": "Preview containment is unavailable"}
                 self.info_fd, containment_write_fd = os.pipe()
                 os.set_blocking(self.info_fd, False)
                 launch_argv = pid_namespace_argv(
@@ -260,7 +365,30 @@ class PreviewSupervisor:
                     label="project app",
                     info_fd=containment_write_fd,
                 )
-                extra["pass_fds"] = (containment_write_fd,)
+            if self.app_cgroup is not None:
+                cgroup_ready_read_fd, cgroup_ready_write_fd = os.pipe()
+                cgroup_release_read_fd, cgroup_release_write_fd = os.pipe()
+                launch_argv = [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(Path(__file__).with_name("preview_app_launcher.py")),
+                    str(self.app_cgroup / "cgroup.procs"),
+                    str(cgroup_ready_write_fd),
+                    str(cgroup_release_read_fd),
+                    *launch_argv,
+                ]
+            pass_fds = tuple(
+                fd
+                for fd in (
+                    containment_write_fd,
+                    cgroup_ready_write_fd,
+                    cgroup_release_read_fd,
+                )
+                if fd is not None
+            )
+            if pass_fds:
+                extra["pass_fds"] = pass_fds
             self.process = subprocess.Popen(
                 launch_argv,
                 cwd=cwd,
@@ -270,12 +398,58 @@ class PreviewSupervisor:
                 **extra,
             )
             self.process_start_time = process_start_time(self.process.pid)
+            if cgroup_ready_read_fd is not None:
+                readable, _, _ = select.select(
+                    [cgroup_ready_read_fd],
+                    [],
+                    [],
+                    2,
+                )
+                if not readable or os.read(cgroup_ready_read_fd, 1) != b"1":
+                    raise RuntimeError(
+                        "Preview process did not enter its managed cgroup"
+                    )
+                observed_cgroup = _cgroup_identity(self.process.pid)
+                expected_cgroup = (
+                    "0::/"
+                    + self.app_cgroup.relative_to("/sys/fs/cgroup").as_posix()
+                    + "\n"
+                )
+                if not (
+                    cgroup_is_within(observed_cgroup, expected_cgroup)
+                    and cgroup_is_within(expected_cgroup, observed_cgroup)
+                ):
+                    raise RuntimeError(
+                        "Preview process escaped its managed cgroup before launch"
+                    )
+                self.app_cgroup_identity = observed_cgroup
+                os.write(cgroup_release_write_fd, b"1")
         except Exception as exc:
+            if self.process is not None and self.process.poll() is None:
+                try:
+                    os.killpg(
+                        os.getpgid(self.process.pid),
+                        signal.SIGKILL,
+                    )
+                except OSError:
+                    pass
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
             return {"error": f"Preview process could not start: {exc}"}
         finally:
-            if containment_write_fd is not None:
+            for fd in (
+                containment_write_fd,
+                cgroup_ready_read_fd,
+                cgroup_ready_write_fd,
+                cgroup_release_read_fd,
+                cgroup_release_write_fd,
+            ):
+                if fd is None:
+                    continue
                 try:
-                    os.close(containment_write_fd)
+                    os.close(fd)
                 except OSError:
                     pass
             if self.write_fd is not None:
@@ -323,7 +497,7 @@ class PreviewSupervisor:
             return {"error": "Preview process has not been launched"}
         if kind not in ("term", "kill"):
             return {"error": "Preview signal is invalid"}
-        if self.process.poll() is not None:
+        if self.process.poll() is not None and not self._app_cgroup_pids():
             return self.process_status()
         try:
             if os.name == "nt":
@@ -341,6 +515,58 @@ class PreviewSupervisor:
                     )
                 else:
                     self.process.terminate()
+            elif self.app_cgroup is not None:
+                signal_number = signal.SIGKILL if kind == "kill" else signal.SIGTERM
+                if kind == "kill":
+                    try:
+                        self.app_cgroup.joinpath("cgroup.kill").write_text(
+                            "1",
+                            encoding="ascii",
+                        )
+                    except OSError as exc:
+                        return {
+                            "error": (
+                                f"Preview managed cgroup could not be terminated: {exc}"
+                            )
+                        }
+                    return self.process_status()
+                pending = [self.app_cgroup]
+                seen: set[int] = set()
+                while pending:
+                    current = pending.pop()
+                    try:
+                        pending.extend(
+                            path for path in current.iterdir() if path.is_dir()
+                        )
+                        pids = (
+                            current.joinpath("cgroup.procs")
+                            .read_text(encoding="ascii")
+                            .split()
+                        )
+                    except OSError:
+                        continue
+                    for raw_pid in pids:
+                        pid = int(raw_pid)
+                        if pid in seen:
+                            continue
+                        seen.add(pid)
+                        pidfd: int | None = None
+                        try:
+                            pidfd = _pidfd_open(pid)
+                            if not cgroup_is_within(
+                                _cgroup_identity(pid),
+                                self.app_cgroup_identity,
+                            ):
+                                continue
+                            _pidfd_send_signal(pidfd, signal_number)
+                        except (OSError, ProcessLookupError):
+                            continue
+                        finally:
+                            if pidfd is not None:
+                                try:
+                                    os.close(pidfd)
+                                except OSError:
+                                    pass
             else:
                 os.killpg(
                     os.getpgid(self.process.pid),
@@ -376,6 +602,8 @@ class PreviewSupervisor:
         if operation == "process_status":
             self._read_containment()
             return self.process_status()
+        if operation == "has_process":
+            return {"has_process": self.process is not None}
         if operation == "signal":
             return self._signal(command.get("kind"))
         if operation == "changes":
@@ -458,20 +686,14 @@ class PreviewSupervisor:
                     self.log,
                     limit=1024 * 1024,
                 )
-            returncode = (
-                self.process.poll()
-                if self.process is not None
-                else None
-            )
-            if (
-                control is None
-                and self.process is None
-            ):
+            returncode = self.process.poll() if self.process is not None else None
+            if control is None and self.process is None:
                 break
             if (
                 control is None
                 and returncode is not None
                 and self.eof
+                and not self._app_cgroup_pids()
             ):
                 break
 
@@ -547,6 +769,7 @@ class PreviewSupervisor:
                     os.close(fd)
                 except OSError:
                     pass
+        self._remove_app_cgroup()
         return 0
 
 

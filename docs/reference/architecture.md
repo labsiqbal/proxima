@@ -1156,11 +1156,17 @@ newline-free streams cannot grow memory without limit. Periodic status polling u
 a version and completed-line cursor, so an unchanged log returns constant-size
 metadata instead of retransmitting the ring. If an uncontained child keeps stdout
 open, the supervisor continues fixed-size reads after the API disconnects and exits
-at EOF. Packaged Linux installs run every app inside its socket-activated,
-profile-specific supervisor unit outside the API cgroup. A durable record binds the
-profile, protocol, supervisor PID/start time, app PID/start time, cgroup, and lineage;
-restart adoption requires every field to match. Shutdown reconciles app generations
-concurrently within the service timeout. Windows uses a detached breakaway supervisor
+only after EOF and an empty managed app cgroup. Packaged Linux installs create a
+delegated, launch-specific app cgroup beneath
+each socket-activated profile supervisor outside the API cgroup. The broker remains in
+the unit root and process-only unit teardown cannot signal an app that escaped its
+managed cgroup. A durable pending record precedes supervisor creation; atomic
+broker-attached and app-attached phases bind the profile, protocol, supervisor
+PID/start time, app PID/start time, app cgroup, and lineage. Restart adoption requires
+every field to match. Startup and shutdown reconcile app generations concurrently
+within aggregate service deadlines. Unit migrations scan same-user procfs first and
+refuse while an older protocol process or a pre-protocol preview identified by API
+lineage or service-cgroup membership remains live. Windows uses a detached breakaway supervisor
 when supported. Supervisor setup failure occurs
 before app spawn and produces a recoverable `output_sink_unavailable` stopped state;
 a later disconnect retains fail-closed authority instead of claiming an unverified
@@ -1177,7 +1183,7 @@ authentication runs before target resolution or procfs ownership work. Proxy pat
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
-See ADR-0014 through ADR-0023 for the focused binding, authentication, authority,
+See ADR-0014 through ADR-0026 for the focused binding, authentication, authority,
 cleanup, framing, supervision, restart-adoption, and profile-isolation decisions.
 
 ### 9. Update check and candidate gate plus disabled switch fixture

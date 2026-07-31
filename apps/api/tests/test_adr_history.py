@@ -88,11 +88,11 @@ def test_preview_authority_adr_history_is_append_only():
         ),
         "0020-preview-lifecycles-use-project-generations.md": (
             "Preview lifecycles use project generations",
-            "Accepted",
+            "Superseded by ADR-0024",
         ),
         "0021-preview-supervisors-own-app-scopes.md": (
             "Preview supervisors own app scopes",
-            "Accepted",
+            "Superseded by ADR-0025",
         ),
         "0022-preview-log-polling-uses-versioned-deltas.md": (
             "Preview log polling uses versioned deltas",
@@ -100,6 +100,18 @@ def test_preview_authority_adr_history_is_append_only():
         ),
         "0023-preview-supervisor-profiles-are-isolated.md": (
             "Preview supervisor profiles are isolated",
+            "Accepted",
+        ),
+        "0024-preview-generations-use-durable-launch-phases.md": (
+            "Preview generations use durable launch phases",
+            "Accepted",
+        ),
+        "0025-preview-apps-use-launch-specific-cgroups.md": (
+            "Preview apps use launch-specific cgroups",
+            "Accepted",
+        ),
+        "0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md": (
+            "Preview supervision upgrades require a drained legacy generation",
             "Accepted",
         ),
     }
@@ -126,10 +138,7 @@ def test_preview_authority_adr_history_is_append_only():
     )
 
     adr_0013 = (
-        ROOT
-        / "docs"
-        / "adr"
-        / "0013-detached-preview-output-uses-os-sink-helpers.md"
+        ROOT / "docs" / "adr" / "0013-detached-preview-output-uses-os-sink-helpers.md"
     ).read_text(encoding="utf-8")
     accepted_0013 = adr_0013.replace(
         "- Status: Superseded by ADR-0018",

@@ -20,7 +20,7 @@ BROKER_SOCKET_ENV = "PROXIMA_OUTPUT_BROKER_SOCKET"
 BROKER_PROTOCOL_ENV = "PROXIMA_OUTPUT_BROKER_PROTOCOL"
 BROKER_PROFILE_ENV = "PROXIMA_PREVIEW_PROFILE"
 BROKER_STATE_ROOT_ENV = "PROXIMA_PREVIEW_SCOPE_STATE_ROOT"
-BROKER_PROTOCOL = "proxima-preview-supervisor-v1"
+BROKER_PROTOCOL = "proxima-preview-supervisor-v2"
 
 
 class OutputBrokerUnavailable(RuntimeError):
@@ -55,6 +55,28 @@ def process_start_time(pid: int) -> int | None:
         return None
 
 
+def cgroup_is_within(identity: str | None, root: str | None) -> bool:
+    def unified(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return next(
+            (
+                line[3:].rstrip("/")
+                for line in value.splitlines()
+                if line.startswith("0::/")
+            ),
+            None,
+        )
+
+    child = unified(identity)
+    parent = unified(root)
+    return (
+        child is not None
+        and parent is not None
+        and (child == parent or child.startswith(parent + "/"))
+    )
+
+
 class BoundedLineBuffer:
     def __init__(self, limit: int = MAX_PENDING_LINE_BYTES) -> None:
         self._limit = limit
@@ -62,7 +84,7 @@ class BoundedLineBuffer:
 
     def _append_tail(self, chunk: bytes) -> None:
         if len(chunk) >= self._limit:
-            self._pending[:] = chunk[-self._limit:]
+            self._pending[:] = chunk[-self._limit :]
             return
         excess = len(self._pending) + len(chunk) - self._limit
         if excess > 0:
@@ -124,11 +146,7 @@ class BrokerLog:
                 "version": self._version,
                 "line_cursor": self._line_cursor,
             }
-        earliest = (
-            self._lines[0][0]
-            if self._lines
-            else self._line_cursor + 1
-        )
+        earliest = self._lines[0][0] if self._lines else self._line_cursor + 1
         reset = (
             after_line is None
             or after_line < earliest - 1
@@ -137,11 +155,7 @@ class BrokerLog:
         selected = (
             list(self._lines)
             if reset
-            else [
-                item
-                for item in self._lines
-                if item[0] > int(after_line)
-            ]
+            else [item for item in self._lines if item[0] > int(after_line)]
         )
         return {
             "changed": True,
@@ -162,18 +176,22 @@ class BrokerManagedProcess:
         start_time: int | None,
         returncode: int | None,
         containment_pid_namespace: int | None,
+        cgroup: str | None = None,
+        managed_cgroup: str | None = None,
+        scope_live: bool = False,
     ) -> None:
         self._broker = broker
         self.pid = int(pid)
         self.start_time = start_time
         self.returncode = returncode
         self.containment_pid_namespace = containment_pid_namespace
+        self.cgroup = cgroup
+        self.managed_cgroup = managed_cgroup or cgroup
+        self.scope_live = scope_live
 
     def _apply(self, payload: dict[str, Any]) -> None:
         if int(payload.get("pid") or 0) != self.pid:
-            raise OutputBrokerUnavailable(
-                "Preview supervisor process identity changed"
-            )
+            raise OutputBrokerUnavailable("Preview supervisor process identity changed")
         start_time = payload.get("start_time")
         if (
             self.start_time is not None
@@ -190,10 +208,15 @@ class BrokerManagedProcess:
         )
         namespace = payload.get("containment_pid_namespace")
         self.containment_pid_namespace = (
-            int(namespace)
-            if isinstance(namespace, int) and namespace > 0
-            else None
+            int(namespace) if isinstance(namespace, int) and namespace > 0 else None
         )
+        cgroup = payload.get("cgroup")
+        self.cgroup = cgroup if isinstance(cgroup, str) else None
+        managed_cgroup = payload.get("managed_cgroup")
+        self.managed_cgroup = (
+            managed_cgroup if isinstance(managed_cgroup, str) else self.cgroup
+        )
+        self.scope_live = payload.get("scope_live") is True
 
     async def refresh(self) -> int | None:
         payload = await self._broker.process_status()
@@ -262,11 +285,14 @@ class OutputBroker:
     async def reconnect(
         cls,
         metadata: dict[str, Any],
+        *,
+        timeout: float = 5,
     ) -> OutputBroker:
         try:
             return await asyncio.to_thread(
                 cls._reconnect_sync,
                 metadata,
+                timeout,
             )
         except OutputBrokerUnavailable:
             raise
@@ -277,17 +303,11 @@ class OutputBroker:
 
     @classmethod
     def _expected_protocol(cls) -> str:
-        return (
-            os.environ.get(BROKER_PROTOCOL_ENV, "").strip()
-            or BROKER_PROTOCOL
-        )
+        return os.environ.get(BROKER_PROTOCOL_ENV, "").strip() or BROKER_PROTOCOL
 
     @classmethod
     def _expected_profile(cls) -> str:
-        return (
-            os.environ.get(BROKER_PROFILE_ENV, "").strip()
-            or "direct"
-        )
+        return os.environ.get(BROKER_PROFILE_ENV, "").strip() or "direct"
 
     @classmethod
     def _validate_identity(
@@ -370,11 +390,12 @@ class OutputBroker:
     def _connect_endpoint(
         cls,
         endpoint: dict[str, Any],
+        timeout: float = 5,
     ) -> socket.socket:
         kind = endpoint.get("kind")
         if kind == "unix" and isinstance(endpoint.get("path"), str):
             control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            control.settimeout(5)
+            control.settimeout(timeout)
             control.connect(endpoint["path"])
             return control
         if (
@@ -383,7 +404,7 @@ class OutputBroker:
             and isinstance(endpoint.get("name"), str)
         ):
             control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            control.settimeout(5)
+            control.settimeout(timeout)
             control.connect("\0" + endpoint["name"])
             return control
         if (
@@ -393,7 +414,7 @@ class OutputBroker:
         ):
             return socket.create_connection(
                 (endpoint["host"], int(endpoint["port"])),
-                timeout=5,
+                timeout=timeout,
             )
         raise OutputBrokerUnavailable(
             "Preview supervisor reconnect endpoint is invalid"
@@ -403,13 +424,14 @@ class OutputBroker:
     def _reconnect_sync(
         cls,
         metadata: dict[str, Any],
+        timeout: float = 5,
     ) -> OutputBroker:
         endpoint = metadata.get("endpoint")
         if not isinstance(endpoint, dict):
             raise OutputBrokerUnavailable(
                 "Preview supervisor reconnect endpoint is missing"
             )
-        control = cls._connect_endpoint(endpoint)
+        control = cls._connect_endpoint(endpoint, timeout)
         try:
             control.sendall(
                 json.dumps(
@@ -577,10 +599,7 @@ class OutputBroker:
                     )
                     break
                 except OSError:
-                    if (
-                        process.poll() is not None
-                        or time.monotonic() >= deadline
-                    ):
+                    if process.poll() is not None or time.monotonic() >= deadline:
                         raise OutputBrokerUnavailable(
                             "Windows cannot start a breakaway preview "
                             "supervisor on this host."
@@ -624,9 +643,7 @@ class OutputBroker:
     ) -> dict[str, Any]:
         with self._lock:
             if self._closed:
-                raise OutputBrokerUnavailable(
-                    "Preview supervisor disconnected"
-                )
+                raise OutputBrokerUnavailable("Preview supervisor disconnected")
             try:
                 self._control.sendall(
                     json.dumps(
@@ -701,10 +718,28 @@ class OutputBroker:
                 )
                 else None
             ),
+            cgroup=(
+                str(payload["cgroup"])
+                if isinstance(payload.get("cgroup"), str)
+                else None
+            ),
+            managed_cgroup=(
+                str(payload["managed_cgroup"])
+                if isinstance(payload.get("managed_cgroup"), str)
+                else None
+            ),
+            scope_live=payload.get("scope_live") is True,
         )
 
     async def managed_process(self) -> BrokerManagedProcess:
         return self._process_from_payload(await self.process_status())
+
+    async def has_managed_process(self) -> bool:
+        payload = await asyncio.to_thread(
+            self._request_sync,
+            {"op": "has_process"},
+        )
+        return payload.get("has_process") is True
 
     async def process_status(self) -> dict[str, Any]:
         return await asyncio.to_thread(

@@ -1253,12 +1253,19 @@ A launch-time supervisor starts the app and owns stdout, keeps the complete-line
 and partial-line byte tail bounded, and drains all currently available bytes before
 returning an atomic final snapshot. Routine polling transfers only versioned line
 deltas. If a detached child keeps stdout open, the supervisor continues fixed-size
-reads until EOF after the API disconnects. Packaged Linux installs place each app in a
-profile-specific socket-activated supervisor unit outside the API cgroup. Production
-and staging use separate sockets, protocol identities, state roots, and checkout
-executables. Shutdown stops project generations concurrently. A restarted API adopts
-only exact durable supervisor, process, cgroup, profile, protocol, and lineage
-evidence; anything incomplete remains ownership-unknown and is not signaled.
+reads until EOF after the API disconnects and stays alive until its managed app cgroup
+is empty. Packaged Linux installs give each app a
+delegated, launch-specific cgroup beneath its profile-specific socket-activated
+supervisor outside the API cgroup. Broker unit teardown targets only the broker
+process, while Stop may signal processes still proven inside the exact app cgroup.
+Production and staging use separate sockets, protocol identities, state roots, and
+checkout executables. A durable pending generation exists before supervisor creation,
+then atomically gains broker and app identity. Startup and shutdown reconcile project
+generations concurrently under aggregate deadlines. A restarted API adopts only exact
+durable supervisor, process, app cgroup, profile, protocol, and lineage evidence;
+anything incomplete remains ownership-unknown and is not signaled. Unit upgrades scan
+same-user procfs first and refuse while an older protocol process or a pre-protocol
+preview identified by API lineage or service-cgroup membership remains live.
 Supported Windows hosts use detached breakaway supervisors. If durable ownership is
 unavailable, start fails before app spawn with a recoverable
 `output_sink_unavailable` stopped state. Stop retains the last available log, and a

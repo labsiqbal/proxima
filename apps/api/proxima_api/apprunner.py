@@ -4,6 +4,7 @@ Lets you preview something the agent built — e.g. `npm run dev` — live insid
 Proxima. One managed process per project; the HTTP proxy forwards to its port so
 relative assets resolve and no port is exposed directly.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,11 +20,14 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from .preview_output import (
+    BROKER_PROTOCOL,
+    BROKER_PROTOCOL_ENV,
     BrokerManagedProcess,
     OutputBroker,
     OutputBrokerUnavailable,
     OutputDelta,
     OutputSnapshot,
+    cgroup_is_within,
     process_start_time,
 )
 from .runners import subprocess_env
@@ -31,7 +35,9 @@ from .runners import subprocess_env
 PROLONGED_START_SECONDS = 15
 OUTPUT_POLL_SECONDS = 0.05
 SHUTDOWN_GRACE_SECONDS = 14
+RECONCILE_DEADLINE_SECONDS = 5
 _LINEAGE_ENV = "PROXIMA_APP_LINEAGE"
+_AUTHORITY_PROTOCOL_ENV = "PROXIMA_PREVIEW_AUTHORITY_PROTOCOL"
 
 
 def _port_open(port: int) -> bool:
@@ -47,7 +53,9 @@ class PortInUseError(RuntimeError):
 
     def __init__(self, port: int) -> None:
         self.port = int(port)
-        super().__init__(f"Port {self.port} is already in use by another process. Choose a different port; Proxima did not stop it.")
+        super().__init__(
+            f"Port {self.port} is already in use by another process. Choose a different port; Proxima did not stop it."
+        )
 
 
 def _listening_socket_inodes(port: int) -> set[str] | None:
@@ -86,6 +94,7 @@ class ProcessAuthority:
     lineage_token: str
     containment_required: bool
     containment_pid_namespace: int | None
+    containment_cgroup: str | None = None
 
 
 def _process_table(
@@ -215,13 +224,9 @@ def _socket_ownership(
     if any(not pids for pids in owners.values()):
         return PortOwnership.UNKNOWN
     owner_pids = {pid for pids in owners.values() for pid in pids}
-    managed_group = all(
-        processes[pid][1] == group_id
-        for pid in owner_pids
-    )
+    managed_group = all(processes[pid][1] == group_id for pid in owner_pids)
     descendants = all(
-        _is_descendant(pid, authority.leader_pid, processes)
-        for pid in owner_pids
+        _is_descendant(pid, authority.leader_pid, processes) for pid in owner_pids
     )
     live_lineage = all(
         processes[pid][1] == group_id
@@ -229,7 +234,13 @@ def _socket_ownership(
         for pid in owner_pids
     )
     lineage_matches = all(
-        _process_has_lineage(pid, authority.lineage_token)
+        _process_has_lineage(pid, authority.lineage_token) for pid in owner_pids
+    )
+    cgroup_matches = authority.containment_cgroup is not None and all(
+        cgroup_is_within(
+            _process_cgroup_identity(pid),
+            authority.containment_cgroup,
+        )
         for pid in owner_pids
     )
     if not authority.containment_required:
@@ -245,13 +256,11 @@ def _socket_ownership(
     if (
         not live_lineage
         or not lineage_matches
+        or not cgroup_matches
         or authority.containment_pid_namespace is None
     ):
         return PortOwnership.DETACHED
-    owner_namespaces = {
-        _pid_namespace_id(pid)
-        for pid in owner_pids
-    }
+    owner_namespaces = {_pid_namespace_id(pid) for pid in owner_pids}
     if None in owner_namespaces:
         return PortOwnership.UNKNOWN
     if owner_namespaces != {authority.containment_pid_namespace}:
@@ -267,6 +276,13 @@ def _process_has_lineage(pid: int, lineage_token: str) -> bool:
         return False
     marker = f"{_LINEAGE_ENV}={lineage_token}".encode()
     return marker in environment
+
+
+def _process_cgroup_identity(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{int(pid)}/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _pid_namespace_id(pid: int) -> int | None:
@@ -295,8 +311,9 @@ def _hex_addr_is_loopback(hex_addr: str) -> bool:
     if len(hex_addr) == 8:  # IPv4: 127.0.0.0/8 → first octet is the last byte
         return hex_addr.endswith("7F")
     if len(hex_addr) == 32:  # IPv6: ::1, or IPv4-mapped ::ffff:127.x.x.x
-        return (hex_addr == "00000000000000000000000001000000"
-                or (hex_addr.startswith("0000000000000000FFFF0000") and hex_addr.endswith("7F")))
+        return hex_addr == "00000000000000000000000001000000" or (
+            hex_addr.startswith("0000000000000000FFFF0000") and hex_addr.endswith("7F")
+        )
     return False
 
 
@@ -322,12 +339,17 @@ def port_bound_non_loopback(port: int) -> bool | None:
                     broad = True
     return broad if checked else None
 
+
 IS_WINDOWS = os.name == "nt"
 
 # Dev servers often ignore $PORT and bind to their own (Vite→5173, etc.), printing
 # the real address. Detect it from stdout so we can proxy to where it actually is.
-_PORT_RE = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})", re.I)
-_PORT_RE2 = re.compile(r"(?:listening|running|server).{0,20}?\bport\b[^\d]{0,4}(\d{2,5})", re.I)
+_PORT_RE = re.compile(
+    r"(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})", re.I
+)
+_PORT_RE2 = re.compile(
+    r"(?:listening|running|server).{0,20}?\bport\b[^\d]{0,4}(\d{2,5})", re.I
+)
 
 
 class EffectLease(Protocol):
@@ -339,6 +361,7 @@ class LaunchReservation:
     generation: int
     cleanup_task: asyncio.Task[Any] | None = None
     active: bool = False
+    record: dict[str, Any] | None = None
 
 
 class AppManager:
@@ -346,9 +369,7 @@ class AppManager:
         self,
         *,
         contained: bool = False,
-        output_broker_factory: (
-            Callable[[], Awaitable[OutputBroker]] | None
-        ) = None,
+        output_broker_factory: (Callable[[], Awaitable[OutputBroker]] | None) = None,
         state_root: str | Path | None = None,
         profile: str = "direct",
     ) -> None:
@@ -359,9 +380,7 @@ class AppManager:
         # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
         self._retained_effects: list[EffectLease] = []
-        self._output_broker_factory = (
-            output_broker_factory or OutputBroker.open
-        )
+        self._output_broker_factory = output_broker_factory or OutputBroker.open
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self._generations: dict[str, int] = {}
@@ -433,10 +452,7 @@ class AppManager:
         generation: int,
     ) -> None:
         reservation = self._reservations.get(slug)
-        if (
-            reservation is not None
-            and reservation.generation == generation
-        ):
+        if reservation is not None and reservation.generation == generation:
             self._reservations.pop(slug, None)
 
     async def start(
@@ -456,6 +472,11 @@ class AppManager:
                     slug,
                     preserve_status=False,
                 )
+                if slug in self._apps:
+                    raise OutputBrokerUnavailable(
+                        "The prior preview generation is still live. Retry "
+                        "after authenticated cleanup succeeds."
+                    )
                 if slug in self._unadopted:
                     raise OutputBrokerUnavailable(
                         "A prior preview scope is still live without complete "
@@ -478,6 +499,10 @@ class AppManager:
                     raise
                 except BaseException:
                     if reservation.cleanup_task is None:
+                        self._remove_generation_record(
+                            slug,
+                            generation,
+                        )
                         self._clear_reservation(slug, generation)
                     raise
         except BaseException:
@@ -510,9 +535,33 @@ class AppManager:
             inherit_env="PROXIMA_APP_INHERIT_ENV",
         )
         lineage_token = secrets.token_urlsafe(24)
+        started_at = time.time()
         env["PORT"] = str(port)
         env[_LINEAGE_ENV] = lineage_token
+        env[_AUTHORITY_PROTOCOL_ENV] = (
+            os.environ.get(BROKER_PROTOCOL_ENV, "").strip() or BROKER_PROTOCOL
+        )
         env.setdefault("HOST", "127.0.0.1")
+        try:
+            reservation.record = self._persist_reservation(
+                slug=slug,
+                generation=reservation.generation,
+                port=port,
+                command=command,
+                lineage_token=lineage_token,
+                started_at=started_at,
+            )
+        except (OSError, ValueError) as exc:
+            if effect_lease is not None:
+                effect_lease.release()
+            self._last_exit[slug] = self._output_unavailable_status(
+                command=command,
+                requested_port=port,
+                message=f"Preview authority could not be reserved: {exc}",
+            )
+            raise OutputBrokerUnavailable(
+                "Preview authority could not be reserved"
+            ) from exc
         broker_task = asyncio.create_task(self._output_broker_factory())
         try:
             broker = await asyncio.shield(broker_task)
@@ -528,6 +577,10 @@ class AppManager:
             reservation.cleanup_task = cleanup
             raise
         except OutputBrokerUnavailable as exc:
+            self._remove_generation_record(
+                slug,
+                reservation.generation,
+            )
             self._last_exit[slug] = self._output_unavailable_status(
                 command=command,
                 requested_port=port,
@@ -537,14 +590,35 @@ class AppManager:
                 effect_lease.release()
             raise
         except BaseException:
+            self._remove_generation_record(
+                slug,
+                reservation.generation,
+            )
             if effect_lease is not None:
                 effect_lease.release()
             raise
-        shell_argv = (
-            ["cmd", "/c", command]
-            if IS_WINDOWS
-            else ["bash", "-lc", command]
-        )
+        try:
+            reservation.record = self._persist_broker_reservation(
+                reservation.record,
+                broker.metadata,
+            )
+        except (OSError, ValueError) as exc:
+            self._track_cleanup(broker.disconnect())
+            self._remove_generation_record(
+                slug,
+                reservation.generation,
+            )
+            if effect_lease is not None:
+                effect_lease.release()
+            self._last_exit[slug] = self._output_unavailable_status(
+                command=command,
+                requested_port=port,
+                message=f"Preview supervisor authority could not be persisted: {exc}",
+            )
+            raise OutputBrokerUnavailable(
+                "Preview supervisor authority could not be persisted"
+            ) from exc
+        shell_argv = ["cmd", "/c", command] if IS_WINDOWS else ["bash", "-lc", command]
         spawn_task = asyncio.create_task(
             broker.spawn(
                 shell_argv,
@@ -566,14 +640,21 @@ class AppManager:
                     command=command,
                     lineage_token=lineage_token,
                     effect_lease=effect_lease,
+                    started_at=started_at,
                 )
             )
             reservation.cleanup_task = cleanup
             raise
         except BaseException:
-            self._track_cleanup(broker.disconnect())
-            if effect_lease is not None:
-                effect_lease.release()
+            cleanup = self._track_cleanup(
+                self._dispose_failed_spawn(
+                    slug=slug,
+                    generation=reservation.generation,
+                    broker=broker,
+                    effect_lease=effect_lease,
+                )
+            )
+            reservation.cleanup_task = cleanup
             raise
         try:
             self._register_app(
@@ -585,6 +666,7 @@ class AppManager:
                 command=command,
                 lineage_token=lineage_token,
                 effect_lease=effect_lease,
+                started_at=started_at,
             )
         except BaseException as exc:
             cleanup = self._track_cleanup(
@@ -607,6 +689,49 @@ class AppManager:
             ) from exc
         reservation.active = True
 
+    async def _dispose_failed_spawn(
+        self,
+        *,
+        slug: str,
+        generation: int,
+        broker: OutputBroker,
+        effect_lease: EffectLease | None,
+    ) -> None:
+        try:
+            has_process = await broker.has_managed_process()
+            if has_process:
+                proc = await broker.managed_process()
+                await self._dispose_failed_registration(
+                    slug=slug,
+                    generation=generation,
+                    proc=proc,
+                    broker=broker,
+                    effect_lease=effect_lease,
+                )
+                return
+            await broker.disconnect()
+        except OutputBrokerUnavailable:
+            self._unadopted.add(slug)
+            reservation = self._reservations.get(slug)
+            record = (
+                reservation.record
+                if reservation is not None
+                and reservation.generation == generation
+                and reservation.record is not None
+                else {"port": 0, "command": ""}
+            )
+            self._last_exit[slug] = self._adoption_unknown_status(
+                record,
+                "Preview spawn outcome could not be authenticated.",
+            )
+            if effect_lease is not None:
+                self._retained_effects.append(effect_lease)
+            return
+        if effect_lease is not None:
+            effect_lease.release()
+        self._remove_generation_record(slug, generation)
+        self._clear_reservation(slug, generation)
+
     async def _dispose_opening_broker(
         self,
         *,
@@ -627,6 +752,7 @@ class AppManager:
         finally:
             if effect_lease is not None:
                 effect_lease.release()
+            self._remove_generation_record(slug, generation)
             self._clear_reservation(slug, generation)
 
     async def _complete_cancelled_spawn(
@@ -640,6 +766,7 @@ class AppManager:
         command: str,
         lineage_token: str,
         effect_lease: EffectLease | None,
+        started_at: float,
     ) -> None:
         try:
             proc = await spawn_task
@@ -647,6 +774,7 @@ class AppManager:
             await broker.disconnect()
             if effect_lease is not None:
                 effect_lease.release()
+            self._remove_generation_record(slug, generation)
             self._clear_reservation(slug, generation)
             return
         reservation = self._reservations.get(slug)
@@ -660,17 +788,30 @@ class AppManager:
                 await broker.disconnect()
                 if effect_lease is not None:
                     effect_lease.release()
+                self._remove_generation_record(slug, generation)
+                self._clear_reservation(slug, generation)
             return
-        app = self._register_app(
-            slug=slug,
-            generation=generation,
-            proc=proc,
-            broker=broker,
-            port=port,
-            command=command,
-            lineage_token=lineage_token,
-            effect_lease=effect_lease,
-        )
+        try:
+            app = self._register_app(
+                slug=slug,
+                generation=generation,
+                proc=proc,
+                broker=broker,
+                port=port,
+                command=command,
+                lineage_token=lineage_token,
+                effect_lease=effect_lease,
+                started_at=started_at,
+            )
+        except BaseException:
+            await self._dispose_failed_registration(
+                slug=slug,
+                generation=generation,
+                proc=proc,
+                broker=broker,
+                effect_lease=effect_lease,
+            )
+            return
         reservation.active = True
         await self._stop_app(
             slug,
@@ -691,25 +832,49 @@ class AppManager:
         if app is not None and int(app.get("generation") or 0) == generation:
             await self._stop_app(slug, app, preserve_status=False)
             return
+        terminated = False
         try:
             await proc.terminate()
             if not await self._wait_for_returncode(proc, 4):
                 await proc.kill()
                 await self._wait_for_returncode(proc, 2)
+            terminated = proc.returncode is not None and not proc.scope_live
+        except OutputBrokerUnavailable:
+            terminated = False
         finally:
-            await broker.disconnect()
+            try:
+                await broker.disconnect()
+            except OutputBrokerUnavailable:
+                pass
+        if terminated:
             if effect_lease is not None:
                 effect_lease.release()
+            self._remove_generation_record(slug, generation)
             self._clear_reservation(slug, generation)
+            return
+        self._unadopted.add(slug)
+        reservation = self._reservations.get(slug)
+        record = (
+            reservation.record
+            if reservation is not None
+            and reservation.generation == generation
+            and reservation.record is not None
+            else {
+                "port": 0,
+                "command": "",
+            }
+        )
+        self._last_exit[slug] = self._adoption_unknown_status(
+            record,
+            "Preview registration failed and terminal cleanup could not "
+            "be authenticated.",
+        )
+        if effect_lease is not None:
+            self._retained_effects.append(effect_lease)
 
     @staticmethod
     def _cgroup_identity(pid: int) -> str | None:
-        try:
-            return Path(f"/proc/{int(pid)}/cgroup").read_text(
-                encoding="utf-8"
-            )
-        except OSError:
-            return None
+        return _process_cgroup_identity(pid)
 
     def _record_path(
         self,
@@ -725,6 +890,84 @@ class AppManager:
             raise ValueError("Preview scope slug is invalid")
         return self._state_root / f"{slug}.{generation}.json"
 
+    @staticmethod
+    def _write_record(path: Path | None, payload: dict[str, Any]) -> None:
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    payload,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        if os.name == "posix":
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def _persist_reservation(
+        self,
+        *,
+        slug: str,
+        generation: int,
+        port: int,
+        command: str,
+        lineage_token: str,
+        started_at: float,
+    ) -> dict[str, Any]:
+        payload = {
+            "version": 2,
+            "phase": "pending",
+            "profile": self._profile,
+            "slug": slug,
+            "generation": generation,
+            "port": port,
+            "command": command,
+            "started_at": started_at,
+            "lineage_token": lineage_token,
+            "contained": self.contained,
+            "containment_pid_namespace": None,
+            "process": None,
+            "broker": None,
+        }
+        self._write_record(
+            self._record_path(slug, generation),
+            payload,
+        )
+        return payload
+
+    def _persist_broker_reservation(
+        self,
+        record: dict[str, Any] | None,
+        broker: dict[str, Any],
+    ) -> dict[str, Any]:
+        if record is None:
+            return {}
+        payload = {
+            **record,
+            "phase": "broker_attached",
+            "broker": dict(broker),
+        }
+        self._write_record(
+            self._record_path(
+                str(payload["slug"]),
+                int(payload["generation"]),
+            ),
+            payload,
+        )
+        return payload
+
     def _persist_app(
         self,
         slug: str,
@@ -733,12 +976,11 @@ class AppManager:
         path = self._record_path(slug, int(app["generation"]))
         if path is None:
             return
-        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(path.parent, 0o700)
         proc: BrokerManagedProcess = app["proc"]
         broker: OutputBroker = app["output_broker"]
         payload = {
-            "version": 1,
+            "version": 2,
+            "phase": "attached",
             "profile": self._profile,
             "slug": slug,
             "generation": app["generation"],
@@ -747,36 +989,46 @@ class AppManager:
             "started_at": app["started_at"],
             "lineage_token": app["authority"].lineage_token,
             "contained": app["authority"].containment_required,
-            "containment_pid_namespace": (
-                app["authority"].containment_pid_namespace
-            ),
+            "containment_pid_namespace": (app["authority"].containment_pid_namespace),
             "process": {
                 "pid": proc.pid,
                 "start_time": proc.start_time,
-                "cgroup": self._cgroup_identity(proc.pid),
+                "cgroup": app["authority"].containment_cgroup,
             },
             "broker": broker.metadata,
         }
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True),
-            encoding="utf-8",
-        )
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        self._write_record(path, payload)
 
-    def _remove_app_record(
+    def _remove_generation_record(
         self,
         slug: str,
-        app: dict[str, Any],
+        generation: int,
     ) -> None:
-        path = self._record_path(slug, int(app["generation"]))
+        path = self._record_path(slug, generation)
         if path is None:
             return
         try:
             path.unlink()
         except FileNotFoundError:
             pass
+        else:
+            if os.name != "posix":
+                return
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def _remove_app_record(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        self._remove_generation_record(
+            slug,
+            int(app["generation"]),
+        )
 
     def _register_app(
         self,
@@ -791,6 +1043,7 @@ class AppManager:
         effect_lease: EffectLease | None,
         started_at: float | None = None,
         containment_pid_namespace: int | None = None,
+        containment_cgroup: str | None = None,
     ) -> dict[str, Any]:
         authority = ProcessAuthority(
             leader_pid=proc.pid,
@@ -798,6 +1051,12 @@ class AppManager:
             lineage_token=lineage_token,
             containment_required=self.contained,
             containment_pid_namespace=containment_pid_namespace,
+            containment_cgroup=(
+                containment_cgroup
+                or proc.managed_cgroup
+                or proc.cgroup
+                or self._cgroup_identity(proc.pid)
+            ),
         )
         app = {
             "generation": generation,
@@ -816,18 +1075,14 @@ class AppManager:
             "stop_lock": asyncio.Lock(),
             "stopped": False,
         }
+        self._persist_app(slug, app)
         self._apps[slug] = app
         if self.contained and containment_pid_namespace is None:
             app["authority_task"] = asyncio.create_task(
                 self._complete_containment_authority(slug, app)
             )
-        app["output_task"] = asyncio.create_task(
-            self._watch_output(slug, app)
-        )
-        app["exit_task"] = asyncio.create_task(
-            self._watch_exit(slug, app)
-        )
-        self._persist_app(slug, app)
+        app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
+        app["exit_task"] = asyncio.create_task(self._watch_exit(slug, app))
         return app
 
     async def _complete_containment_authority(
@@ -916,6 +1171,21 @@ class AppManager:
             and process_start_time(process_pid) != process_started
         )
 
+    @staticmethod
+    def _broker_identity_ended(record: dict[str, Any]) -> bool:
+        broker = record.get("broker")
+        if not isinstance(broker, dict):
+            return False
+        pid = broker.get("pid")
+        started = broker.get("start_time")
+        return (
+            isinstance(pid, int)
+            and pid > 0
+            and isinstance(started, int)
+            and started > 0
+            and process_start_time(pid) != started
+        )
+
     async def reconcile(self) -> None:
         if self._state_root is None or not self._state_root.exists():
             return
@@ -927,7 +1197,7 @@ class AppManager:
                 continue
             if (
                 not isinstance(record, dict)
-                or record.get("version") != 1
+                or record.get("version") not in (1, 2)
                 or record.get("profile") != self._profile
                 or not isinstance(record.get("slug"), str)
                 or not isinstance(record.get("generation"), int)
@@ -939,162 +1209,245 @@ class AppManager:
             ):
                 continue
             records.setdefault(record["slug"], []).append((path, record))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RECONCILE_DEADLINE_SECONDS
+        tasks: dict[asyncio.Task[None], str] = {}
         for slug, candidates in records.items():
+            self._generations[slug] = max(
+                self._generations.get(slug, 0),
+                *(int(record.get("generation") or 0) for _path, record in candidates),
+            )
+            task = asyncio.create_task(self._reconcile_slug(slug, candidates, deadline))
+            tasks[task] = slug
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=max(0, deadline - loop.time()),
+        )
+        for task in pending:
+            slug = tasks[task]
+            candidates = records[slug]
             newest = max(
                 candidates,
                 key=lambda item: int(item[1].get("generation") or 0),
             )[1]
-            self._generations[slug] = max(
-                self._generations.get(slug, 0),
-                *(
-                    int(record.get("generation") or 0)
-                    for _path, record in candidates
+            self._unadopted.add(slug)
+            self._last_exit[slug] = self._adoption_unknown_status(
+                newest,
+                "Preview adoption exceeded the startup deadline.",
+            )
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
+
+    async def _reconcile_slug(
+        self,
+        slug: str,
+        candidates: list[tuple[Path, dict[str, Any]]],
+        deadline: float,
+    ) -> None:
+        newest = max(
+            candidates,
+            key=lambda item: int(item[1].get("generation") or 0),
+        )[1]
+        remaining: list[tuple[Path, dict[str, Any]]] = []
+        for path, record in candidates:
+            if (
+                record.get("version") == 2
+                and record.get("phase") == "pending"
+                and record.get("broker") is None
+            ):
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
+                )
+            elif self._scope_identity_ended(record):
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
+                )
+            elif (
+                record.get("version") == 2
+                and record.get("phase") == "broker_attached"
+                and self._broker_identity_ended(record)
+            ):
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
+                )
+            else:
+                remaining.append((path, record))
+        if not remaining:
+            self._last_exit[slug] = self._ended_scope_status(newest)
+            return
+        if len(remaining) != 1:
+            self._unadopted.add(slug)
+            self._last_exit[slug] = self._adoption_unknown_status(
+                newest,
+                "Multiple durable preview scopes exist for this project.",
+            )
+            return
+        path, record = remaining[0]
+        broker: OutputBroker | None = None
+        try:
+            broker_record = record.get("broker")
+            if not isinstance(broker_record, dict):
+                raise OutputBrokerUnavailable("Preview scope record is incomplete")
+            timeout = min(
+                1,
+                max(
+                    0.1,
+                    deadline - asyncio.get_running_loop().time(),
                 ),
             )
-            remaining: list[tuple[Path, dict[str, Any]]] = []
-            for path, record in candidates:
-                if self._scope_identity_ended(record):
-                    path.unlink(missing_ok=True)
-                else:
-                    remaining.append((path, record))
-            candidates = remaining
-            if not candidates:
-                self._last_exit[slug] = self._ended_scope_status(newest)
-                continue
-            if len(candidates) != 1:
-                self._unadopted.add(slug)
-                newest = max(
-                    candidates,
-                    key=lambda item: int(
-                        item[1].get("generation") or 0
-                    ),
-                )[1]
-                self._last_exit[slug] = self._adoption_unknown_status(
-                    newest,
-                    "Multiple durable preview scopes exist for this project.",
+            broker = await OutputBroker.reconnect(
+                broker_record,
+                timeout=timeout,
+            )
+            if (
+                record.get("version") == 2
+                and record.get("phase") == "broker_attached"
+                and not await broker.has_managed_process()
+            ):
+                await broker.disconnect()
+                broker = None
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
                 )
-                continue
-            path, record = candidates[0]
-            broker: OutputBroker | None = None
-            try:
-                broker_record = record.get("broker")
-                process_record = record.get("process")
-                if (
-                    not isinstance(broker_record, dict)
-                    or not isinstance(process_record, dict)
-                ):
-                    raise OutputBrokerUnavailable(
-                        "Preview scope record is incomplete"
-                    )
-                broker = await OutputBroker.reconnect(broker_record)
-                proc = await broker.managed_process()
-                await proc.refresh()
-                if proc.returncode is not None:
-                    snapshot = await broker.snapshot()
-                    app = {
-                        "port": int(record["port"]),
-                        "command": str(record["command"]),
-                        "log": snapshot.lines,
-                        "proc": proc,
-                    }
-                    self._last_exit[slug] = self._exited_status(app)
-                    await broker.disconnect()
-                    path.unlink(missing_ok=True)
-                    continue
-                broker_pid = int(broker_record.get("pid") or 0)
-                process_pid = int(process_record.get("pid") or 0)
-                broker_start = broker_record.get("start_time")
-                process_started = process_record.get("start_time")
-                broker_cgroup = self._cgroup_identity(broker_pid)
-                process_cgroup = self._cgroup_identity(process_pid)
-                namespace = proc.containment_pid_namespace
-                proof = (
-                    proc.pid == process_pid
-                    and proc.start_time == process_started
-                    and process_start_time(process_pid) == process_started
-                    and broker.pid == broker_pid
-                    and process_start_time(broker_pid) == broker_start
-                    and broker_cgroup is not None
-                    and process_cgroup is not None
-                    and broker_cgroup == process_cgroup
-                    and broker_cgroup == broker_record.get("cgroup")
-                    and process_cgroup == process_record.get("cgroup")
-                    and broker_record.get("controller_cgroup")
-                    == self._cgroup_identity(os.getpid())
-                    and broker_record.get("profile") == self._profile
-                    and bool(record.get("contained")) == self.contained
-                    and _process_has_lineage(
+                self._last_exit[slug] = self._ended_scope_status(record)
+                return
+            proc = await broker.managed_process()
+            await proc.refresh()
+            if proc.returncode is not None and not proc.scope_live:
+                snapshot = await broker.snapshot()
+                app = {
+                    "port": int(record["port"]),
+                    "command": str(record["command"]),
+                    "log": snapshot.lines,
+                    "proc": proc,
+                }
+                self._last_exit[slug] = self._exited_status(app)
+                await broker.disconnect()
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
+                )
+                return
+            process_record = record.get("process")
+            if not isinstance(process_record, dict):
+                process_record = {
+                    "pid": proc.pid,
+                    "start_time": proc.start_time,
+                    "cgroup": proc.cgroup,
+                }
+            broker_pid = int(broker_record.get("pid") or 0)
+            process_pid = int(process_record.get("pid") or 0)
+            broker_start = broker_record.get("start_time")
+            process_started = process_record.get("start_time")
+            broker_cgroup = self._cgroup_identity(broker_pid)
+            live_process_cgroup = self._cgroup_identity(process_pid)
+            recorded_process_cgroup = process_record.get("cgroup")
+            process_cgroup = live_process_cgroup or proc.managed_cgroup
+            namespace = proc.containment_pid_namespace
+            leader_live = process_start_time(process_pid) == process_started
+            managed_scope_only = (
+                not leader_live
+                and proc.returncode is not None
+                and proc.scope_live
+                and proc.managed_cgroup == recorded_process_cgroup
+            )
+            proof = (
+                proc.pid == process_pid
+                and proc.start_time == process_started
+                and (leader_live or managed_scope_only)
+                and broker.pid == broker_pid
+                and process_start_time(broker_pid) == broker_start
+                and broker_cgroup is not None
+                and process_cgroup is not None
+                and broker_cgroup == broker_record.get("cgroup")
+                and process_cgroup == recorded_process_cgroup
+                and (proc.cgroup == process_cgroup or managed_scope_only)
+                and broker_record.get("controller_cgroup")
+                == self._cgroup_identity(os.getpid())
+                and broker_record.get("profile") == self._profile
+                and bool(record.get("contained")) == self.contained
+                and (
+                    managed_scope_only
+                    or _process_has_lineage(
                         process_pid,
                         str(record.get("lineage_token") or ""),
                     )
-                    and (
-                        not self.contained
-                        or (
-                            isinstance(namespace, int)
-                            and namespace
-                            == record.get("containment_pid_namespace")
+                )
+                and (
+                    not self.contained
+                    or (
+                        isinstance(namespace, int)
+                        and (
+                            record.get("containment_pid_namespace") is None
+                            or namespace == record.get("containment_pid_namespace")
                         )
                     )
                 )
-                if not proof:
-                    raise OutputBrokerUnavailable(
-                        "Durable preview scope proof is incomplete"
-                    )
-                generation = int(record["generation"])
-                self._generations[slug] = max(
-                    self._generations.get(slug, 0),
-                    generation,
+            )
+            if not proof:
+                raise OutputBrokerUnavailable(
+                    "Durable preview scope proof is incomplete"
                 )
-                reservation = LaunchReservation(
-                    generation,
-                    active=True,
+            generation = int(record["generation"])
+            reservation = LaunchReservation(generation, active=True)
+            self._reservations[slug] = reservation
+            app = self._register_app(
+                slug=slug,
+                generation=generation,
+                proc=proc,
+                broker=broker,
+                port=int(record["port"]),
+                command=str(record["command"]),
+                lineage_token=str(record["lineage_token"]),
+                effect_lease=None,
+                started_at=float(record["started_at"]),
+                containment_pid_namespace=(
+                    int(namespace) if isinstance(namespace, int) else None
+                ),
+                containment_cgroup=process_cgroup,
+            )
+            if managed_scope_only:
+                app["leader_exited_scope_live"] = True
+            snapshot = await broker.snapshot()
+            self._apply_output_snapshot(app, snapshot)
+            app["log_complete"] = []
+            app["log_pending"] = ""
+            app["output_version"] = -1
+            app["output_line_cursor"] = 0
+        except asyncio.CancelledError:
+            if broker is not None:
+                await broker.disconnect()
+            raise
+        except (
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            OutputBrokerUnavailable,
+        ) as exc:
+            if broker is not None:
+                try:
+                    await broker.disconnect()
+                except OutputBrokerUnavailable:
+                    pass
+            if self._scope_identity_ended(record):
+                self._remove_generation_record(
+                    slug,
+                    int(record["generation"]),
                 )
-                self._reservations[slug] = reservation
-                app = self._register_app(
-                    slug=slug,
-                    generation=generation,
-                    proc=proc,
-                    broker=broker,
-                    port=int(record["port"]),
-                    command=str(record["command"]),
-                    lineage_token=str(record["lineage_token"]),
-                    effect_lease=None,
-                    started_at=float(record["started_at"]),
-                    containment_pid_namespace=(
-                        int(namespace)
-                        if isinstance(namespace, int)
-                        else None
-                    ),
-                )
-                snapshot = await broker.snapshot()
-                self._apply_output_snapshot(app, snapshot)
-                app["log_complete"] = []
-                app["log_pending"] = ""
-                app["output_version"] = -1
-                app["output_line_cursor"] = 0
-            except (
-                KeyError,
-                OSError,
-                TypeError,
-                ValueError,
-                OutputBrokerUnavailable,
-            ) as exc:
-                if broker is not None:
-                    try:
-                        await broker.disconnect()
-                    except OutputBrokerUnavailable:
-                        pass
-                if self._scope_identity_ended(record):
-                    path.unlink(missing_ok=True)
-                    self._last_exit[slug] = self._ended_scope_status(
-                        record
-                    )
-                    continue
-                self._unadopted.add(slug)
-                self._last_exit[slug] = self._adoption_unknown_status(
-                    record,
-                    str(exc),
-                )
+                self._last_exit[slug] = self._ended_scope_status(record)
+                return
+            self._unadopted.add(slug)
+            self._last_exit[slug] = self._adoption_unknown_status(
+                record,
+                str(exc),
+            )
 
     @staticmethod
     def _apply_output_snapshot(
@@ -1188,35 +1541,75 @@ class AppManager:
         slug: str,
         app: dict[str, Any],
     ) -> None:
-        await app["proc"].wait()
+        try:
+            await app["proc"].wait()
+        except OutputBrokerUnavailable as exc:
+            app["output_error"] = str(exc)
+            return
         async with app["stop_lock"]:
             if app.get("stopped") or app.get("stop_requested"):
                 return
             output_task = app.get("output_task")
-            if (
-                isinstance(output_task, asyncio.Task)
-                and not output_task.done()
-            ):
+            if isinstance(output_task, asyncio.Task) and not output_task.done():
                 output_task.cancel()
                 await asyncio.gather(output_task, return_exceptions=True)
             await self._settle_authority_task(app)
             if not app.get("output_error"):
                 await self._snapshot_output(app)
-            result = self._terminal_status_after_exit(app)
+            if app["proc"].scope_live:
+                app["leader_exited_scope_live"] = True
+                app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
+                app["exit_task"] = asyncio.create_task(
+                    self._watch_scope_exit(slug, app)
+                )
+                return
+            await self._finalize_exited_app(slug, app)
+
+    async def _watch_scope_exit(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        proc: BrokerManagedProcess = app["proc"]
+        while proc.scope_live:
             try:
-                await app["output_broker"].disconnect()
+                await proc.refresh()
             except OutputBrokerUnavailable as exc:
                 app["output_error"] = str(exc)
-            if app.get("output_error"):
-                result["reason"] = "output_sink_unavailable"
-                result["message"] = app["output_error"]
-            if self._apps.get(slug) is app:
-                self._apps.pop(slug, None)
-            self._remove_app_record(slug, app)
-            self._clear_reservation(slug, int(app["generation"]))
-            self._last_exit[slug] = result
-            self._finish_effect(app, terminated=True)
-            app["stopped"] = True
+                return
+            if proc.scope_live:
+                await asyncio.sleep(OUTPUT_POLL_SECONDS)
+        async with app["stop_lock"]:
+            if app.get("stopped") or app.get("stop_requested"):
+                return
+            output_task = app.get("output_task")
+            if isinstance(output_task, asyncio.Task) and not output_task.done():
+                output_task.cancel()
+                await asyncio.gather(output_task, return_exceptions=True)
+            if not app.get("output_error"):
+                await self._snapshot_output(app)
+            await self._finalize_exited_app(slug, app)
+
+    async def _finalize_exited_app(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        result = self._terminal_status_after_exit(app)
+        try:
+            await app["output_broker"].disconnect()
+        except OutputBrokerUnavailable as exc:
+            app["output_error"] = str(exc)
+        if app.get("output_error"):
+            result["reason"] = "output_sink_unavailable"
+            result["message"] = app["output_error"]
+        if self._apps.get(slug) is app:
+            self._apps.pop(slug, None)
+        self._remove_app_record(slug, app)
+        self._clear_reservation(slug, int(app["generation"]))
+        self._last_exit[slug] = result
+        self._finish_effect(app, terminated=True)
+        app["stopped"] = True
 
     @staticmethod
     def _stopped_status(previous: dict[str, Any]) -> dict[str, Any]:
@@ -1243,12 +1636,14 @@ class AppManager:
         timeout: float,
     ) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout
-        while await proc.refresh() is None:
+        while True:
+            returncode = await proc.refresh()
+            if returncode is not None and not proc.scope_live:
+                return True
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return False
             await asyncio.sleep(min(0.02, remaining))
-        return True
 
     async def stop(
         self,
@@ -1268,15 +1663,15 @@ class AppManager:
         slug: str,
         *,
         preserve_status: bool,
-    ) -> None:
+    ) -> bool:
         if slug in self._unadopted:
-            return
+            return False
         previous = self._last_exit.pop(slug, None)
         app = self._apps.get(slug)
         if not app:
             if preserve_status and previous:
                 self._last_exit[slug] = self._stopped_status(previous)
-            return
+            return True
         stop_task = app.get("stop_task")
         if not isinstance(stop_task, asyncio.Task):
             stop_task = self._track_cleanup(
@@ -1288,6 +1683,7 @@ class AppManager:
             )
             app["stop_task"] = stop_task
         await asyncio.shield(stop_task)
+        return self._apps.get(slug) is not app
 
     async def _stop_app(
         self,
@@ -1295,14 +1691,12 @@ class AppManager:
         app: dict[str, Any],
         *,
         preserve_status: bool,
-    ) -> None:
+    ) -> bool:
         async with app["stop_lock"]:
             if app.get("stopped"):
                 if preserve_status and slug in self._last_exit:
-                    self._last_exit[slug] = self._stopped_status(
-                        self._last_exit[slug]
-                    )
-                return
+                    self._last_exit[slug] = self._stopped_status(self._last_exit[slug])
+                return True
             app["stop_requested"] = True
             lifecycle_tasks = [
                 task
@@ -1327,7 +1721,7 @@ class AppManager:
             await self._settle_authority_task(app)
             try:
                 await proc.refresh()
-                if proc.returncode is None:
+                if proc.returncode is None or proc.scope_live:
                     await proc.terminate()
                     if not await self._wait_for_returncode(proc, 4):
                         await proc.kill()
@@ -1340,12 +1734,8 @@ class AppManager:
             except OutputBrokerUnavailable as exc:
                 app["output_error"] = str(exc)
                 app["stop_requested"] = False
-                app["output_task"] = asyncio.create_task(
-                    self._watch_output(slug, app)
-                )
-                app["exit_task"] = asyncio.create_task(
-                    self._watch_exit(slug, app)
-                )
+                app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
+                app["exit_task"] = asyncio.create_task(self._watch_exit(slug, app))
                 if preserve_status:
                     self._last_exit[slug] = {
                         "state": "ownership_unknown",
@@ -1357,7 +1747,29 @@ class AppManager:
                         "reason": "output_sink_unavailable",
                         "message": str(exc),
                     }
-                return
+                if app.get("stop_task") is asyncio.current_task():
+                    app.pop("stop_task", None)
+                return False
+            if proc.returncode is None or proc.scope_live:
+                app["stop_requested"] = False
+                app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
+                app["exit_task"] = asyncio.create_task(self._watch_exit(slug, app))
+                if preserve_status:
+                    self._last_exit[slug] = {
+                        "state": "ownership_unknown",
+                        "running": True,
+                        "ready": False,
+                        "requested_port": app["port"],
+                        "command": app["command"],
+                        "log": app["log"][-40:],
+                        "message": (
+                            "The preview left its launch-specific managed "
+                            "scope. Proxima did not signal it."
+                        ),
+                    }
+                if app.get("stop_task") is asyncio.current_task():
+                    app.pop("stop_task", None)
+                return False
             await self._snapshot_output(app)
             try:
                 await app["output_broker"].disconnect()
@@ -1385,6 +1797,7 @@ class AppManager:
                     result["reason"] = "output_sink_unavailable"
                     result["message"] = app["output_error"]
                 self._last_exit[slug] = result
+            return True
 
     @staticmethod
     def _port_conflict_status(
@@ -1452,7 +1865,7 @@ class AppManager:
             return
         app["termination_sent"] = True
         proc = app["proc"]
-        if proc.returncode is not None:
+        if proc.returncode is not None and not proc.scope_live:
             return
         self._track_cleanup(proc.terminate())
 
@@ -1502,20 +1915,33 @@ class AppManager:
                 "ready": False,
             }
         if app.get("output_error"):
-            if app["proc"].returncode is not None:
+            if app["proc"].returncode is not None and not app["proc"].scope_live:
                 result = self._exited_status(app)
                 result["reason"] = "output_sink_unavailable"
                 result["message"] = app["output_error"]
                 return result
             return {
                 "state": "ownership_unknown",
-                "running": app["proc"].returncode is None,
+                "running": (app["proc"].returncode is None or app["proc"].scope_live),
                 "ready": False,
                 "requested_port": app["port"],
                 "command": app["command"],
                 "log": app["log"][-40:],
                 "reason": "output_sink_unavailable",
                 "message": app["output_error"],
+            }
+        if app.get("leader_exited_scope_live"):
+            return {
+                "state": "ownership_unknown",
+                "running": True,
+                "ready": False,
+                "requested_port": app["port"],
+                "command": app["command"],
+                "log": app["log"][-40:],
+                "message": (
+                    "The launch leader exited while processes remain in its "
+                    "managed cgroup. Stop can clean up that exact scope."
+                ),
             }
         if app.get("terminal_state") == "port_conflict":
             result = self._port_conflict_status(
@@ -1550,18 +1976,12 @@ class AppManager:
         if not port_open:
             return self._starting_status(
                 app,
-                prolonged=(
-                    time.time() - app["started_at"]
-                    >= PROLONGED_START_SECONDS
-                ),
+                prolonged=(time.time() - app["started_at"] >= PROLONGED_START_SECONDS),
             )
         if ownership == PortOwnership.NO_LISTENER:
             return self._starting_status(
                 app,
-                prolonged=(
-                    time.time() - app["started_at"]
-                    >= PROLONGED_START_SECONDS
-                ),
+                prolonged=(time.time() - app["started_at"] >= PROLONGED_START_SECONDS),
             )
         out = {
             "state": "ready",
@@ -1617,9 +2037,7 @@ class AppManager:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + SHUTDOWN_GRACE_SECONDS
         stop_requests = [
-            self._track_cleanup(
-                self.stop(slug, preserve_status=False)
-            )
+            self._track_cleanup(self.stop(slug, preserve_status=False))
             for slug in list(self._apps)
         ]
         if stop_requests:

@@ -77,7 +77,10 @@ Supersedes / superseded-by / links to feature docs.
 | [0017](0017-manager-owned-provisional-preview-cleanup.md) | Manager-owned provisional preview cleanup | Superseded by ADR-0020 |
 | [0018](0018-preview-status-log-framing-is-bounded.md) | Preview status log framing is bounded | Accepted |
 | [0019](0019-launch-time-broker-owns-preview-output.md) | Launch-time broker owns preview output | Superseded by ADR-0021 |
-| [0020](0020-preview-lifecycles-use-project-generations.md) | Preview lifecycles use project generations | Accepted |
-| [0021](0021-preview-supervisors-own-app-scopes.md) | Preview supervisors own app scopes | Accepted |
+| [0020](0020-preview-lifecycles-use-project-generations.md) | Preview lifecycles use project generations | Superseded by ADR-0024 |
+| [0021](0021-preview-supervisors-own-app-scopes.md) | Preview supervisors own app scopes | Superseded by ADR-0025 |
 | [0022](0022-preview-log-polling-uses-versioned-deltas.md) | Preview log polling uses versioned deltas | Accepted |
 | [0023](0023-preview-supervisor-profiles-are-isolated.md) | Preview supervisor profiles are isolated | Accepted |
+| [0024](0024-preview-generations-use-durable-launch-phases.md) | Preview generations use durable launch phases | Accepted |
+| [0025](0025-preview-apps-use-launch-specific-cgroups.md) | Preview apps use launch-specific cgroups | Accepted |
+| [0026](0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md) | Preview supervision upgrades require a drained legacy generation | Accepted |
