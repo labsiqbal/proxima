@@ -256,18 +256,12 @@ async def terminate_and_verify(
                     raise RuntimeError(
                         f"{label} process did not exit after kill"
                     ) from exc
-                raise RuntimeError(
-                    f"{label} process did not exit after kill"
-                ) from exc
+                # Post-kill wait succeeded - fall through to tree proof.
         try:
             tree.seed_live_members()
         except Exception:
             pass
         if tree.exited() is not True:
-            raise RuntimeError(
-                f"{label} process tree did not exit after kill"
-            )
-        if not tree_done and tree.exited() is not True:
             raise RuntimeError(
                 f"{label} process tree did not exit after kill"
             )
@@ -308,9 +302,7 @@ async def terminate_and_verify(
                 raise RuntimeError(
                     f"{label} process did not exit after kill"
                 ) from exc
-            raise RuntimeError(
-                f"{label} process did not exit after kill"
-            ) from exc
+            # Post-kill wait succeeded - continue verification below.
         if process.returncode is None:
             raise RuntimeError(f"{label} process exit was not verified")
         if not tree_done:

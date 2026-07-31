@@ -308,6 +308,10 @@ class CodexAppServerProcess:
                         else None
                     ),
                 )
+                try:
+                    self.writer_tree.seed_live_members()
+                except Exception:
+                    pass
             self._reader = asyncio.create_task(self._read_loop())
             self._stderr_reader = asyncio.create_task(self._read_stderr())
             # app-server handshake: initialize, then the required `initialized`

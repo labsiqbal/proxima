@@ -287,6 +287,10 @@ class ScriptRunner:
                             else None
                         ),
                     )
+                    try:
+                        writer_tree.seed_live_members()
+                    except Exception:
+                        pass
             except FileNotFoundError as exc:
                 self._fail(run, f"script interpreter not found: {exc}")
                 return

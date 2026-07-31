@@ -404,3 +404,115 @@ def test_process_exit_must_be_observed_after_kill():
 
     assert process.terminated is True
     assert process.killed is True
+
+
+class _SlowThenDeadProcess:
+    """Launcher that only exits after kill(); first wait times out."""
+
+    def __init__(self) -> None:
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+        self._wait_calls = 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        self._wait_calls += 1
+        if not self.killed:
+            raise asyncio.TimeoutError
+        self.returncode = -9
+        return -9
+
+
+class _ClearTree:
+    def __init__(self) -> None:
+        self.seeded = 0
+        self.terminated = False
+
+    def seed_live_members(self) -> None:
+        self.seeded += 1
+
+    def terminate(self, **_kwargs) -> bool:
+        self.terminated = True
+        return False
+
+    def exited(self) -> bool | None:
+        return True
+
+
+def test_terminate_and_verify_continues_after_successful_post_kill_wait():
+    """A successful post-kill wait must fall through to tree exit proof."""
+    process = _SlowThenDeadProcess()
+    tree = _ClearTree()
+
+    async def run_case() -> None:
+        await terminate_and_verify(
+            process,
+            label="runner",
+            timeout=0.2,
+            tree=tree,
+        )
+
+    asyncio.run(run_case())
+    assert process.killed is True
+    assert process.returncode == -9
+    assert tree.terminated is True
+    assert tree.seeded >= 1
+
+
+class _UnprovenTree:
+    def seed_live_members(self) -> None:
+        return None
+
+    def exited(self) -> bool | None:
+        return None
+
+
+class _StartFailsUnprovenProcess:
+    instances: list["_StartFailsUnprovenProcess"] = []
+
+    def __init__(self, *_args, **_kwargs):
+        self.proc = SimpleNamespace(returncode=0, pid=4242)
+        self.writer_tree = _UnprovenTree()
+        self.config_sig = ()
+        self.__class__.instances.append(self)
+
+    async def start(self) -> None:
+        raise RuntimeError("initialize failed")
+
+    async def stop(self) -> None:
+        return None
+
+    def resolve_permission(self, *_args) -> bool:
+        return False
+
+
+def test_acp_start_failure_retains_ingress_when_tree_unproven(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Start-failure cleanup must not release ingress on launcher returncode."""
+    boundary = _Boundary()
+    manager = AcpManager(contained=True, maintenance=boundary)
+    _StartFailsUnprovenProcess.instances.clear()
+    monkeypatch.setattr(
+        acp_module,
+        "_process_class",
+        lambda _spec: _StartFailsUnprovenProcess,
+    )
+    spec = SimpleNamespace(id="fake", protocol="acp")
+
+    async def run_case() -> None:
+        with pytest.raises(RuntimeError, match="initialize failed"):
+            await manager.get(spec, str(tmp_path / "home"), str(tmp_path))
+
+    asyncio.run(run_case())
+
+    assert boundary.lease.released is False
+    assert boundary.lease.suspended is True
+    assert boundary.retained == [boundary.lease]

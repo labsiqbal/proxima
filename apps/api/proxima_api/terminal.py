@@ -123,6 +123,10 @@ class TerminalSession:
                 launcher_pid=pid,
                 launcher_start=self.start_identity,
             )
+            try:
+                self.writer_tree.seed_live_members()
+            except Exception:
+                pass
         for _ in range(50):
             try:
                 if os.getsid(pid) == pid:

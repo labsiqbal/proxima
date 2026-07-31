@@ -3083,3 +3083,215 @@ def test_worker_acp_recycle_failure_retains_activity_lease():
     assert project_activity_lease.released is False
     assert retained["lease"] is project_activity_lease
     assert retained["kwargs"]["tree"] is recycle_tree
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="stale guardian-record orphan proof uses Linux /proc",
+)
+def test_writer_tree_stale_record_with_unseeded_orphan_fails_closed(tmp_path):
+    """Leftover guardian record must not report exited after sentinel death."""
+    import json
+    from proxima_api.container_activity import (
+        GuardedWriterTree,
+        process_start_identity,
+        retain_activity_lease,
+        acquire_container_activity_lease,
+        container_quiescence_lock,
+        ContainerBoundaryError,
+    )
+
+    conn = connect(tmp_path / "proxima.db")
+    init_db(conn, [])
+    root = tmp_path / "stale-record"
+    root.mkdir()
+    user_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES (?, ?)",
+        ("owner-stale", "owner-stale"),
+    ).lastrowid
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
+        ("stale-record", "Stale", str(root), user_id),
+    ).lastrowid
+    lease = acquire_container_activity_lease(conn, int(container_id))
+
+    ready = tmp_path / "orphan-ready"
+    record = tmp_path / "guardian.json"
+
+    # Launch a setsid orphan writer under a short-lived sentinel, leave the
+    # guardian record on disk (SIGKILL skips cleanup), and never seed the
+    # writer into known_identities - the pre-fix false-positive path.
+    launcher = os.fork()
+    if launcher == 0:
+        sentinel = os.fork()
+        if sentinel == 0:
+            try:
+                os.setsid()
+                writer = os.fork()
+                if writer == 0:
+                    try:
+                        ready.write_text(str(os.getpid()), encoding="utf-8")
+                        while True:
+                            time.sleep(1)
+                    finally:
+                        os._exit(0)
+                # Parent is the sentinel; stay alive until killed.
+                while True:
+                    time.sleep(1)
+            finally:
+                os._exit(0)
+        # Write guardian record pointing at the live sentinel, then exit the
+        # launcher so only sentinel + orphan remain.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(sentinel, 0)
+                break
+            except OSError:
+                time.sleep(0.01)
+        payload = {
+            "sentinel_pid": sentinel,
+            "sentinel_start": process_start_identity(sentinel) or "",
+            "launcher_pid": os.getpid(),
+            "owner_pid": os.getppid(),
+            "owner_start": "",
+            "job_name": None,
+        }
+        record.write_text(json.dumps(payload), encoding="utf-8")
+        # Signal parent with sentinel pid via a side file then exit launcher.
+        (tmp_path / "sentinel-pid").write_text(str(sentinel), encoding="utf-8")
+        os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not (
+        ready.is_file() and (tmp_path / "sentinel-pid").is_file()
+    ):
+        time.sleep(0.01)
+    assert ready.is_file()
+    assert (tmp_path / "sentinel-pid").is_file()
+    try:
+        os.waitpid(launcher, 0)
+    except ChildProcessError:
+        pass
+
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    sentinel_pid = int(
+        (tmp_path / "sentinel-pid").read_text(encoding="utf-8").strip()
+    )
+    launcher_start = process_start_identity(launcher)
+    # Launcher is already dead; bind with dead launcher + live record only.
+    tree = GuardedWriterTree(
+        launcher_pid=launcher,
+        launcher_start=launcher_start or "dead-launcher",
+        guardian_record=record,
+        known_identities={},
+    )
+    # Kill sentinel hard so the record is never cleaned up and the writer is
+    # reparented away from the monitored roots.
+    os.kill(sentinel_pid, 9)
+    try:
+        os.waitpid(sentinel_pid, 0)
+    except ChildProcessError:
+        pass
+    time.sleep(0.05)
+
+    # Writer still alive, record still on disk, no seeded descendants.
+    assert Path(f"/proc/{writer_pid}").exists()
+    assert record.exists()
+    assert tree.exited() is not True, (
+        "stale guardian record must fail closed, not report tree exit"
+    )
+
+    retain_activity_lease(
+        lease,
+        pid=launcher,
+        start_identity=launcher_start or "dead-launcher",
+        tree=tree,
+    )
+    time.sleep(0.15)
+    assert getattr(lease, "_released", False) is False
+
+    blocked = False
+    try:
+        with container_quiescence_lock(conn, int(container_id)):
+            pass
+    except ContainerBoundaryError:
+        blocked = True
+    assert blocked, "quiescence must stay blocked on unproven orphan tree"
+
+    os.kill(writer_pid, 9)
+    try:
+        os.waitpid(writer_pid, 0)
+    except ChildProcessError:
+        pass
+    # Even after the orphan dies, leftover record keeps proof unavailable
+    # (fail closed) until the record is reconciled/removed.
+    assert tree.exited() is not True
+    record.unlink(missing_ok=True)
+    # With record gone and no live known identities, exit can clear.
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and tree.exited() is not True:
+        time.sleep(0.05)
+    assert tree.exited() is True
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="live seed arming uses Linux /proc process trees",
+)
+def test_writer_tree_exited_seeds_live_descendants(tmp_path):
+    """exited() must capture live descendants before they can escape."""
+    from proxima_api.container_activity import (
+        GuardedWriterTree,
+        process_start_identity,
+    )
+
+    ready = tmp_path / "seed-ready"
+    parent = os.fork()
+    if parent == 0:
+        child = os.fork()
+        if child == 0:
+            try:
+                ready.write_text(str(os.getpid()), encoding="utf-8")
+                while True:
+                    time.sleep(1)
+            finally:
+                os._exit(0)
+        try:
+            os.waitpid(child, 0)
+        except ChildProcessError:
+            pass
+        os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    child_pid = int(ready.read_text(encoding="utf-8").strip())
+    parent_start = process_start_identity(parent)
+    assert parent_start
+    tree = GuardedWriterTree(
+        launcher_pid=parent,
+        launcher_start=parent_start,
+        known_identities={},
+    )
+    assert tree.exited() is False
+    assert child_pid in tree.known_identities
+
+    os.kill(parent, 9)
+    try:
+        os.waitpid(parent, 0)
+    except ChildProcessError:
+        pass
+    # Child may still be alive; seeded identity keeps exited False.
+    if Path(f"/proc/{child_pid}").exists():
+        assert tree.exited() is False
+        os.kill(child_pid, 9)
+        try:
+            os.waitpid(child_pid, 0)
+        except ChildProcessError:
+            pass
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and tree.exited() is not True:
+        time.sleep(0.05)
+    assert tree.exited() is True

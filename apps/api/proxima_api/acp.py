@@ -272,6 +272,10 @@ class AcpProcess:
                     else None
                 ),
             )
+            try:
+                self.writer_tree.seed_live_members()
+            except Exception:
+                pass
         self._reader = asyncio.create_task(self._read_loop())
         self._stderr_reader = asyncio.create_task(self._read_stderr())
         try:
@@ -671,13 +675,18 @@ class AcpManager:
                 await proc.start()
             except BaseException:
                 process = getattr(proc, "proc", None)
-                self._finish_effect_lease(
-                    lease,
-                    verified=(
-                        process is None
-                        or process.returncode is not None
-                    ),
-                )
+                tree = getattr(proc, "writer_tree", None)
+                verified = process is None
+                if not verified and tree is not None:
+                    try:
+                        tree.seed_live_members()
+                        verified = tree.exited() is True
+                    except Exception:
+                        verified = False
+                elif not verified:
+                    # No tree handle: launcher returncode alone is not proof.
+                    verified = False
+                self._finish_effect_lease(lease, verified=verified)
                 raise
             self._procs[key] = proc
             if lease is not None:

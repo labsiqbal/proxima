@@ -476,6 +476,11 @@ class GuardedWriterTree:
 
         False when any bound identity is still live. None when the tree cannot
         be proven either way (caller must fail closed).
+
+        Launcher/sentinel death never implies tree exit. A still-present
+        guardian record is authoritative evidence that clean sentinel teardown
+        did not finish, so exit stays unproven even when every previously
+        observed identity looks dead.
         """
         from .process_containment import process_tree_pids
 
@@ -500,9 +505,14 @@ class GuardedWriterTree:
         for pid, start in roots:
             alive = _process_has_identity(pid, start)
             if alive is True:
+                # Arm descendant identities while the root is still live so a
+                # later sentinel crash cannot orphan writers unobserved.
                 tree = process_tree_pids(pid)
-                if tree is None:
-                    return False
+                if tree:
+                    for child in tree:
+                        child_start = _process_start_identity(int(child))
+                        if child_start:
+                            self.known_identities[int(child)] = child_start
                 return False
             if alive is None:
                 if _process_exists(pid):
@@ -511,9 +521,6 @@ class GuardedWriterTree:
                 continue
             saw_dead = True
 
-        # Guardian record still present without a live matching sentinel is a
-        # stale file left after crash; treat as clear only when no member still
-        # matches a known identity.
         for pid, start in list(self.known_identities.items()):
             alive = _process_has_identity(pid, start)
             if alive is True:
@@ -522,6 +529,17 @@ class GuardedWriterTree:
                 return None
             if alive is False:
                 saw_dead = True
+
+        # Clean guardian teardown removes the record before exit. A leftover
+        # record after launcher/sentinel death means orphans may still exist
+        # outside known_identities - fail closed rather than releasing.
+        if self.guardian_record is not None:
+            try:
+                if self.guardian_record.exists():
+                    return None
+            except OSError:
+                return None
+
         return True if saw_dead else None
 
     def terminate(

@@ -1162,6 +1162,10 @@ class AppManager:
             launcher_pid=proc_pid,
             launcher_start=proc_start,
         )
+        try:
+            writer_tree.seed_live_members()
+        except Exception:
+            pass
         self._apps[slug] = {
 >>>>>>> 62b87ec (no-mistakes(review): Prove writer-tree exit before lease release)
             "proc": proc,
