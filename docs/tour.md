@@ -224,7 +224,7 @@ Help and Tours provides the replayable core tour plus feature-aware chapters.
 ![Core flow help chapter](screenshots/help-core-flow.png)
 
 Account preferences include themes, font choice, and font-size scaling.
-Diagnostics keeps update checks, debug logs, and the owner audit trail.
+Diagnostics keeps platform support labels, update checks, debug logs, and the owner audit trail.
 
 ![Appearance settings](screenshots/settings-appearance.png)
 

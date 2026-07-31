@@ -1,5 +1,8 @@
 # Proxima Quickstart
 
+This quickstart is the **supported Linux path**. macOS and Windows installers are
+experimental; see the [platform support matrix](docs/linux-daily-driver-acceptance.md).
+
 ## 1. Prerequisite checks
 
 Confirm the build tools are available before you start:
@@ -35,6 +38,8 @@ The install script:
 - Installs and enables a systemd **user** service (`proxima.service`) that starts automatically on login/boot and restarts on crash.
 - Installs a daily backup timer (`proxima-backup.timer`) that runs at 03:00.
 - Builds Design Studio (enabled by default); image generation and Workflow Graph remain available.
+
+It refuses non-Linux hosts before any build, config, or service mutation.
 
 ## 3. First run
 
@@ -119,6 +124,9 @@ The database is a single SQLite file. The daily timer backs it up automatically 
 ```bash
 bash scripts/backup
 ```
+
+For the tested stop, restore, integrity-check, and restart sequence, see
+[Backup and recovery](docs/backup.md).
 
 ## Troubleshooting
 

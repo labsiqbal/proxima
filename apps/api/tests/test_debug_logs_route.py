@@ -99,6 +99,43 @@ def test_debug_logs_empty_journal_explains_service_unit(tmp_path, monkeypatch):
     assert "PROXIMA_SERVICE_NAME" in data["logHint"]
 
 
+def test_debug_logs_stop_before_systemd_on_experimental_macos(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "proxima_api.routes.admin.current_platform",
+        lambda: {
+            "key": "macos",
+            "label": "macOS",
+            "tier": "experimental",
+            "summary": "experimental",
+        },
+    )
+
+    def unexpected_run(*_args, **_kwargs):
+        raise AssertionError("journalctl must not run on macOS")
+
+    monkeypatch.setattr("proxima_api.routes.admin.subprocess.run", unexpected_run)
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "workspace"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+    })
+    c = TestClient(app)
+    c.headers.update({
+        "Authorization": f"Bearer {c.post('/auth/auto').json()['token']}",
+    })
+
+    data = c.get("/api/debug/logs").json()
+
+    assert data["platformSupport"]["tier"] == "experimental"
+    assert data["serviceManager"] == "launchd"
+    assert "macOS diagnostics are experimental" in data["logHint"]
+    assert data["logError"] == ""
+
+
 def test_debug_logs_separates_stale_runs_from_active_sessions(tmp_path, monkeypatch):
     class Result:
         returncode = 0

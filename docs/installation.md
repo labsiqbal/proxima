@@ -20,13 +20,27 @@ Project roots to their platform filesystem identities. Details:
 
 ## Requirements
 
-- Linux or macOS host (Windows packaging exists, but the PTY backend is not yet portable)
+- **Linux host (supported daily-driver path)**. Linux Mint on a NUC is the
+  qualified server target; Linux browser clients such as CachyOS use the same app
+  locally or over Tailscale.
+- **macOS or Windows (experimental)**. Packaging exists, but neither platform has
+  passed the complete Linux install, lifecycle, PTY, backup/restore, diagnostics,
+  preview, access, and upgrade matrix.
 - `uv`
 - Node.js + `npm`
 - At least one authenticated agent CLI: Claude Code, Codex, Grok, Hermes, or Pi
 
 Proxima ships no provider credentials. It uses the runner CLIs already installed
 and authenticated on the host.
+
+Run the isolated support gate before a Linux release or host upgrade:
+
+```bash
+bash scripts/linux-daily-driver-acceptance
+```
+
+See the [executable acceptance matrix](linux-daily-driver-acceptance.md). It never
+targets the installed database or service and keeps Safe Self-Update disabled.
 
 ### Grok Build CLI
 
@@ -60,7 +74,7 @@ npm install -g lavish-axi     # rich HTML artifacts from plans/reports
 
 Missing tools only show as a quiet hint in Settings → Agents; nothing blocks.
 
-## Linux user install
+## Linux user install (supported)
 
 From the repo root:
 
@@ -84,6 +98,9 @@ The installer:
 - installs a socket-activated per-preview supervisor
 - installs a daily backup timer
 
+On any non-Linux host it exits before dependency, config, unit, or service work and
+points to the experimental platform package.
+
 Open the configured local URL after install. The default packaged bind is
 `127.0.0.1:8765`; the current live handoff may use a different port.
 
@@ -96,7 +113,7 @@ and verifies those units before restarting either API profile.
 config; it does not create a service account or install/enable systemd units, so it
 is not a complete managed-service installer.
 
-## macOS install
+## macOS install (experimental)
 
 ```bash
 bash scripts/install-macos
@@ -106,8 +123,10 @@ This creates the `com.minarflow.proxima` LaunchAgent, writes
 `~/.config/proxima/proxima.env`, links `proxima` into `~/.local/bin`, and writes
 logs to `~/Library/Logs/proxima.log`. It does not install an automatic backup
 schedule; see [backup.md](backup.md).
+The installer refuses non-macOS hosts before it builds or writes files. macOS is
+not covered by the Linux daily-driver acceptance claim.
 
-## Windows install
+## Windows install (experimental)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
@@ -117,6 +136,8 @@ This registers the `Proxima` Scheduled Task and writes runtime/config/log files
 under `%LOCALAPPDATA%\proxima`. Re-running the installer rebuilds the app and
 replaces the task without overwriting `proxima.env`. Windows backups are manual or
 scheduled separately; see [backup.md](backup.md).
+The PowerShell installer refuses non-Windows hosts before it builds or registers a
+task. Windows remains experimental, including its PTY behavior.
 
 ## Runtime Paths
 
@@ -394,6 +415,11 @@ access before traffic reaches Proxima.
 
 Full step-by-step guides for both paths (Tailscale; Cloudflare Tunnel + your own
 domain + Access) are built into the app: **Settings → Remote Access**.
+
+The supported remote client target is a current browser on Linux, including
+CachyOS, reaching the Linux server through its existing Tailscale HTTPS MagicDNS
+URL. The acceptance suite uses a synthetic HTTPS reverse-proxy request and does not
+change Tailscale operator, Serve, DNS, or certificate settings.
 
 ## Backups
 

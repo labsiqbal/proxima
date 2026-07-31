@@ -176,11 +176,16 @@ surface.
 
 ## Requirements
 
-- **Linux, macOS, or Windows** (no Docker required)
+- **Linux** for the supported daily-driver server path (Linux Mint NUC target;
+  Linux browser clients such as CachyOS work locally or over Tailscale)
+- **macOS and Windows are experimental**: packaging exists, but the complete
+  lifecycle, PTY, backup/restore, diagnostics, preview, access, and upgrade matrix
+  is not qualified
 - [`uv`](https://docs.astral.sh/uv/) and Node.js / `npm`
 - At least one **agent CLI** installed + logged in: Claude Code, Codex, Grok, Hermes, or Pi
 
-See [docs/installation.md](docs/installation.md) for per-OS steps.
+See [docs/installation.md](docs/installation.md) for per-OS steps and the
+[executable Linux acceptance matrix](docs/linux-daily-driver-acceptance.md).
 
 ## Quickstart
 

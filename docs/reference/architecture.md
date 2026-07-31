@@ -91,7 +91,8 @@ proxy, reconnectable supervisor client, and delta log protocol) with
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
-bounded vision inputs), and `routes/` (the HTTP surface).
+bounded vision inputs), `platform_support.py` (Linux-first host support catalog
+projected by `/api/config` and `/api/health`), and `routes/` (the HTTP surface).
 
 ## Runtime / repo split
 
@@ -1271,6 +1272,32 @@ same-origin/generated HTML previews omit `allow-same-origin`. These are lightwei
 self-hosted mitigations, not OS isolation of the project process.
 See ADR-0014 through ADR-0026 for the focused binding, authentication, authority,
 cleanup, framing, supervision, restart-adoption, and profile-isolation decisions.
+
+### 8b. Linux-first platform support boundary
+
+`platform_support.py` owns the machine-readable host catalog. Linux is the
+supported daily-driver server platform; macOS and Windows remain experimental.
+The existing `/api/config` and `/api/health` routes project the catalog, and
+Settings Diagnostics renders the same values instead of maintaining frontend-only
+labels.
+
+Host actions enforce the contract before side effects. `scripts/install-user`
+accepts Linux only, `scripts/install-macos` accepts macOS only, and
+`scripts/install-windows.ps1` accepts Windows only. The Bash lifecycle wrapper
+selects systemd on Linux and launchd on experimental macOS, refuses unknown hosts
+before manager calls, and never falls through from a missing macOS LaunchAgent to
+systemd. Linux Diagnostics alone calls `journalctl`; other host families receive
+actionable experimental or unsupported guidance.
+
+`scripts/linux-daily-driver-acceptance` is the release gate for the complete
+support claim. It composes temporary HOME/XDG installs, fake service managers, a
+real POSIX PTY, temporary SQLite backup/restore targets, loopback preview servers,
+and a synthetic HTTPS MagicDNS reverse-proxy request. The acceptance environment
+sets Master on and Safe Self-Update off. It never targets the installed database,
+service, Tailscale state, privileged enrollment, or release custody. The decision
+and row-level evidence live in
+[ADR-0028](../adr/0028-linux-first-daily-driver-support.md) and the
+[acceptance matrix](../linux-daily-driver-acceptance.md).
 
 ### 9. Update check and candidate gate plus disabled switch fixture
 

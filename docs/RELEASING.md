@@ -56,6 +56,10 @@ pushes `main` plus the tag, and creates the GitHub Release in
   park unfinished work there; use the `staging` branch.
 - Requires an authenticated `gh` CLI; the script aborts cleanly otherwise.
 - Never bypass the release script's QA or repository-identity checks.
+- The Linux daily-driver support claim is gated separately by
+  `scripts/linux-daily-driver-acceptance` (not invoked by `scripts/release`).
+  Run it before advertising Linux support changes; see
+  [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md).
 - Release notes are user-facing — write for users.
 - If the script fails AFTER pushing (network blip during the final step), the
   tag `vX.Y.Z` exists on GitHub but the Release object doesn't — installs see

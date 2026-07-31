@@ -79,7 +79,14 @@ same command with launchd/Task Scheduler. Staging must use its own
 
 ## Restore
 
-Stop the server, then copy a snapshot over the live database:
+Stop the server and confirm it is inactive before replacing the database:
+
+```bash
+systemctl --user stop proxima
+systemctl --user is-active proxima  # expect "inactive"
+```
+
+Copy a snapshot over the database:
 
 ```bash
 cp ~/.local/share/proxima/backups/proxima-YYYYMMDD-HHMMSS.db \
@@ -90,4 +97,11 @@ Verify before starting back up:
 
 ```bash
 sqlite3 ~/.local/share/proxima/proxima.db "PRAGMA integrity_check;"
+systemctl --user start proxima
+curl --fail --silent http://127.0.0.1:8765/api/health
 ```
+
+Do not restore over a running service. The executable
+[Linux daily-driver matrix](linux-daily-driver-acceptance.md) proves the same
+backup/copy/integrity sequence against separate temporary databases only; it never
+stops the installed service or writes the installed database.
