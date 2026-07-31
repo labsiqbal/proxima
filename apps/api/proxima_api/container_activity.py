@@ -1004,6 +1004,12 @@ def retain_activity_lease(
     """
     if lease is None or getattr(lease, "_released", False):
         return
+    if getattr(lease, "_retain_monitor_armed", False):
+        try:
+            lease._retained_for_writer_tree = True
+        except Exception:
+            pass
+        return
 
     with _RETAINED_ACTIVITY_GUARD:
         if lease not in _RETAINED_ACTIVITY_LEASES:
@@ -1033,6 +1039,11 @@ def retain_activity_lease(
                 except ValueError:
                     pass
         return
+
+    try:
+        lease._retain_monitor_armed = True
+    except Exception:
+        pass
 
     def monitor() -> None:
         release = False

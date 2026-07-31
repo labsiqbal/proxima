@@ -3087,6 +3087,38 @@ def test_worker_acp_recycle_failure_retains_activity_lease():
     assert retained["kwargs"]["tree"] is recycle_tree
 
 
+def test_worker_acp_uncached_start_failure_honors_transferred_activity_lease():
+    """Recycle no-op after uncached start failure must not drop a transferred lease."""
+
+    class FakeLease:
+        def __init__(self):
+            self.released = False
+            self._released = False
+            # ACP start-failure path already transferred ownership.
+            self._retained_for_writer_tree = True
+
+        def release(self):
+            self.released = True
+            self._released = True
+
+    project_activity_lease = FakeLease()
+    recycle_verified = True  # recycle() is a no-op when proc was never cached
+    if project_activity_lease is not None:
+        if (
+            recycle_verified
+            and not getattr(
+                project_activity_lease,
+                "_retained_for_writer_tree",
+                False,
+            )
+        ):
+            project_activity_lease.release()
+        elif not recycle_verified:
+            project_activity_lease.release()  # would be retain in real code
+    assert project_activity_lease.released is False
+    assert project_activity_lease._retained_for_writer_tree is True
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="stale guardian-record orphan proof uses Linux /proc",

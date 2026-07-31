@@ -18,7 +18,11 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from .container_activity import GuardedWriterTree, process_start_identity
+from .container_activity import (
+    GuardedWriterTree,
+    process_start_identity,
+    retain_activity_lease,
+)
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
 
@@ -289,8 +293,14 @@ class AcpProcess:
                 self._image_capable = bool((((init_res or {}).get("agentCapabilities") or {}).get("promptCapabilities") or {}).get("image"))
             except Exception:
                 self._image_capable = False
-        except BaseException:
-            await self.stop()
+        except BaseException as start_exc:
+            stop_exc: BaseException | None = None
+            try:
+                await self.stop()
+            except BaseException as exc:
+                stop_exc = exc
+            if stop_exc is not None:
+                raise start_exc from stop_exc
             raise
         self.config_sig = config_sig(self.home)
         self._started = True
@@ -491,6 +501,30 @@ class AcpProcess:
         except Exception:
             pass
 
+    def _retain_activity_for_unproven_tree(self) -> None:
+        if self.activity_lease is None:
+            return
+        tree = self.writer_tree
+        if tree is not None:
+            try:
+                tree.seed_live_members()
+            except Exception:
+                pass
+            if tree.exited() is True:
+                return
+        retain_activity_lease(
+            self.activity_lease,
+            tree=tree,
+            pid=(
+                tree.launcher_pid
+                if tree is not None
+                else (getattr(self.proc, "pid", None) if self.proc else None)
+            ),
+            start_identity=(
+                tree.launcher_start if tree is not None else None
+            ),
+        )
+
     async def stop(self) -> None:
         for fut in list(self._pending.values()):
             if not fut.done():
@@ -521,8 +555,19 @@ class AcpProcess:
         self._started = bool(
             self.proc is not None and self.proc.returncode is None
         )
+        tree_clear = True
+        if self.writer_tree is not None:
+            try:
+                self.writer_tree.seed_live_members()
+                tree_clear = self.writer_tree.exited() is True
+            except Exception:
+                tree_clear = False
+        if failure is not None or not tree_clear:
+            self._retain_activity_for_unproven_tree()
         if failure is not None:
             raise failure
+        if not tree_clear:
+            raise RuntimeError("ACP runner process tree exit was not verified")
 
 
 def _process_class(spec):
@@ -676,16 +721,48 @@ class AcpManager:
             except BaseException:
                 process = getattr(proc, "proc", None)
                 tree = getattr(proc, "writer_tree", None)
-                verified = process is None
-                if not verified and tree is not None:
+                activity = getattr(proc, "activity_lease", None)
+                verified = process is None and tree is None
+                if tree is not None:
                     try:
                         tree.seed_live_members()
                         verified = tree.exited() is True
                     except Exception:
                         verified = False
-                elif not verified:
+                elif process is not None:
                     # No tree handle: launcher returncode alone is not proof.
                     verified = False
+                if not verified and activity is not None:
+                    # Transfer activity ownership with the identity-bound tree so
+                    # worker finally cannot drop the shared blocker on an
+                    # uncached start-failure path.
+                    retain_fn = getattr(
+                        proc,
+                        "_retain_activity_for_unproven_tree",
+                        None,
+                    )
+                    if callable(retain_fn):
+                        retain_fn()
+                    else:
+                        if tree is not None:
+                            try:
+                                tree.seed_live_members()
+                            except Exception:
+                                pass
+                        retain_activity_lease(
+                            activity,
+                            tree=tree,
+                            pid=(
+                                tree.launcher_pid
+                                if tree is not None
+                                else getattr(process, "pid", None)
+                            ),
+                            start_identity=(
+                                tree.launcher_start
+                                if tree is not None
+                                else None
+                            ),
+                        )
                 self._finish_effect_lease(lease, verified=verified)
                 raise
             self._procs[key] = proc

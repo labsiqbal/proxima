@@ -38,7 +38,11 @@ from typing import Any, Callable
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
 from .codex_master_proxy import CodexMasterModelProxy
 from .master_tool_broker import TOOL_SCHEMAS, master_dynamic_tools
-from .container_activity import GuardedWriterTree, process_start_identity
+from .container_activity import (
+    GuardedWriterTree,
+    process_start_identity,
+    retain_activity_lease,
+)
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
 
@@ -333,8 +337,14 @@ class CodexAppServerProcess:
                 timeout=60,
             )
             self._notify("initialized", {})
-        except BaseException:
-            await self.stop()
+        except BaseException as start_exc:
+            stop_exc: BaseException | None = None
+            try:
+                await self.stop()
+            except BaseException as exc:
+                stop_exc = exc
+            if stop_exc is not None:
+                raise start_exc from stop_exc
             raise
         self.config_sig = config_sig(self.home)
         self._started = True
@@ -754,6 +764,30 @@ class CodexAppServerProcess:
         except Exception:
             pass
 
+    def _retain_activity_for_unproven_tree(self) -> None:
+        if self.activity_lease is None:
+            return
+        tree = self.writer_tree
+        if tree is not None:
+            try:
+                tree.seed_live_members()
+            except Exception:
+                pass
+            if tree.exited() is True:
+                return
+        retain_activity_lease(
+            self.activity_lease,
+            tree=tree,
+            pid=(
+                tree.launcher_pid
+                if tree is not None
+                else (getattr(self.proc, "pid", None) if self.proc else None)
+            ),
+            start_identity=(
+                tree.launcher_start if tree is not None else None
+            ),
+        )
+
     async def stop(self) -> None:
         for bucket in (self._pending, self._perm_futures, self._turn_done):
             for fut in list(bucket.values()):
@@ -791,8 +825,19 @@ class CodexAppServerProcess:
         self._started = bool(
             self.proc is not None and self.proc.returncode is None
         )
+        tree_clear = True
+        if self.writer_tree is not None:
+            try:
+                self.writer_tree.seed_live_members()
+                tree_clear = self.writer_tree.exited() is True
+            except Exception:
+                tree_clear = False
+        if failure is not None or not tree_clear:
+            self._retain_activity_for_unproven_tree()
         if failure is not None:
             raise failure
+        if not tree_clear:
+            raise RuntimeError("Codex runner process tree exit was not verified")
 
 
 def _tool_title(item: dict[str, Any]) -> str:
