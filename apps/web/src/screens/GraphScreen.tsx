@@ -1332,16 +1332,28 @@ export function GraphScreen({
                     <div role="columnheader">Status</div>
                     <div className="workflow-home-actions-head" role="columnheader">Actions</div>
                   </div>
-                  {visibleDrafts.map(item => <div className="workflow-home-row workflow-home-draft-row" role="row" key={item.id}>
+                  {visibleDrafts.map(item => {
+                    const isOpenDraft = job?.id === item.id
+                    const draftSnapshot = isOpenDraft
+                      ? { ...job, graph: plan ?? job.graph }
+                      : item
+                    const draftRunBlocked = isOpenDraft && runBlocked
+                    return <div className="workflow-home-row workflow-home-draft-row" role="row" key={item.id}>
                     <div className="workflow-home-name" role="cell" data-label="Draft plan"><strong>{item.title || 'Untitled plan'}</strong></div>
                     <div role="cell" data-label="Status"><span className="workflow-home-chip workflow-home-draft-chip">Draft</span></div>
                     <div className="workflow-home-actions" role="cell" data-label="Actions">
                       <button className="ghost-button" disabled={!!busy} onClick={() => openJob(item.id)}>Edit</button>
-                      <button className="primary-button" disabled={!!busy} onClick={() => setRunTarget({ kind: 'job', job: item })}>Run</button>
+                      <button
+                        className="primary-button"
+                        disabled={!!busy || draftRunBlocked}
+                        title={draftRunBlocked ? 'Wait for a valid saved workflow before running' : undefined}
+                        onClick={() => setRunTarget({ kind: 'job', job: draftSnapshot })}
+                      >Run</button>
                       <button className="ghost-button workflow-home-star" disabled={!!busy} onClick={() => void prepareDraftTemplate(item)}>★ Save as template</button>
                       <button className="row-action danger" title="Delete draft" aria-label={`Delete ${item.title}`} disabled={!!busy} onClick={() => void deletePlan(item)}><IconTrash size={13} /></button>
                     </div>
-                  </div>)}
+                  </div>
+                  })}
                 </div>
           )}
 

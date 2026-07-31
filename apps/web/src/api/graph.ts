@@ -47,7 +47,7 @@ export const startGraphJob = (
 ) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}/start`, token, {
     method: 'POST',
-    ...(input === undefined ? {} : { body: JSON.stringify({ input }) }),
+    body: JSON.stringify(input === undefined ? {} : { input }),
   })
 
 export const editGraphNodeOutput = (token: string, jobId: number, nodeId: string, value: unknown) =>
