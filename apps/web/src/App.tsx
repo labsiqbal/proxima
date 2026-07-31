@@ -39,6 +39,10 @@ import {
   readWorkProjectPreference,
   resolveWorkProject,
 } from './lib/workProjectPreference'
+import {
+  taskHashPreservesWorkProject,
+  withoutTaskPolicy,
+} from './lib/taskHashRoute'
 const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m => ({ default: m.IterateStage })))
 const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m => ({ default: m.DesignStudio })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
@@ -262,7 +266,12 @@ export function App() {
     setNavStack([])
   }, [])
   const clearTaskHash = React.useCallback(() => {
-    if (window.location.hash.startsWith('#task/')) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+    if (!window.location.hash.startsWith('#task/')) return
+    window.history.replaceState(
+      withoutTaskPolicy(window.history.state),
+      '',
+      `${window.location.pathname}${window.location.search}`,
+    )
   }, [])
   // Archive record permalinks (T4): #archive/<project>/<slug> is a record's
   // permanent address - bookmarkable, shareable, survives reloads.
@@ -522,7 +531,20 @@ export function App() {
   const [runners, setRunners] = React.useState<Runner[]>([])
   const [runnerReadiness, setRunnerReadiness] = React.useState<RunnerReadinessMap>({})
   const [activeProfile, setActiveProfile] = React.useState<Profile | null>(null)
-  const [activeProject, setActiveProject] = React.useState<Project | null>(null)
+  const [activeProject, setActiveProjectState] = React.useState<Project | null>(null)
+  const activeProjectRef = React.useRef<Project | null>(null)
+  const setActiveProject = React.useCallback((update: Project | null | ((prev: Project | null) => Project | null)) => {
+    if (typeof update === 'function') {
+      setActiveProjectState(prev => {
+        const next = update(prev)
+        activeProjectRef.current = next
+        return next
+      })
+      return
+    }
+    activeProjectRef.current = update
+    setActiveProjectState(update)
+  }, [])
   const [projectFallbackNotice, setProjectFallbackNotice] = React.useState('')
   const [activeSession, setActiveSession] = React.useState<ChatSession | null>(null)
   const [error, setError] = React.useState('')
@@ -532,9 +554,10 @@ export function App() {
       const match = window.location.hash.match(/^#task\/(\d+)$/)
       if (match) {
         const jobId = Number(match[1])
-        const preserveWork = !initial
-          && event instanceof PopStateEvent
-          && event.state?.proximaTaskPolicy === 'preserve-work'
+        const historyState = event instanceof PopStateEvent
+          ? event.state
+          : window.history.state
+        const preserveWork = taskHashPreservesWorkProject(initial, historyState)
         if (preserveWork) {
           setTaskPermalinkResolving(false)
           setTaskProjectContext({
@@ -679,12 +702,13 @@ export function App() {
     setRunnerReadiness(runnerBody.runnerReadiness || {})
     setActiveProfile(current => current && profileBody.profiles.some(p => p.id === current.id) ? current : profileBody.profiles.find(p => p.is_default) || profileBody.profiles[0] || null)
     const preference = ownerId == null ? null : readWorkProjectPreference(ownerId)
-    const resolution = resolveWorkProject(projectBody.projects, preference, activeProject)
+    const resolution = resolveWorkProject(
+      projectBody.projects,
+      preference,
+      activeProjectRef.current,
+    )
     const nextProject = resolution.project
     setActiveProject(nextProject)
-    if (ownerId != null && nextProject) {
-      persistWorkProjectPreference(ownerId, nextProject)
-    }
     if (resolution.missingPreference && nextProject) {
       setProjectFallbackNotice(
         `Saved Work Project "${resolution.missingPreference.name}" is no longer available. Switched to "${nextProject.name}".`,
@@ -708,7 +732,7 @@ export function App() {
             )
       })
     }
-  }, [activeProject, token, sessionEnabled, user?.id])
+  }, [token, sessionEnabled, user?.id, setActiveProject])
 
   React.useEffect(() => {
     if (!user || !activeProject) return

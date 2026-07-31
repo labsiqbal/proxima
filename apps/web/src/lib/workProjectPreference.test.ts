@@ -50,7 +50,7 @@ describe('Work Project preference', () => {
     expect(resolveWorkProject([atlas, beacon], {
       slug: 'beacon',
       name: 'Beacon release',
-    }, atlas)).toEqual({
+    }, null)).toEqual({
       project: beacon,
       missingPreference: null,
     })
@@ -63,6 +63,26 @@ describe('Work Project preference', () => {
         slug: 'beacon',
         name: 'Beacon release',
       },
+    })
+  })
+
+  it('keeps a newer live Work selection over a stale saved preference', () => {
+    expect(resolveWorkProject([atlas, beacon], {
+      slug: 'beacon',
+      name: 'Beacon release',
+    }, atlas)).toEqual({
+      project: atlas,
+      missingPreference: null,
+    })
+  })
+
+  it('keeps a permalink-adopted Project while preference still points elsewhere', () => {
+    expect(resolveWorkProject([atlas, beacon], {
+      slug: 'atlas',
+      name: 'Atlas private ops',
+    }, beacon)).toEqual({
+      project: beacon,
+      missingPreference: null,
     })
   })
 })

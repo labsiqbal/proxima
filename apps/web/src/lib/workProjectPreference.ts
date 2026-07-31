@@ -50,16 +50,22 @@ export function resolveWorkProject(
   current: Project | null,
 ): WorkProjectResolution {
   const preferred = preference
-    ? projects.find(project => project.slug === preference.slug)
+    ? projects.find(project => project.slug === preference.slug) || null
     : null
   const stillCurrent = current
-    ? projects.find(project => project.slug === current.slug)
+    ? projects.find(project => project.slug === current.slug) || null
     : null
   const fallback = projects.find(project => project.visibility === 'private')
     || projects[0]
     || null
+  if (stillCurrent) {
+    return { project: stillCurrent, missingPreference: null }
+  }
+  if (preferred) {
+    return { project: preferred, missingPreference: null }
+  }
   return {
-    project: preferred || stillCurrent || fallback,
+    project: fallback,
     missingPreference: preference && !preferred ? preference : null,
   }
 }
