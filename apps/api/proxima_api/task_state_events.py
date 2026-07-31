@@ -206,7 +206,11 @@ def append_task_update(
         ),
     )
     event_id = _as_int(cursor.lastrowid)
-    result = {"session_id": session_id, "event_id": event_id}
+    result = {
+        "job_id": job_id,
+        "session_id": session_id,
+        "event_id": event_id,
+    }
     if job["origin_master_session_id"] is not None:
         task_status = str(
             canonical_job_payload(

@@ -472,6 +472,35 @@ def reconcile_final_approval_intents(app: Any) -> list[dict[str, int]]:
     return task_events
 
 
+def recover_final_approval_intents(app: Any) -> list[dict[str, int]]:
+    """Finalize live intents, project Task/Master updates, fan out prerequisites.
+
+    Callers must run this before resume_committed so dependent start intents see
+    completed prerequisites. Side effects stay outside the reconcile write lock.
+    """
+    task_events = reconcile_final_approval_intents(app)
+    projection = getattr(app.state, "master_projection", None)
+    seen_jobs: set[int] = set()
+    for task_event in task_events:
+        outbox_id = task_event.get("projection_outbox_id")
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
+        session_id = task_event.get("session_id")
+        if session_id is not None:
+            app.state.hub.notify(int(session_id))
+        job_id = task_event.get("job_id")
+        if job_id is None:
+            continue
+        job_id = int(job_id)
+        if job_id in seen_jobs:
+            continue
+        seen_jobs.add(job_id)
+        app.state.task_delegation.prerequisite_changed(
+            job_id, connection=app.state.db
+        )
+    return task_events
+
+
 def task_can_continue_after_decision(job: Mapping[str, Any] | sqlite3.Row) -> bool:
     """Linear Tasks with a current step can accept exactly-once continuation."""
     data = dict(job)

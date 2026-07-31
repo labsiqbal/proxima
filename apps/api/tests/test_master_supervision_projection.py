@@ -4200,6 +4200,119 @@ def test_final_approval_restart_finalizes_merged_live_intent(tmp_path: Path):
     assert calls["n"] == 0
 
 
+def test_final_approval_restart_unblocks_dependent_start_once(tmp_path: Path):
+    app, client, _desk, job_id, _origin_id, repo = _repo_review_job(
+        tmp_path, key="restart-prereq"
+    )
+    upstream = app.state.db.execute(
+        "SELECT project_id, target_area_id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    dependent = client.post(
+        "/api/jobs",
+        json={
+            "project_id": upstream["project_id"],
+            "target_area_id": upstream["target_area_id"],
+            "input": {"brief": "run after merge"},
+        },
+        headers={"Idempotency-Key": "restart-prereq-down"},
+    )
+    assert dependent.status_code == 200, dependent.text
+    dependent_id = dependent.json()["id"]
+    app.state.db.execute(
+        "INSERT INTO task_dependencies(task_id, depends_on_task_id) VALUES (?, ?)",
+        (dependent_id, job_id),
+    )
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'queued', blocked_reason = ? WHERE id = ?",
+        (
+            f"Waiting for prerequisite Task #{job_id} to reach done; currently review",
+            dependent_id,
+        ),
+    )
+    app.state.db.execute(
+        "UPDATE task_delegations SET start_requested = 1, start_state = 'blocked', "
+        "blocked_reason = ? WHERE job_id = ?",
+        (
+            f"Waiting for prerequisite Task #{job_id} to reach done; currently review",
+            dependent_id,
+        ),
+    )
+
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        intent, _resumed = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    job = app.state.db.execute(
+        "SELECT * FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    wt = worktrees.job_worktree_row(app.state.db, job_id)
+    merged = worktrees.merge_job_worktree(app.state.db, job, wt)
+    assert merged["status"] == "merged"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+
+    # Crash window: merge landed, finalize did not. Restart recovery must mark
+    # the prerequisite done, project it, and start the dependent exactly once
+    # before resume_committed runs.
+    fanout = {"jobs": []}
+    original_prereq = app.state.task_delegation.prerequisite_changed
+
+    def counted_prereq(prerequisite_job_id, *, connection=None):
+        fanout["jobs"].append(int(prerequisite_job_id))
+        return original_prereq(
+            prerequisite_job_id, connection=connection
+        )
+
+    app.state.task_delegation.prerequisite_changed = counted_prereq
+    try:
+        events = master_decisions.recover_final_approval_intents(app)
+        app.state.task_delegation.resume_committed(connection=app.state.db)
+    finally:
+        app.state.task_delegation.prerequisite_changed = original_prereq
+
+    assert [event["job_id"] for event in events] == [job_id]
+    assert fanout["jobs"] == [job_id]
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "done"
+    assert app.state.db.execute(
+        "SELECT state FROM job_final_approval_intents "
+        "WHERE job_id = ? AND generation = ?",
+        (job_id, int(intent["generation"])),
+    ).fetchone()["state"] == "finalized"
+    dependent_row = app.state.db.execute(
+        "SELECT status, blocked_reason FROM jobs WHERE id = ?",
+        (dependent_id,),
+    ).fetchone()
+    assert dependent_row["status"] == "running"
+    assert dependent_row["blocked_reason"] in (None, "")
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = "
+        "(SELECT session_id FROM jobs WHERE id = ?)",
+        (dependent_id,),
+    ).fetchone()[0] == 1
+    assert (repo / "feature.py").read_text(encoding="utf-8") == "x = 1\n"
+
+    # Repeated restart stays idempotent: no second fan-out or second start.
+    again_events = master_decisions.recover_final_approval_intents(app)
+    again_started = app.state.task_delegation.resume_committed(
+        connection=app.state.db
+    )
+    assert again_events == []
+    assert again_started == []
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM runs WHERE session_id = "
+        "(SELECT session_id FROM jobs WHERE id = ?)",
+        (dependent_id,),
+    ).fetchone()[0] == 1
+
+
 def test_final_approval_restart_releases_incomplete_merge(tmp_path: Path):
     app, _client, _desk, job_id, _origin_id, _repo = _repo_review_job(
         tmp_path, key="restart-release"
