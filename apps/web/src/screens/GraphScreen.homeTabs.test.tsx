@@ -196,11 +196,12 @@ describe('GraphScreen workflow home tabs', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Runs 1' }))
     const runs = screen.getByRole('table', { name: 'Workflow runs' })
-    expect(within(runs).getByText('Launch readiness review')).toBeInTheDocument()
-    expect(within(runs).getByText('Failed')).toBeInTheDocument()
-    expect(within(runs).getByText('12s')).toBeInTheDocument()
-    expect(within(runs).queryByText(/7h/)).not.toBeInTheDocument()
-    expect(within(runs).getByRole('button', { name: 'View' })).toBeInTheDocument()
+    const runRow = within(runs).getByText('Launch readiness review').closest('[role="row"]') as HTMLElement
+    expect(within(runRow).getByText('Failed')).toBeInTheDocument()
+    // Duration is authoritative wall-clock length; When is a separate relative-age cell.
+    expect(runRow.querySelector('[data-label="Duration"]')).toHaveTextContent('12s')
+    expect(runRow.querySelector('[data-label="When"]')?.textContent).toMatch(/ago|Just now|Yesterday/)
+    expect(within(runRow).getByRole('button', { name: 'View' })).toBeInTheDocument()
   })
 
   it('remembers the last selected tab across remounts', async () => {
