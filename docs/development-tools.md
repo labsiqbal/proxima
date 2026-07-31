@@ -105,6 +105,8 @@ apps/api/proxima_api/route_deps.py    shared route dependencies (current_user, e
 apps/api/proxima_api/worker.py        run orchestration (RunWorker); run_*.py helpers
 apps/api/proxima_api/scheduler.py     cron scheduler loop
 apps/api/proxima_api/acp.py           ACP subprocess manager (agent runners)
+apps/api/proxima_api/preview_output.py preview supervisor client + delta log protocol
+apps/api/proxima_api/preview_output_broker.py per-app launch/output supervisor
 apps/api/proxima_api/frontend_static.py  static PWA serving
 apps/api/proxima_api/db.py            SQLite schema + migrate_existing
 apps/api/proxima_api/migrations.py    versioned migrations

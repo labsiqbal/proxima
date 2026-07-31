@@ -1,0 +1,17 @@
+[Unit]
+Description=Proxima staging preview supervisor
+
+[Service]
+Type=simple
+User=proxima
+Group=proxima
+WorkingDirectory=/opt/proxima-staging
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:staging
+Environment=PROXIMA_PREVIEW_PROFILE=staging
+Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima-staging/preview-supervisors
+ExecStart=/opt/proxima-staging/scripts/proxima output-broker --systemd-socket
+StandardInput=socket
+StandardOutput=null
+StandardError=journal
+KillMode=control-group
+TimeoutStopSec=10s

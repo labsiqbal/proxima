@@ -14,9 +14,12 @@ complete sequence below for a managed deployment.
 Both public hostnames must remain behind Cloudflare Access (or an equivalent
 owner-only gate). The services bind to loopback; the tunnel is the only public
 route. Production uses `proxima-backup.service` and `proxima-backup.timer`.
-Both profiles share the socket-activated `proxima-preview-output.socket`. Each
-accepted connection starts a sibling broker instance that owns one preview app's
-stdout outside the API service cgroup until every writer reaches EOF.
+Production uses `proxima-preview-output.socket`; staging uses
+`proxima-staging-preview-output.socket`. Each accepted connection starts a
+profile-specific supervisor from that profile's checkout and state root. The
+supervisor launches one preview app in its own service cgroup, owns its bounded
+output, and exposes a profile-bound reconnect capability. A restarted API adopts
+only an exact saved broker, process, cgroup, profile, protocol, and lineage match.
 
 ## 1. Install prerequisites and code
 
@@ -111,10 +114,17 @@ sudo install -o root -g root -m 0644 \
   /etc/systemd/system/proxima-backup.timer
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now \
-  proxima-preview-output.socket \
-  proxima.service \
-  proxima-backup.timer
+sudo systemctl enable --now proxima-preview-output.socket
+sudo -u proxima env \
+  PROXIMA_REPO_ROOT=/opt/proxima \
+  PROXIMA_CONFIG=/etc/proxima/proxima.env \
+  PROXIMA_DATA_DIR=/var/lib/proxima \
+  PROXIMA_OUTPUT_BROKER_SOCKET=/run/proxima-preview-output.sock \
+  PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:production \
+  PROXIMA_PREVIEW_PROFILE=production \
+  PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima/preview-supervisors \
+  /opt/proxima/scripts/proxima preview-broker-check
+sudo systemctl enable --now proxima.service proxima-backup.timer
 sudo systemctl status proxima.service --no-pager
 curl --fail --silent http://127.0.0.1:8765/api/health
 ```
@@ -165,10 +175,24 @@ sudo -u proxima env HOME=/var/lib/proxima-staging \
 sudo install -o root -g root -m 0644 \
   infra/systemd/proxima-staging.service.example \
   /etc/systemd/system/proxima-staging.service
+sudo install -o root -g root -m 0644 \
+  infra/systemd/proxima-staging-preview-output.socket \
+  /etc/systemd/system/proxima-staging-preview-output.socket
+sudo install -o root -g root -m 0644 \
+  infra/systemd/proxima-staging-preview-output@.service.example \
+  /etc/systemd/system/proxima-staging-preview-output@.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now \
-  proxima-preview-output.socket \
-  proxima-staging.service
+sudo systemctl enable --now proxima-staging-preview-output.socket
+sudo -u proxima env \
+  PROXIMA_REPO_ROOT=/opt/proxima-staging \
+  PROXIMA_CONFIG=/etc/proxima-staging/proxima.env \
+  PROXIMA_DATA_DIR=/var/lib/proxima-staging \
+  PROXIMA_OUTPUT_BROKER_SOCKET=/run/proxima-staging-preview-output.sock \
+  PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:staging \
+  PROXIMA_PREVIEW_PROFILE=staging \
+  PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima-staging/preview-supervisors \
+  /opt/proxima-staging/scripts/proxima preview-broker-check
+sudo systemctl enable --now proxima-staging.service
 curl --fail --silent http://127.0.0.1:8767/api/health
 ```
 
@@ -190,9 +214,38 @@ sudo bash -c 'cd /opt/proxima/apps/api && uv sync --frozen'
 sudo npm --prefix /opt/proxima/apps/web ci
 sudo npm --prefix /opt/proxima/apps/web run build
 sudo chown -R root:root /opt/proxima
+sudo install -o root -g root -m 0644 \
+  /opt/proxima/infra/systemd/proxima.service.example \
+  /etc/systemd/system/proxima.service
+sudo install -o root -g root -m 0644 \
+  /opt/proxima/infra/systemd/proxima-preview-output.socket \
+  /etc/systemd/system/proxima-preview-output.socket
+sudo install -o root -g root -m 0644 \
+  /opt/proxima/infra/systemd/proxima-preview-output@.service.example \
+  /etc/systemd/system/proxima-preview-output@.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now proxima-preview-output.socket
+sudo -u proxima env \
+  PROXIMA_REPO_ROOT=/opt/proxima \
+  PROXIMA_CONFIG=/etc/proxima/proxima.env \
+  PROXIMA_DATA_DIR=/var/lib/proxima \
+  PROXIMA_OUTPUT_BROKER_SOCKET=/run/proxima-preview-output.sock \
+  PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:production \
+  PROXIMA_PREVIEW_PROFILE=production \
+  PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima/preview-supervisors \
+  /opt/proxima/scripts/proxima preview-broker-check
 sudo systemctl restart proxima.service
 curl --fail --silent http://127.0.0.1:8765/api/health
 ```
+
+For staging, perform the same sequence from `/opt/proxima-staging`, install the
+two `proxima-staging-preview-output*` units plus
+`proxima-staging.service`, verify the
+`proxima-preview-supervisor-v1:staging` protocol identity, and only then restart
+`proxima-staging.service`. Never point one profile at the other profile's socket,
+checkout, protocol, or state root. Enabling a socket does not stop active
+per-preview supervisor instances; they remain available for exact adoption or
+finish draining at EOF.
 
 The safe-updater foundation adds contract-only root-owned controller and candidate
 unit templates. The candidate template carries defence-in-depth systemd sandbox

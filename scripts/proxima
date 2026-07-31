@@ -32,6 +32,8 @@ load_config() {
   export PROXIMA_ENV_NAME PROXIMA_APPS_DOMAIN PROXIMA_CF_API_TOKEN PROXIMA_CF_ACCOUNT_ID PROXIMA_CF_TUNNEL_ID PROXIMA_CF_ZONE PROXIMA_CF_ZONE_ID PROXIMA_UPDATE_CHECK PROXIMA_UPDATE_REPO
   export PROXIMA_FEATURE_DESIGN_STUDIO PROXIMA_FEATURE_SAFE_SELF_UPDATE
   export PROXIMA_SAFE_UPDATE_FENCE_PATH PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
+  export PROXIMA_OUTPUT_BROKER_SOCKET PROXIMA_OUTPUT_BROKER_PROTOCOL
+  export PROXIMA_PREVIEW_PROFILE PROXIMA_PREVIEW_SCOPE_STATE_ROOT
   export PYTHONPATH="$ROOT:$API_DIR${PYTHONPATH:+:$PYTHONPATH}"
 }
 
@@ -143,6 +145,10 @@ EOF
     load_config
     exec "$API_DIR/.venv/bin/python" -m proxima_api.preview_output_broker "$@"
     ;;
+  preview-broker-check)
+    load_config
+    exec "$API_DIR/.venv/bin/python" -m proxima_api.preview_output
+    ;;
   print-env)
     load_config
     while IFS='=' read -r key value; do
@@ -167,6 +173,7 @@ Usage:
   proxima logs          Tail live service logs
   proxima serve         Serve API + built PWA on PROXIMA_HOST:PROXIMA_PORT
   proxima output-broker Run the supervised preview output broker
+  proxima preview-broker-check Verify the preview broker profile and protocol
   proxima print-env     Print resolved PROXIMA_* env
 EOF
     ;;

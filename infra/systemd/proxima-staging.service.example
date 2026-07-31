@@ -1,19 +1,23 @@
 [Unit]
 Description=Proxima staging workspace
-After=network.target proxima-preview-output.socket
-Requires=proxima-preview-output.socket
+After=network.target proxima-staging-preview-output.socket
+Requires=proxima-staging-preview-output.socket
 
 [Service]
 Type=simple
 User=proxima
 Group=proxima
 EnvironmentFile=/etc/proxima-staging/proxima.env
-Environment=PROXIMA_OUTPUT_BROKER_SOCKET=/run/proxima-preview-output.sock
+Environment=PROXIMA_OUTPUT_BROKER_SOCKET=/run/proxima-staging-preview-output.sock
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:staging
+Environment=PROXIMA_PREVIEW_PROFILE=staging
+Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima-staging/preview-supervisors
 WorkingDirectory=/opt/proxima-staging
-ExecStart=/usr/local/bin/proxima serve
+ExecStart=/opt/proxima-staging/scripts/proxima serve
 Restart=on-failure
 RestartSec=3
 KillMode=process
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=multi-user.target

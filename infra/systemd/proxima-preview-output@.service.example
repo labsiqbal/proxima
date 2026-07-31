@@ -1,12 +1,17 @@
 [Unit]
-Description=Proxima preview output broker
+Description=Proxima production preview supervisor
 
 [Service]
 Type=simple
 User=proxima
 Group=proxima
 WorkingDirectory=/opt/proxima
-ExecStart=/usr/local/bin/proxima output-broker --systemd-socket
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:production
+Environment=PROXIMA_PREVIEW_PROFILE=production
+Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=/var/lib/proxima/preview-supervisors
+ExecStart=/opt/proxima/scripts/proxima output-broker --systemd-socket
 StandardInput=socket
 StandardOutput=null
 StandardError=journal
+KillMode=control-group
+TimeoutStopSec=10s

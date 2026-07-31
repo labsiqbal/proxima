@@ -81,6 +81,7 @@ The installer:
 - installs web dependencies and builds the PWA
 - writes `~/.config/proxima/proxima.env`
 - installs a systemd user service named `proxima`
+- installs a socket-activated per-preview supervisor
 - installs a daily backup timer
 
 Open the configured local URL after install. The default packaged bind is
@@ -88,6 +89,9 @@ Open the configured local URL after install. The default packaged bind is
 
 For a system-wide Linux service under `/opt`, `/etc`, and `/var/lib`, follow the
 complete manual procedure in [`infra/systemd/README.md`](../infra/systemd/README.md).
+Production and staging require separate supervisor sockets, protocol identities,
+state roots, and checkout-specific units. The documented update sequence installs
+and verifies those units before restarting either API profile.
 `scripts/install-local` only copies/builds the application and creates the CLI and
 config; it does not create a service account or install/enable systemd units, so it
 is not a complete managed-service installer.

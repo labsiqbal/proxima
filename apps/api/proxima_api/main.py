@@ -103,6 +103,7 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
         startup_lease.release()
         yield
         return
+    await app.state.app_manager.reconcile()
     if cfg.get("auto_provision", True):
         try:
             backfill(app.state.db, cfg)
@@ -365,6 +366,8 @@ def _create_app(
     )
     app.state.app_manager = AppManager(
         contained=maintenance.process_containment_required,
+        state_root=cfg.get("preview_scope_state_root"),
+        profile=str(cfg.get("preview_profile") or "direct"),
     )
     app.state.hub = EventHub()
     if cfg.get("feature_master_orchestrator", False):
@@ -706,6 +709,13 @@ def _config_from_env() -> dict[str, Any]:
         # domain). Default "auto": loopback plus the tailnet interface if present -
         # never 0.0.0.0 unless explicitly set. "off" disables relays.
         "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
+        "preview_profile": (
+            os.environ.get("PROXIMA_PREVIEW_PROFILE")
+            or DEFAULT_CONFIG["preview_profile"]
+        ),
+        "preview_scope_state_root": (
+            os.environ.get("PROXIMA_PREVIEW_SCOPE_STATE_ROOT") or None
+        ),
         # Browser-tab label (e.g. "STAGING") so staging/prod aren't confused. Unset ⇒ none.
         "env_name": (os.environ.get("PROXIMA_ENV_NAME") or "").strip() or None,
         "cf_api_token": os.environ.get("PROXIMA_CF_API_TOKEN") or None,

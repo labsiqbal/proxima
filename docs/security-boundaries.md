@@ -423,21 +423,31 @@ while namespace proof completes asynchronously; readiness stays fail closed unti
 completes.
 Provisional cleanup belongs to AppManager rather than the start request. Cancellation
 can return immediately, while the manager-owned task completes the in-flight spawn and
-reaps only the process Proxima created. Shutdown reconciles those tasks.
+reaps only the process Proxima created. A monotonic per-project generation reserves
+the lifecycle before broker creation or process spawn. A retry waits for the matching
+cancelled generation to settle, and stale cleanup cannot replace or remove newer
+authority. Shutdown reconciles project generations concurrently.
 
-A preview output broker owns the child pipe before the app is spawned. It keeps a
+A preview supervisor launches the app and owns its child pipe. It keeps a
 bounded complete-line ring and separately bounded partial-line tail, drains all
 currently available bytes before returning an atomic final snapshot, and continues
-discarding detached output until EOF after the API disconnects. Packaged Linux
-services obtain brokers from a socket-activated sibling systemd unit outside the API
-service cgroup. The API service uses `KillMode=process`, so service stop does not
-signal an uncontained detached writer through cgroup cleanup. Windows uses a detached
-breakaway broker when supported. If durable output ownership cannot be established,
-the app is not spawned and status reports the recoverable
-`output_sink_unavailable` reason. This policy preserves the ownership boundary instead
-of treating a successful TCP handshake as ownership evidence. See
-[ADR-0016](adr/0016-live-containment-lineage-gates-preview-authority.md) through
-[ADR-0019](adr/0019-launch-time-broker-owns-preview-output.md).
+discarding detached output until EOF after the API disconnects. Routine polling uses
+versioned line deltas; only explicit finalization requests the full bounded snapshot.
+Packaged Linux services obtain profile-specific supervisors from socket-activated
+systemd units outside the API service cgroup, and the app remains inside that
+supervisor unit. Production and staging have different sockets, protocol identities,
+state roots, and executables. The API service uses `KillMode=process` and a declared
+stop timeout, while app generations stop concurrently. If the API restarts before
+cleanup finishes, it adopts only an exact durable supervisor, process, cgroup,
+profile, protocol, and lineage proof. Incomplete proof remains
+`ownership_unknown` and is neither proxied nor signaled. Windows uses a detached
+breakaway supervisor when supported. If durable ownership cannot be established,
+the launch transaction is rolled back and status reports the recoverable
+`output_sink_unavailable` reason. This policy preserves the ownership boundary
+instead of treating a successful TCP handshake as ownership evidence. See
+[ADR-0016](adr/0016-live-containment-lineage-gates-preview-authority.md) and
+[ADR-0020](adr/0020-preview-lifecycles-use-project-generations.md) through
+[ADR-0023](adr/0023-preview-supervisor-profiles-are-isolated.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale

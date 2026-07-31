@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 import shlex
@@ -15,7 +16,11 @@ import pytest
 
 from proxima_api import apprunner
 from proxima_api.apprunner import AppManager, PortInUseError
-from proxima_api.preview_output import OutputBrokerUnavailable
+from proxima_api.preview_output import (
+    BROKER_STATE_ROOT_ENV,
+    OutputBroker,
+    OutputBrokerUnavailable,
+)
 
 
 def _free_port() -> int:
@@ -368,7 +373,7 @@ def test_cancelled_start_reaps_provisional_process(
     stage,
 ):
     manager = AppManager(contained=True)
-    original_spawn = asyncio.create_subprocess_exec
+    original_spawn = OutputBroker.spawn
     entered = asyncio.Event()
     release = asyncio.Event()
     spawned = {}
@@ -381,11 +386,15 @@ def test_cancelled_start_reaps_provisional_process(
 
     lease = Lease()
 
-    async def delayed_spawn(*args, **kwargs):
+    async def delayed_spawn(broker, *args, **kwargs):
         if stage == "before_spawn":
             entered.set()
             await release.wait()
-        proc = await original_spawn(*args, **kwargs)
+        proc = await original_spawn(
+            broker,
+            *args,
+            **{**kwargs, "contained": False},
+        )
         spawned["proc"] = proc
         if stage == "after_spawn":
             entered.set()
@@ -393,13 +402,8 @@ def test_cancelled_start_reaps_provisional_process(
         return proc
 
     monkeypatch.setattr(
-        apprunner,
-        "pid_namespace_argv",
-        lambda argv, **_kwargs: list(argv),
-    )
-    monkeypatch.setattr(
-        apprunner.asyncio,
-        "create_subprocess_exec",
+        OutputBroker,
+        "spawn",
         delayed_spawn,
     )
 
@@ -432,6 +436,275 @@ def test_cancelled_start_reaps_provisional_process(
     asyncio.run(run_case())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_cancelled_start_reserves_generation_before_immediate_retry(
+    monkeypatch,
+    tmp_path,
+):
+    manager = AppManager()
+    original_spawn = OutputBroker.spawn
+    first_entered = asyncio.Event()
+    first_release = asyncio.Event()
+    calls = 0
+
+    async def delayed_first_spawn(broker, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_entered.set()
+            await first_release.wait()
+        return await original_spawn(broker, *args, **kwargs)
+
+    monkeypatch.setattr(
+        OutputBroker,
+        "spawn",
+        delayed_first_spawn,
+    )
+
+    async def run_case():
+        first = asyncio.create_task(
+            manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        )
+        await asyncio.wait_for(first_entered.wait(), timeout=2)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        retry = asyncio.create_task(
+            manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert retry.done() is False
+
+        first_release.set()
+        await asyncio.wait_for(retry, timeout=8)
+        app = manager._apps["demo"]
+        retry_pid = app["proc"].pid
+        assert app["generation"] == 2
+        assert app["proc"].returncode is None
+
+        await manager.shutdown()
+        assert app["proc"].returncode is not None
+        assert retry_pid > 0
+        assert not manager._cleanup_tasks
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs adoption requires POSIX")
+def test_restart_adopts_only_exact_durable_preview_scope(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+
+    async def run_case():
+        first = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await first.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        original = first._apps["demo"]
+        original_pid = original["proc"].pid
+        tasks = [
+            task
+            for task in (
+                original.get("output_task"),
+                original.get("exit_task"),
+                original.get("authority_task"),
+            )
+            if isinstance(task, asyncio.Task)
+        ]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await original["output_broker"].disconnect()
+        first._apps.clear()
+
+        restarted = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await restarted.reconcile()
+
+        adopted = restarted._apps["demo"]
+        assert adopted["proc"].pid == original_pid
+        assert adopted["generation"] == 1
+        assert restarted.status("demo")["state"] == "starting"
+
+        await restarted.shutdown()
+        assert adopted["proc"].returncode is not None
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs adoption requires POSIX")
+def test_restart_rejects_tampered_scope_without_signaling_it(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+
+    async def run_case():
+        first = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await first.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        original = first._apps["demo"]
+        metadata = original["output_broker"].metadata
+        original_pid = original["proc"].pid
+        tasks = [
+            task
+            for task in (
+                original.get("output_task"),
+                original.get("exit_task"),
+            )
+            if isinstance(task, asyncio.Task)
+        ]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await original["output_broker"].disconnect()
+        first._apps.clear()
+
+        record_path = next(state_root.glob("*.json"))
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["process"]["start_time"] += 1
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+
+        restarted = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await restarted.reconcile()
+
+        assert "demo" not in restarted._apps
+        assert restarted.status("demo")["state"] == "ownership_unknown"
+        os.kill(original_pid, 0)
+
+        cleanup = await OutputBroker.reconnect(metadata)
+        process = await cleanup.managed_process()
+        await process.terminate()
+        assert await AppManager._wait_for_returncode(process, 4)
+        await cleanup.disconnect()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="procfs adoption requires POSIX")
+def test_restart_discards_fully_ended_durable_scope(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = tmp_path / "preview-supervisors"
+    monkeypatch.setenv(BROKER_STATE_ROOT_ENV, str(state_root))
+
+    async def run_case():
+        first = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await first.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        original = first._apps["demo"]
+        metadata = original["output_broker"].metadata
+        broker_pid = int(metadata["pid"])
+        tasks = [
+            task
+            for task in (
+                original.get("output_task"),
+                original.get("exit_task"),
+            )
+            if isinstance(task, asyncio.Task)
+        ]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await original["output_broker"].disconnect()
+        first._apps.clear()
+
+        cleanup = await OutputBroker.reconnect(metadata)
+        process = await cleanup.managed_process()
+        await process.terminate()
+        assert await AppManager._wait_for_returncode(process, 4)
+        await cleanup.disconnect()
+        deadline = time.monotonic() + 5
+        while (
+            apprunner.process_start_time(broker_pid) is not None
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.02)
+        assert apprunner.process_start_time(broker_pid) is None
+
+        restarted = AppManager(
+            state_root=state_root,
+            profile="direct",
+        )
+        await restarted.reconcile()
+
+        assert restarted.status("demo")["state"] == "stopped"
+        assert not list(state_root.glob("*.json"))
+        await restarted.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        assert restarted._apps["demo"]["generation"] == 2
+        await restarted.shutdown()
+
+    asyncio.run(run_case())
+
+
+def test_shutdown_reconciles_many_apps_concurrently(monkeypatch):
+    manager = AppManager()
+    for index in range(24):
+        manager._apps[f"app-{index}"] = {"registered": True}
+
+    async def slow_stop(slug, _app, *, preserve_status):
+        assert preserve_status is False
+        await asyncio.sleep(0.1)
+        manager._apps.pop(slug, None)
+
+    monkeypatch.setattr(manager, "_stop_app", slow_stop)
+
+    async def run_case():
+        started = time.monotonic()
+        await manager.shutdown()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.5
+        assert not manager._apps
+
+    asyncio.run(run_case())
+
+
 def test_cancelled_start_before_spawn_releases_effect_lease(
     monkeypatch,
     tmp_path,
@@ -452,7 +725,7 @@ def test_cancelled_start_before_spawn_releases_effect_lease(
         entered.set()
         await gate.wait()
 
-    monkeypatch.setattr(manager, "stop", blocked_stop)
+    monkeypatch.setattr(manager, "_stop_locked", blocked_stop)
 
     async def run_case():
         task = asyncio.create_task(
@@ -476,7 +749,6 @@ def test_cancelled_start_before_spawn_releases_effect_lease(
 
 
 def test_output_broker_launch_failure_is_recoverable_before_spawn(
-    monkeypatch,
     tmp_path,
 ):
     async def unavailable():
@@ -484,14 +756,6 @@ def test_output_broker_launch_failure_is_recoverable_before_spawn(
             "Windows breakaway preview output is unavailable"
         )
 
-    async def unexpected_spawn(*_args, **_kwargs):
-        raise AssertionError("app process must not spawn without output broker")
-
-    monkeypatch.setattr(
-        apprunner.asyncio,
-        "create_subprocess_exec",
-        unexpected_spawn,
-    )
     manager = AppManager(output_broker_factory=unavailable)
 
     async def run_case():
@@ -555,22 +819,30 @@ def test_containment_proof_completes_asynchronously_and_stop_owns_it(
     manager = AppManager(contained=True)
     entered = asyncio.Event()
     release = asyncio.Event()
+    original_spawn = OutputBroker.spawn
 
-    async def slow_proof(_info_fd, _proc):
+    async def uncontained_spawn(broker, *args, **kwargs):
+        return await original_spawn(
+            broker,
+            *args,
+            **{**kwargs, "contained": False},
+        )
+
+    async def slow_proof(slug, app):
         entered.set()
         await release.wait()
-        return 4242
+        if manager._apps.get(slug) is app:
+            app["authority"] = apprunner.replace(
+                app["authority"],
+                containment_pid_namespace=4242,
+            )
 
     monkeypatch.setattr(
-        apprunner,
-        "pid_namespace_argv",
-        lambda argv, **_kwargs: list(argv),
+        OutputBroker,
+        "spawn",
+        uncontained_spawn,
     )
-    monkeypatch.setattr(
-        manager,
-        "_read_containment_pid_namespace",
-        slow_proof,
-    )
+    monkeypatch.setattr(manager, "_complete_containment_authority", slow_proof)
 
     async def run_case():
         await manager.start(
@@ -595,13 +867,12 @@ def test_containment_proof_completes_asynchronously_and_stop_owns_it(
 
         second_gate = asyncio.Event()
 
-        async def blocked_proof(_info_fd, _proc):
+        async def blocked_proof(_slug, _app):
             await second_gate.wait()
-            return 5252
 
         monkeypatch.setattr(
             manager,
-            "_read_containment_pid_namespace",
+            "_complete_containment_authority",
             blocked_proof,
         )
         await manager.stop("demo", preserve_status=False)

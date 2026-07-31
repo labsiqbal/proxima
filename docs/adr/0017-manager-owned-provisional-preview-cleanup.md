@@ -1,6 +1,6 @@
 # ADR-0017: Manager-owned provisional preview cleanup
 
-- Status: Accepted
+- Status: Superseded by ADR-0020
 - Date: 2026-07-31
 
 ## Context

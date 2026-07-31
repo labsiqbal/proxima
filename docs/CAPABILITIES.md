@@ -1236,7 +1236,9 @@ authority. The managed process and stdout are registered immediately after
 spawn while containment proof completes asynchronously, and preview stays fail
 closed until that proof is available. Cancellation cleanup is registered in a
 manager-owned task before the request returns and is reconciled at shutdown, so
-repeated request cancellation cannot abandon the provisional process.
+repeated request cancellation cannot abandon the provisional process. Each project
+has a monotonic lifecycle generation. An immediate retry waits for cancellation
+cleanup of the prior generation, and cleanup can mutate only its own generation.
 A start with no listener after 15 seconds shows an actionable prolonged-start warning
 with Stop and logs instead of an infinite spinner. When a command self-exits (short
 script, crash, or non-server entry point), status keeps
@@ -1247,15 +1249,20 @@ The existing bounded 40-line status buffer survives preview Reload and explicit 
 so stopped/retry feedback shows the most recent command output, including terminal
 shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
-A launch-time broker owns stdout before the app process starts, keeps the complete-line
-ring and partial-line byte tail bounded, and drains all currently available bytes
-before returning an atomic final snapshot. If a detached child keeps stdout open, the
-broker continues fixed-size reads until EOF after the API disconnects. Packaged Linux
-installs place brokers in socket-activated sibling systemd units outside the API
-cgroup, while supported Windows hosts use detached breakaway brokers. If durable
-output ownership is unavailable, start fails before app spawn with a recoverable
-`output_sink_unavailable` stopped state. Stop retains the last available log and
-completes even if a broker later disconnects.
+A launch-time supervisor starts the app and owns stdout, keeps the complete-line ring
+and partial-line byte tail bounded, and drains all currently available bytes before
+returning an atomic final snapshot. Routine polling transfers only versioned line
+deltas. If a detached child keeps stdout open, the supervisor continues fixed-size
+reads until EOF after the API disconnects. Packaged Linux installs place each app in a
+profile-specific socket-activated supervisor unit outside the API cgroup. Production
+and staging use separate sockets, protocol identities, state roots, and checkout
+executables. Shutdown stops project generations concurrently. A restarted API adopts
+only exact durable supervisor, process, cgroup, profile, protocol, and lineage
+evidence; anything incomplete remains ownership-unknown and is not signaled.
+Supported Windows hosts use detached breakaway supervisors. If durable ownership is
+unavailable, start fails before app spawn with a recoverable
+`output_sink_unavailable` stopped state. Stop retains the last available log, and a
+later supervisor disconnect preserves fail-closed authority.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

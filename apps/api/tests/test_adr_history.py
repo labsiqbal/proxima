@@ -76,7 +76,7 @@ def test_preview_authority_adr_history_is_append_only():
         ),
         "0017-manager-owned-provisional-preview-cleanup.md": (
             "Manager-owned provisional preview cleanup",
-            "Accepted",
+            "Superseded by ADR-0020",
         ),
         "0018-preview-status-log-framing-is-bounded.md": (
             "Preview status log framing is bounded",
@@ -84,6 +84,22 @@ def test_preview_authority_adr_history_is_append_only():
         ),
         "0019-launch-time-broker-owns-preview-output.md": (
             "Launch-time broker owns preview output",
+            "Superseded by ADR-0021",
+        ),
+        "0020-preview-lifecycles-use-project-generations.md": (
+            "Preview lifecycles use project generations",
+            "Accepted",
+        ),
+        "0021-preview-supervisors-own-app-scopes.md": (
+            "Preview supervisors own app scopes",
+            "Accepted",
+        ),
+        "0022-preview-log-polling-uses-versioned-deltas.md": (
+            "Preview log polling uses versioned deltas",
+            "Accepted",
+        ),
+        "0023-preview-supervisor-profiles-are-isolated.md": (
+            "Preview supervisor profiles are isolated",
             "Accepted",
         ),
     }

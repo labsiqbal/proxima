@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${PROXIMA_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/proxima/proxima.env}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+DATA_DIR="${PROXIMA_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/proxima}"
 DRY_RUN=0
 
 case "${1:-}" in
@@ -45,6 +46,12 @@ fi
 
 echo "==> Writing config"
 run bash "$ROOT/scripts/proxima" init-config
+if [[ "$DRY_RUN" != 1 ]]; then
+  set +u
+  source "$CONFIG_FILE"
+  set -u
+  DATA_DIR="${PROXIMA_DATA_DIR:-$DATA_DIR}"
+fi
 
 echo "==> Checking for Hermes runner"
 if command -v hermes >/dev/null 2>&1 && { [ -f "${HERMES_HOME:-$HOME/.hermes}/auth.json" ] || [ -f "${HERMES_HOME:-$HOME/.hermes}/config.yaml" ]; }; then
@@ -70,7 +77,7 @@ if [[ "$DRY_RUN" == 1 ]]; then
 else
   cat > "$UNIT_DIR/proxima-preview-output.socket" <<EOF
 [Unit]
-Description=Proxima preview output broker socket
+Description=Proxima preview supervisor socket
 
 [Socket]
 ListenStream=%t/proxima/preview-output.sock
@@ -88,16 +95,21 @@ if [[ "$DRY_RUN" == 1 ]]; then
 else
   cat > "$UNIT_DIR/proxima-preview-output@.service" <<EOF
 [Unit]
-Description=Proxima preview output broker
+Description=Proxima preview supervisor
 
 [Service]
 Type=simple
 WorkingDirectory=$ROOT
 Environment=PATH=$SVC_PATH
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:user
+Environment=PROXIMA_PREVIEW_PROFILE=user
+Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=$DATA_DIR/preview-supervisors
 ExecStart=$ROOT/scripts/proxima output-broker --systemd-socket
 StandardInput=socket
 StandardOutput=null
 StandardError=journal
+KillMode=control-group
+TimeoutStopSec=10s
 EOF
 fi
 
@@ -116,10 +128,14 @@ Type=simple
 WorkingDirectory=$ROOT
 Environment=PATH=$SVC_PATH
 Environment=PROXIMA_OUTPUT_BROKER_SOCKET=%t/proxima/preview-output.sock
+Environment=PROXIMA_OUTPUT_BROKER_PROTOCOL=proxima-preview-supervisor-v1:user
+Environment=PROXIMA_PREVIEW_PROFILE=user
+Environment=PROXIMA_PREVIEW_SCOPE_STATE_ROOT=$DATA_DIR/preview-supervisors
 ExecStart=$ROOT/scripts/proxima serve
 Restart=on-failure
 RestartSec=3
 KillMode=process
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=default.target

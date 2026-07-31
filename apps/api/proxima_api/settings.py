@@ -115,6 +115,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # still set an explicit interface (including 0.0.0.0) via
     # PROXIMA_PREVIEW_BIND, or "off" for strict loopback-only installs.
     "preview_bind_host": "auto",
+    "preview_profile": "direct",
+    "preview_scope_state_root": None,
     # systemd --user unit name for Diagnostics journal (without .service).
     # Staging/preview installs set PROXIMA_SERVICE_NAME so debug logs match the
     # real unit instead of always reading proxima.service.
@@ -213,6 +215,18 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     raw_service = str(cfg.get("service_name") or "proxima").strip() or "proxima"
     cfg["service_name"] = raw_service.removesuffix(".service")
+    raw_profile = str(
+        cfg.get("preview_profile") or cfg["service_name"]
+    ).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", raw_profile):
+        raise ValueError("preview profile identity is invalid")
+    cfg["preview_profile"] = raw_profile
+    cfg["preview_scope_state_root"] = str(
+        Path(
+            cfg.get("preview_scope_state_root")
+            or workspace_root / "preview-supervisors"
+        )
+    )
     return cfg
 
 

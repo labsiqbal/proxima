@@ -1,6 +1,6 @@
 # ADR-0019: Launch-time broker owns preview output
 
-- Status: Accepted
+- Status: Superseded by ADR-0021
 - Date: 2026-07-31
 
 ## Context

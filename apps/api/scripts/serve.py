@@ -117,6 +117,13 @@ app = create_app(
         # domain). Default "auto": the tailnet interface if present, else loopback -
         # never 0.0.0.0 unless explicitly set. "off" disables relays.
         "preview_bind_host": os.environ.get("PROXIMA_PREVIEW_BIND") or DEFAULT_CONFIG["preview_bind_host"],
+        "preview_profile": (
+            os.environ.get("PROXIMA_PREVIEW_PROFILE")
+            or DEFAULT_CONFIG["preview_profile"]
+        ),
+        "preview_scope_state_root": (
+            os.environ.get("PROXIMA_PREVIEW_SCOPE_STATE_ROOT") or None
+        ),
         # Browser-tab label (e.g. "STAGING") so staging/prod tabs aren't confused.
         "env_name": (os.environ.get("PROXIMA_ENV_NAME") or "").strip() or None,
         "cf_api_token": os.environ.get("PROXIMA_CF_API_TOKEN") or None,

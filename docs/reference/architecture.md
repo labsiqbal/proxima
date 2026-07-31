@@ -82,9 +82,10 @@ queue starter), `graph_context.py` (scoped Graphify adapter),
 `graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
 `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
-`apprunner.py` + `preview_proxy.py` + `preview_output.py` (preview lifecycle,
-proxy, and launch-time output broker client) with `preview_output_broker.py` as
-the supervisor-owned broker process, `image_providers.py` (image backend registry),
+`apprunner.py` + `preview_proxy.py` + `preview_output.py` (project generations,
+proxy, reconnectable supervisor client, and delta log protocol) with
+`preview_output_broker.py` as the per-app launch/output supervisor,
+`image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
@@ -1147,16 +1148,23 @@ forever. The bounded 40-line status buffer and Logs toggle remain available whil
 starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
 the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
 including terminal shutdown output, remains available for the stopped/retry
-state. A launch-time output broker owns the child pipe before process creation and
-drains all currently available bytes before returning the final snapshot. Complete
+state. A launch-time supervisor creates the process and owns its child pipe, so the
+API never has to transfer process or output ownership. It drains all currently
+available bytes before returning the final snapshot. Complete
 lines use a bounded ring and the pending partial line has its own fixed byte bound, so
-newline-free streams cannot grow memory without limit. If an uncontained child keeps
-stdout open, the broker continues fixed-size reads after the API disconnects and exits
-at EOF. Packaged Linux installs run each broker in a socket-activated sibling systemd
-unit outside the API cgroup, so an API stop or restart does not close that read end.
-Windows uses a detached breakaway broker when supported. Broker setup failure occurs
+newline-free streams cannot grow memory without limit. Periodic status polling uses
+a version and completed-line cursor, so an unchanged log returns constant-size
+metadata instead of retransmitting the ring. If an uncontained child keeps stdout
+open, the supervisor continues fixed-size reads after the API disconnects and exits
+at EOF. Packaged Linux installs run every app inside its socket-activated,
+profile-specific supervisor unit outside the API cgroup. A durable record binds the
+profile, protocol, supervisor PID/start time, app PID/start time, cgroup, and lineage;
+restart adoption requires every field to match. Shutdown reconciles app generations
+concurrently within the service timeout. Windows uses a detached breakaway supervisor
+when supported. Supervisor setup failure occurs
 before app spawn and produces a recoverable `output_sink_unavailable` stopped state;
-a later broker disconnect cannot strand Stop or discard the last cached log.
+a later disconnect retains fail-closed authority instead of claiming an unverified
+stop.
 Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
@@ -1169,8 +1177,8 @@ authentication runs before target resolution or procfs ownership work. Proxy pat
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
-See ADR-0014 through ADR-0019 for the focused binding, authentication, authority,
-cleanup, framing, and output-lifetime decisions.
+See ADR-0014 through ADR-0023 for the focused binding, authentication, authority,
+cleanup, framing, supervision, restart-adoption, and profile-isolation decisions.
 
 ### 9. Update check and candidate gate plus disabled switch fixture
 
