@@ -396,6 +396,10 @@ describe('GraphScreen editor autosave actions', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 label' }), {
       target: { value: 'Topic' },
     })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 ID' }), {
+      target: { value: 'topic' },
+    })
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Input 1 ID' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Input 1 required' }))
 
     await waitFor(() => {

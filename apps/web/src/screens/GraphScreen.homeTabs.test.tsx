@@ -311,8 +311,9 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
     })
     render(<GraphScreen {...props} />)
 
-    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
-    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+    const manual = await screen.findByRole('table', { name: 'Reusable workflows' })
+    const reportRow = within(manual).getByText('Manual report').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(reportRow).getByRole('button', { name: 'Run' }))
 
     expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
     expect(createGraphJob).not.toHaveBeenCalled()
@@ -374,8 +375,9 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
       })
 
     render(<GraphScreen {...props} />)
-    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
-    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+    const manual = await screen.findByRole('table', { name: 'Reusable workflows' })
+    const reportRow = within(manual).getByText('Manual report').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(reportRow).getByRole('button', { name: 'Run' }))
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
       target: { value: 'Launch week' },

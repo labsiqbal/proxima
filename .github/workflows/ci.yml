@@ -67,6 +67,7 @@ jobs:
           sudo ln -sfn "$chrome_path" /usr/local/bin/google-chrome
           command -v google-chrome
           google-chrome --version
+          echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
       - name: Sync API dependencies
         working-directory: apps/api
         run: uv sync --locked
@@ -75,6 +76,8 @@ jobs:
         run: npm ci
       - name: Run disposable real-browser regression
         run: npm run test:e2e:schedules
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
   fresh-install:
     name: Fresh-install smoke

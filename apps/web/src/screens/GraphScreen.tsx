@@ -289,6 +289,9 @@ export function GraphScreen({
   const jobLoadSeq = React.useRef(0)
   const wantedJobIdRef = React.useRef<number | null>(null)
   const focusedJobIdRef = React.useRef<number | null>(null)
+  // Last successfully focused job object - used to soft-restore UI after a failed open
+  // without letting focusJob(null) forget the prior identity mid-flight.
+  const focusedJobRef = React.useRef<GraphJob | null>(null)
   const draftSeq = React.useRef(0)
   // Parent-owned Schedule Run now lock: set before spawn, cleared after exact
   // selection or a surfaced failure. Sync ref so mid-await gates see it immediately.
@@ -298,12 +301,14 @@ export function GraphScreen({
   const focusJob = React.useCallback((next: GraphJob | null) => {
     wantedJobIdRef.current = next?.id ?? null
     focusedJobIdRef.current = next?.id ?? null
+    focusedJobRef.current = next
     setJob(next)
   }, [])
   // Autosave, live poll, and other same-job refreshes must never steal focus.
   const applyFocusedJob = React.useCallback((next: GraphJob) => {
     if (wantedJobIdRef.current !== next.id) return false
     focusedJobIdRef.current = next.id
+    focusedJobRef.current = next
     setJob(next)
     return true
   }, [])
@@ -469,7 +474,15 @@ export function GraphScreen({
             if (snapshot.graph) setPlan(next.graph)
             setDraftTitle(next.title)
           }
-          if (!pendingSave.current) setSaveState('saved')
+        }
+        // Clear Saving once this draft's PATCH lands, even if wanted focus has moved
+        // to an in-flight open target (soft-fail opens must not leave Saving stuck).
+        if (
+          mounted.current
+          && autosaveJobId.current === snapshot.jobId
+          && !pendingSave.current
+        ) {
+          setSaveState('saved')
         }
       }
     })()
@@ -673,12 +686,18 @@ export function GraphScreen({
 
   React.useEffect(
     () => {
+      // Prefer an in-flight open target even while the library (home) is still
+      // mounted - that lets the shell retarget without flashing a keep-alive prior
+      // and without forcing the editor chrome up before the load commits.
+      if (openingJobId != null) {
+        onStageChange?.('editor', openingJobId)
+        return
+      }
       if (stage !== 'editor') {
         onStageChange?.(stage, null)
         return
       }
-      // Prefer the requested open target over any keep-alive job still in state.
-      onStageChange?.(stage, openingJobId ?? job?.id ?? null)
+      onStageChange?.(stage, job?.id ?? null)
     },
     [stage, openingJobId, job?.id, onStageChange],
   )
@@ -708,18 +727,36 @@ export function GraphScreen({
   jobIdRef.current = job?.id ?? null
 
   const openJob = React.useCallback(async (jobId: number) => {
+    // Mark the in-flight target immediately. Stage stays put until load commits so
+    // home (and the schedule dialog) remain interactive for cancel/Run-now races;
+    // the stage effect still reports editor+openingJobId to the shell.
     setOpeningJobId(jobId)
-    // Drop a mismatched keep-alive job so loading never displays or reports it.
+    // Snapshot prior focus for soft-fail restore. Do not focusJob(null) - that
+    // forgets the prior focused identity and drops in-flight Saving UI.
     // Read via ref so this callback stays stable when job loads - otherwise the
     // pendingJobId effect re-fires, re-GETs, and can clear the editor mid-edit.
-    if (jobIdRef.current !== jobId) {
-      focusJob(null)
-      setPlan(null)
-      setSelectedId(null)
-    }
+    const prior = focusedJobRef.current
+    const priorDraft = latestDraft.current && prior && latestDraft.current.jobId === prior.id
+      ? { title: latestDraft.current.title, graph: latestDraft.current.graph }
+      : null
     const selected = await loadJob(jobId)
     if (!selected || selected.id !== jobId) {
       setOpeningJobId(current => (current === jobId ? null : current))
+      // Soft-fail: keep prior editor focus when restore still points at it.
+      if (
+        prior
+        && focusedJobIdRef.current === prior.id
+        && wantedJobIdRef.current === prior.id
+      ) {
+        setJob(prior)
+        if (priorDraft) {
+          setPlan(priorDraft.graph)
+          setDraftTitle(priorDraft.title)
+        } else if (!jobIdRef.current) {
+          setPlan(prior.graph)
+          setDraftTitle(prior.title || 'Untitled plan')
+        }
+      }
       return null
     }
     setStage('editor')
@@ -735,17 +772,20 @@ export function GraphScreen({
     if (!pendingJobId) return
     // Schedule Run now owns focus until exact selection finishes. Drop competing
     // deep-links so they cannot steal the spawned job after handoff completes.
-    if (scheduleHandoffRef.current || busy === 'schedule-run-now') {
+    // Gate on the sync handoff ref only - do not re-open when ordinary busy tokens
+    // flip (Run/start would otherwise cancel itself by bumping jobLoadSeq).
+    if (scheduleHandoffRef.current) {
       onPendingConsumed?.()
       return
     }
     void openJob(pendingJobId)
     onPendingConsumed?.()
-  }, [pendingJobId, openJob, onPendingConsumed, busy])
+  }, [pendingJobId, openJob, onPendingConsumed])
 
   React.useEffect(() => {
     if (!pendingDraft) return
-    if (scheduleHandoffRef.current || busy === 'schedule-run-now') {
+    // Same handoff gate as pendingJobId - never depend on busy here.
+    if (scheduleHandoffRef.current) {
       onDraftConsumed?.()
       return
     }
@@ -797,7 +837,7 @@ export function GraphScreen({
     }).finally(() => {
       if (seq === draftSeq.current) releaseOwnedBusy('create')
     })
-  }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed, busy])
+  }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed])
 
   // Every external Task mutation publishes one durable job.update event to
   // this Task's session. Running/review polling remains a liveness fallback.

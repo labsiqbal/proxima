@@ -94,6 +94,10 @@ def _port() -> int:
 
 
 def _browser() -> str:
+    for key in ("CHROME_PATH", "CHROMIUM_PATH", "GOOGLE_CHROME_BIN"):
+        configured = os.environ.get(key, "").strip()
+        if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
+            return configured
     for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"):
         executable = shutil.which(name)
         if executable:

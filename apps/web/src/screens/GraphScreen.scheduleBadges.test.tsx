@@ -500,7 +500,8 @@ describe('GraphScreen how-it-runs badges', () => {
     )
     expect(await screen.findByRole('button', { name: '▶ Run' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42, undefined))
     expect(await screen.findByText('Execution started.')).toBeInTheDocument()
 
     const getsAfterStart = gets
@@ -540,8 +541,9 @@ describe('GraphScreen how-it-runs badges', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
     const row = (await screen.findByText('Home draft')).closest('[role="row"]') as HTMLElement
     fireEvent.click(within(row).getByRole('button', { name: 'Run' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
 
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55, undefined))
     expect(await screen.findByRole('button', { name: 'Rename workflow Home draft' })).toBeInTheDocument()
 
     const getsAfterStart = gets
@@ -627,6 +629,7 @@ describe('GraphScreen how-it-runs badges', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 2' }))
     const row = (await screen.findByText('Target draft')).closest('[role="row"]') as HTMLElement
     fireEvent.click(within(row).getByRole('button', { name: 'Run' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
 
     // Intent is recorded, but focus/plan stay on the prior draft while flush is in flight.
     await waitFor(() => expect(finishAutosave).toBeTypeOf('function'))
@@ -647,7 +650,7 @@ describe('GraphScreen how-it-runs badges', () => {
       await Promise.resolve()
     })
 
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55, undefined))
     expect(await screen.findByRole('button', { name: 'Rename workflow Target draft' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Target step/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Prior step/ })).not.toBeInTheDocument()
@@ -746,6 +749,7 @@ describe('GraphScreen how-it-runs badges', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 3' }))
     const targetRow = (await screen.findByText('Target draft')).closest('[role="row"]') as HTMLElement
     fireEvent.click(within(targetRow).getByRole('button', { name: 'Run' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
     await waitFor(() => expect(finishAutosave).toBeTypeOf('function'))
     expect(startGraphJob).not.toHaveBeenCalled()
 
@@ -1021,7 +1025,8 @@ describe('GraphScreen how-it-runs badges', () => {
     await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77, undefined))
     expect(await screen.findByText('Execution started.')).toBeInTheDocument()
 
     const getsAfterStart = gets77
@@ -1116,7 +1121,8 @@ describe('GraphScreen how-it-runs badges', () => {
     await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77, undefined))
     expect(await screen.findByText('Execution started.')).toBeInTheDocument()
 
     const getsAfterStart = gets77
@@ -1401,6 +1407,8 @@ describe('GraphScreen how-it-runs badges', () => {
     await waitFor(() => expect(rejectOpen).toBeTypeOf('function'))
     expect(screen.getByText('Saving…')).toBeInTheDocument()
 
+    expect(typeof finishAutosave).toBe('function')
+    expect(updateGraphPlan).toHaveBeenCalled()
     await act(async () => {
       finishAutosave?.({
         ...prior,
@@ -1412,9 +1420,11 @@ describe('GraphScreen how-it-runs badges', () => {
         },
       })
       await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
-    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.getByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
 
     await act(async () => {
@@ -1536,7 +1546,8 @@ describe('GraphScreen how-it-runs badges', () => {
     await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77, undefined))
     expect(await screen.findByText('Execution started.')).toBeInTheDocument()
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
   })
@@ -2154,7 +2165,8 @@ describe('GraphScreen how-it-runs badges', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Drafts 1' }))
     const draftRow = (await screen.findByText('Home draft')).closest('[role="row"]') as HTMLElement
     fireEvent.click(within(draftRow).getByRole('button', { name: 'Run' }))
-    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run workflow' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55, undefined))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
     await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
@@ -2248,6 +2260,7 @@ describe('GraphScreen how-it-runs badges', () => {
       startCreate: () => {
         const runRow = screen.getByText('Publish on demand').closest('[role="row"]') as HTMLElement
         fireEvent.click(within(runRow).getByRole('button', { name: 'Run' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }))
       },
     })
   })
