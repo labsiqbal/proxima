@@ -55,12 +55,13 @@ export function listPlanRowAriaLabel(
 
 /** Spaced accessible name for a Tasks list classic-task row. */
 export function listTaskRowAriaLabel(
-  job: Pick<Job, 'title' | 'status' | 'schedule_id' | 'workflow_id'>,
+  job: Pick<Job, 'title' | 'schedule_id' | 'workflow_id'>,
+  status: string,
   progressLabel: string,
   age: string,
 ): string {
   const kind = job.schedule_id != null ? 'Scheduled' : job.workflow_id ? 'Workflow' : 'Task'
-  return [job.title, kind, job.status, progressLabel, age].filter(Boolean).join(' · ')
+  return [job.title, kind, status, progressLabel, age].filter(Boolean).join(' · ')
 }
 
 // Tasks = plans + their jobs (T2). A classic one-step task and a sliced plan are
@@ -317,7 +318,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                 <span className="jr-title">Task</span><span className="jr-wf">Type</span><span className="jr-status">Status</span><span className="jr-prog">Jobs</span><span className="jr-time">Created</span>
               </div>
               {rows.map((row, index) => row.kind === 'task'
-                ? <button className="job-row stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id} aria-label={listTaskRowAriaLabel(row.job, progress(row.job), runAge(row.job))} onClick={() => onOpenTask(row.job.id)}>
+                ? <button className="job-row stagger-item" style={{ ['--i' as string]: index } as React.CSSProperties} key={row.id} aria-label={listTaskRowAriaLabel(row.job, projectRun(row.job).status, progress(row.job), runAge(row.job))} onClick={() => onOpenTask(row.job.id)}>
                     <span className="jr-title" aria-hidden="true">{row.job.title}{row.job.schedule_id != null && <span className="job-pill scheduled">{' '}scheduled</span>}</span>
                     <span className="jr-wf muted" aria-hidden="true">{row.job.workflow_id ? (row.job.schedule_id != null ? 'Scheduled' : 'Workflow') : 'Task'}</span>
                     <span className="jr-status" aria-hidden="true"><StatusPill status={projectRun(row.job).status} /></span>

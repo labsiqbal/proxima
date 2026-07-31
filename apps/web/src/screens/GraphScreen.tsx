@@ -1145,7 +1145,7 @@ export function GraphScreen({
     const matches = (...values: Array<string | null | undefined>) =>
       !query || values.some(value => value?.toLowerCase().includes(query))
     const visibleDrafts = drafts.filter(item => matches(item.title))
-    const visibleRuns = runs.filter(item => matches(item.title, item.status))
+    const visibleRuns = runs.filter(item => matches(item.title, projectRun(item).status))
     const searchedTemplates = (showArchived ? archivedTemplates : activeTemplates)
       .filter(item => matches(item.name, item.description, item.category, ...(scheduleCronByWorkflow.get(item.id) || [])))
     const automaticTemplates = searchedTemplates.filter(item =>

@@ -66,7 +66,8 @@ describe('list row aria labels', () => {
 
   it('spaces classic task status and type', () => {
     expect(listTaskRowAriaLabel(
-      { title: 'Tidy docs', status: 'done', schedule_id: null, workflow_id: null },
+      { title: 'Tidy docs', schedule_id: null, workflow_id: null },
+      'done',
       '—',
       '3h ago',
     )).toBe('Tidy docs · Task · done · — · 3h ago')
