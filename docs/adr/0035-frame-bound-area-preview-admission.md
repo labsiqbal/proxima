@@ -1,4 +1,4 @@
-# ADR-0016: Area preview admission is frame-bound
+# ADR-0035: Area preview admission is frame-bound
 
 - Status: Accepted
 - Date: 2026-07-31
@@ -56,8 +56,8 @@ validates its capability and resolves through the canonical Area jail.
 
 ## Related
 
-- Extends [ADR-0015](0015-distinct-tls-area-preview-origins.md) without superseding
+- Extends [ADR-0034](0034-distinct-tls-area-preview-origins.md) without superseding
   its distinct-origin decision.
-- [Canonical file targets](0010-canonical-file-targets.md)
+- [Canonical file targets](0029-canonical-file-targets.md)
 - [Capabilities](../CAPABILITIES.md)
 - [Security boundaries](../security-boundaries.md)

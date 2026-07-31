@@ -1,11 +1,11 @@
-# ADR-0011: Area-scoped artifact media and preview routing
+# ADR-0030: Area-scoped artifact media and preview routing
 
 - Status: Accepted
 - Date: 2026-07-31
 
 ## Context
 
-ADR-0010 established a canonical file locator, but retaining that identity only
+ADR-0029 established a canonical file locator, but retaining that identity only
 at an initial read is insufficient. Artifact scans can cross from an Ops-at-dot
 root into a nested Code Area. Task, Iterate, Archive, and Design Studio consumers
 can also drop the locator before resolving Markdown resources or scene images.
@@ -74,6 +74,6 @@ authoritative ownership check.
 
 ## Related
 
-- [ADR-0010](0010-canonical-file-targets.md)
+- [ADR-0029](0029-canonical-file-targets.md)
 - [Architecture and data model](../reference/architecture.md)
 - [Files capability](../CAPABILITIES.md#11-files--uploads-apis)

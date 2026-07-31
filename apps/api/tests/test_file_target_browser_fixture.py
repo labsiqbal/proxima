@@ -414,12 +414,12 @@ def test_browser_manifest_probe_keeps_track_load_independent() -> None:
 
 
 def test_accepted_preview_adr_remains_append_only() -> None:
-    adr = ROOT / "docs" / "adr" / "0015-distinct-tls-area-preview-origins.md"
+    adr = ROOT / "docs" / "adr" / "0034-distinct-tls-area-preview-origins.md"
     digest = hashlib.sha256(adr.read_bytes()).hexdigest()
     assert digest == "559d71879df7260d42c015fc0f2063ab828e564baeaac7bd56173d6646ba7a72"
 
     successor = (
-        ROOT / "docs" / "adr" / "0016-frame-bound-area-preview-admission.md"
+        ROOT / "docs" / "adr" / "0035-frame-bound-area-preview-admission.md"
     ).read_text(encoding="utf-8")
     assert "- Status: Accepted" in successor
     assert "without superseding" in successor
@@ -428,6 +428,6 @@ def test_accepted_preview_adr_remains_append_only() -> None:
         encoding="utf-8",
     )
     assert (
-        "| [0016](0016-frame-bound-area-preview-admission.md) "
+        "| [0035](0035-frame-bound-area-preview-admission.md) "
         "| Area preview admission is frame-bound | Accepted |"
     ) in index

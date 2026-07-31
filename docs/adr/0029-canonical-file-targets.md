@@ -1,4 +1,4 @@
-# ADR-0010: Canonical file targets preserve Area identity
+# ADR-0029: Canonical file targets preserve Area identity
 
 - Status: Accepted
 - Date: 2026-07-31

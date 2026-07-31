@@ -1,11 +1,11 @@
-# ADR-0013: Canonical file previews use Area-bound capability origins
+# ADR-0032: Canonical file previews use Area-bound capability origins
 
-- Status: Superseded by ADR-0014
+- Status: Superseded by ADR-0033
 - Date: 2026-07-31
 
 ## Context
 
-ADR-0012 put targeted HTML on the owner API origin and relied on an
+ADR-0031 put targeted HTML on the owner API origin and relied on an
 opaque-origin sandbox plus path-scoped Content Security Policy. A browser
 normalizes document navigation before sending a request, so a script could
 navigate from the targeted path to a legacy or application route on that same
@@ -82,8 +82,8 @@ not receive same-origin permission.
 
 ## Related
 
-- Superseded by [ADR-0014](0014-capability-scoped-file-preview-gateways.md)
-- Supersedes [ADR-0012](0012-sandboxed-target-preview-resources.md)
-- [ADR-0010](0010-canonical-file-targets.md)
-- [ADR-0011](0011-area-scoped-artifact-media.md)
+- Superseded by [ADR-0033](0033-capability-scoped-file-preview-gateways.md)
+- Supersedes [ADR-0031](0031-sandboxed-target-preview-resources.md)
+- [ADR-0029](0029-canonical-file-targets.md)
+- [ADR-0030](0030-area-scoped-artifact-media.md)
 - [Architecture and data model](../reference/architecture.md)
