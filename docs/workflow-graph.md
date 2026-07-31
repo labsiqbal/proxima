@@ -116,9 +116,9 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | Field | Meaning |
 | --- | --- |
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
-| `trigger_kind` | Trigger nodes only. Informational label for the entry point; intake and schedule seeds are independent fields on the same trigger. |
+| `trigger_kind` | Trigger nodes only. Informational authoring-view label for the entry point; intake and schedule seeds are independent fields on the same trigger and survive panel toggles. |
 | `inputs` | Shared run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders on every manual **Run**. IDs begin with a letter and contain only letters, numbers, and underscores. |
-| `schedule` | Optional schedule seed: `{cron, timezone, overlap_policy, enabled}` (enabled defaults Off; UI timezone defaults to the browser zone, API/graph omit defaults to UTC) promoted to the workflow's schedule row. Unattended ticks resolve durable bindings rather than replacing intake. |
+| `schedule` | Optional schedule seed: `{cron, timezone, overlap_policy, enabled}` (enabled defaults Off; UI timezone defaults to the browser zone, API/graph omit defaults to UTC). Promoted to the workflow's schedule row whenever the object is present, regardless of `trigger_kind`. Unattended ticks resolve durable bindings rather than replacing intake. |
 | `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |

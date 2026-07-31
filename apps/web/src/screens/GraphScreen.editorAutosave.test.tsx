@@ -264,7 +264,8 @@ describe('GraphScreen editor autosave actions', () => {
     await screen.findByRole('heading', { name: 'Untitled plan' })
     fireEvent.click(screen.getByRole('button', { name: 'Select trigger' }))
 
-    expect(screen.getByRole('group', { name: 'Trigger mode' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Trigger authoring view' })).toBeInTheDocument()
+    expect(screen.getByText(/authoring view only/i)).toBeInTheDocument()
     expect(screen.getByText('Intake form')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '+ Add field' }))
     expect(screen.getByRole('textbox', { name: 'Input 1 ID' })).toHaveValue('field')
@@ -298,6 +299,135 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.getByText('Schedule settings')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Cron' })).toHaveValue('0 9 * * *')
     expect(screen.getByText(/leave this schedule off/i)).toBeInTheDocument()
+    expect(screen.getByText(/manual intake stays available/i)).toBeInTheDocument()
+  })
+
+  it('keeps schedule seed and intake after Schedule then Manual authoring and save', async () => {
+    const triggerGraph: WorkflowGraph = {
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          trigger_kind: 'manual',
+          name: 'When I run it',
+          instruction: '',
+          output_kind: 'json',
+          inputs: [],
+        },
+        ...structuredClone(graph.nodes),
+      ],
+      edges: [{ from: 'trigger', to: 'step' }],
+    }
+    const triggerJob: GraphJob = {
+      ...structuredClone(queuedJob),
+      graph: triggerGraph,
+      node_states: [
+        {
+          id: 2,
+          job_id: 42,
+          node_id: 'trigger',
+          status: 'pending',
+          output_kind: 'json',
+          version: 0,
+        },
+        ...structuredClone(queuedJob.node_states),
+      ],
+    }
+    let latestGraph = structuredClone(triggerGraph)
+    vi.mocked(getGraphJob).mockImplementation(async () => ({
+      ...structuredClone(triggerJob),
+      graph: structuredClone(latestGraph),
+    }))
+    vi.mocked(updateGraphPlan).mockImplementation(async (_token, _jobId, body) => {
+      if (body.graph) latestGraph = structuredClone(body.graph)
+      return {
+        ...structuredClone(triggerJob),
+        title: body.title ?? triggerJob.title,
+        graph: structuredClone(latestGraph),
+      }
+    })
+    vi.mocked(saveGraphTemplate).mockImplementation(async (_token, _jobId, body) => ({
+      id: 7,
+      name: body.name || 'Saved',
+      description: body.description ?? '',
+      category: body.category ?? 'other',
+      status: 'active',
+      graph: structuredClone(latestGraph),
+      inputs: latestGraph.nodes.find(node => node.type === 'trigger')?.inputs ?? [],
+    }))
+
+    render(<GraphScreen {...props} />)
+    await screen.findByRole('heading', { name: 'Untitled plan' })
+    fireEvent.click(screen.getByRole('button', { name: 'Select trigger' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }))
+    fireEvent.change(screen.getByLabelText('Cron'), {
+      target: { value: '15 7 * * 1-5' },
+    })
+    const timezoneField = screen.getByText('Timezone').closest('label')
+    expect(timezoneField).not.toBeNull()
+    fireEvent.click(within(timezoneField as HTMLElement).getByRole('button'))
+    fireEvent.click(screen.getByRole('option', { name: 'UTC' }))
+
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
+      't',
+      42,
+      expect.objectContaining({
+        graph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'trigger',
+              trigger_kind: 'scheduled',
+              schedule: expect.objectContaining({
+                cron: '15 7 * * 1-5',
+                timezone: 'UTC',
+                enabled: false,
+              }),
+            }),
+          ]),
+        }),
+      }),
+    ), { timeout: 2000 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manual' }))
+    expect(screen.getByText('Intake form')).toBeInTheDocument()
+    expect(screen.getByText(/schedule seed is retained/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '+ Add field' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Input 1 label' }), {
+      target: { value: 'Topic' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Input 1 required' }))
+
+    await waitFor(() => {
+      const trigger = latestGraph.nodes.find(node => node.id === 'trigger')
+      expect(trigger).toMatchObject({
+        trigger_kind: 'manual',
+        inputs: [{ id: 'topic', label: 'Topic', kind: 'text', required: true }],
+        schedule: {
+          cron: '15 7 * * 1-5',
+          timezone: 'UTC',
+          overlap_policy: 'skip',
+          enabled: false,
+        },
+      })
+    }, { timeout: 2000 })
+
+    fireEvent.click(screen.getByRole('button', { name: '★ Save as Workflow' }))
+    await waitFor(() => expect(saveGraphTemplate).toHaveBeenCalledWith('t', 42, expect.objectContaining({
+      name: 'Untitled plan',
+    })))
+    const saved = await vi.mocked(saveGraphTemplate).mock.results.at(-1)?.value
+    expect(saved?.graph.nodes.find(node => node.id === 'trigger')).toMatchObject({
+      trigger_kind: 'manual',
+      inputs: [{ id: 'topic', label: 'Topic', kind: 'text', required: true }],
+      schedule: {
+        cron: '15 7 * * 1-5',
+        timezone: 'UTC',
+        overlap_policy: 'skip',
+        enabled: false,
+      },
+    })
+    expect(saved?.inputs).toEqual([{ id: 'topic', label: 'Topic', kind: 'text', required: true }])
   })
 
   it('keeps save false and Run blocked after persistence rejection until Retry succeeds', async () => {

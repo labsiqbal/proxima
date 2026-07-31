@@ -495,11 +495,7 @@ def register(app, deps):
         )
         graph = _hydrate_trigger_contract(graph, declared_inputs)
         trigger = _trigger_node(graph)
-        schedule_config = (
-            trigger.get("schedule")
-            if trigger is not None and trigger.get("trigger_kind") == "scheduled"
-            else None
-        )
+        schedule_config = trigger.get("schedule") if trigger is not None else None
         if schedule_config is not None and not wf.cron_valid(schedule_config["cron"]):
             raise HTTPException(
                 status_code=422,

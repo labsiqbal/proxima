@@ -496,7 +496,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
           // A script card leads with what it runs — the command is its identity
           // the way the instruction is an agent node's.
           const subtitle = trigger
-            ? (definition.trigger_kind === 'scheduled' ? 'scheduled' : 'manual intake')
+            ? (definition.schedule ? 'manual intake · schedule seed' : 'manual intake')
             : script
               ? `⚡ scripts/${definition.command ?? ''}`
               : `${definition.output_kind}${binding}${agent ? ` · ${agent.name}` : ''}`

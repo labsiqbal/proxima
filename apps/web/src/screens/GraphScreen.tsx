@@ -1860,7 +1860,7 @@ export function GraphScreen({
               {definition.type === 'trigger' ? <>
                 <div className="graph-trigger-mode">
                   <p className="graph-eyebrow">Trigger node</p>
-                  <div className="seg graph-trigger-seg" role="group" aria-label="Trigger mode">
+                  <div className="seg graph-trigger-seg" role="group" aria-label="Trigger authoring view">
                     <button
                       type="button"
                       className={(definition.trigger_kind ?? 'manual') === 'manual' ? 'active' : ''}
@@ -1877,6 +1877,9 @@ export function GraphScreen({
                       })}
                     >Schedule</button>
                   </div>
+                  <p className="muted graph-field-note">
+                    Authoring view only. Intake and schedule seeds stay on this trigger when you switch panels, and both promote when you save the workflow.
+                  </p>
                 </div>
                 {(definition.trigger_kind ?? 'manual') === 'manual' ? <div className="graph-trigger-panel">
                   <p className="graph-eyebrow">Intake form</p>
@@ -1888,6 +1891,9 @@ export function GraphScreen({
                   <p className="muted graph-field-note">
                     These are the questions each manual run asks. Nodes reference them with <code>{'{{id}}'}</code>.
                   </p>
+                  {definition.schedule ? <p className="muted graph-field-note">
+                    A schedule seed is retained on this trigger. Open the Schedule view to edit it, or leave it Off until durable bindings are set in Schedules.
+                  </p> : null}
                 </div> : <div className="graph-trigger-panel">
                   <p className="graph-eyebrow">Schedule settings</p>
                   <ScheduleSettingsEditor
@@ -1895,7 +1901,7 @@ export function GraphScreen({
                     onChange={schedule => updateSelected({ schedule })}
                   />
                   <p className="muted graph-field-note">
-                    Scheduled runs never ask for per-run input. Leave this schedule Off, then open Schedules to configure durable bindings before turning it On.
+                    Scheduled runs never ask for per-run input. Leave this schedule Off, then open Schedules to configure durable bindings before turning it On. Manual intake stays available for explicit Run.
                   </p>
                 </div>}
               </> : definition.type === 'script' ? <>

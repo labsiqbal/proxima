@@ -759,10 +759,11 @@ and refuses missing or type-invalid values before execution. The API repeats tha
 validation before claiming the job and freezes the resolved values into the job and
 trigger output. Each field's `{{id}}` is substituted into node text. Schedule seed
 settings (cron, IANA timezone, overlap, enabled, default Off; UI timezone defaults to the
-browser zone, API/graph omit defaults to UTC) are independent of intake - promoting a
-plan may create a schedule row from those seeds, but unattended ticks and **Run now**
-resolve durable schedule bindings rather than prompting, and never replace the manual Run
-path. Existing graph workflows keep the compatibility
+browser zone, API/graph omit defaults to UTC) are independent of intake and of the
+Manual/Schedule authoring view - promoting a plan creates a schedule row whenever a seed
+object is present (default Off), regardless of `trigger_kind`, but unattended ticks and
+**Run now** resolve durable schedule bindings rather than prompting, and never replace the
+manual Run path. Existing graph workflows keep the compatibility
 `workflows.inputs` projection, which is migrated and hydrated onto the trigger so old
 templates and `{{id}}` references continue to work. An **authoring chat** (Plan Chat) beside the
 canvas emits `<workflow-graph>` blocks that are applied to the plan on screen, never

@@ -505,6 +505,61 @@ def test_omitted_trigger_schedule_enabled_defaults_off_on_save_template(tmp_path
     assert schedules[0]["cron"] == "0 8 * * *"
 
 
+def test_manual_trigger_kind_still_promotes_schedule_seed(tmp_path):
+    """Inspector Manual/Schedule is an authoring view; seed promotion keys off the object."""
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = _chain_graph()
+    graph["nodes"].insert(
+        0,
+        {
+            "id": "trigger",
+            "type": "trigger",
+            "name": "When I run it",
+            "trigger_kind": "manual",
+            "inputs": [
+                {"id": "topic", "label": "Topic", "kind": "text", "required": True}
+            ],
+            "schedule": {
+                "cron": "15 7 * * 1-5",
+                "timezone": "America/Chicago",
+                "overlap_policy": "skip",
+                "enabled": False,
+            },
+        },
+    )
+    graph["nodes"][1]["depends_on"] = ["trigger"]
+    job = _create(client, graph)
+
+    response = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={"name": "Weekday brief"},
+    )
+
+    assert response.status_code == 201, response.text
+    template = response.json()
+    trigger = template["graph"]["nodes"][0]
+    assert trigger["trigger_kind"] == "manual"
+    assert trigger["inputs"] == [
+        {"id": "topic", "label": "Topic", "kind": "text", "required": True}
+    ]
+    assert trigger["schedule"] == {
+        "cron": "15 7 * * 1-5",
+        "timezone": "America/Chicago",
+        "overlap_policy": "skip",
+        "enabled": False,
+    }
+    assert template["inputs"] == trigger["inputs"]
+    schedules = client.get("/api/schedules").json()
+    assert len(schedules) == 1
+    assert schedules[0]["workflow_id"] == template["id"]
+    assert schedules[0]["cron"] == "15 7 * * 1-5"
+    assert schedules[0]["timezone"] == "America/Chicago"
+    assert schedules[0]["enabled"] is False
+    assert schedules[0]["ready"] is False
+    assert schedules[0]["unresolved_inputs"] == ["topic"]
+
+
 def test_graph_routes_are_inert_while_feature_is_off(tmp_path):
     app = _app(tmp_path, enabled=False)
     client = _client(app)
