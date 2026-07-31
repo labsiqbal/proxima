@@ -368,6 +368,11 @@ legacy migration, Area mutation, and Area-sensitive execution - rather than on h
 read paths (project lists, Home, file resolution), which stay O(1). Historical
 virtual Ops paths remain stable but resolve to the active Ops row, which may
 temporarily be legacy `.` while a collision awaits owner attention.
+Migration creation and rename use stable no-follow directory handles with identity
+revalidation, and one cross-process Container lock covers migration, Area changes,
+Files mutations, and Project purge before any virtual root is selected. Generated
+document fallback bytes are manifest-name and hash bound; ambiguous bytes are never
+removed.
 
 Never allow:
 

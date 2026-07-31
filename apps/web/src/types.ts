@@ -100,6 +100,10 @@ export type OpsMigrationDetail = {
 		state: string;
 		entries: { path: string; kind: string }[];
 	};
+	inspection: {
+		legacy_root: { inspectable: boolean; reason: string | null };
+		physical_root: { inspectable: boolean; reason: string | null };
+	};
 	conflicts: { path: string; reason: string }[];
 	retry_safe: boolean;
 	validation_reason: string | null;

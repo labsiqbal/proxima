@@ -347,11 +347,16 @@ dry-run manifest with content hashes. It includes an existing owner-authored
 `container.md` as a byte-preserving move, or binds exact generated content only when
 that legacy document is absent. It rejects collisions or ambiguous types before
 moving anything and uses atomic no-clobber creation and rename primitives for only
-known Ops-owned paths on the same filesystem. A durable `moving` marker supports
-restart after any completed rename. Version 1 moving markers upgrade in memory and
-are persisted at the current version only when legacy and physical document state
-identifies one safe continuation; ambiguous candidates remain untouched for owner
-intervention.
+known Ops-owned paths on the same filesystem. Creation and rename operate relative
+to stable no-follow directory descriptors and revalidate root identity before the
+durable database switch, so replacing a parent cannot redirect a move. Generated
+documents prefer anonymous same-filesystem temporary storage; the fallback has a
+deterministic manifest-bound name and hash, is excluded from owner scans only when
+exact, and is cleaned only after its ownership is revalidated. A durable `moving`
+marker supports restart after any completed rename. Older moving markers upgrade in
+memory and are persisted at the current version only when legacy and physical
+document state identifies one safe continuation; ambiguous candidates remain
+untouched for owner intervention.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
@@ -364,9 +369,10 @@ same-filesystem migration routine used at startup. Immediately before every mani
 application, that boundary rechecks current code-Area ownership plus path type,
 symlink, hash, and filesystem constraints, including ownership of the complete
 physical Ops root and an exact match for any existing manifest-bound
-`ops/container.md`. Migration planning, apply, durable state updates, and supported
-Area mutations share a cross-process per-Container lock, and late destinations fail
-without replacement. A repaired already-physical layout with open migration Attention
+`ops/container.md`. Migration planning, apply, durable state updates, supported Area
+and Files mutations, and complete Project purge share a cross-process per-Container
+lock. Virtual roots are resolved only after acquiring that lock, and late
+destinations fail without replacement. A repaired already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
 without moving content. It does not add merge, overwrite, delete, cross-device move,
 symlink-following, or content-authority behavior.
@@ -375,7 +381,8 @@ file API all resolve through the active Ops row. Recovery reveal actions can opt
 an explicit read-only Container-root file target so legacy `wiki` and physical
 `ops/wiki` remain independently inspectable even after physical Ops becomes active.
 Only tree and file reads accept that target; write, mkdir, rename, and delete remain
-virtual-root operations.
+virtual-root operations. The inspection projection declares each root's inspectability
+and refusal reason so unavailable or unsafe root actions never dispatch a read.
 
 The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers`, `GET /api/containers/{slug}`, and

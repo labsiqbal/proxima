@@ -20,6 +20,7 @@ from .capabilities import apply_capabilities, parse_selection
 from .container_registry import (
     ContainerBoundaryError,
     compatibility_project_payload,
+    container_mutation_lock,
     container_root,
     ops_root,
     root_for_virtual_path,
@@ -353,7 +354,7 @@ def build_route_deps(
             "mode": row.get("mode") or "chat",
         }
 
-    def _purge_project(project: dict[str, Any]) -> None:
+    def _purge_project_locked(project: dict[str, Any]) -> None:
         """Delete a project's on-disk dir (jailed to workspace root) + its DB row."""
         conn = db()
         focus_notifications: list[int] = []
@@ -508,6 +509,10 @@ def build_route_deps(
                 raise
         for session_id in set(focus_notifications):
             app.state.hub.notify(session_id)
+
+    def _purge_project(project: dict[str, Any]) -> None:
+        with container_mutation_lock(db(), project):
+            _purge_project_locked(project)
 
     def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.

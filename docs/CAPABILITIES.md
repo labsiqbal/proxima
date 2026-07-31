@@ -1285,11 +1285,15 @@ Existing Containers whose Ops row is `.` migrate at startup. The migration first
 builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
 hash-bound and moved byte-for-byte; a generated document is planned only when the
 legacy document is absent. Atomic no-clobber creation and same-filesystem renames
-move only known Ops-owned paths, while one cross-process per-Container lock serializes
-the filesystem and durable marker boundary with every supported Area mutation. Its
-durable marker resumes safely after interruption. Version 1 markers upgrade only
-when the legacy and physical document state is unambiguous; otherwise every candidate
-is preserved for owner intervention. Any collision, changed content, unsupported file
+through stable no-follow directory handles move only known Ops-owned paths. Generated
+documents prefer anonymous same-filesystem temporary storage, with an exact
+manifest-name and hash-bound recovery file as the fail-safe fallback. Only a recovery
+file that still matches the manifest can be hidden from inspection or cleaned up.
+One cross-process per-Container lock serializes the filesystem and durable marker
+boundary with supported Area and Files mutations and complete Project deletion. Its
+durable marker resumes safely after interruption. Older markers upgrade only when
+the legacy and physical document state is unambiguous; otherwise every candidate is
+preserved for owner intervention. Any collision, changed content, unsupported file
 type, or ambiguity stops only that Container, opens an owner-visible Attention item,
 and leaves the legacy row active. Every resumed marker rechecks current code-Area
 ownership across the complete physical Ops root and every path type, symlink, content
@@ -1304,7 +1308,9 @@ and physical path states, exact physical-root entries, conflicts, and which Ops 
 remain usable. Owners can reveal either side through an explicit Container-root
 read-only target and refresh read-only validation. Recovery inspection has only tree
 and file-read operations; its Files tree removes mutation controls, opens files
-read-only, and visibly expands and marks directory targets. Closing inspection,
+read-only, and visibly expands and marks directory targets. Backend-declared root
+inspectability disables unavailable or unsafe reveal actions with an accessible
+reason. Closing inspection,
 changing Projects, or opening Files normally restores the ordinary virtual writable
 boundary. The durable detail route pins the shell to its Project across reload and
 refresh; switching Settings sections clears the detail route. Retry stays disabled

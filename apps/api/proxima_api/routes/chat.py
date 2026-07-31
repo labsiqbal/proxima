@@ -786,29 +786,35 @@ def register(app, deps):
     def wiki_note_commit(session_id: int, payload: WikiCommitRequest, user: dict[str, Any] = Depends(current_user)):
         session = session_for_user(session_id, user)
         _require_session_features(session)
-        root = _session_wiki_root(session, user)
-        if root is None:
-            raise HTTPException(status_code=400, detail="no wiki for this session")
-        try:
-            if payload.mode == "append":
-                try:
-                    prior = fsapi.read_file(root, payload.path)
-                except fsapi.FsError as _exc:
-                    prior = ""
-                content = (prior.rstrip() + "\n\n" + payload.content.strip() + "\n") if prior else payload.content
-            else:
-                content = payload.content
-            fsapi.write_file(root, payload.path, content)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        db().execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'wiki.note.commit', 'wiki', ?, ?)",
-            (user["id"], payload.path, json.dumps({"mode": payload.mode, "session_id": session_id})),
+        mutation = (
+            container_registry.container_mutation_lock(db(), int(session["project_id"]))
+            if session.get("project_id")
+            else contextlib.nullcontext()
         )
-        try:
-            wiki_memory.rebuild_index(root)
-        except Exception:
-            logging.getLogger("proxima.api").exception("wiki index rebuild failed (non-fatal)")
+        with mutation:
+            root = _session_wiki_root(session, user)
+            if root is None:
+                raise HTTPException(status_code=400, detail="no wiki for this session")
+            try:
+                if payload.mode == "append":
+                    try:
+                        prior = fsapi.read_file(root, payload.path)
+                    except fsapi.FsError as _exc:
+                        prior = ""
+                    content = (prior.rstrip() + "\n\n" + payload.content.strip() + "\n") if prior else payload.content
+                else:
+                    content = payload.content
+                fsapi.write_file(root, payload.path, content)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'wiki.note.commit', 'wiki', ?, ?)",
+                (user["id"], payload.path, json.dumps({"mode": payload.mode, "session_id": session_id})),
+            )
+            try:
+                wiki_memory.rebuild_index(root)
+            except Exception:
+                logging.getLogger("proxima.api").exception("wiki index rebuild failed (non-fatal)")
         return {"ok": True, "path": payload.path}
 
     def _chat_media_kind(message: str) -> tuple[str, str] | None:
@@ -1112,15 +1118,6 @@ def register(app, deps):
             refs_ignored = bool(ref_paths) and not sources
 
             def generate_image(run_id: int) -> tuple[dict[str, Any], str]:
-                # run_id is unique in this database, so concurrent generations
-                # started in the same second can never select the same target.
-                stamp = _as_int(time.time())
-                target = fsapi.resolve_in_project(root, f"artifacts/media/images/chat-{stamp}-{run_id}.png")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                i = 1
-                while target.exists():
-                    target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
-                    i += 1
                 raw = image_providers.generate(
                     provider.id,
                     cfg.get("apiKey"),
@@ -1131,11 +1128,24 @@ def register(app, deps):
                     extra_images=extra_images,
                     base_url=cfg.get("baseUrl"),
                 )
-                target.write_bytes(raw)
+                project = visible_project(slug, user)
+                with container_registry.container_mutation_lock(db(), project):
+                    current_root = _ops_root(slug, user)
+                    stamp = _as_int(time.time())
+                    target = fsapi.resolve_in_project(
+                        current_root,
+                        f"artifacts/media/images/chat-{stamp}-{run_id}.png",
+                    )
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    i = 1
+                    while target.exists():
+                        target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
+                        i += 1
+                    target.write_bytes(raw)
                 actions = ["use-as-reference"]
                 if features.enabled(feature_cfg, features.DESIGN_STUDIO):
                     actions.insert(0, "open-design-studio")
-                artifact = {"type": "image", "title": target.name, "path": str(target.relative_to(root)), "project_slug": slug, "actions": actions}
+                artifact = {"type": "image", "title": target.name, "path": str(target.relative_to(current_root)), "project_slug": slug, "actions": actions}
                 text = (
                     f"Generated image artifact: `{artifact['path']}`. "
                     "Saved to the project Archive as a reusable deliverable."

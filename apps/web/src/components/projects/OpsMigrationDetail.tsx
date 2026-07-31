@@ -113,7 +113,10 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   const phase = detail?.phase || 'loading'
   const safe = !!detail?.retry_safe
   const unavailable = detail?.what_remains_usable.unavailable_paths || []
+  const legacyInspection = detail?.inspection.legacy_root
+  const physicalInspection = detail?.inspection.physical_root
   const physicalRootKind = detail
+    && physicalInspection?.inspectable
     && (detail.physical_ops.state === 'empty' || detail.physical_ops.state === 'populated')
     ? 'directory'
     : null
@@ -173,12 +176,18 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
           <p>{detail.validation_reason || 'All planned paths passed collision, type, hash, symlink, overlap, and same-filesystem checks.'}</p>
         </div>
         <div className="ops-migration-actions">
-          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('', 'root')}>Reveal legacy side</button>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={!!busy || !legacyInspection?.inspectable}
+            aria-describedby="ops-migration-legacy-inspection"
+            onClick={() => { if (legacyInspection?.inspectable) reveal('', 'root') }}
+          >Reveal legacy side</button>
           <button
             type="button"
             className="ghost-button"
             disabled={!!busy || !physicalRootKind}
-            title={physicalRootKind ? undefined : 'Physical ops/ is unavailable for inspection'}
+            aria-describedby="ops-migration-physical-inspection"
             onClick={() => { if (physicalRootKind) reveal('ops', physicalRootKind) }}
           >Reveal physical ops/</button>
           <button type="button" className="ghost-button" disabled={!!busy} onClick={() => void refreshValidation()}>
@@ -194,6 +203,12 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
             {busy === 'retry' ? 'Retrying...' : 'Retry migration'}
           </button>
         </div>
+        <span id="ops-migration-legacy-inspection" className="sr-only">
+          {legacyInspection?.reason || 'Legacy Container root is available for inspection'}
+        </span>
+        <span id="ops-migration-physical-inspection" className="sr-only">
+          {physicalInspection?.reason || 'Physical ops root is available for inspection'}
+        </span>
         <p id="ops-migration-retry-rule" className="muted">
           Retry is available only after validation is safe. Proxima never merges, overwrites,
           deletes, follows symlinks, moves across filesystems, or chooses authoritative content.
@@ -208,8 +223,12 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
               <caption>Legacy and physical state for each planned Ops-owned path</caption>
               <thead><tr><th scope="col">Path</th><th scope="col">Legacy</th><th scope="col">Physical</th><th scope="col">Usable</th><th scope="col">Inspect</th></tr></thead>
               <tbody>{detail.legacy_owned_paths.map(path => {
-                const legacyKind = inspectableKind(path.legacy_state)
-                const physicalKind = inspectableKind(path.physical_state)
+                const legacyKind = legacyInspection?.inspectable
+                  ? inspectableKind(path.legacy_state)
+                  : null
+                const physicalKind = physicalInspection?.inspectable
+                  ? inspectableKind(path.physical_state)
+                  : null
                 return <tr key={path.path}>
                   <th scope="row"><code>{path.path}</code></th>
                   <td>{stateLabel(path.legacy_state)}</td>

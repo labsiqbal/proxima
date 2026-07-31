@@ -95,6 +95,25 @@ def _store_moving_manifest(conn, container_id: int, manifest: dict) -> None:
     )
 
 
+def _prepare_completed_filesystem_move(
+    conn,
+    container_id: int,
+    root: Path,
+) -> dict:
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    strategy, content, _ = container_registry._manifest_container_doc(manifest)
+    assert strategy == "generate"
+    assert content is not None
+    (root / "ops").mkdir()
+    (root / "ops" / "container.md").write_text(content, encoding="utf-8")
+    (root / "wiki").rename(root / "ops" / "wiki")
+    return manifest
+
+
 def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: Path):
     conn = _database(tmp_path)
     root = tmp_path / "legacy"
@@ -395,13 +414,13 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
     class SimulatedProcessDeath(BaseException):
         pass
 
-    def die_after_one_move(source, destination):
+    def die_after_one_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise SimulatedProcessDeath
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", die_after_one_move)
     with pytest.raises(SimulatedProcessDeath):
@@ -636,13 +655,13 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -693,13 +712,13 @@ def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -743,13 +762,13 @@ def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -793,13 +812,13 @@ def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -844,13 +863,13 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -896,13 +915,13 @@ def test_retry_serializes_late_area_registration_before_manifest_apply(
     real_replace = container_registry._rename_noreplace
     moves = 0
 
-    def interrupt_second_move(source, destination):
+    def interrupt_second_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise OSError("simulated interrupted move")
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
@@ -1012,18 +1031,21 @@ def test_generated_container_doc_creation_never_clobbers_late_content(
     container_id = _legacy_container(conn, root, "late-container-doc")
     (root / "wiki").mkdir()
     (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
-    real_mkstemp = container_registry.tempfile.mkstemp
+    real_publish = container_registry._publish_anonymous_file
     injected = False
 
-    def inject_destination(*args, **kwargs):
+    def inject_destination(temp_fd: int, parent_fd: int, target_name: str):
         nonlocal injected
-        result = real_mkstemp(*args, **kwargs)
-        if not injected and Path(kwargs["dir"]) == root / "ops":
+        if not injected:
             injected = True
             (root / "ops" / "container.md").write_bytes(b"late owner content")
-        return result
+        return real_publish(temp_fd, parent_fd, target_name)
 
-    monkeypatch.setattr(container_registry.tempfile, "mkstemp", inject_destination)
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_anonymous_file",
+        inject_destination,
+    )
 
     assert migrate_container_ops(conn, container_id) is False
     assert (root / "ops" / "container.md").read_bytes() == b"late owner content"
@@ -1038,23 +1060,293 @@ def test_manifest_rename_never_clobbers_late_destination(
     root = tmp_path / "late-manifest-destination"
     container_id = _legacy_container(conn, root, "late-manifest-destination")
     (root / "design.md").write_bytes(b"legacy design")
-    real_hash_entry = container_registry._hash_entry
-    design_hashes = 0
+    real_rename = container_registry._rename_noreplace
+    injected = False
 
-    def inject_destination(path: Path):
-        nonlocal design_hashes
-        result = real_hash_entry(path)
-        if path == root / "design.md":
-            design_hashes += 1
-            if design_hashes == 3:
-                (root / "ops" / "design.md").write_bytes(b"late destination")
-        return result
+    def inject_destination(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            (root / "ops" / "design.md").write_bytes(b"late destination")
+        return real_rename(*args, **kwargs)
 
-    monkeypatch.setattr(container_registry, "_hash_entry", inject_destination)
+    monkeypatch.setattr(
+        container_registry,
+        "_rename_noreplace",
+        inject_destination,
+    )
 
     assert migrate_container_ops(conn, container_id) is False
     assert (root / "design.md").read_bytes() == b"legacy design"
     assert (root / "ops" / "design.md").read_bytes() == b"late destination"
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ("before_temp", "after_temp_write", "after_publish"),
+)
+def test_generated_document_recovers_each_owned_write_stage(
+    tmp_path: Path,
+    stage: str,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / f"document-stage-{stage}"
+    container_id = _legacy_container(conn, root, f"document-stage-{stage}")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    recovery = planned["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    if stage in {"after_temp_write", "after_publish"}:
+        (root / "ops" / recovery["path"]).write_text(
+            planned["content"],
+            encoding="utf-8",
+        )
+    if stage == "after_publish":
+        (root / "ops" / "container.md").write_text(
+            planned["content"],
+            encoding="utf-8",
+        )
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "container.md").read_text(
+        encoding="utf-8"
+    ) == planned["content"]
+    assert not (root / "ops" / recovery["path"]).exists()
+
+
+def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v2-generated-document"
+    container_id = _legacy_container(conn, root, "v2-generated-document")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 2
+    manifest["container_doc"].pop("recovery_temp")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json "
+        "FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    upgraded = json.loads(marker["manifest_json"])
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["container_doc"]["recovery_temp"] == (
+        container_registry._planned_recovery_temp(
+            upgraded["container_doc"]["sha256"]
+        )
+    )
+
+
+def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "ambiguous-recovery-temp"
+    container_id = _legacy_container(conn, root, "ambiguous-recovery-temp")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    recovery = manifest["container_doc"]["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    ambiguous = b"owner bytes at internal-looking path"
+    (root / "ops" / recovery["path"]).write_bytes(ambiguous)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "ops" / recovery["path"]).read_bytes() == ambiguous
+    assert not (root / "ops" / "container.md").exists()
+
+
+def test_retry_serializes_virtual_file_write_before_root_resolution(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-file-write"
+    container_id = _owned_api_legacy(api, root, "serialized-file-write")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    write_finished = threading.Event()
+
+    def write_file():
+        try:
+            return api.put(
+                "/api/projects/serialized-file-write/file",
+                params={"path": "wiki/new.md"},
+                headers=headers,
+                json={"content": "late owner edit"},
+            )
+        finally:
+            write_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-file-write/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        write_future = pool.submit(write_file)
+        write_was_blocked = not write_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        write = write_future.result(timeout=5)
+
+    assert write_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert write.status_code == 200, write.text
+    assert not (root / "wiki").exists()
+    assert (root / "ops" / "wiki" / "new.md").read_text(
+        encoding="utf-8"
+    ) == "late owner edit"
+
+
+def test_retry_serializes_complete_project_purge(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-project-delete"
+    container_id = _owned_api_legacy(api, root, "serialized-project-delete")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    delete_finished = threading.Event()
+
+    def delete_project():
+        try:
+            return api.delete(
+                "/api/projects/serialized-project-delete",
+                headers=headers,
+            )
+        finally:
+            delete_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-project-delete/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        delete_future = pool.submit(delete_project)
+        delete_was_blocked = not delete_finished.wait(timeout=0.25)
+        release_apply.set()
+        try:
+            retry = retry_future.result(timeout=5)
+        except Exception as exc:
+            retry = exc
+        delete = delete_future.result(timeout=5)
+
+    assert delete_was_blocked is True
+    assert not isinstance(retry, Exception)
+    assert retry.status_code == 200, retry.text
+    assert delete.status_code == 200, delete.text
+    assert root.is_dir()
+    assert (root / "ops" / "wiki" / "existing.md").read_text(
+        encoding="utf-8"
+    ) == "existing"
+    assert api.app.state.db.execute(
+        "SELECT 1 FROM projects WHERE id = ?",
+        (container_id,),
+    ).fetchone() is None
+
+
+def test_parent_symlink_swap_cannot_redirect_manifest_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "parent-swap"
+    outside = tmp_path / "outside-parent-swap"
+    parked = tmp_path / "parked-physical-ops"
+    outside.mkdir()
+    container_id = _legacy_container(conn, root, "parent-swap")
+    (root / "design.md").write_bytes(b"legacy design")
+    real_rename = container_registry._rename_noreplace
+    swapped = False
+
+    def swap_parent_then_rename(*args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            (root / "ops").rename(parked)
+            (root / "ops").symlink_to(outside, target_is_directory=True)
+        return real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_rename_noreplace",
+        swap_parent_then_rename,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert not (outside / "design.md").exists()
+    assert (parked / "design.md").read_bytes() == b"legacy design"
+
+
+def test_migration_detail_exposes_unavailable_root_inspectability(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "unavailable-inspection-root"
+    _owned_api_legacy(api, root, "unavailable-inspection-root")
+    unavailable = tmp_path / "moved-unavailable-inspection-root"
+    root.rename(unavailable)
+
+    detail = api.get(
+        "/api/projects/unavailable-inspection-root/ops-migration",
+        headers=headers,
+    )
+
+    assert detail.status_code == 200, detail.text
+    legacy = detail.json()["inspection"]["legacy_root"]
+    assert legacy["inspectable"] is False
+    assert "missing" in legacy["reason"]
 
 
 def test_repaired_physical_layout_can_retry_to_resolve_open_attention(tmp_path: Path):

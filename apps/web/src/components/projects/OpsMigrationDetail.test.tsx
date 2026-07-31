@@ -43,6 +43,10 @@ const collision: Detail = {
     state: 'populated',
     entries: [{ path: 'ops/wiki', kind: 'directory' }],
   },
+  inspection: {
+    legacy_root: { inspectable: true, reason: null },
+    physical_root: { inspectable: true, reason: null },
+  },
   conflicts: [{ path: 'wiki', reason: 'Both wiki and ops/wiki exist.' }],
   retry_safe: false,
   validation_reason: 'physical Ops root is not empty',
@@ -179,6 +183,27 @@ describe('OpsMigrationDetail', () => {
     expect(screen.getByRole('button', { name: 'Reveal legacy artifacts' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Reveal physical ops/artifacts' })).toBeDisabled()
     window.removeEventListener('proxima:reveal-file', listener)
+  })
+
+  it('disables unavailable legacy-root inspection with an accessible reason', async () => {
+    vi.mocked(getOpsMigration).mockResolvedValue({
+      ...collision,
+      inspection: {
+        legacy_root: {
+          inspectable: false,
+          reason: 'Container root is missing',
+        },
+        physical_root: {
+          inspectable: false,
+          reason: 'Physical ops/ is unavailable',
+        },
+      },
+    })
+    render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
+
+    const reveal = await screen.findByRole('button', { name: 'Reveal legacy side' })
+    expect(reveal).toBeDisabled()
+    expect(reveal).toHaveAccessibleDescription('Container root is missing')
   })
 
   it('clears the previous project payload while the next request fails', async () => {
