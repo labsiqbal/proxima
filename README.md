@@ -75,7 +75,8 @@ One workspace, organized around two paths into durable work: **Chat or Master â†
   through your existing `git`/`gh` setup. Satpam alone owns stuck-job recovery.
 - **Global Attention inbox** - review gates, tool permissions, satpam restart asks,
   and Master decisions collect in one shell badge. Safe binary actions can run
-  inline; complex diffs and open questions always deep-link to their owning surface.
+  inline; Master decisions render their full resolve/defer form in the inbox;
+  complex diffs deep-link to their owning surface.
 - **Tasks with review gates** â€” describe an outcome, pick an agent and a
   **Guarded** or **Autonomous** policy; the task runs as a durable job and
   pauses for your review before it counts as done.

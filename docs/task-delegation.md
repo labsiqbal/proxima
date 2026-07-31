@@ -99,7 +99,9 @@ deferred. A valid versioned response atomically records the owner response, appe
 one user message to the Task session, queues one continuation run, promotes the
 current step and Task to running, closes Attention, and records its audit and
 Master-projection links. Retrying the same or a stale response cannot enqueue a
-second continuation.
+second continuation. Reject, Task delete, and project delete settle every open
+decision for that Task closed without a continuation, while the Task row still
+exists so Master can project the left-review outcome.
 
 ## Restart recovery
 

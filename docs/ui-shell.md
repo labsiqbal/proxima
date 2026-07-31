@@ -242,9 +242,11 @@ loading state.
 ## Global attention, running work, and account surfaces
 
 The shell-level **Attention** badge persists across destinations and polls one unified
-shape. Every item is a real button that deep-links to the owning Master/Task/plan/Settings
-surface. Only server-marked `inline_ok` binary actions render beside the link; diff
-review and open-text decisions navigate instead. The popover has loading, empty,
+shape. Non-decision rows are real buttons that deep-link to the owning
+Master/Task/plan/Settings surface. Only server-marked `inline_ok` binary actions render
+beside the link; diff review and Master budget items navigate instead. Non-approval
+Master decisions render their full resolve/defer form inline in the inbox (same card as
+Master Decisions and the Task workspace). The popover has loading, empty,
 populated, and persistent retryable-error states, closes on Escape/outside click, and
 becomes a viewport-bounded sheet on narrow screens.
 

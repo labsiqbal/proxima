@@ -604,15 +604,16 @@ owner message -> queued Master chat-only run
       -> one authenticated MasterStateProvider resumes the durable cursor
       -> Master home + popup share thread, composer, Focus, target, active run, and scroll
       -> named durable transitions may coalesce into one focus-neutral shell toast
-      -> global Attention deep-links owner decisions
+      -> global Attention surfaces owner decisions inline
       -> non-approval create_attention writes one durable Master decision
       -> Master Decisions and global Attention render the full question and response contract
       -> defer persists the decision but removes it from the global needs-you badge
       -> versioned resolution validates the response and atomically queues one Task continuation
+      -> Task reject/delete settles open decisions closed without a continuation run
       -> the requesting Task rejects generic approval while its decision remains unresolved
       -> worktree-backed final approve claims a durable generation before merge/push
       -> decision creation refuses while that generation is live; merge failure releases it
-      -> decision projection appends one human-readable defer or resolution event
+      -> decision projection appends one human-readable defer, resolve, or left-review event
 ```
 
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
