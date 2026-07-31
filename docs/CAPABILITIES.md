@@ -600,8 +600,12 @@ the current version and response, records the response, queues exactly one Task
 continuation, closes Attention, and appends a concise human-readable Master event in
 one transaction. A Task with an unresolved Master decision shows that same question
 in its workspace and rejects the generic approval endpoint, while ordinary approvals
-keep their existing specialized path. Errors persist inside the inbox until retried
-or dismissed.
+keep their existing specialized path. Worktree-backed final approve claims a durable
+generation before any merge or push so a concurrent decision cannot land mid-merge;
+decision creation refuses while that generation is live, merge failure releases it,
+and restart finalizes a merged generation without merging twice. Supervisor start
+failures stay bare generic Attention and never become resolvable decision ledger rows.
+Errors persist inside the inbox until retried or dismissed.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
 and running jobs, badges a count when work is in flight, and deep-links each row to

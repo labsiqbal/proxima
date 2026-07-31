@@ -242,6 +242,236 @@ def pending_decision_conflict(decision_id: int) -> dict[str, str]:
     }
 
 
+def live_final_approval_for_job(
+    conn: sqlite3.Connection, job_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM job_final_approval_intents "
+        "WHERE job_id = ? AND state = 'live' "
+        "ORDER BY generation DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+
+
+def final_approval_in_flight_conflict(generation: int) -> dict[str, str]:
+    return {
+        "code": "final_approval_in_flight",
+        "message": (
+            "A final approval is already in progress for this Task "
+            f"(generation {generation})"
+        ),
+    }
+
+
+def claim_final_approval_intent(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    actor_user_id: int,
+    allow_resume_merged: bool = False,
+) -> tuple[sqlite3.Row, bool]:
+    """Claim or resume a durable final-approval generation under the write txn.
+
+    Mutually exclusive with unresolved Master decisions. When
+    ``allow_resume_merged`` is set and a live generation already exists for a
+    worktree that has already merged, returns that generation with
+    ``resumed=True`` so the caller can finalize without merging again.
+    Does not perform Git work.
+    """
+    pending = pending_decision_for_job(conn, job_id)
+    if pending is not None:
+        raise MasterDecisionError(
+            "master_decision_pending",
+            (
+                f"Resolve Master decision #{int(pending['id'])} "
+                "instead of approving this Task"
+            ),
+            409,
+        )
+    existing = live_final_approval_for_job(conn, job_id)
+    if existing is not None:
+        if allow_resume_merged:
+            from . import worktrees
+
+            wt = worktrees.job_worktree_row(conn, job_id)
+            if wt is not None and wt["status"] == "merged":
+                job = conn.execute(
+                    "SELECT id FROM jobs WHERE id = ? AND status = 'review'",
+                    (job_id,),
+                ).fetchone()
+                if job is not None:
+                    return existing, True
+        raise MasterDecisionError(
+            "final_approval_in_flight",
+            (
+                "A final approval is already in progress for this Task "
+                f"(generation {int(existing['generation'])})"
+            ),
+            409,
+        )
+    job = conn.execute(
+        "SELECT id FROM jobs WHERE id = ? AND status = 'review'",
+        (job_id,),
+    ).fetchone()
+    if job is None:
+        raise MasterDecisionError(
+            "approval_task_not_waiting",
+            "Task is no longer waiting for review",
+            409,
+        )
+    generation = int(
+        conn.execute(
+            "SELECT COALESCE(MAX(generation), 0) + 1 "
+            "FROM job_final_approval_intents WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+    )
+    cursor = conn.execute(
+        "INSERT INTO job_final_approval_intents("
+        "job_id, generation, actor_user_id, state"
+        ") VALUES (?, ?, ?, 'live')",
+        (job_id, generation, actor_user_id),
+    )
+    row = conn.execute(
+        "SELECT * FROM job_final_approval_intents WHERE id = ?",
+        (int(cursor.lastrowid),),
+    ).fetchone()
+    assert row is not None
+    return row, False
+
+
+def release_final_approval_intent(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    generation: int,
+    error: str | None = None,
+) -> bool:
+    """Release one live generation so decision creation and retry can proceed."""
+    claimed = conn.execute(
+        "UPDATE job_final_approval_intents "
+        "SET state = 'released', error = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE job_id = ? AND generation = ? AND state = 'live'",
+        ((error or None), job_id, generation),
+    )
+    return claimed.rowcount == 1
+
+
+def finalize_final_approval_intent(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    generation: int,
+) -> bool:
+    """Mark one live generation finalized after the Task claim succeeds."""
+    claimed = conn.execute(
+        "UPDATE job_final_approval_intents "
+        "SET state = 'finalized', error = NULL, updated_at = CURRENT_TIMESTAMP "
+        "WHERE job_id = ? AND generation = ? AND state = 'live'",
+        (job_id, generation),
+    )
+    return claimed.rowcount == 1
+
+
+def intent_is_live_generation(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    generation: int,
+) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM job_final_approval_intents "
+        "WHERE job_id = ? AND generation = ? AND state = 'live'",
+        (job_id, generation),
+    ).fetchone()
+    return row is not None
+
+
+def reconcile_final_approval_intents(app: Any) -> list[dict[str, int]]:
+    """Complete or release live final-approval intents after restart.
+
+    Merged worktrees with a live intent finalize the same generation without
+    merging again. Incomplete merges park the worktree and release the intent so
+    a later approve can claim a new generation. Returns task-update events that
+    the caller must project after the write transaction commits.
+    """
+    from . import artifact_registry, worktrees
+
+    conn = app.state.db
+    task_events: list[dict[str, int]] = []
+    with app.state.db_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            intents = conn.execute(
+                "SELECT * FROM job_final_approval_intents "
+                "WHERE state = 'live' ORDER BY id"
+            ).fetchall()
+            for intent in intents:
+                job_id = int(intent["job_id"])
+                generation = int(intent["generation"])
+                job = conn.execute(
+                    "SELECT * FROM jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                if job is None:
+                    release_final_approval_intent(
+                        conn,
+                        job_id=job_id,
+                        generation=generation,
+                        error="task missing during approval recovery",
+                    )
+                    continue
+                wt = worktrees.job_worktree_row(conn, job_id)
+                if wt is not None and wt["status"] == "merged":
+                    if job["status"] == "review":
+                        claimed = conn.execute(
+                            "UPDATE jobs SET status = 'done', "
+                            "finished_at = CURRENT_TIMESTAMP, "
+                            "updated_at = CURRENT_TIMESTAMP "
+                            "WHERE id = ? AND status = 'review'",
+                            (job_id,),
+                        )
+                        if claimed.rowcount == 1:
+                            try:
+                                artifact_registry.approve_records_for_job(
+                                    conn, job_id
+                                )
+                            except Exception:
+                                pass
+                            task_events.append(
+                                append_task_update(
+                                    conn,
+                                    job_id=job_id,
+                                    mutation="review_approved",
+                                )
+                            )
+                    finalize_final_approval_intent(
+                        conn, job_id=job_id, generation=generation
+                    )
+                    continue
+                if wt is not None and wt["status"] == "merging":
+                    conn.execute(
+                        "UPDATE job_worktrees SET status = 'conflict', "
+                        "error = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'merging'",
+                        (
+                            "merge interrupted before final approval completed",
+                            wt["id"],
+                        ),
+                    )
+                release_final_approval_intent(
+                    conn,
+                    job_id=job_id,
+                    generation=generation,
+                    error="final approval interrupted before completion",
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    return task_events
+
+
 def task_can_continue_after_decision(job: Mapping[str, Any] | sqlite3.Row) -> bool:
     """Linear Tasks with a current step can accept exactly-once continuation."""
     data = dict(job)
@@ -489,6 +719,17 @@ def create_decision(
                 raise MasterDecisionError(
                     "decision_already_pending",
                     "This Task already has an unresolved Master decision",
+                    409,
+                )
+            live_approval = live_final_approval_for_job(conn, job_id)
+            if live_approval is not None:
+                raise MasterDecisionError(
+                    "final_approval_in_flight",
+                    (
+                        "Cannot request a Master decision while final approval "
+                        f"generation {int(live_approval['generation'])} "
+                        "is in progress"
+                    ),
                     409,
                 )
             target = {

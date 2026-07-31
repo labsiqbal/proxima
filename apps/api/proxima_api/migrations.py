@@ -5983,6 +5983,25 @@ def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _legacy_owner_decision_prompt(target: dict[str, Any], title: Any) -> str | None:
+    """Return the owner prompt for a genuine legacy decision Attention row.
+
+    Owner decisions always carried a non-empty ``message`` prompt in target_json.
+    Supervisor start-failure rows instead carry an ``error`` and no owner message -
+    those stay bare Attention and must not become master_decisions ledger rows.
+    """
+    del title  # title alone is not enough to prove an owner decision
+    if not isinstance(target, dict):
+        return None
+    message = target.get("message")
+    if not isinstance(message, str):
+        return None
+    prompt = message.strip()
+    if not prompt:
+        return None
+    return prompt[:4000]
+
+
 def _add_master_decisions(conn: sqlite3.Connection) -> None:
     """Add the durable owner-response ledger and preserve legacy requests."""
     _expand_master_projection_decision_types(conn)
@@ -6032,6 +6051,32 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_master_decisions_task "
         "ON master_decisions(requesting_job_id, created_at DESC)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_final_approval_intents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL
+            REFERENCES jobs(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK (generation > 0),
+          actor_user_id INTEGER NOT NULL
+            REFERENCES users(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'live'
+            CHECK (state IN ('live', 'finalized', 'released')),
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (job_id, generation)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_final_approval_live "
+        "ON job_final_approval_intents(job_id) WHERE state = 'live'"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_final_approval_job "
+        "ON job_final_approval_intents(job_id, generation DESC)"
+    )
 
     if conn.execute(
         "SELECT 1 FROM sqlite_master "
@@ -6053,9 +6098,19 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             target = {}
         if not isinstance(target, dict):
             target = {}
+        prompt = _legacy_owner_decision_prompt(target, row["title"])
+        if prompt is None:
+            # Bare supervisor start-failure Attention (error, no owner message)
+            # stays generic and is not fabricated into the decision ledger.
+            continue
         source_parts = str(row["source_key"] or "").split(":")
         session_id = target.get("origin_master_session_id")
-        if session_id is None and len(source_parts) >= 3 and source_parts[0] == "master":
+        if session_id is None:
+            session_id = target.get("alpha_session_id")
+        if session_id is None and len(source_parts) >= 3 and source_parts[0] in {
+            "master",
+            "alpha",
+        }:
             session_id = source_parts[1]
         try:
             session_id = int(session_id)
@@ -6091,7 +6146,6 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             (origin_message_id, session_id),
         ).fetchone() is None:
             origin_message_id = None
-        prompt = str(target.get("message") or row["title"]).strip()[:4000]
         state = "pending" if row["status"] == "open" else "resolved"
         decision_cursor = conn.execute(
             "INSERT INTO master_decisions("
@@ -6292,7 +6346,7 @@ MIGRATIONS: list[Migration] = [
     ),
     (
         55,
-        "add durable Master decision prompts, responses, and Task handoff links",
+        "add durable Master decisions and final-approval intents",
         _add_master_decisions,
         {"no_auto_tx": True},
     ),

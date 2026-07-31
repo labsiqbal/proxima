@@ -3271,3 +3271,122 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
             "UPDATE message_focus SET focus_epoch_id = NULL "
             "WHERE message_id = 17"
         )
+
+
+def test_master_decision_migration_skips_start_failure_and_keeps_owner(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "legacy-decisions.db"
+    conn = connect(db_path)
+    conn.executescript(SCHEMA)
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('owner', 'owner')"
+    ).lastrowid
+    session_id = conn.execute(
+        "INSERT INTO sessions(title, mode, owner_user_id, project_id) "
+        "VALUES ('Master', 'master', ?, NULL)",
+        (owner_id,),
+    ).lastrowid
+    message_id = conn.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Choose a window', 'owner')",
+        (session_id,),
+    ).lastrowid
+    job_id = conn.execute(
+        "INSERT INTO jobs(title, status, engine, created_by, "
+        "origin_master_session_id) VALUES ('Ship', 'queued', 'linear', ?, ?)",
+        (owner_id, session_id),
+    ).lastrowid
+    owner_attention_id = conn.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, status, source_key"
+        ") VALUES ("
+        "'master_decision', 'Choose rollout window', ?, 'open', ?"
+        ")",
+        (
+            json.dumps(
+                {
+                    "view": "master",
+                    "message": "Should rollout happen Saturday or Sunday?",
+                    "origin_message_id": message_id,
+                    "job_id": job_id,
+                    "origin_master_session_id": session_id,
+                }
+            ),
+            f"master:{session_id}:rollout-window",
+        ),
+    ).lastrowid
+    start_attention_id = conn.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, status, source_key"
+        ") VALUES ("
+        "'master_decision', 'Master could not start queued work', ?, 'open', ?"
+        ")",
+        (
+            json.dumps(
+                {
+                    "view": "master",
+                    "job_id": job_id,
+                    "error": "runner missing",
+                    "origin_master_session_id": session_id,
+                }
+            ),
+            f"master-start:{job_id}",
+        ),
+    ).lastrowid
+    # Simulate a pre-v54 database: ledger tables are absent, Attention remains.
+    conn.execute("DROP TABLE IF EXISTS master_decisions")
+    conn.execute("DROP TABLE IF EXISTS job_final_approval_intents")
+    conn.commit()
+
+    migration = next(item for item in MIGRATIONS if item[0] == 54)
+    migration[2](conn)
+
+    owner_row = conn.execute(
+        "SELECT prompt, requesting_job_id, state FROM master_decisions "
+        "WHERE attention_item_id = ?",
+        (owner_attention_id,),
+    ).fetchone()
+    assert dict(owner_row) == {
+        "prompt": "Should rollout happen Saturday or Sunday?",
+        "requesting_job_id": job_id,
+        "state": "pending",
+    }
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (start_attention_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    bare = conn.execute(
+        "SELECT kind, status, target_json FROM attention_items WHERE id = ?",
+        (start_attention_id,),
+    ).fetchone()
+    assert bare["kind"] == "master_decision"
+    assert bare["status"] == "open"
+    assert "decision_id" not in json.loads(bare["target_json"])
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'job_final_approval_intents'"
+    ).fetchone()
+
+    # Idempotent re-apply: owner decision stays singular, start-failure stays bare.
+    migration[2](conn)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (start_attention_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (owner_attention_id,),
+        ).fetchone()[0]
+        == 1
+    )

@@ -1436,6 +1436,22 @@ CREATE INDEX IF NOT EXISTS idx_master_decisions_owner_state
   ON master_decisions(owner_user_id, state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_master_decisions_task
   ON master_decisions(requesting_job_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS job_final_approval_intents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'live'
+    CHECK (state IN ('live', 'finalized', 'released')),
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (job_id, generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_job_final_approval_live
+  ON job_final_approval_intents(job_id) WHERE state = 'live';
+CREATE INDEX IF NOT EXISTS idx_job_final_approval_job
+  ON job_final_approval_intents(job_id, generation DESC);
 -- An ACP session belongs to the agent HOME that created it, so a shared thread
 -- needs one ACP session PER home (per collaborator), not a single shared id.
 CREATE TABLE IF NOT EXISTS agent_sessions (

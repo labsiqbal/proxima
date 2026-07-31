@@ -3838,3 +3838,512 @@ def test_linear_approve_claim_checks_pending_decision_atomically(
         "SELECT status FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()["status"] == "review"
     assert calls["n"] >= 2
+
+
+def _repo_review_job(tmp_path: Path, *, key: str):
+    repo = tmp_path / f"repo-{key}"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "--allow-empty", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "add", "README.md"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "readme"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    app = create_app(
+        {
+            "database_path": str(tmp_path / f"{key}.db"),
+            "workspace_root": str(tmp_path / f"{key}-ws"),
+            "projectctl_path": "/usr/bin/true",
+            "link_roots": [str(tmp_path)],
+            "seed_users": [{"username": "owner", "os_user": "owner"}],
+            "start_worker": False,
+            "feature_master_orchestrator": True,
+            "feature_repo_worktrees": True,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    linked = client.post(
+        "/api/projects/link",
+        json=with_browse_root(client, {"path": str(repo), "slug": key}),
+    )
+    assert linked.status_code == 201, linked.text
+    area_id = linked.json()["code_areas"][0]["id"]
+    job = client.post(
+        "/api/jobs",
+        json={
+            "project_slug": key,
+            "target_area_id": area_id,
+            "input": {"brief": "change code"},
+        },
+    ).json()
+    started = client.post(f"/api/jobs/{job['id']}/start")
+    assert started.status_code == 200, started.text
+    wt_path = Path(started.json()["worktree"]["worktree_path"])
+    (wt_path / "feature.py").write_text("x = 1\n", encoding="utf-8")
+    desk = client.get("/api/master/desk").json()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+        "origin_master_session_id = ?, steps_state = ? WHERE id = ?",
+        (
+            desk["session"]["id"],
+            json.dumps(
+                [
+                    {
+                        "title": "Change code",
+                        "status": "done",
+                        "output_summary": "Ready to merge.",
+                    }
+                ]
+            ),
+            job["id"],
+        ),
+    )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Ship it', 'owner')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=None,
+    )
+    return app, client, desk, job["id"], origin.lastrowid, repo
+
+
+def test_create_decision_refuses_live_final_approval_intent(tmp_path: Path):
+    app, client, desk, job_id, origin_id, _repo = _repo_review_job(
+        tmp_path, key="intent-blocks-decision"
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        intent, resumed = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    assert resumed is False
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1, "username": "owner"},
+        desk["session"]["id"],
+        origin_message_id=origin_id,
+    )
+    created = broker.execute(
+        "create_attention",
+        {
+            "title": "Blocked by approve",
+            "prompt": "Should not land",
+            "context": "Approve intent is live",
+            "response": {
+                "type": "choice",
+                "choices": [
+                    {"id": "a", "label": "A"},
+                    {"id": "b", "label": "B"},
+                ],
+            },
+            "task_id": job_id,
+            "idempotency_key": "blocked-by-intent",
+        },
+    )
+    assert created["ok"] is False
+    assert created["error"]["code"] == "final_approval_in_flight"
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE requesting_job_id = ? AND state IN ('pending', 'deferred')",
+            (job_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert int(intent["generation"]) == 1
+
+
+def test_final_approve_merge_race_blocks_decision_both_orders(tmp_path: Path):
+    app, client, desk, job_id, origin_id, repo = _repo_review_job(
+        tmp_path, key="merge-race"
+    )
+    original_merge = worktrees.merge_job_worktree
+    barrier = threading.Barrier(2)
+    merge_calls = {"n": 0}
+
+    def slow_merge(conn, job, wt):
+        merge_calls["n"] += 1
+        barrier.wait(timeout=5)
+        return original_merge(conn, job, wt)
+
+    worktrees.merge_job_worktree = slow_merge
+    results: dict[str, object] = {}
+
+    def approve() -> None:
+        results["approve"] = client.post(f"/api/jobs/{job_id}/approve")
+
+    def create() -> None:
+        barrier.wait(timeout=5)
+        broker = MasterToolBroker(
+            app.state.db,
+            app,
+            {"id": 1, "username": "owner"},
+            desk["session"]["id"],
+            origin_message_id=origin_id,
+        )
+        results["create"] = broker.execute(
+            "create_attention",
+            {
+                "title": "During merge",
+                "prompt": "Pick a window",
+                "context": "Merge is in flight",
+                "response": {
+                    "type": "choice",
+                    "choices": [
+                        {"id": "a", "label": "A"},
+                        {"id": "b", "label": "B"},
+                    ],
+                },
+                "task_id": job_id,
+                "idempotency_key": "during-merge",
+            },
+        )
+
+    try:
+        threads = [threading.Thread(target=approve), threading.Thread(target=create)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+    finally:
+        worktrees.merge_job_worktree = original_merge
+
+    approve_response = results["approve"]
+    create_result = results["create"]
+    assert approve_response.status_code == 200
+    assert approve_response.json()["status"] == "done"
+    assert isinstance(create_result, dict)
+    assert create_result.get("ok") is False
+    assert create_result["error"]["code"] == "final_approval_in_flight"
+    assert merge_calls["n"] == 1
+    assert (repo / "feature.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE requesting_job_id = ? AND state IN ('pending', 'deferred')",
+            (job_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    intent_state = app.state.db.execute(
+        "SELECT state, generation FROM job_final_approval_intents "
+        "WHERE job_id = ? ORDER BY generation DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    assert dict(intent_state) == {"state": "finalized", "generation": 1}
+
+
+def test_final_approve_decision_first_blocks_merge_claim(tmp_path: Path):
+    app, client, desk, job_id, origin_id, _repo = _repo_review_job(
+        tmp_path, key="decision-first"
+    )
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1, "username": "owner"},
+        desk["session"]["id"],
+        origin_message_id=origin_id,
+    )
+    created = broker.execute(
+        "create_attention",
+        {
+            "title": "Before approve",
+            "prompt": "Pick a window",
+            "context": "Decision lands first",
+            "response": {
+                "type": "choice",
+                "choices": [
+                    {"id": "a", "label": "A"},
+                    {"id": "b", "label": "B"},
+                ],
+            },
+            "task_id": job_id,
+            "idempotency_key": "before-approve",
+        },
+    )
+    assert created["ok"] is True
+    original_merge = worktrees.merge_job_worktree
+    merge_calls = {"n": 0}
+
+    def guarded_merge(conn, job, wt):
+        merge_calls["n"] += 1
+        return original_merge(conn, job, wt)
+
+    worktrees.merge_job_worktree = guarded_merge
+    try:
+        approved = client.post(f"/api/jobs/{job_id}/approve")
+    finally:
+        worktrees.merge_job_worktree = original_merge
+    assert approved.status_code == 409
+    assert approved.json()["detail"]["code"] == "master_decision_pending"
+    assert merge_calls["n"] == 0
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+    assert app.state.db.execute(
+        "SELECT status FROM job_worktrees WHERE job_id = ?", (job_id,)
+    ).fetchone()["status"] == "active"
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM job_final_approval_intents "
+            "WHERE job_id = ? AND state = 'live'",
+            (job_id,),
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_merge_failure_releases_intent_and_stays_in_review(tmp_path: Path):
+    app, client, _desk, job_id, _origin_id, _repo = _repo_review_job(
+        tmp_path, key="merge-fail"
+    )
+
+    def boom(conn, job, wt):
+        raise worktrees.WorktreeError("simulated merge conflict")
+
+    original = worktrees.merge_job_worktree
+    worktrees.merge_job_worktree = boom
+    try:
+        approved = client.post(f"/api/jobs/{job_id}/approve")
+    finally:
+        worktrees.merge_job_worktree = original
+    assert approved.status_code == 409
+    assert "merge blocked" in approved.json()["detail"]
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+    intent = app.state.db.execute(
+        "SELECT state, error FROM job_final_approval_intents "
+        "WHERE job_id = ? ORDER BY generation DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    assert intent["state"] == "released"
+    assert "simulated merge conflict" in (intent["error"] or "")
+
+
+def test_final_approval_restart_finalizes_merged_live_intent(tmp_path: Path):
+    app, client, _desk, job_id, _origin_id, repo = _repo_review_job(
+        tmp_path, key="restart-finalize"
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        intent, _resumed = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    job = app.state.db.execute(
+        "SELECT * FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    wt = worktrees.job_worktree_row(app.state.db, job_id)
+    merged = worktrees.merge_job_worktree(app.state.db, job, wt)
+    assert merged["status"] == "merged"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+
+    events = master_decisions.reconcile_final_approval_intents(app)
+    assert events
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "done"
+    assert app.state.db.execute(
+        "SELECT state FROM job_final_approval_intents "
+        "WHERE job_id = ? AND generation = ?",
+        (job_id, int(intent["generation"])),
+    ).fetchone()["state"] == "finalized"
+    assert (repo / "feature.py").read_text(encoding="utf-8") == "x = 1\n"
+
+    # Restart again is a no-op: no second merge, no second done transition.
+    original = worktrees.merge_job_worktree
+    calls = {"n": 0}
+
+    def counted(conn, job_row, wt_row):
+        calls["n"] += 1
+        return original(conn, job_row, wt_row)
+
+    worktrees.merge_job_worktree = counted
+    try:
+        again = master_decisions.reconcile_final_approval_intents(app)
+    finally:
+        worktrees.merge_job_worktree = original
+    assert again == []
+    assert calls["n"] == 0
+
+
+def test_final_approval_restart_releases_incomplete_merge(tmp_path: Path):
+    app, _client, _desk, job_id, _origin_id, _repo = _repo_review_job(
+        tmp_path, key="restart-release"
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        intent, _ = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    app.state.db.execute(
+        "UPDATE job_worktrees SET status = 'merging' WHERE job_id = ?",
+        (job_id,),
+    )
+    events = master_decisions.reconcile_final_approval_intents(app)
+    assert events == []
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+    assert app.state.db.execute(
+        "SELECT status FROM job_worktrees WHERE job_id = ?", (job_id,)
+    ).fetchone()["status"] == "conflict"
+    assert app.state.db.execute(
+        "SELECT state FROM job_final_approval_intents "
+        "WHERE job_id = ? AND generation = ?",
+        (job_id, int(intent["generation"])),
+    ).fetchone()["state"] == "released"
+
+
+def test_generation_mismatch_refuses_stale_finalize(tmp_path: Path):
+    app, _client, _desk, job_id, _origin_id, _repo = _repo_review_job(
+        tmp_path, key="gen-mismatch"
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        first, _ = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    master_decisions.release_final_approval_intent(
+        app.state.db,
+        job_id=job_id,
+        generation=int(first["generation"]),
+        error="owner cancelled",
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        second, _ = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    assert int(second["generation"]) == int(first["generation"]) + 1
+    assert not master_decisions.finalize_final_approval_intent(
+        app.state.db,
+        job_id=job_id,
+        generation=int(first["generation"]),
+    )
+    assert master_decisions.finalize_final_approval_intent(
+        app.state.db,
+        job_id=job_id,
+        generation=int(second["generation"]),
+    )
+
+
+def test_ordinary_no_decision_final_approve_still_works(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="ordinary-approve",
+        tasks=[{"title": "Ship docs", "brief": "No decision needed"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+        "steps_state = ? WHERE id = ?",
+        (
+            json.dumps(
+                [
+                    {
+                        "title": "Write docs",
+                        "status": "done",
+                        "output_summary": "Docs ready.",
+                    }
+                ]
+            ),
+            job_id,
+        ),
+    )
+    approved = client.post(f"/api/jobs/{job_id}/approve")
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "done"
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM job_final_approval_intents WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_resume_merged_live_intent_without_second_merge(tmp_path: Path):
+    app, client, _desk, job_id, _origin_id, repo = _repo_review_job(
+        tmp_path, key="resume-merged"
+    )
+    with app.state.db_lock:
+        app.state.db.execute("BEGIN IMMEDIATE")
+        intent, _ = master_decisions.claim_final_approval_intent(
+            app.state.db,
+            job_id=job_id,
+            actor_user_id=1,
+        )
+        app.state.db.execute("COMMIT")
+    job = app.state.db.execute(
+        "SELECT * FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    wt = worktrees.job_worktree_row(app.state.db, job_id)
+    worktrees.merge_job_worktree(app.state.db, job, wt)
+
+    original = worktrees.merge_job_worktree
+    calls = {"n": 0}
+
+    def counted(conn, job_row, wt_row):
+        calls["n"] += 1
+        return original(conn, job_row, wt_row)
+
+    worktrees.merge_job_worktree = counted
+    try:
+        approved = client.post(f"/api/jobs/{job_id}/approve")
+    finally:
+        worktrees.merge_job_worktree = original
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "done"
+    assert calls["n"] == 0
+    assert app.state.db.execute(
+        "SELECT state FROM job_final_approval_intents "
+        "WHERE job_id = ? AND generation = ?",
+        (job_id, int(intent["generation"])),
+    ).fetchone()["state"] == "finalized"
+    assert (repo / "feature.py").read_text(encoding="utf-8") == "x = 1\n"

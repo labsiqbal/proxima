@@ -514,6 +514,22 @@ def _create_app(
             app.state.task_delegation.resume_committed()
         except Exception:
             logger.exception("durable Task start recovery failed")
+        try:
+            from . import master_decisions as master_decision_recovery
+
+            recovered_events = (
+                master_decision_recovery.reconcile_final_approval_intents(app)
+            )
+            projection = getattr(app.state, "master_projection", None)
+            for task_event in recovered_events:
+                outbox_id = task_event.get("projection_outbox_id")
+                if outbox_id is not None and projection is not None:
+                    projection.safe_process_task_outbox(outbox_id)
+                session_id = task_event.get("session_id")
+                if session_id is not None:
+                    app.state.hub.notify(int(session_id))
+        except Exception:
+            logger.exception("final approval intent recovery failed")
 
     _route_deps = build_route_deps(
         app,
