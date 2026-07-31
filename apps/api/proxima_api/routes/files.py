@@ -10,7 +10,9 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
@@ -642,7 +644,7 @@ def register(app, deps):
         if not session.get("project_id"):
             return {"artifacts": []}
         project = db().execute(
-            "SELECT id, slug, path FROM projects WHERE id = ?",
+            "SELECT id, slug, path, path_identity FROM projects WHERE id = ?",
             (session["project_id"],),
         ).fetchone()
         if project is None:
@@ -674,7 +676,7 @@ def register(app, deps):
             p = (
                 db()
                 .execute(
-                    "SELECT id, slug, path FROM projects WHERE id = ?",
+                    "SELECT id, slug, path, path_identity FROM projects WHERE id = ?",
                     (session["project_id"],),
                 )
                 .fetchone()

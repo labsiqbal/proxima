@@ -888,7 +888,8 @@ class TargetPreviewManager:
             conn = connect(self.database_path, read_only=True)
             try:
                 project = conn.execute(
-                    "SELECT id, slug, path FROM projects WHERE id = ?",
+                    "SELECT id, slug, path, path_identity "
+                    "FROM projects WHERE id = ?",
                     (area.project_id,),
                 ).fetchone()
                 if project is None:
