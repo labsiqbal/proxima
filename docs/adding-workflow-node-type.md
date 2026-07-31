@@ -11,9 +11,14 @@ There are three execution types today, all carried by the node's `type` field:
 - **`agent`** (the default, and what an absent `type` means): runner-agnostic work
   dispatched as a `wf_node` run.
 - **`trigger`**: the graph's entry point. It resolves inside `dispatch_ready` without a
-  runner and has no `runs` row. `trigger_kind` selects the variety: `manual` (owns the
-  intake form) and `scheduled` (owns cadence) exist today. `webhook`/`event` belong here
-  as further kinds — that is the whole reason the entry point is a node.
+  runner and has no `runs` row. The trigger owns the shared **intake contract** used by every manual **Run**, plus an
+  optional independent **schedule seed** (`cron` / IANA `timezone` / `overlap_policy` /
+  `enabled`, default Off; UI timezone defaults to the browser zone, API/graph omit
+  defaults to UTC). Seeds promote whenever the object is present, regardless of
+  `trigger_kind`; unattended ticks and **Run now** resolve durable bindings rather than
+  prompting. `trigger_kind` is an informational authoring-view label (`manual` /
+  `scheduled` today). `webhook`/`event` belong here as further kinds - that is the whole
+  reason the entry point is a node.
 - **`script`** (slice 6, T6 — ADR-0001's Phase-3 deterministic node in minimal form):
   runs a library script from the Container's physical `ops/scripts/` folder as a subprocess. It is
   the precedent for a deterministic type done right: dispatched as a `wf_script_node`

@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getGraphJob, listGraphJobs, listGraphTemplates, startGraphJob, updateGraphPlan } from '../api/graph'
+import { createGraphJob, getGraphJob, listGraphJobs, listGraphTemplates, startGraphJob, updateGraphPlan } from '../api/graph'
 import { listSchedules, runScheduleNow } from '../api/schedules'
 import { GraphScreen } from './GraphScreen'
 
@@ -1602,5 +1602,233 @@ describe('GraphScreen how-it-runs badges', () => {
     })
     await waitFor(() => expect(thirdGets).toBeGreaterThan(getsAfterOpen))
     expect(await screen.findByRole('button', { name: 'Rename workflow Third plan live' })).toBeInTheDocument()
+  })
+
+  it('keeps createFromTemplate and Runs View handoff on one consistent job after a slow prior flush', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const viewed = runningJob(88, 'Viewed run')
+    const created = queuedDraft(55, 'Publish on demand')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior, viewed] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 88) return viewed
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(createGraphJob).mockResolvedValue(created)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Runs 1' }))
+    const runRow = (await screen.findByText('Viewed run')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(runRow).getByRole('button', { name: 'View' }))
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 88))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Workflows 2' }))
+    const templateRow = (await screen.findByText('Publish on demand')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(templateRow).getByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(createGraphJob).toHaveBeenCalled())
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'Dirty instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Publish on demand' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Viewed run' })).not.toBeInTheDocument()
+
+    // Title rename proves autosave identity tracks the focused create.
+    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Publish on demand' }))
+    const titleInput = await screen.findByRole('textbox', { name: 'Workflow name' })
+    fireEvent.change(titleInput, { target: { value: 'Created still saves' } })
+    fireEvent.blur(titleInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
+      't',
+      55,
+      expect.objectContaining({ title: 'Created still saves' }),
+    ))
+    expect(updateGraphPlan).not.toHaveBeenCalledWith('t', 88, expect.anything())
+  })
+
+  it('lets Schedule Run now win over a slow pendingDraft adopt without duplicate spawns', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const spawned = runningJob(99, 'Nightly publish run')
+    const drafted = queuedDraft(55, 'Architect draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 99) return spawned
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(createGraphJob).mockResolvedValue(drafted)
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    const onPendingConsumed = vi.fn()
+    const onDraftConsumed = vi.fn()
+    const draft = {
+      name: 'Architect draft',
+      description: 'from architect',
+      category: 'other',
+      graph: drafted.graph,
+    }
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    // Open Schedules before the draft create claims busy so Run now stays reachable.
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    const row = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        pendingDraft={draft}
+        onPendingConsumed={onPendingConsumed}
+        onDraftConsumed={onDraftConsumed}
+        backNonce={1}
+      />,
+    )
+    await waitFor(() => expect(createGraphJob).toHaveBeenCalled())
+    // Draft has begun focus and is blocked on the prior flush; Run now must still win.
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'Dirty instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Architect draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('disables Runs View while a create is in flight', async () => {
+    const created = queuedDraft(55, 'Publish on demand')
+    let finishCreate: ((value: typeof created) => void) | undefined
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [runningJob(88, 'Viewed run')] })
+    vi.mocked(createGraphJob).mockImplementation(() => new Promise(resolve => { finishCreate = resolve }))
+
+    render(<GraphScreen {...screenBase} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    const templateRow = (await screen.findByText('Publish on demand')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(templateRow).getByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(createGraphJob).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs 1' }))
+    const view = await screen.findByRole('button', { name: 'View' })
+    expect(view).toBeDisabled()
+
+    await act(async () => {
+      finishCreate?.(created)
+      await Promise.resolve()
+    })
+    expect(await screen.findByRole('button', { name: 'Rename workflow Publish on demand' })).toBeInTheDocument()
   })
 })

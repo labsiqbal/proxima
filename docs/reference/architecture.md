@@ -141,11 +141,12 @@ cycles and invalid references, computes deterministic topological/ready sets, va
 node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
 trigger, no incoming edges), and validates each node's `text` / `json` / `artifact-ref`
 output contract (including JSON Schema definitions). Trigger normalization also owns
-the manual intake field declaration or the scheduled cron, overlap, and enabled
-settings. Manual intake IDs use a stable identifier grammar and may declare typed
-defaults. The same pure boundary resolves a start payload by validating required,
-number, and URL values, applying defaults, omitting blank optional fields, and
-preserving job-owned values. It performs no DB, runner, or HTTP
+the shared manual intake field declaration plus the optional schedule seed
+(cron, IANA timezone, overlap, enabled; default Off). Manual intake IDs use a stable
+identifier grammar and may declare typed defaults. The same pure boundary resolves a
+start payload by validating required, number, and URL values, applying defaults,
+omitting blank optional fields, and preserving job-owned values. It performs no DB,
+runner, or HTTP
 work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a node's
 `target` names ONE container area (a code area's rel_path or `ops`), `touches_repo` is
 always derived from it (an authored value is never trusted), and an ambiguous binding
