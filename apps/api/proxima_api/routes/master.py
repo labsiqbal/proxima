@@ -272,33 +272,46 @@ def register(app, deps):
             .fetchall()
         )
         jobs = [_master_job_payload(row) for row in rows]
-        attention = [item for item in _attention_items(user) if item["kind"].startswith("master_") or item.get("target", {}).get("origin_master_session_id") == session["id"]]
-        master_run = db().execute(
-            "SELECT id, status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-            (session["id"],),
-        ).fetchone()
-        return canonicalize_api_timestamps({
-            "session": session_payload(session),
-            "master_run": dict(master_run) if master_run else None,
-            "event_cursor": event_cursor,
-            "backing_runner": profile["runner_id"],
-            "jobs": jobs,
-            "unattended": app_settings.get_master_settings(db())["unattended"],
-            "budgets": app_settings.get_master_settings(db()),
-            "capacity": master_capacity(
-                db(),
-                session["id"],
-                max_parallel=master_parallel_limit(app.state.config),
-            ),
-            "attention": attention,
-            "decisions": master_decisions.list_decisions(
-                db(),
-                owner_user_id=_as_int(user["id"]),
-                master_session_id=_as_int(session["id"]),
-            ),
-            "checkpoints": list_checkpoints(db(), origin_master_session_id=session["id"]),
-            "focus": master_focus.state_payload(db(), session["id"]),
-        })
+        attention = [
+            item
+            for item in _attention_items(user)
+            if item["kind"].startswith("master_")
+            or item.get("target", {}).get("origin_master_session_id") == session["id"]
+        ]
+        master_run = (
+            db()
+            .execute(
+                "SELECT id, status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                (session["id"],),
+            )
+            .fetchone()
+        )
+        return canonicalize_api_timestamps(
+            {
+                "session": session_payload(session),
+                "master_run": dict(master_run) if master_run else None,
+                "event_cursor": event_cursor,
+                "backing_runner": profile["runner_id"],
+                "jobs": jobs,
+                "unattended": app_settings.get_master_settings(db())["unattended"],
+                "budgets": app_settings.get_master_settings(db()),
+                "capacity": master_capacity(
+                    db(),
+                    session["id"],
+                    max_parallel=master_parallel_limit(app.state.config),
+                ),
+                "attention": attention,
+                "decisions": master_decisions.list_decisions(
+                    db(),
+                    owner_user_id=_as_int(user["id"]),
+                    master_session_id=_as_int(session["id"]),
+                ),
+                "checkpoints": list_checkpoints(
+                    db(), origin_master_session_id=session["id"]
+                ),
+                "focus": master_focus.state_payload(db(), session["id"]),
+            }
+        )
 
     @app.get("/api/alpha/desk", deprecated=True)
     def get_alpha_desk(user: dict[str, Any] = Depends(current_user)):
@@ -897,28 +910,34 @@ def register(app, deps):
             data["target"] = _json(data.pop("target_json"), {})
             data["actions"] = _json(data.pop("actions_json"), [])
             if data["kind"] == "master_decision":
-                decision = db().execute(
-                    "SELECT * FROM master_decisions "
-                    "WHERE attention_item_id = ? AND owner_user_id = ?",
-                    (attention_id, user["id"]),
-                ).fetchone()
-                if decision is not None:
-                    data["decision"] = master_decisions.decision_payload(
-                        db(), decision
+                decision = (
+                    db()
+                    .execute(
+                        "SELECT * FROM master_decisions "
+                        "WHERE attention_item_id = ? AND owner_user_id = ?",
+                        (attention_id, user["id"]),
                     )
+                    .fetchone()
+                )
+                if decision is not None:
+                    data["decision"] = master_decisions.decision_payload(db(), decision)
             data["id"] = f"attention:{attention_id}"
             items.append(data)
-        for row in db().execute(
-            "SELECT j.*, EXISTS(SELECT 1 FROM job_worktrees wt WHERE wt.job_id = j.id) AS has_worktree "
-            "FROM jobs j WHERE j.status = 'review' AND (j.created_by = ? OR j.project_id IN "
-            "(SELECT id FROM projects WHERE owner_user_id = ?)) "
-            "AND NOT EXISTS ("
-            "  SELECT 1 FROM master_decisions decision "
-            "  WHERE decision.requesting_job_id = j.id "
-            "  AND decision.state IN ('pending', 'deferred')"
-            ") ORDER BY j.updated_at DESC",
-            (user["id"], user["id"]),
-        ).fetchall():
+        for row in (
+            db()
+            .execute(
+                "SELECT j.*, EXISTS(SELECT 1 FROM job_worktrees wt WHERE wt.job_id = j.id) AS has_worktree "
+                "FROM jobs j WHERE j.status = 'review' AND (j.created_by = ? OR j.project_id IN "
+                "(SELECT id FROM projects WHERE owner_user_id = ?)) "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM master_decisions decision "
+                "  WHERE decision.requesting_job_id = j.id "
+                "  AND decision.state IN ('pending', 'deferred')"
+                ") ORDER BY j.updated_at DESC",
+                (user["id"], user["id"]),
+            )
+            .fetchall()
+        ):
             steps = _json(row["steps_state"], [])
             final_simple = (
                 bool(steps)
@@ -1035,9 +1054,7 @@ def register(app, deps):
     ):
         _require_master()
         try:
-            row = master_decisions.get_decision(
-                db(), decision_id, _as_int(user["id"])
-            )
+            row = master_decisions.get_decision(db(), decision_id, _as_int(user["id"]))
         except master_decisions.MasterDecisionError as exc:
             raise _decision_http_error(exc) from exc
         return master_decisions.decision_payload(db(), row)

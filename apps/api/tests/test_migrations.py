@@ -484,7 +484,18 @@ def test_v48_retains_published_successor_ordering_gap(tmp_path: Path):
         recovery_json=_recovery_payload(ids["job_id"], 2),
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+    ]
     assert run_migrations(conn, str(db_path)) == []
     assert current_version(conn) == 56
     gap = dict(
@@ -627,7 +638,18 @@ def test_v48_keeps_unpublished_recoveries_strictly_orderable(
             ),
         )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+    ]
     assert [
         tuple(row)
         for row in conn.execute(
@@ -728,7 +750,18 @@ def test_v50_schema_separates_markers_and_recovery_coverage(
         "schema-46-final-contract.db",
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+    ]
     assert run_migrations(conn, str(db_path)) == []
     assert current_version(conn) == 56
     assert {
@@ -894,7 +927,18 @@ def test_v49_detects_reversals_and_aggregates_corrections_per_task(
         ).fetchall()
     ]
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+    ]
     assert run_migrations(conn, str(db_path)) == []
     assert [
         tuple(row)
@@ -1244,9 +1288,10 @@ def test_v50_records_pre_staging_identity_loss_without_inventing_markers(
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging")
 
     assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55, 56]
-    assert conn.execute(
-        "SELECT COUNT(*) FROM task_recovery_corrections"
-    ).fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM task_recovery_corrections").fetchone()[0]
+        == 0
+    )
     losses = [
         dict(row)
         for row in conn.execute(
@@ -1750,11 +1795,14 @@ def test_v53_never_promotes_mixed_graph_sessions_to_task_identity(
     )
 
     assert run_migrations(conn, str(db_path)) == [53, 54, 55, 56]
-    assert conn.execute(
-        "SELECT task_session_id FROM task_recovery_history_tombstones "
-        "WHERE job_id = ?",
-        (job_id,),
-    ).fetchone()[0] is None
+    assert (
+        conn.execute(
+            "SELECT task_session_id FROM task_recovery_history_tombstones "
+            "WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+        is None
+    )
     assert dict(
         conn.execute(
             "SELECT reason, observed_task_session_id "
@@ -2169,14 +2217,35 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     conn.execute("DROP TABLE knowledge_rebuild_intents")
 
     assert run_migrations(conn, str(db_path)) == [
-        32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-        49, 50, 51, 52, 53, 54, 55, 56,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     assert run_migrations(conn, str(db_path)) == []
     assert current_version(conn) == 56
-    assert {
-        row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
-    } == {
+    assert {row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")} == {
         "id",
         "master_session_id",
         "turn_root_run_id",
@@ -2787,13 +2856,28 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         42,
         43,
         44,
-        45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     assert current_version(conn) == 56
-    assert conn.execute(
-        "SELECT path_identity FROM projects WHERE id = ?",
-        (container_id,),
-    ).fetchone()["path_identity"].startswith(("posix:", "windows:"))
+    assert (
+        conn.execute(
+            "SELECT path_identity FROM projects WHERE id = ?",
+            (container_id,),
+        )
+        .fetchone()["path_identity"]
+        .startswith(("posix:", "windows:"))
+    )
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -2851,8 +2935,34 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-        46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     assert current_version(conn) == 56
     assert "blocked_reason" in {
@@ -3065,7 +3175,27 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
     assert run_migrations(conn, str(db_path)) == [
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     assert run_migrations(conn, str(db_path)) == []
     assert current_version(conn) == 56
@@ -3162,7 +3292,24 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     assert current_version(conn) == 56
     state = conn.execute(
@@ -3262,7 +3409,23 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
@@ -3390,7 +3553,21 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
     ]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(
@@ -3513,8 +3690,7 @@ def test_master_decision_migration_skips_start_failure_and_keeps_owner(
     }
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM master_decisions "
-            "WHERE attention_item_id = ?",
+            "SELECT COUNT(*) FROM master_decisions WHERE attention_item_id = ?",
             (start_attention_id,),
         ).fetchone()[0]
         == 0
@@ -3535,16 +3711,14 @@ def test_master_decision_migration_skips_start_failure_and_keeps_owner(
     migration[2](conn)
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM master_decisions "
-            "WHERE attention_item_id = ?",
+            "SELECT COUNT(*) FROM master_decisions WHERE attention_item_id = ?",
             (start_attention_id,),
         ).fetchone()[0]
         == 0
     )
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM master_decisions "
-            "WHERE attention_item_id = ?",
+            "SELECT COUNT(*) FROM master_decisions WHERE attention_item_id = ?",
             (owner_attention_id,),
         ).fetchone()[0]
         == 1

@@ -5824,6 +5824,7 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
                 (schedule_id,),
             )
 
+
 def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
     """Widen projection_type checks for decision events.
 
@@ -5838,9 +5839,7 @@ def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
         return
     columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(master_projections)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(master_projections)").fetchall()
     }
     required_columns = {
         "id",
@@ -6063,10 +6062,13 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
         "ON job_final_approval_intents(job_id, generation DESC)"
     )
 
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master "
-        "WHERE type = 'table' AND name = 'attention_items'"
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'attention_items'"
+        ).fetchone()
+        is None
+    ):
         return
     rows = conn.execute(
         "SELECT * FROM attention_items "
@@ -6092,10 +6094,15 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
         session_id = target.get("origin_master_session_id")
         if session_id is None:
             session_id = target.get("alpha_session_id")
-        if session_id is None and len(source_parts) >= 3 and source_parts[0] in {
-            "master",
-            "alpha",
-        }:
+        if (
+            session_id is None
+            and len(source_parts) >= 3
+            and source_parts[0]
+            in {
+                "master",
+                "alpha",
+            }
+        ):
             session_id = source_parts[1]
         try:
             session_id = int(session_id)
@@ -6113,11 +6120,15 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             job_id = int(job_id) if job_id is not None else None
         except (TypeError, ValueError, OverflowError):
             job_id = None
-        if job_id is not None and conn.execute(
-            "SELECT 1 FROM jobs WHERE id = ? "
-            "AND origin_master_session_id = ? AND created_by = ?",
-            (job_id, session_id, session["owner_user_id"]),
-        ).fetchone() is None:
+        if (
+            job_id is not None
+            and conn.execute(
+                "SELECT 1 FROM jobs WHERE id = ? "
+                "AND origin_master_session_id = ? AND created_by = ?",
+                (job_id, session_id, session["owner_user_id"]),
+            ).fetchone()
+            is None
+        ):
             job_id = None
         origin_message_id = target.get("origin_message_id")
         try:
@@ -6126,10 +6137,14 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             )
         except (TypeError, ValueError, OverflowError):
             origin_message_id = None
-        if origin_message_id is not None and conn.execute(
-            "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
-            (origin_message_id, session_id),
-        ).fetchone() is None:
+        if (
+            origin_message_id is not None
+            and conn.execute(
+                "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
+                (origin_message_id, session_id),
+            ).fetchone()
+            is None
+        ):
             origin_message_id = None
         state = "pending" if row["status"] == "open" else "resolved"
         decision_cursor = conn.execute(
@@ -6178,6 +6193,7 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
                 row["id"],
             ),
         )
+
 
 def _add_turn_journal_root_semantics(conn: sqlite3.Connection) -> None:
     if not conn.execute(
