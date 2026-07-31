@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -250,6 +252,92 @@ def test_link_mkdir_routes_unreadable_parent_probe_to_parent(
     assert not target.exists()
 
 
+def test_link_mkdir_validates_multibyte_component_bytes(tmp_path: Path):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    c, h = _link_client(tmp_path)
+    limit = os.pathconf(parent, "PC_NAME_MAX")
+    unit = "é"
+    unit_bytes = len(os.fsencode(unit))
+    near_name = unit * (limit // unit_bytes)
+    over_name = unit * ((limit // unit_bytes) + 1)
+
+    near = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(parent / near_name), "name": "Near limit", "mkdir": True},
+    )
+    assert near.status_code == 201, near.text
+    assert (parent / near_name).is_dir()
+
+    over = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(parent / over_name), "name": "Over limit", "mkdir": True},
+    )
+    assert over.status_code == 400
+    assert over.json()["detail"]["field"] == "folder"
+    assert f"maximum {limit} bytes" in over.json()["detail"]["message"]
+    assert over_name not in {entry.name for entry in parent.iterdir()}
+
+
+def test_link_mkdir_routes_component_encoding_failure_to_folder(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "encoding-error"
+    c, h = _link_client(tmp_path)
+    original_fsencode = os.fsencode
+
+    def reject_component(value):
+        if value == target.name:
+            raise UnicodeEncodeError("utf-8", value, 0, 1, "unsupported")
+        return original_fsencode(value)
+
+    monkeypatch.setattr(os, "fsencode", reject_component)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "message": "folder name cannot be encoded for this filesystem",
+        "field": "folder",
+    }
+    assert not target.exists()
+
+
+def test_link_mkdir_keeps_full_path_name_too_long_on_parent(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "short-name"
+    c, h = _link_client(tmp_path)
+    original_mkdir = Path.mkdir
+
+    def reject_full_path(path: Path, *args, **kwargs):
+        if path == target:
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", reject_full_path)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["field"] == "parent"
+    assert not target.exists()
+
+
 def test_browse_recovers_to_nearest_readable_ancestor(tmp_path: Path):
     root = tmp_path / "allowed"
     ancestor = root / "code"
@@ -349,6 +437,77 @@ def test_browse_never_traverses_outside_allowed_roots(tmp_path: Path):
     assert response.json()["dirs"] == [
         {"name": "visible", "path": str(root / "visible")},
     ]
+
+
+def test_browse_skips_self_and_mutual_symlink_cycles(tmp_path: Path):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    (root / "visible").mkdir()
+    (root / "self-cycle").symlink_to("self-cycle")
+    (root / "mutual-a").symlink_to("mutual-b")
+    (root / "mutual-b").symlink_to("mutual-a")
+    c, h = _link_client(tmp_path, roots=[root])
+
+    response = c.get("/api/fs/dirs", headers=h, params={"path": str(root)})
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(root)
+    assert response.json()["dirs"] == [
+        {"name": "visible", "path": str(root / "visible")},
+    ]
+
+
+def test_browse_recovers_from_requested_symlink_cycle_to_parent(tmp_path: Path):
+    root = tmp_path / "allowed"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    loop = nested / "loop"
+    loop.symlink_to("loop")
+    c, h = _link_client(tmp_path, roots=[root])
+
+    response = c.get("/api/fs/dirs", headers=h, params={"path": str(loop)})
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(nested)
+    assert response.json()["dirs"] == []
+
+
+def test_link_and_create_symlink_cycles_return_structured_fields(tmp_path: Path):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    loop = root / "loop"
+    loop.symlink_to("loop")
+    c, h = _link_client(tmp_path, roots=[root])
+
+    link = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(loop)},
+    )
+    assert link.status_code == 400
+    assert link.json()["detail"]["field"] == "path"
+
+    create = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(loop / "child"), "mkdir": True},
+    )
+    assert create.status_code == 400
+    assert create.json()["detail"]["field"] == "parent"
+
+
+def test_unresolvable_configured_root_returns_structured_path_error(tmp_path: Path):
+    root = tmp_path / "root-cycle"
+    root.symlink_to("root-cycle")
+    c, h = _link_client(tmp_path, roots=[root])
+
+    response = c.get("/api/fs/dirs", headers=h)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "No readable folder is available inside the allowed roots",
+        "field": "path",
+    }
 
 
 def test_link_mkdir_routes_derived_slug_collisions_to_name(tmp_path: Path):

@@ -15,7 +15,16 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from .. import container_registry, fsapi, repo_remote
-from ..project_browse import DirectoryBrowseUnavailable, browse_directory
+from ..project_browse import (
+    AllowedRoots,
+    DirectoryBrowseUnavailable,
+    DirectoryComponentInvalid,
+    PathOutsideRoots,
+    PathResolutionUnavailable,
+    browse_directory,
+    split_directory_target,
+    validate_directory_component,
+)
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
@@ -98,12 +107,8 @@ def register(app, deps):
             )
         }
 
-    def _link_roots() -> list[Path]:
-        return [Path(p).expanduser().resolve() for p in (cfg.get("link_roots") or [os.path.expanduser("~")])]
-
-    def _within_link_roots(p: Path) -> bool:
-        rp = p.resolve()
-        return any(rp == r or r in rp.parents for r in _link_roots())
+    def _link_roots() -> list[str | Path]:
+        return list(cfg.get("link_roots") or [os.path.expanduser("~")])
 
     @app.get("/api/fs/dirs")
     def fs_dirs(path: str = "", user: dict[str, Any] = Depends(current_user)):
@@ -124,8 +129,6 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
         if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
             raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
-        if len(cleaned) > 255:
-            raise HTTPException(status_code=400, detail={"message": "folder name is too long", "field": "folder"})
         return cleaned
 
     def _link_error(status_code: int, message: str, field: str) -> HTTPException:
@@ -148,23 +151,44 @@ def register(app, deps):
         # so a retry is not blocked by an orphan empty folder.
         created_dir: Path | None = None
         try:
+            error_field = "parent" if payload.mkdir else "path"
+            try:
+                allowed_roots = AllowedRoots.from_configured(_link_roots())
+            except PathResolutionUnavailable as exc:
+                raise _link_error(403, str(exc), error_field) from exc
             if payload.mkdir:
-                raw = Path(payload.path).expanduser()
-                folder_name = _validate_new_folder_name(raw.name)
                 try:
-                    parent = raw.parent.resolve()
+                    raw_parent, raw_name = split_directory_target(payload.path)
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                folder_name = _validate_new_folder_name(raw_name)
+                try:
+                    parent = allowed_roots.resolve(raw_parent).path
+                except PathOutsideRoots as exc:
+                    raise _link_error(403, str(exc), "parent") from exc
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                try:
                     parent_is_dir = parent.is_dir()
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - parent directory is not accessible", "parent") from exc
                 except OSError as exc:
                     raise _link_error(400, "parent directory is not reachable", "parent") from exc
-                if not _within_link_roots(parent):
-                    raise _link_error(403, "path is outside the allowed roots", "parent")
                 if not parent_is_dir:
                     raise _link_error(400, "parent directory does not exist", "parent")
+                try:
+                    validate_directory_component(parent, folder_name)
+                except DirectoryComponentInvalid as exc:
+                    raise _link_error(400, str(exc), "folder") from exc
+                except PermissionError as exc:
+                    raise _link_error(403, "permission denied - parent directory is not accessible", "parent") from exc
+                except OSError as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 target = parent / folder_name
                 try:
                     target.mkdir(mode=0o755)  # single level only; never parents=True
+                except UnicodeError as exc:
+                    raise _link_error(400, "folder name cannot be encoded for this filesystem", "folder") from exc
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
                 except FileExistsError as exc:
@@ -173,22 +197,24 @@ def register(app, deps):
                     raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
                 created_dir = target
                 try:
-                    target = target.resolve()
-                except OSError as exc:
+                    target = allowed_roots.resolve(target).path
+                except PathOutsideRoots as exc:
+                    raise _link_error(403, str(exc), "parent") from exc
+                except PathResolutionUnavailable as exc:
                     raise _link_error(400, "created folder is not reachable", "parent") from exc
-                if not _within_link_roots(target):
-                    # Extremely defensive: if resolve() jumped (unexpected), finally removes the empty dir.
-                    raise _link_error(403, "path is outside the allowed roots", "parent")
             else:
                 try:
-                    target = Path(payload.path).expanduser().resolve()
+                    target = allowed_roots.resolve(payload.path).path
+                except PathOutsideRoots as exc:
+                    raise _link_error(403, str(exc), "path") from exc
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "selected folder is not reachable", "path") from exc
+                try:
                     target_is_dir = target.is_dir()
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - selected folder is not accessible", "path") from exc
                 except OSError as exc:
                     raise _link_error(400, "selected folder is not reachable", "path") from exc
-                if not _within_link_roots(target):
-                    raise _link_error(403, "path is outside the allowed roots", "path")
                 if not target_is_dir:
                     raise _link_error(400, "not a directory", "path")
             name = (payload.name or target.name).strip()

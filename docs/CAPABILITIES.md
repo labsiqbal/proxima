@@ -1085,8 +1085,12 @@ project-link error contract distinguishes the selected `path`/`parent`, child `f
 and display `name`/`slug` targets. Parent and link-path failures focus a selected-folder
 refresh control, child-name failures focus the folder field, and name/slug failures
 focus the display-name field. Browsing selects the nearest actually readable ancestor
-inside the configured root. If no allowed ancestor is readable, the chooser retains
-its selection and explicit invalid state instead of reporting an empty success.
+inside the configured root, skips self-referential or mutual symlink cycles, and never
+uses an unresolved path for containment. If no allowed ancestor is readable, the chooser
+retains its selection and explicit invalid state instead of reporting an empty success.
+New folder names are validated against the target filesystem's encoded component-byte
+limit, so component and encoding failures stay owned by the folder field while full
+parent-path failures remain owned by the selected-folder control.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

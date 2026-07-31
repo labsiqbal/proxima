@@ -4,8 +4,9 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry check sends one unauthenticated shell GET, verifies the current
-device Serve mapping, and blocks every live API or data request in the browser.
+The private-entry browser check asserts exactly one unauthenticated root navigation GET,
+forwards its allowlisted static asset GETs, verifies the current device Serve mapping,
+and blocks every live API or data request.
 
 | Check | Result |
 | --- | --- |
@@ -20,7 +21,8 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Permission-denied create parent focuses selected-folder recovery | pass |
 | Unreadable selection recovers to its nearest readable ancestor | pass |
 | No readable ancestor retains explicit invalid state | pass |
-| Browse recovery remains inside configured roots | pass |
+| Browse recovery handles symlink cycles and remains inside configured roots | pass |
+| Folder names respect the target filesystem component byte limit | pass |
 | Missing selected folder focuses its refresh/reselect control | pass |
 | Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
@@ -30,6 +32,7 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | 100 |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
+| Remote browser sends exactly one shell root GET | pass |
 | Private Tailscale unauthenticated entry | pass - private Tailscale origin (redacted); current device Serve mapping verified (redacted) |
 
 ## Before and after

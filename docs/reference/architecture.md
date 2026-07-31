@@ -1400,14 +1400,17 @@ selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership.
 control, child-name failures to the folder input, and name/slug failures to the
 display-name input before focusing and publishing the single alert. Every repeated
 attempt remounts that sole announcement owner. Directory browsing tests readability,
-climbs only to the nearest readable ancestor within the owning configured root, and
-returns a structured path error while retaining the current invalid selection when no
-allowed ancestor is readable. The retained browser audit runs the production bundle
+uses one fail-closed resolution and containment boundary, skips symlink cycles, climbs
+only to the nearest readable ancestor within the owning configured root, and returns a
+structured path error while retaining the current invalid selection when no allowed
+ancestor is readable. Create-on-disk validates the encoded component against the target
+filesystem limit before mutation, preserving folder versus parent error ownership. The
+retained browser audit runs the production bundle
 with allowlisted child environments, disposable runtime/profile roots, and
 background/live-service features disabled. Its real Tailscale entry check
-correlates the origin to the current device root Serve handler, fetches the shell with
-one unauthenticated root GET, and forwards only allowlisted static shell requests.
+correlates the origin to the current device root Serve handler, asserts exactly one
+unauthenticated root navigation GET, and forwards only its allowlisted static asset GETs.
 Config, setup status, and failed session resume are fulfilled inside the browser
 fixture; every other API, auth, cross-origin, and non-static request is blocked. The
-report persists only a redacted pass label and current-device Serve provenance, never
-the private origin or address.
+report persists only exact request counts, a redacted pass label, and current-device
+Serve provenance, never the private origin or address.

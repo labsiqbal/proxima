@@ -4,7 +4,6 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
-import https from 'node:https'
 import { createRequire } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
@@ -15,6 +14,7 @@ import {
   privateEntryUrl,
   remoteRequestPolicy,
   resolvePrivateTailscaleEntry,
+  summarizeStaticShellRequests,
 } from './accessibility-audit-policy.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -586,43 +586,14 @@ function discoverPrivateTailscaleEntry(environment) {
   })
 }
 
-function readOnlyGet(url, address = null) {
-  const target = new URL(privateEntryUrl(url))
-  const client = target.protocol === 'https:' ? https : http
-  return new Promise((resolve, reject) => {
-    const request = client.get(target, {
-      headers: { Accept: 'text/html' },
-      lookup: address
-        ? (_hostname, options, callback) => {
-          const family = net.isIP(address)
-          if (options?.all) callback(null, [{ address, family }])
-          else callback(null, address, family)
-        }
-        : undefined,
-    }, response => {
-      let body = ''
-      response.setEncoding('utf8')
-      response.on('data', chunk => { body += chunk })
-      response.on('end', () => resolve({ status: response.statusCode || 0, body }))
-    })
-    request.setTimeout(15000, () => request.destroy(new Error('Unauthenticated GET timed out')))
-    request.on('error', reject)
-  })
-}
-
 async function auditRemoteEntry(cdp, url, {
   origin,
   screenshotName = null,
-  getUrl = url,
-  address = null,
   provenance = null,
   assertAccessibilityContract = true,
 }) {
   const target = privateEntryUrl(url)
   const targetOrigin = new URL(target).origin
-  const response = await readOnlyGet(getUrl, address)
-  assert(response.status >= 200 && response.status < 300, `${origin} did not accept an unauthenticated GET`)
-  assert.match(response.body, /<title>Proxima<\/title>/i)
 
   const forwarded = []
   const fulfilled = []
@@ -700,6 +671,7 @@ async function auditRemoteEntry(cdp, url, {
   assert(forwarded.every(
     request => !request.startsWith('GET /api/') && !request.startsWith('GET /auth/'),
   ))
+  const shellRequests = summarizeStaticShellRequests(forwarded)
   assert.deepEqual(
     [...new Set(fulfilled)].sort(),
     ['GET /api/config', 'GET /api/setup/status', 'POST /auth/resume'],
@@ -726,7 +698,9 @@ async function auditRemoteEntry(cdp, url, {
     status: 'pass',
     ...(provenance ? { provenance } : {}),
     network: {
-      forwarded: 'same-origin static shell GET only',
+      forwarded: 'same-origin static shell GETs only',
+      shellRootGetCount: shellRequests.rootGetCount,
+      forwardedStaticGetCount: shellRequests.staticGetCount,
       bootstrap: 'fulfilled in browser fixture',
       liveDataRequests: 'blocked',
       blockedRequestCount: blocked.length,
@@ -774,8 +748,9 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry check sends one unauthenticated shell GET, verifies the current
-device Serve mapping, and blocks every live API or data request in the browser.
+The private-entry browser check asserts exactly one unauthenticated root navigation GET,
+forwards its allowlisted static asset GETs, verifies the current device Serve mapping,
+and blocks every live API or data request.
 
 | Check | Result |
 | --- | --- |
@@ -790,7 +765,8 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Permission-denied create parent focuses selected-folder recovery | pass |
 | Unreadable selection recovers to its nearest readable ancestor | pass |
 | No readable ancestor retains explicit invalid state | pass |
-| Browse recovery remains inside configured roots | pass |
+| Browse recovery handles symlink cycles and remains inside configured roots | pass |
+| Folder names respect the target filesystem component byte limit | pass |
 | Missing selected folder focuses its refresh/reselect control | pass |
 | Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
@@ -800,6 +776,7 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | ${report.lighthouse.score} |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
+| Remote browser sends exactly one shell root GET | pass |
 | Private Tailscale unauthenticated entry | ${remote} |
 
 ## Before and after
@@ -1326,7 +1303,6 @@ async function main() {
       {
         origin: 'isolated Tailnet-host fixture',
         screenshotName: 'tailnet-unauthenticated-entry.png',
-        getUrl: baseUrl,
       },
     )
     const tailscaleEntry = await auditRemoteEntry(
@@ -1334,7 +1310,6 @@ async function main() {
       privateTailscale.url,
       {
         origin: 'private Tailscale origin (redacted)',
-        address: privateTailscale.address,
         provenance: privateTailscale.provenance,
         assertAccessibilityContract: false,
       },

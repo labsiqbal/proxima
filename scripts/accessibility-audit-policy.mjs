@@ -182,3 +182,12 @@ export function remoteRequestPolicy(request, targetOrigin) {
   }
   return { action: 'block', label: `GET ${url.pathname}` }
 }
+
+export function summarizeStaticShellRequests(requests) {
+  const rootGetCount = requests.filter(request => request === 'GET /').length
+  assert.equal(rootGetCount, 1, 'Remote entry must send exactly one unauthenticated root GET')
+  return {
+    rootGetCount,
+    staticGetCount: requests.length,
+  }
+}

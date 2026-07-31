@@ -5,6 +5,7 @@ import {
   REDACTED_TAILSCALE_PROVENANCE,
   remoteRequestPolicy,
   resolvePrivateTailscaleEntry,
+  summarizeStaticShellRequests,
 } from './accessibility-audit-policy.mjs'
 
 const serveStatus = {
@@ -135,6 +136,24 @@ test('forwards static shell files and traps every live data request', () => {
       origin,
     ).action,
     'block',
+  )
+})
+
+test('requires exactly one remote shell root GET', () => {
+  assert.deepEqual(
+    summarizeStaticShellRequests(['GET /', 'GET /assets/app.js', 'GET /manifest.webmanifest']),
+    {
+      rootGetCount: 1,
+      staticGetCount: 3,
+    },
+  )
+  assert.throws(
+    () => summarizeStaticShellRequests(['GET /assets/app.js']),
+    /exactly one unauthenticated root GET/,
+  )
+  assert.throws(
+    () => summarizeStaticShellRequests(['GET /', 'GET /']),
+    /exactly one unauthenticated root GET/,
   )
 })
 
