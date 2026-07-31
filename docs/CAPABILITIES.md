@@ -1399,7 +1399,11 @@ path-only and rejects target parameters, but active content is upgraded to the
 canonical boundary instead of executing on the Proxima origin. HTML renders under
 response sandbox policy; XHTML, SVG, and other active XML media download safely.
 Every document-viewable response, including PDF, receives the exact authenticated
-frame-ancestor policy. Capability values are redacted from query, path, and cookie
+frame-ancestor policy. Successful file responses expose a non-secret hash identifying
+the capability generation. Browser verification binds that hash and a strong request
+nonce to exactly one post-resolution admission record containing the normalized
+Area-relative target; the capability itself is never logged. Capability values are
+redacted from query, path, and cookie
 logs for configured launchers and plain Uvicorn entry points. Cloudflare tunnel
 ingress changes use a cancellation-safe cross-process desired-state lock. They
 preserve every ordered rule, including path-only rules and the terminal catchall,

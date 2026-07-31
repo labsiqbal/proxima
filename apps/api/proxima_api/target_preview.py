@@ -36,6 +36,9 @@ _LOG = logging.getLogger(__name__)
 FILE_PREVIEW_COOKIE = "proxima_file_preview"
 FILE_PREVIEW_TTL_SECONDS = 60 * 60
 _CAPABILITY_QUERY = "__proxima_cap"
+_REQUEST_NONCE_QUERY = "__proxima_request_nonce"
+_REQUEST_NONCE_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z", re.ASCII)
+_CAPABILITY_GENERATION_HEADER = "X-Proxima-Preview-Generation"
 _ACTIVE_MEDIA_TYPES = frozenset(
     {
         "application/xhtml+xml",
@@ -365,6 +368,32 @@ def _capability_query(scope: Scope) -> tuple[str, str]:
         [(key, value) for key, value in pairs if key != _CAPABILITY_QUERY]
     )
     return token, clean
+
+
+def _request_nonce(scope: Scope) -> str | None:
+    try:
+        pairs = parse_qsl(
+            (scope.get("query_string") or b"").decode("latin-1"),
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError:
+        return None
+    if len(pairs) != 1 or pairs[0][0] != _REQUEST_NONCE_QUERY:
+        return None
+    value = pairs[0][1]
+    return value if _REQUEST_NONCE_TOKEN.fullmatch(value) is not None else None
+
+
+def _normalized_request_target(path: str, nonce: str | None) -> str:
+    target = f"/{quote(path, safe='/')}"
+    if nonce is not None:
+        target = f"{target}?{urlencode([(_REQUEST_NONCE_QUERY, nonce)])}"
+    return target
+
+
+def _capability_generation(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -750,22 +779,6 @@ class TargetPreviewManager:
                 "preview request metadata is invalid",
             )
             return
-        _LOG.debug(
-            "target-preview-admitted %s",
-            json.dumps(
-                {
-                    "area": area.area_id,
-                    "destination": metadata.destination,
-                    "kind": area.kind,
-                    "mode": metadata.mode,
-                    "path": str(scope.get("path") or ""),
-                    "project": area.project_id,
-                    "site": metadata.site,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-        )
         await self._serve_admitted(
             area,
             scope,
@@ -795,6 +808,7 @@ class TargetPreviewManager:
         if payload is None or _area_from_payload(payload) != area:
             await self._reject(scope, send, 403, "preview capability is invalid")
             return
+        capability_generation = _capability_generation(token)
         if _is_service_worker_request(scope, metadata):
             await self._reject(scope, send, 403, "service workers are unavailable")
             return
@@ -850,6 +864,8 @@ class TargetPreviewManager:
             receive,
             send,
             frame_origin=str(payload.get("frame_origin") or ""),
+            capability_generation=capability_generation,
+            metadata=metadata,
         )
 
     async def _serve_file(
@@ -861,6 +877,8 @@ class TargetPreviewManager:
         send: Send,
         *,
         frame_origin: str,
+        capability_generation: str,
+        metadata: _PreviewFetchMetadata,
     ) -> None:
         try:
             normalized = file_targets.normalize_relative_path(
@@ -920,6 +938,7 @@ class TargetPreviewManager:
             "Cache-Control": "private, no-store",
             "Cross-Origin-Opener-Policy": "same-origin",
             "Referrer-Policy": "no-referrer",
+            _CAPABILITY_GENERATION_HEADER: capability_generation,
             "X-Content-Type-Options": "nosniff",
         }
         if media_type in _HTML_MEDIA_TYPES:
@@ -956,6 +975,30 @@ class TargetPreviewManager:
             policy = ()
         headers["Content-Security-Policy"] = "; ".join(
             (*policy, f"frame-ancestors {frame_ancestors}")
+        )
+        request_nonce = _request_nonce(scope)
+        _LOG.debug(
+            "target-preview-admitted %s",
+            json.dumps(
+                {
+                    "area": area.area_id,
+                    "capability_generation": capability_generation,
+                    "destination": metadata.destination,
+                    "final_path": resolved.locator.path,
+                    "kind": area.kind,
+                    "method": str(scope.get("method") or ""),
+                    "mode": metadata.mode,
+                    "nonce": request_nonce,
+                    "project": area.project_id,
+                    "request_target": _normalized_request_target(
+                        resolved.locator.path,
+                        request_nonce,
+                    ),
+                    "site": metadata.site,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
         )
 
         if is_active_preview_media_type(media_type) and media_type not in _HTML_MEDIA_TYPES:

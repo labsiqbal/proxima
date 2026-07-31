@@ -441,7 +441,11 @@ framing, worker responses restrict connections, and Service Worker scripts are
 rejected. Fetch Metadata and opaque-origin checks reject embedded requests that try
 to leave the preview boundary for Proxima routes. Same-Area resources still cross
 the canonical resolver and realpath jail. Every document-viewable response,
-including PDF, receives the exact authenticated frame-ancestor policy.
+including PDF, receives the exact authenticated frame-ancestor policy. Successful
+file responses expose a non-secret capability-generation hash. Browser evidence
+correlates that hash and a strong request nonce with exactly one admission record
+written after canonical resolution; capability values and unvalidated query fields
+are not recorded.
 Design Studio obtains targeted canvas and export pixels through authenticated raw
 bytes and temporary blob URLs rather than through preview-origin CORS.
 

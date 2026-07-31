@@ -39,7 +39,10 @@ def _browser_module():
 
 _MANIFEST_URL = (
     "https://file-3-ops-3.preview.test/site/app.webmanifest"
+    "?__proxima_request_nonce=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 )
+_MANIFEST_NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_CAPABILITY_GENERATION = "b" * 64
 _MANIFEST_BODY = {
     "name": "Canonical preview",
     "short_name": "Canonical",
@@ -53,6 +56,7 @@ _MANIFEST_EXPECTATION = {
         "mode": "cors",
         "dest": "manifest",
     },
+    "response_headers": ["X-Proxima-Preview-Generation"],
 }
 
 
@@ -62,7 +66,7 @@ def _manifest_events() -> list[dict[str, object]]:
             "method": "Network.requestWillBeSent",
             "params": {
                 "requestId": "manifest-request",
-                "request": {"url": _MANIFEST_URL},
+                "request": {"method": "GET", "url": _MANIFEST_URL},
             },
         },
         {
@@ -83,6 +87,7 @@ def _manifest_events() -> list[dict[str, object]]:
                 "response": {
                     "headers": {
                         "Content-Type": "application/manifest+json",
+                        "X-Proxima-Preview-Generation": _CAPABILITY_GENERATION,
                     },
                     "mimeType": "application/manifest+json",
                     "status": 200,
@@ -229,12 +234,24 @@ def test_manifest_network_observation_rejects_wrong_content() -> None:
         _manifest_summary(browser, _manifest_events(), {"name": "Wrong"})
 
 
+def test_manifest_network_observation_requires_generation_header() -> None:
+    browser = _browser_module()
+    events = _manifest_events()
+    del events[2]["params"]["response"]["headers"][
+        "X-Proxima-Preview-Generation"
+    ]
+
+    with pytest.raises(browser.BrowserProbeError, match="header is missing"):
+        _manifest_summary(browser, events)
+
+
 def test_manifest_network_observation_proves_success() -> None:
     browser = _browser_module()
 
     summary = _manifest_summary(browser, _manifest_events())
 
     assert summary["request_id"] == "manifest-request"
+    assert summary["method"] == "GET"
     assert summary["status"] == 200
     assert summary["mime_type"] == "application/manifest+json"
     assert summary["fetch_metadata"] == {
@@ -242,6 +259,147 @@ def test_manifest_network_observation_proves_success() -> None:
         "mode": "cors",
         "dest": "manifest",
     }
+    assert summary["response_headers"] == {
+        "x-proxima-preview-generation": _CAPABILITY_GENERATION,
+    }
+
+
+def _admission_record(
+    *,
+    nonce: str = _MANIFEST_NONCE,
+    generation: str = _CAPABILITY_GENERATION,
+    project: int = 3,
+    area: int = 3,
+    kind: str = "ops",
+) -> dict[str, object]:
+    return {
+        "area": area,
+        "capability_generation": generation,
+        "destination": "manifest",
+        "final_path": "site/app.webmanifest",
+        "kind": kind,
+        "method": "GET",
+        "mode": "cors",
+        "nonce": nonce,
+        "project": project,
+        "request_target": (
+            "/site/app.webmanifest?__proxima_request_nonce=" + nonce
+        ),
+        "site": "same-origin",
+    }
+
+
+def _manifest_resource() -> dict[str, object]:
+    return _manifest_summary(_browser_module(), _manifest_events())
+
+
+def test_manifest_probe_nonce_uses_cryptographic_source(monkeypatch) -> None:
+    fixture = _fixture_module()
+    calls: list[int] = []
+
+    def token_urlsafe(size: int) -> str:
+        calls.append(size)
+        return _MANIFEST_NONCE
+
+    monkeypatch.setattr(fixture.secrets, "token_urlsafe", token_urlsafe)
+
+    assert fixture._new_manifest_probe_nonce() == _MANIFEST_NONCE
+    assert calls == [24]
+
+
+def test_manifest_admission_correlation_proves_exact_request_with_decoy() -> None:
+    fixture = _fixture_module()
+    decoy = _admission_record(nonce="C" * 32)
+
+    actual = fixture._correlate_manifest_admission(
+        [decoy, _admission_record()],
+        _manifest_resource(),
+        _MANIFEST_NONCE,
+    )
+
+    assert actual == _admission_record()
+
+
+def test_manifest_admission_correlation_rejects_absent_nonce() -> None:
+    fixture = _fixture_module()
+
+    with pytest.raises(RuntimeError, match="exactly one"):
+        fixture._correlate_manifest_admission(
+            [_admission_record(nonce="C" * 32)],
+            _manifest_resource(),
+            _MANIFEST_NONCE,
+        )
+
+
+def test_manifest_admission_correlation_rejects_duplicate_nonce() -> None:
+    fixture = _fixture_module()
+    record = _admission_record()
+
+    with pytest.raises(RuntimeError, match="exactly one"):
+        fixture._correlate_manifest_admission(
+            [record, dict(record)],
+            _manifest_resource(),
+            _MANIFEST_NONCE,
+        )
+
+
+def test_manifest_admission_correlation_rejects_replay() -> None:
+    fixture = _fixture_module()
+
+    with pytest.raises(RuntimeError, match="do not correlate"):
+        fixture._correlate_manifest_admission(
+            [_admission_record(generation="c" * 64)],
+            _manifest_resource(),
+            _MANIFEST_NONCE,
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"project": 4},
+        {"area": 4},
+        {"kind": "code"},
+    ],
+)
+def test_manifest_admission_correlation_rejects_mismatched_area(
+    changes,
+) -> None:
+    fixture = _fixture_module()
+
+    with pytest.raises(RuntimeError, match="do not correlate"):
+        fixture._correlate_manifest_admission(
+            [_admission_record(**changes)],
+            _manifest_resource(),
+            _MANIFEST_NONCE,
+        )
+
+
+def test_manifest_admission_correlation_rejects_stale_nonce() -> None:
+    fixture = _fixture_module()
+
+    with pytest.raises(RuntimeError, match="do not correlate"):
+        fixture._correlate_manifest_admission(
+            [_admission_record()],
+            _manifest_resource(),
+            "D" * 32,
+        )
+
+
+def test_manifest_admission_correlation_rejects_redirected_target() -> None:
+    fixture = _fixture_module()
+    resource = _manifest_resource()
+    resource["url"] = (
+        "https://file-3-ops-3.preview.test/site/redirected.webmanifest"
+        f"?__proxima_request_nonce={_MANIFEST_NONCE}"
+    )
+
+    with pytest.raises(RuntimeError, match="do not correlate"):
+        fixture._correlate_manifest_admission(
+            [_admission_record()],
+            resource,
+            _MANIFEST_NONCE,
+        )
 
 
 def test_browser_manifest_probe_keeps_track_load_independent() -> None:
