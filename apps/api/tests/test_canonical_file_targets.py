@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qs,
+    parse_qsl,
+    urlencode,
+    urljoin,
+    urlsplit,
+    urlunsplit,
+)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +31,23 @@ PDF = (
     b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] >>endobj\n"
     b"trailer<< /Root 1 0 R /Size 4 >>\n%%EOF\n"
 )
+
+
+def _clean_capability_url(url: str) -> str:
+    parsed = urlsplit(url)
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+            )
+            if key != "__proxima_cap"
+        ]
+    )
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)
+    )
 
 
 def _api(
@@ -245,27 +269,92 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert capability_query["cache"] == ["7"]
     assert capability_query["__proxima_cap"]
 
+    frame_metadata = {
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
     tampered_url = capability_url.replace(
         capability_query["__proxima_cap"][0],
         capability_query["__proxima_cap"][0] + "x",
     )
-    assert api.get(tampered_url, follow_redirects=False).status_code == 403
+    assert api.get(
+        tampered_url,
+        headers=frame_metadata,
+        follow_redirects=False,
+    ).status_code == 403
     wrong_area_url = capability_url.replace(
         f"file-{project_id}-ops-{ops_area_id}.testserver",
         f"file-{project_id}-container-0.testserver",
     )
-    assert api.get(wrong_area_url, follow_redirects=False).status_code == 403
+    assert api.get(
+        wrong_area_url,
+        headers=frame_metadata,
+        follow_redirects=False,
+    ).status_code == 403
 
-    capability_gate = api.get(capability_url, follow_redirects=False)
-    assert capability_gate.status_code == 307
+    rejected_metadata = (
+        {},
+        {
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Mode": "navigate",
+        },
+        {
+            "Sec-Fetch-Site": "invalid",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+        },
+        {
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+        {
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+            "Origin": "null",
+        },
+    )
+    for metadata in rejected_metadata:
+        rejected = api.get(
+            capability_url,
+            headers=metadata,
+            follow_redirects=False,
+        )
+        assert rejected.status_code == 403
+        assert rejected.text == "preview request metadata is invalid"
+
+    capability_gate = api.get(
+        capability_url,
+        headers=frame_metadata,
+        follow_redirects=False,
+    )
+    assert capability_gate.status_code == 200
     assert capability_gate.headers["cache-control"] == "private, no-store"
     assert "SameSite=strict" in capability_gate.headers["set-cookie"]
-    isolated_url = urljoin(capability_url, capability_gate.headers["location"])
+    assert "Secure" not in capability_gate.headers["set-cookie"]
+    assert "Domain=" not in capability_gate.headers["set-cookie"]
+    assert "Path=/" in capability_gate.headers["set-cookie"]
+    assert (
+        f"proxima_file_preview_{project_id}_ops_{ops_area_id}="
+        in capability_gate.headers["set-cookie"]
+    )
+    isolated_url = _clean_capability_url(capability_url)
+    assert "content=\"0;url=/site/index.html?cache=7\"" in (
+        capability_gate.text
+    )
     clean_query = parse_qs(urlsplit(isolated_url).query)
     assert clean_query == {"cache": ["7"]}
 
+    same_origin_metadata = {"Sec-Fetch-Site": "same-origin"}
     without_capability = TestClient(api.app)
-    assert without_capability.get(isolated_url).status_code == 403
+    missing_cookie = without_capability.get(
+        isolated_url,
+        headers=same_origin_metadata,
+    )
+    assert missing_cookie.status_code == 403
+    assert missing_cookie.text == "preview capability is invalid"
     assert without_capability.get(
         "http://file-invalid.testserver/api/health"
     ).status_code == 404
@@ -275,7 +364,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         ):
             pass
 
-    page = api.get(isolated_url)
+    page = api.get(isolated_url, headers=same_origin_metadata)
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
     preview_policy = page.headers["content-security-policy"]
@@ -290,16 +379,31 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert page.headers["cross-origin-opener-policy"] == "same-origin"
     assert page.headers["referrer-policy"] == "no-referrer"
 
-    nested_asset = api.get(urljoin(isolated_url, "theme.css"))
+    nested_asset = api.get(
+        urljoin(isolated_url, "theme.css"),
+        headers=same_origin_metadata,
+    )
     assert nested_asset.status_code == 200, nested_asset.text
     assert nested_asset.text == "body { color: canonical-ops; }"
-    module = api.get(urljoin(isolated_url, "module.js"))
+    module = api.get(
+        urljoin(isolated_url, "module.js"),
+        headers=same_origin_metadata,
+    )
     worker = api.get(
         urljoin(isolated_url, "worker.js"),
-        headers={"Sec-Fetch-Dest": "worker"},
+        headers={
+            **same_origin_metadata,
+            "Sec-Fetch-Dest": "worker",
+        },
     )
-    font = api.get(urljoin(isolated_url, "font.woff2"))
-    fetched = api.get(urljoin(isolated_url, "data.json"))
+    font = api.get(
+        urljoin(isolated_url, "font.woff2"),
+        headers=same_origin_metadata,
+    )
+    fetched = api.get(
+        urljoin(isolated_url, "data.json"),
+        headers=same_origin_metadata,
+    )
     assert module.status_code == 200
     assert module.headers["content-type"].startswith(
         ("text/javascript", "application/javascript")
@@ -311,7 +415,10 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert fetched.json() == {"source": "canonical"}
     service_worker = api.get(
         urljoin(isolated_url, "worker.js"),
-        headers={"Service-Worker": "script"},
+        headers={
+            **same_origin_metadata,
+            "Service-Worker": "script",
+        },
     )
     assert service_worker.status_code == 403
     assert service_worker.text == "service workers are unavailable"
@@ -320,7 +427,10 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         ("active.xhtml", "application/xhtml+xml"),
         ("active.svg", "image/svg+xml"),
     ):
-        active = api.get(urljoin(isolated_url, active_name))
+        active = api.get(
+            urljoin(isolated_url, active_name),
+            headers=same_origin_metadata,
+        )
         assert active.status_code == 200
         assert active.headers["content-type"].startswith(media_type)
         assert active.headers["content-disposition"].startswith("attachment;")
@@ -398,8 +508,14 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         "../../../../../../api/preview/identity/escape.png",
     )
     assert urlsplit(escaped_navigation).hostname == capability_host
-    assert api.get(escaped_navigation).status_code == 404
-    assert api.get(urljoin(isolated_url, "/api/health")).status_code == 404
+    assert api.get(
+        escaped_navigation,
+        headers=same_origin_metadata,
+    ).status_code == 404
+    assert api.get(
+        urljoin(isolated_url, "/api/health"),
+        headers=same_origin_metadata,
+    ).status_code == 404
 
     invalid_area = api.get(
         "/api/target-preview/identity/ops/999999/site/index.html",
@@ -467,6 +583,66 @@ def test_https_remote_preview_requires_a_distinct_tls_origin(
     )
 
 
+def test_http_named_localhost_uses_a_scoped_bootstrap_cookie(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<main>Named-local preview</main>",
+        encoding="utf-8",
+    )
+    area = api.app.state.db.execute(
+        "SELECT pa.id, pa.project_id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    localhost = TestClient(
+        api.app,
+        base_url="http://localhost:8766",
+    )
+    entry = localhost.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+
+    assert entry.status_code == 307
+    location = entry.headers["location"]
+    assert urlsplit(location).netloc == (
+        f"file-{area['project_id']}-ops-{area['id']}.localhost:8766"
+    )
+    frame_metadata = {
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
+    gate = localhost.get(
+        location,
+        headers=frame_metadata,
+        follow_redirects=False,
+    )
+
+    assert gate.status_code == 200
+    cookie_name = (
+        f"proxima_file_preview_{area['project_id']}_ops_{area['id']}"
+    )
+    set_cookie = gate.headers["set-cookie"]
+    assert f"{cookie_name}=" in set_cookie
+    assert "SameSite=none" in set_cookie
+    assert "Secure" in set_cookie
+    assert "Domain=" not in set_cookie
+    token = parse_qs(urlsplit(location).query)["__proxima_cap"][0]
+    clean = localhost.get(
+        _clean_capability_url(location),
+        headers={
+            **frame_metadata,
+            "Cookie": f"{cookie_name}={token}",
+        },
+    )
+    assert clean.status_code == 200
+    assert "Named-local preview" in clean.text
+
+
 def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     tmp_path: Path,
 ):
@@ -519,6 +695,31 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Dest": "iframe",
     }
+    for metadata in (
+        {},
+        {
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "navigate",
+        },
+        {
+            "Sec-Fetch-Site": "invalid",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+        },
+        {
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+    ):
+        denied = remote.get(
+            location,
+            headers=metadata,
+            follow_redirects=False,
+        )
+        assert denied.status_code == 403
+        assert denied.text == "preview request metadata is invalid"
+
     capability_gate = remote.get(
         location,
         headers=external_navigation,
@@ -527,19 +728,19 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     assert capability_gate.status_code == 200
     assert "SameSite=none" in capability_gate.headers["set-cookie"]
     assert "Secure" in capability_gate.headers["set-cookie"]
-    page_url = urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, "", "")
-    )
+    assert "Domain=" not in capability_gate.headers["set-cookie"]
+    assert "Path=/" in capability_gate.headers["set-cookie"]
+    page_url = _clean_capability_url(location)
     assert f'content="0;url={parsed.path}"' in capability_gate.text
     assert (
         "frame-ancestors https://proxima.tailnet.test"
         in capability_gate.headers["content-security-policy"]
     )
-    cookie_only_entry = remote.get(
+    cookie_frame_entry = remote.get(
         page_url,
         headers=external_navigation,
     )
-    assert cookie_only_entry.status_code == 403
+    assert cookie_frame_entry.status_code == 200
 
     same_origin_navigation = {
         "Sec-Fetch-Site": "same-origin",
@@ -624,9 +825,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     ):
         attack = remote.get(attack_url, headers=attack_headers)
         assert attack.status_code == 403
-        assert attack.text == (
-            "preview request must enter with a capability"
-        )
+        assert attack.text == "preview request metadata is invalid"
     service_worker = remote.get(
         worker_url,
         headers={

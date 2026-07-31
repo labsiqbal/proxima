@@ -224,6 +224,16 @@ parent.postMessage({
   probe: "target-preview-origin",
   value: location.origin
 }, "*");
+parent.postMessage({
+  probe: "target-preview-clean-location",
+  value: `${location.pathname}${location.search}`
+}, "*");
+if (window.opener) {
+  window.opener.postMessage({
+    probe: "target-preview-top-level",
+    value: "executed"
+  }, "*");
+}
 fetch("data.json")
   .then(response => response.json())
   .then(value => parent.postMessage({
@@ -738,6 +748,33 @@ def _browser_expression() -> str:
       ) {
         throw new Error(`targeted HTML used an invalid TLS origin: ${previewOrigin}`);
       }
+      const cleanLocation = await until(
+        `${name} capability cleanup`,
+        () => previewMessages["target-preview-clean-location"]
+      );
+      if (cleanLocation.includes("__proxima_cap")) {
+        throw new Error("Area capability remained in the clean preview URL");
+      }
+      const crossSiteScript = await new Promise(resolve => {
+        const script = document.createElement("script");
+        const timer = setTimeout(() => resolve("timeout"), 3000);
+        script.onload = () => {
+          clearTimeout(timer);
+          resolve("loaded");
+        };
+        script.onerror = () => {
+          clearTimeout(timer);
+          resolve("blocked");
+        };
+        script.src = `${previewOrigin}/site/module.js`;
+        document.body.append(script);
+      });
+      if (crossSiteScript !== "blocked") {
+        throw new Error(
+          `cross-site Area script request was not rejected: ${crossSiteScript}`
+        );
+      }
+      checks.push("cross-site-area-subresource-rejected");
       await until(`${name} targeted stylesheet load`, () =>
         previewMessages["target-preview-css"] === "loaded"
       );
@@ -793,6 +830,17 @@ def _browser_expression() -> str:
       if (previewMessages["target-preview-external-frame"] === "loaded") {
         throw new Error("an opaque external ancestor framed the Area preview");
       }
+      delete previewMessages["target-preview-top-level"];
+      const popup = window.open(frame.src, "target-preview-top-level-probe");
+      if (!popup) {
+        throw new Error("top-level preview probe could not open");
+      }
+      await wait(1500);
+      popup.close();
+      if (previewMessages["target-preview-top-level"] === "executed") {
+        throw new Error("capability executed in a top-level Area document");
+      }
+      checks.push("top-level-area-navigation-rejected");
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
@@ -814,6 +862,116 @@ def _browser_expression() -> str:
   checks.push("archive-to-viewer-markdown-image-html-pdf");
 
   return {ok: true, checks};
+})()
+"""
+
+
+def _http_preview_expression() -> str:
+    return r"""
+(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const until = async (label, check, timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const value = await check();
+      if (value) return value;
+      await wait(75);
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  };
+  const archiveResponse = await fetch("/api/archive?project=canonical-browser");
+  if (!archiveResponse.ok) {
+    throw new Error(`HTTP preview Archive lookup failed: ${archiveResponse.status}`);
+  }
+  const archive = await archiveResponse.json();
+  const record = archive.items.find(item => item.name === "index.html");
+  if (!record?.target) {
+    throw new Error("HTTP preview target is unavailable");
+  }
+  const encodePath = path =>
+    path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  const target = record.target;
+  const entry = (
+    `/api/target-preview/${encodeURIComponent(target.project)}`
+    + `/${encodeURIComponent(target.area.kind)}`
+    + `/${target.area.id ?? "root"}`
+    + `/${encodePath(target.path)}`
+  );
+  const messages = {};
+  window.addEventListener("message", event => {
+    if (typeof event.data?.probe === "string") {
+      messages[event.data.probe] = event.data.value;
+    }
+  });
+  const frame = document.createElement("iframe");
+  frame.src = entry;
+  document.body.append(frame);
+  const origin = await until(
+    "HTTP named-local Area origin",
+    () => messages["target-preview-origin"]
+  );
+  if (
+    !origin.startsWith("http://file-")
+    || !origin.includes(".localhost")
+    || origin === location.origin
+  ) {
+    throw new Error(`invalid HTTP named-local Area origin: ${origin}`);
+  }
+  const cleanLocation = await until(
+    "HTTP capability cleanup",
+    () => messages["target-preview-clean-location"]
+  );
+  if (cleanLocation.includes("__proxima_cap")) {
+    throw new Error("HTTP Area capability remained in the clean URL");
+  }
+  for (const probe of [
+    "target-preview-module",
+    "target-preview-worker",
+    "target-preview-fetch",
+  ]) {
+    const result = await until(`HTTP ${probe}`, () => messages[probe]);
+    if (result !== "loaded") {
+      throw new Error(`${probe} failed on HTTP named-local Area origin: ${result}`);
+    }
+  }
+  const sameSiteScript = await new Promise(resolve => {
+    const script = document.createElement("script");
+    const timer = setTimeout(() => resolve("timeout"), 3000);
+    script.onload = () => {
+      clearTimeout(timer);
+      resolve("loaded");
+    };
+    script.onerror = () => {
+      clearTimeout(timer);
+      resolve("blocked");
+    };
+    script.src = `${origin}/site/module.js`;
+    document.body.append(script);
+  });
+  if (sameSiteScript !== "blocked") {
+    throw new Error(
+      `same-site Area script request was not rejected: ${sameSiteScript}`
+    );
+  }
+  delete messages["target-preview-top-level"];
+  const popup = window.open(entry, "http-target-preview-top-level-probe");
+  if (!popup) {
+    throw new Error("HTTP top-level preview probe could not open");
+  }
+  await wait(1500);
+  popup.close();
+  if (messages["target-preview-top-level"] === "executed") {
+    throw new Error("HTTP capability executed in a top-level Area document");
+  }
+  return {
+    ok: true,
+    checks: [
+      "http-localhost-area-bootstrap",
+      "http-localhost-same-origin-resources",
+      "http-localhost-subresource-rejection",
+      "http-localhost-top-level-rejection",
+    ],
+  };
 })()
 """
 
@@ -924,6 +1082,12 @@ def main() -> None:
                     )
                 _write_fixture_files(canonical)
                 _seed_registry(database, canonical, legacy)
+                http_database = fixture / "http-preview.db"
+                with (
+                    sqlite3.connect(database) as source_database,
+                    sqlite3.connect(http_database) as target_database,
+                ):
+                    source_database.backup(target_database)
                 evidence_dir_value = os.environ.get(
                     "PROXIMA_FILE_TARGET_SCREENSHOTS", ""
                 ).strip()
@@ -993,6 +1157,109 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                         sort_keys=True,
                     )
                 )
+                http_port = _port()
+                http_environment = {
+                    **environment,
+                    "PROXIMA_DB_PATH": str(http_database),
+                    "PROXIMA_PORT": str(http_port),
+                }
+                http_environment.pop("PROXIMA_APPS_DOMAIN", None)
+                http_log_path = fixture / "http-server.log"
+                with http_log_path.open("wb") as http_log:
+                    http_server = subprocess.Popen(
+                        [
+                            str(API_PYTHON),
+                            "-m",
+                            "uvicorn",
+                            "proxima_api.main:app",
+                            "--host",
+                            "127.0.0.1",
+                            "--port",
+                            str(http_port),
+                        ],
+                        cwd=ROOT,
+                        env=http_environment,
+                        stdin=subprocess.DEVNULL,
+                        stdout=http_log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                    try:
+                        deadline = time.monotonic() + 30
+                        while True:
+                            if http_server.poll() is not None:
+                                raise RuntimeError(
+                                    http_log_path.read_text(
+                                        encoding="utf-8",
+                                    )
+                                )
+                            try:
+                                _request(
+                                    f"http://127.0.0.1:{http_port}/api/health"
+                                )
+                                break
+                            except Exception:
+                                if time.monotonic() >= deadline:
+                                    raise RuntimeError(
+                                        "HTTP preview server readiness timed out"
+                                    )
+                                time.sleep(0.1)
+                        http_scenario = {
+                            "name": "canonical-file-targets-http-localhost",
+                            "authenticated": True,
+                            "steps": [
+                                {
+                                    "action": "script",
+                                    "name": "HTTP named-local preview flow",
+                                    "timeout": 30,
+                                    "expression": _http_preview_expression(),
+                                }
+                            ],
+                        }
+                        http_transcript = run_scenario(
+                            executable=browser_executable,
+                            base_url=f"http://localhost:{http_port}",
+                            scenario=http_scenario,
+                            profile=fixture / "http-browser-profile",
+                            auth_token=token,
+                            drop_prefix=[],
+                            host_resolver_rules=(
+                                "MAP *.localhost 127.0.0.1, "
+                                "EXCLUDE localhost, EXCLUDE 127.0.0.1"
+                            ),
+                        )
+                        print(
+                            json.dumps(
+                                {
+                                    "fixture": "disposable",
+                                    "ok": True,
+                                    "scenario": http_scenario["name"],
+                                    "transcript": json.loads(http_transcript),
+                                },
+                                sort_keys=True,
+                            )
+                        )
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"{exc}\nHTTP disposable server log:\n"
+                            f"{http_log_path.read_text(encoding='utf-8', errors='replace')}"
+                        ) from exc
+                    finally:
+                        try:
+                            os.killpg(http_server.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        if http_server.poll() is None:
+                            try:
+                                http_server.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                pass
+                        try:
+                            os.killpg(http_server.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        if http_server.poll() is None:
+                            http_server.wait()
             except Exception as exc:
                 raise RuntimeError(
                     f"{exc}\nDisposable server log:\n"

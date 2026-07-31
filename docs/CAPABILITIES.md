@@ -1364,10 +1364,14 @@ canonical media remains on the authenticated route with an exact framing policy.
 TLS Area origin exchanges its capability for a Secure, host-scoped
 `SameSite=None` cookie, allowing a Tailscale Proxima origin to embed a distinct
 apps-domain host while the token's signed Proxima origin remains the only permitted
-frame ancestor. The HTTPS exchange uses a server-owned bootstrap to enter the clean
-same-origin URL. Cross-origin entry requires a capability-bearing navigation;
-cross-origin subresources and cookie-only navigations are rejected before Area
-dispatch. HTTP same-site relays use `SameSite=Strict`.
+frame ancestor. Host-routed HTTPS and named-local HTTP exchanges use a server-owned
+bootstrap to enter the clean same-origin URL. Cross-origin entry requires a
+capability-bearing iframe or frame navigation; the clean frame may use the validated
+host-scoped cookie and remains bound by the signed frame ancestor. Top-level,
+malformed-entry, missing-entry-metadata, and cross-origin subresource requests are
+rejected before Area dispatch. Named-local HTTP uses a Secure `SameSite=None`
+cookie under the browser's trustworthy-localhost exception; plain HTTP relays use
+`SameSite=Strict`.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated
 worker responses restrict outbound connections, Service Worker scripts are rejected,
 external ancestors cannot frame a preview, and embedded same-site or cross-site

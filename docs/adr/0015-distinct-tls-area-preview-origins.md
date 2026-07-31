@@ -44,9 +44,13 @@ rejection remain mandatory. TLS exchange uses a Secure, host-scoped
 may remain cross-site; the signed Proxima origin remains the exact permitted frame
 ancestor. HTTP same-site relays retain `SameSite=Strict`. Native module workers use
 same-origin Area URLs. A cross-origin Area entry must carry the signed capability
-on a navigation request. HTTPS exchange returns a server-owned bootstrap that sets
-the cookie and enters the clean same-origin URL. Cross-origin scripts, images,
-fetches, workers, and cookie-only navigations are rejected before Area dispatch.
+on an iframe or frame navigation request. Host-routed HTTPS and named-local HTTP
+exchanges return a server-owned bootstrap that sets the cookie and enter the clean
+same-origin URL. The clean frame navigation may use that validated host-scoped
+cookie and remains bound by the signed frame ancestor. Top-level, malformed-entry,
+missing-entry-metadata, cross-origin script, image, fetch, and worker requests are
+rejected before Area dispatch. Named-local HTTP uses a Secure `SameSite=None`
+cookie under the browser's trustworthy-localhost exception.
 
 Named local origins and plain HTTP Area relays retain the same isolated-host model.
 When an HTTPS installation has no distinct TLS Area origin, active preview entry
