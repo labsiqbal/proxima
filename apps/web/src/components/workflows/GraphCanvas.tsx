@@ -161,6 +161,8 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   const [selectedEdge, setSelectedEdge] = React.useState<string | null>(null)
   const intentRef = React.useRef<CanvasIntent>({ mode: 'fit' })
   const refitFrame = React.useRef(0)
+  const gestureRef = React.useRef<Gesture>(null)
+  gestureRef.current = gesture
   const geometryKey = React.useMemo(
     () => layout.nodes
       .map(node => `${node.id}:${node.x}:${node.y}:${node.width}:${node.height}`)
@@ -193,9 +195,11 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   }, [viewport])
 
   const scheduleRefit = React.useCallback(() => {
+    if (gestureRef.current?.kind === 'node') return
     if (refitFrame.current) return
     refitFrame.current = requestAnimationFrame(() => {
       refitFrame.current = 0
+      if (gestureRef.current?.kind === 'node') return
       applyRefit()
     })
   }, [applyRefit])
@@ -212,7 +216,8 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
 
   const zoomTo = React.useCallback((nextK: number, focus?: Point) => {
     setView(current => {
-      const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextK))
+      const zoomMin = Math.min(ZOOM_MIN, current.k)
+      const k = Math.min(ZOOM_MAX, Math.max(zoomMin, nextK))
       const rect = svgRef.current?.getBoundingClientRect()
       const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
       // Keep whatever sits under `at` pinned there while the scale changes.
@@ -236,7 +241,8 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       const rect = element.getBoundingClientRect()
       const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top }
       setView(current => {
-        const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current.k * Math.exp(-event.deltaY * 0.0015)))
+        const zoomMin = Math.min(ZOOM_MIN, current.k)
+        const k = Math.min(ZOOM_MAX, Math.max(zoomMin, current.k * Math.exp(-event.deltaY * 0.0015)))
         const next = {
           k,
           x: focus.x - (focus.x - current.x) * (k / current.k),
@@ -309,6 +315,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       setLinkAt(point)
     }
     const onUp = (event: PointerEvent) => {
+      const endedNodeDrag = gesture.kind === 'node'
       if (gesture.kind === 'link') {
         const point = toGraphPoint(event)
         const { layout: currentLayout, plan: currentPlan, onConnect: connect } = live.current
@@ -329,6 +336,10 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       }
       setGesture(null)
       setLinkAt(null)
+      if (endedNodeDrag) {
+        gestureRef.current = null
+        scheduleRefit()
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -338,7 +349,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [gesture, toGraphPoint, rememberManualView])
+  }, [gesture, toGraphPoint, rememberManualView, scheduleRefit])
 
   function beginPan(event: React.PointerEvent<SVGSVGElement>) {
     if (event.button !== 0) return

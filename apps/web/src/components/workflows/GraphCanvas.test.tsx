@@ -87,6 +87,41 @@ function CanvasHarness({ plan }: { plan: WorkflowGraph }) {
   />
 }
 
+function DragCanvasHarness({ initialPlan }: { initialPlan: WorkflowGraph }) {
+  const [plan, setPlan] = React.useState(initialPlan)
+  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  return <GraphCanvas
+    job={job}
+    plan={plan}
+    profiles={[]}
+    selectedId={selectedId}
+    onSelect={setSelectedId}
+    onDeselect={() => setSelectedId(null)}
+    editable
+    onMoveNode={(nodeId, x, y) => {
+      setPlan(current => ({
+        ...current,
+        nodes: current.nodes.map(node => (
+          node.id === nodeId ? { ...node, x, y } : node
+        )),
+      }))
+    }}
+    onConnect={vi.fn()}
+    onDisconnect={vi.fn()}
+    onAddNode={vi.fn()}
+    onAddScript={vi.fn()}
+    onAddTrigger={vi.fn()}
+    hasTrigger={false}
+  />
+}
+
+function readTransform(canvas: Element): { x: number; y: number; k: number } {
+  const raw = canvas.querySelector(':scope > g')?.getAttribute('transform') ?? ''
+  const match = /translate\(([^ ]+) ([^)]+)\) scale\(([^)]+)\)/.exec(raw)
+  if (!match) throw new Error(`unexpected transform: ${raw}`)
+  return { x: Number(match[1]), y: Number(match[2]), k: Number(match[3]) }
+}
+
 describe('GraphCanvas refitting', () => {
   beforeEach(() => {
     resizeCallback = null
@@ -166,13 +201,99 @@ describe('GraphCanvas refitting', () => {
     triggerResize()
     canvasRect = rect(480, 480)
     triggerResize()
-    expect(frameQueue).toHaveLength(1)
+    expect(frameQueue.size).toBe(1)
 
     act(() => flushFrames())
     expect(canvas.querySelector(':scope > g')).toHaveAttribute(
       'transform',
       'translate(0 197) scale(0.5)',
     )
+  })
+
+  it('defers geometry refits while a node is dragged and refits once on release', () => {
+    const laidOut = layoutGraph(chain())
+    const seed = {
+      ...chain(),
+      nodes: chain().nodes.map(node => {
+        const position = laidOut.nodes.find(entry => entry.id === node.id)!
+        return { ...node, x: position.x, y: position.y }
+      }),
+    }
+    render(<DragCanvasHarness initialPlan={seed} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => rect(480, 480))
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const before = readTransform(canvas)
+    expect(before.k).toBeCloseTo(0.5)
+
+    const node = screen.getByRole('button', { name: 'Node 1, Pending' })
+    const start = laidOut.nodes.find(entry => entry.id === 'node-1')!
+    // Pointer at the node's top-left corner in screen space under the fitted view.
+    const pointerX = before.x + start.x * before.k
+    const pointerY = before.y + start.y * before.k
+
+    // Drag the leftmost node further left so the layout bounds expand.
+    const dragDx = -240
+    act(() => {
+      fireEvent.pointerDown(node, { button: 0, clientX: pointerX, clientY: pointerY })
+    })
+    act(() => {
+      fireEvent.pointerMove(window, {
+        clientX: pointerX + dragDx,
+        clientY: pointerY,
+      })
+      flushFrames()
+    })
+
+    // Mid-drag geometry changes must not rewrite the live transform.
+    expect(readTransform(canvas)).toEqual(before)
+    expect(frameQueue.size).toBe(0)
+
+    act(() => {
+      fireEvent.pointerUp(window, {
+        clientX: pointerX + dragDx,
+        clientY: pointerY,
+      })
+    })
+    expect(frameQueue.size).toBe(1)
+
+    act(() => flushFrames())
+    const after = readTransform(canvas)
+    expect(after.k).toBeLessThan(before.k)
+    const finalLayout = layoutGraph({
+      ...seed,
+      nodes: seed.nodes.map(node => (
+        node.id === 'node-1'
+          ? { ...node, x: start.x + Math.round(dragDx / before.k), y: start.y }
+          : node
+      )),
+    })
+    expect(after.x + finalLayout.x * after.k).toBeGreaterThanOrEqual(-0.001)
+    expect(after.x + (finalLayout.x + finalLayout.width) * after.k)
+      .toBeLessThanOrEqual(480.001)
+  })
+
+  it('keeps manual zoom continuous after a deep auto-fit below ZOOM_MIN', () => {
+    render(<CanvasHarness plan={chain(4)} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    // Narrow laptop-style viewport forces fitScale well below the manual ZOOM_MIN (0.35).
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => rect(200, 160))
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const fitted = readTransform(canvas)
+    expect(fitted.k).toBeLessThan(0.35)
+
+    fireEvent.click(screen.getByLabelText('Zoom in'))
+    const zoomed = readTransform(canvas)
+    expect(zoomed.k).toBeCloseTo(fitted.k * 1.25)
+    expect(zoomed.k).toBeLessThan(0.35)
   })
 
   it('refits when graph growth changes the layout bounds', () => {
