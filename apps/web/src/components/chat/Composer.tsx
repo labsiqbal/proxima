@@ -74,7 +74,7 @@ export function slashCommandAriaLabel(command: {
 	return `${base} (${command.surface})`;
 }
 
-type Att = { path: string; name: string; img: boolean };
+export type ComposerAttachment = { path: string; name: string; img: boolean };
 type ModeOption = {
 	id: PromptMode;
 	label: string;
@@ -122,6 +122,10 @@ export function Composer({
 	onDraftChange,
 	selectionValue,
 	onSelectionChange,
+	modeValue,
+	onModeChange,
+	attachmentsValue,
+	onAttachmentsChange,
 	focusRequest,
 	clearOnSubmitStart = true,
 	draftSeed,
@@ -155,6 +159,10 @@ export function Composer({
 	onDraftChange?: (draft: string) => void;
 	selectionValue?: { start: number; end: number };
 	onSelectionChange?: (selection: { start: number; end: number }) => void;
+	modeValue?: PromptMode;
+	onModeChange?: (mode: PromptMode) => void;
+	attachmentsValue?: ComposerAttachment[];
+	onAttachmentsChange?: (attachments: ComposerAttachment[]) => void;
 	focusRequest?: number;
 	clearOnSubmitStart?: boolean;
 	draftSeed?: string;
@@ -176,7 +184,16 @@ export function Composer({
 		const next = typeof update === "function" ? update(current) : update;
 		onDraftChange?.(next);
 	}, [controlledDraft, draftValue, onDraftChange]);
-	const [mode, setMode] = React.useState<PromptMode>("chat");
+	const [internalMode, setInternalMode] = React.useState<PromptMode>("chat");
+	const controlledMode = modeValue !== undefined;
+	const mode = controlledMode ? modeValue : internalMode;
+	const setMode = React.useCallback(
+		(next: PromptMode) => {
+			if (controlledMode) onModeChange?.(next);
+			else setInternalMode(next);
+		},
+		[controlledMode, onModeChange],
+	);
 	const [genOpen, setGenOpen] = React.useState(false);
 	const mediaKinds = generateKinds ?? (promptModes ? ["image", "design"] as const : []);
 	const genRef = React.useRef<HTMLDivElement>(null);
@@ -205,7 +222,21 @@ export function Composer({
 		taRef.current?.focus();
 	};
 	const [commands, setCommands] = React.useState<CatalogCommand[]>([]);
-	const [atts, setAtts] = React.useState<Att[]>([]);
+	const [internalAtts, setInternalAtts] = React.useState<ComposerAttachment[]>([]);
+	const controlledAtts = attachmentsValue !== undefined;
+	const atts = controlledAtts ? attachmentsValue : internalAtts;
+	const setAtts = React.useCallback(
+		(update: React.SetStateAction<ComposerAttachment[]>) => {
+			if (!controlledAtts) {
+				setInternalAtts(update);
+				return;
+			}
+			const current = attachmentsValue ?? [];
+			const next = typeof update === "function" ? update(current) : update;
+			onAttachmentsChange?.(next);
+		},
+		[attachmentsValue, controlledAtts, onAttachmentsChange],
+	);
 	const [uploading, setUploading] = React.useState(false);
 	const [submitting, setSubmitting] = React.useState(false);
 	const [uploadError, setUploadError] = React.useState("");
@@ -352,13 +383,13 @@ export function Composer({
 		slugRef.current = slug;
 		uploadSeq.current += 1;
 		submitSeq.current += 1;
-		setAtts([]);
+		if (!controlledAtts) setInternalAtts([]);
 		setUploadError("");
 		setUploading(false);
 		setSubmitting(false);
 		setMention(null);
 		if (fileRef.current) fileRef.current.value = "";
-	}, [slug]);
+	}, [controlledAtts, slug]);
 
 	React.useLayoutEffect(() => {
 		const el = taRef.current;

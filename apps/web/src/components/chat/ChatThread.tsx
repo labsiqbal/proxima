@@ -852,6 +852,10 @@ export function ChatThread({
 	onOpenOutput,
 	onMessageUpdated,
 	emptyContent,
+	scrollAnchor,
+	onScrollAnchorChange,
+	scrollRestoreKey,
+	surfaceActive = true,
 	features = DEFAULT_FEATURES,
 }: {
 	messages: ChatMessage[];
@@ -866,6 +870,11 @@ export function ChatThread({
 	onMessageUpdated?: (messageId: number, content: string) => void;
 	/** Surface-specific teaching copy for embedded empty threads. */
 	emptyContent?: React.ReactNode;
+	scrollAnchor?: number | null;
+	onScrollAnchorChange?: (scrollTop: number) => void;
+	scrollRestoreKey?: string | null;
+	/** False while the keep-alive Chat pane is hidden behind another surface. */
+	surfaceActive?: boolean;
 	features?: AppFeatures;
 }) {
 	// Label = recorded author (username for people, profile/agent name for the
@@ -978,11 +987,42 @@ export function ChatThread({
 	// Short threads that fit the viewport never force a bottom jump (see
 	// applyThreadScrollFollow) — content stays top-anchored under the header.
 	const pinnedRef = React.useRef(true);
+	const restoredScrollRef = React.useRef(false);
+	const restoreIdentityRef = React.useRef<string | null | undefined>(undefined);
+	const pageLeavingRef = React.useRef(false);
 	const [atBottom, setAtBottom] = React.useState(true);
+	const restoreIdentity = scrollRestoreKey ?? null;
+
+	React.useEffect(() => {
+		const leaving = () => { pageLeavingRef.current = true; };
+		window.addEventListener("beforeunload", leaving);
+		window.addEventListener("pagehide", leaving);
+		return () => {
+			window.removeEventListener("beforeunload", leaving);
+			window.removeEventListener("pagehide", leaving);
+		};
+	}, []);
+
+	if (restoreIdentityRef.current !== restoreIdentity) {
+		restoreIdentityRef.current = restoreIdentity;
+		restoredScrollRef.current = false;
+		pinnedRef.current = true;
+	}
 
 	const onScroll = () => {
 		const el = scrollRef.current;
-		if (!el) return;
+		if (
+			!el ||
+			pageLeavingRef.current ||
+			el.closest<HTMLElement>("[hidden]") != null
+		) return;
+		// A newly mounted thread can emit scrollTop=0 before its messages arrive.
+		// Do not let that transient boot position overwrite a persisted anchor.
+		if (
+			!restoredScrollRef.current &&
+			scrollAnchor != null &&
+			scrollAnchor > 0
+		) return;
 		const pinned = isThreadPinnedNearBottom(
 			el.scrollHeight,
 			el.scrollTop,
@@ -990,15 +1030,71 @@ export function ChatThread({
 		);
 		pinnedRef.current = pinned;
 		setAtBottom(pinned);
+		onScrollAnchorChange?.(el.scrollTop);
 	};
 
 	// Follow new content only when pinned AND the thread actually overflows.
 	// Short conversations stay at the top (no messenger-style bottom glue).
+	// While a keep-alive Chat surface is still hidden, or a persisted anchor has
+	// not been applied yet, do not force the bottom - hidden layout reports
+	// clientHeight 0 and would clamp/steal the restore.
 	React.useLayoutEffect(() => {
 		const el = scrollRef.current;
-		if (!el) return;
+		if (!el || !surfaceActive) return;
+		if (el.closest<HTMLElement>("[hidden]") != null || el.clientHeight <= 0) return;
+		if (
+			!restoredScrollRef.current &&
+			scrollAnchor != null &&
+			scrollAnchor > 0
+		) {
+			return;
+		}
 		applyThreadScrollFollow(el, pinnedRef.current);
-	}, [messages, streaming, waiting, tools.length, collaborationGroups]);
+	}, [
+		messages,
+		streaming,
+		waiting,
+		tools.length,
+		collaborationGroups,
+		scrollAnchor,
+		surfaceActive,
+	]);
+
+	React.useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (!el || scrollAnchor == null || !surfaceActive) return;
+
+		const tryRestore = () => {
+			if (restoredScrollRef.current) return true;
+			if (messages.length === 0 && scrollAnchor > 0) return false;
+			// Keep-alive Chat mounts under [hidden] while Design/Workflows is primary.
+			// Restoring then clamps to 0 and latches restoredScrollRef - defer until visible.
+			if (el.closest<HTMLElement>("[hidden]") != null || el.clientHeight <= 0) {
+				return false;
+			}
+			el.scrollTop = Math.min(
+				scrollAnchor,
+				Math.max(0, el.scrollHeight - el.clientHeight),
+			);
+			const pinned = isThreadPinnedNearBottom(
+				el.scrollHeight,
+				el.scrollTop,
+				el.clientHeight,
+			);
+			pinnedRef.current = pinned;
+			setAtBottom(pinned);
+			restoredScrollRef.current = true;
+			return true;
+		};
+
+		if (tryRestore()) return;
+		if (typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => {
+			tryRestore();
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [messages.length, restoreIdentity, scrollAnchor, surfaceActive]);
 
 	const scrollToBottom = () => {
 		const el = scrollRef.current;

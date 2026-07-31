@@ -23,11 +23,23 @@ not primary nav. Agents and Settings stay in the Work account menu. The default 
 mode and surface are Work and Chat. Delegate uses the same header and left-panel
 geometry but its global navigation is only **Master**, **Tasks**, and **Archive**.
 
+Every Work destination has a stable history entry. Its URL records the Work mode,
+active project, active Chat session, primary surface, and the open Workflow or Design
+identity when one is focused. Full reload, an installed-PWA restart, and native browser
+Back/Forward restore that validated context. A missing project or session falls back to
+an available project and one of its sessions; it never reuses another project's draft.
+
 ## Chat — the front door
 
 Chat is the conversational surface where work begins: brainstorm until the scope is clear, then promote the conversation with **Slice into plan**, which drafts a plan (a DAG of jobs) and opens it in the editor. The left nav lists destinations only (**Chat**, **Master**, **Tasks**, …); it does not carry a separate **New chat** row. A blank session is started from the **Chat** header control (compact icon on the mobile topbar), or via `/new`. The database session is created lazily on the first message; recent chats appear under the nav once a thread exists.
 
 A workflow's iteration thread is not an ordinary chat: the nav attributes it to Workflows, and picking Chat while one is open switches to a plain conversation instead.
+
+One owner-scoped Work Chat provider remains mounted while the shell moves between
+Work destinations or Delegate. It stores state per project and session: the unsent
+draft, selection, composer mode, safe pending attachment references, and thread scroll
+anchor. These values survive reload and an installed-PWA restart. Deleted projects are
+pruned explicitly, and a fallback session reads only its own project-scoped state.
 
 A file-changing assistant turn carries a **Restore changed paths** control. It first
 opens a path impact preview and asks for confirmation; active Master work in the same
@@ -212,8 +224,9 @@ The enabled desktop Back control includes the origin text, not only an icon.
 **Multitask foundation:** primary surfaces must not destroy in-flight UI on leave.
 Once visited, **Chat, Master, Tasks, Workflows, Archive, and Design** stay mounted in
 hidden `surface-pane`s so draft text, open panels, canvas/plan state, and in-flight
-runs re-attach when the owner returns in the same browser session. Server work continues
-regardless; the client contract is keep-alive / re-attach, not remount-from-zero.
+runs re-attach when the owner returns in the same browser session. Work Chat reload
+durability is owned under Chat above. Server work continues regardless; the client
+contract is keep-alive / re-attach, not remount-from-zero.
 
 **Teaching empty states:** top-level empties share one grammar — title, what the surface
 can do, short tutorial steps, and one primary CTA where it applies (Chat, Master, Tasks,
