@@ -27,6 +27,7 @@ const stored = (key: string, fallback: number) => {
 }
 
 const LEFT_MIN = 200, LEFT_MAX = 480
+type StatusDisclosure = 'running' | 'attention' | null
 
 function useMobileShell(): boolean {
   const [mobile, setMobile] = React.useState(() => matches(MOBILE_SHELL_QUERY))
@@ -102,8 +103,7 @@ export function AppShell(props: {
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [toolOpen, setToolOpen] = React.useState(false)
-  const [runningOpen, setRunningOpen] = React.useState(false)
-  const [attentionOpen, setAttentionOpen] = React.useState(false)
+  const [statusDisclosure, setStatusDisclosure] = React.useState<StatusDisclosure>(null)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
   const mobileShell = useMobileShell()
@@ -182,6 +182,9 @@ export function AppShell(props: {
 
   React.useEffect(() => { localStorage.setItem('proxima.leftWidth', String(leftWidth)) }, [leftWidth])
   React.useEffect(() => { localStorage.setItem('proxima.leftCollapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
+  React.useEffect(() => {
+    if (delegateMode) setStatusDisclosure(null)
+  }, [delegateMode])
 
   const toggleLeft = () => { if (matches('(min-width: 768px)')) setLeftCollapsed(value => !value); else setDrawerOpen(value => !value) }
   const startResize = (event: React.PointerEvent) => {
@@ -217,11 +220,18 @@ export function AppShell(props: {
   // collapse its navigation never hides this bounded navigation surface.
   const effectiveLeftCollapsed = !delegateMode && leftCollapsed
   const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
-  const statusOverlayOpen = runningOpen || attentionOpen
+  const setRunningOpen = React.useCallback((open: boolean) => {
+    setStatusDisclosure(current => open ? 'running' : current === 'running' ? null : current)
+  }, [])
+  const setAttentionOpen = React.useCallback((open: boolean) => {
+    setStatusDisclosure(current => open ? 'attention' : current === 'attention' ? null : current)
+  }, [])
+  const statusOverlayOpen = statusDisclosure !== null
   const statusControls = (
     <div className="shell-status-controls">
       <RunningTasks
         token={props.token}
+        open={statusDisclosure === 'running'}
         sessions={props.sessions}
         onOpenJob={props.onOpenRunningJob}
         onOpenSession={props.onOpenRunningSession}
@@ -231,6 +241,7 @@ export function AppShell(props: {
       <span className="attention-control-slot">
         <AttentionInbox
           token={props.token}
+          open={statusDisclosure === 'attention'}
           onOpenTarget={target => props.onOpenAttentionTarget?.(target)}
           onOpenChange={setAttentionOpen}
         />

@@ -10,15 +10,16 @@ const labelForKind = (kind: string) => ({
 
 export function AttentionInbox({
   token,
+  open,
   onOpenTarget,
   onOpenChange,
 }: {
   token: string
+  open: boolean
   onOpenTarget: (target: AttentionItem['target']) => void
-  onOpenChange?: (open: boolean) => void
+  onOpenChange: (open: boolean) => void
 }) {
   const [items, setItems] = React.useState<AttentionItem[]>([])
-  const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState('')
   const [error, setError] = React.useState('')
@@ -36,18 +37,14 @@ export function AttentionInbox({
   }, [load])
   React.useEffect(() => {
     if (!open) return
-    const dismiss = (event: MouseEvent) => { if (root.current && !root.current.contains(event.target as Node)) setOpen(false) }
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    const dismiss = (event: MouseEvent) => { if (root.current && !root.current.contains(event.target as Node)) onOpenChange(false) }
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onOpenChange(false) }
     window.addEventListener('mousedown', dismiss); window.addEventListener('keydown', key)
     return () => { window.removeEventListener('mousedown', dismiss); window.removeEventListener('keydown', key) }
-  }, [open])
-  React.useLayoutEffect(() => {
-    onOpenChange?.(open)
-    return () => onOpenChange?.(false)
   }, [onOpenChange, open])
   React.useEffect(() => {
-    if (items.length === 0) setOpen(false)
-  }, [items.length])
+    if (items.length === 0 && open) onOpenChange(false)
+  }, [items.length, onOpenChange, open])
   const act = async (item: AttentionItem, action: string) => {
     const key = `${item.id}:${action}`
     if (busy) return
@@ -56,13 +53,13 @@ export function AttentionInbox({
     catch (err) { setError(err instanceof Error ? err.message : String(err)) }
     finally { setBusy('') }
   }
-  const go = (item: AttentionItem) => { setOpen(false); onOpenTarget(item.target) }
+  const go = (item: AttentionItem) => { onOpenChange(false); onOpenTarget(item.target) }
 
   // Hide when empty so a permanent "!" does not read as an alarm next to running work.
   if (items.length === 0) return null
 
   return <div className="attention-inbox" ref={root}>
-    <button type="button" className={`attention-trigger has-attention ${open ? 'active' : ''}`} onClick={() => setOpen(value => !value)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${items.length} attention item${items.length === 1 ? '' : 's'}`}>
+    <button type="button" className={`attention-trigger has-attention ${open ? 'active' : ''}`} onClick={() => onOpenChange(!open)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${items.length} attention item${items.length === 1 ? '' : 's'}`}>
       <span aria-hidden="true">!</span><b>{items.length > 99 ? '99+' : items.length}</b>
     </button>
     {open && <section className="attention-popover" role="dialog" aria-modal="false" aria-label="Attention inbox">

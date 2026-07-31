@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest'
+import React from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -66,6 +67,21 @@ const decisionItem = {
   decision,
 }
 
+function InboxHarness({ onOpenChange = vi.fn() }: { onOpenChange?: (open: boolean) => void }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <AttentionInbox
+      token="token"
+      open={open}
+      onOpenTarget={vi.fn()}
+      onOpenChange={next => {
+        setOpen(next)
+        onOpenChange(next)
+      }}
+    />
+  )
+}
+
 describe('AttentionInbox', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -93,7 +109,7 @@ describe('AttentionInbox', () => {
 
   it('hides the trigger when the inbox is empty so it does not look like an active alarm', async () => {
     vi.mocked(getAttention).mockResolvedValue({ items: [], count: 0 })
-    const { container } = render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    const { container } = render(<InboxHarness />)
     await waitFor(() => expect(getAttention).toHaveBeenCalled())
     expect(container.querySelector('.attention-inbox')).toBeNull()
     expect(screen.queryByRole('button', { name: /attention item/ })).not.toBeInTheDocument()
@@ -101,7 +117,7 @@ describe('AttentionInbox', () => {
   })
 
   it('shows a needs-you trigger with count when there are open items', async () => {
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<InboxHarness />)
     const trigger = await screen.findByRole('button', { name: '1 attention item' })
     expect(trigger).toHaveClass('has-attention')
     expect(trigger).toHaveTextContent('!')
@@ -111,7 +127,11 @@ describe('AttentionInbox', () => {
   it('deep-links every item and restricts inline controls to supplied actions', async () => {
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    function TargetHarness() {
+      const [open, setOpen] = React.useState(false)
+      return <AttentionInbox token="token" open={open} onOpenTarget={openTarget} onOpenChange={setOpen} />
+    }
+    render(<TargetHarness />)
     await waitFor(() => expect(screen.getByRole('button', { name: '1 attention item' })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: '1 attention item' }))
 
@@ -122,7 +142,7 @@ describe('AttentionInbox', () => {
 
   it('runs a safe inline action once and refreshes the inbox', async () => {
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<InboxHarness />)
     await user.click(await screen.findByRole('button', { name: '1 attention item' }))
     await user.click(screen.getByRole('button', { name: 'Approve' }))
 
@@ -248,13 +268,7 @@ describe('AttentionInbox', () => {
   it('reports keyboard disclosure state to the shell overlay owner', async () => {
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
-    render(
-      <AttentionInbox
-        token="token"
-        onOpenTarget={vi.fn()}
-        onOpenChange={onOpenChange}
-      />,
-    )
+    render(<InboxHarness onOpenChange={onOpenChange} />)
     const trigger = await screen.findByRole('button', { name: '1 attention item' })
     trigger.focus()
     await user.keyboard('{Enter}')

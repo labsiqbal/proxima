@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest'
+import React from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +19,25 @@ const job = {
   engine: 'linear',
   project_slug: 'demo',
 } as Job
+
+function RunningHarness({
+  onOpenChange = vi.fn(),
+  ...props
+}: Omit<React.ComponentProps<typeof RunningTasks>, 'open' | 'onOpenChange'> & {
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <RunningTasks
+      {...props}
+      open={open}
+      onOpenChange={next => {
+        setOpen(next)
+        onOpenChange(next)
+      }}
+    />
+  )
+}
 
 describe('buildRunningItems', () => {
   it('prefers jobs over bare sessions and keeps chat-only runs', () => {
@@ -54,13 +74,13 @@ describe('RunningTasks', () => {
   it('hides entirely when nothing is running (quiet header)', async () => {
     vi.mocked(activeRuns).mockResolvedValue({ session_ids: [] })
     vi.mocked(listJobs).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
-    const { container } = render(<RunningTasks token="token" />)
+    const { container } = render(<RunningHarness token="token" />)
     await waitFor(() => expect(container).toBeEmptyDOMElement())
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('shows a text pill with the full phrase - never icon-only or "!"', async () => {
-    render(<RunningTasks token="token" />)
+    render(<RunningHarness token="token" />)
     const trigger = await screen.findByRole('button', { name: '1 task running' })
     expect(trigger).toHaveClass('running-pill')
     expect(trigger).toHaveTextContent('1 task running')
@@ -72,7 +92,7 @@ describe('RunningTasks', () => {
   it('pluralizes for multiple running tasks', async () => {
     vi.mocked(activeRuns).mockResolvedValue({ session_ids: [12, 99] })
     render(
-      <RunningTasks
+      <RunningHarness
         token="token"
         sessions={[{ id: 99, title: 'Brainstorm', runner_id: 'pi', visibility: 'private' }]}
       />,
@@ -86,7 +106,7 @@ describe('RunningTasks', () => {
     const onOpenSession = vi.fn()
     vi.mocked(activeRuns).mockResolvedValue({ session_ids: [12, 99] })
     render(
-      <RunningTasks
+      <RunningHarness
         token="token"
         sessions={[{ id: 99, title: 'Brainstorm', runner_id: 'pi', visibility: 'private' }]}
         onOpenJob={onOpenJob}
@@ -109,7 +129,7 @@ describe('RunningTasks', () => {
   it('supports keyboard open and Escape dismiss', async () => {
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
-    render(<RunningTasks token="token" onOpenChange={onOpenChange} />)
+    render(<RunningHarness token="token" onOpenChange={onOpenChange} />)
     const trigger = await screen.findByRole('button', { name: '1 task running' })
     trigger.focus()
     await user.keyboard('{Enter}')

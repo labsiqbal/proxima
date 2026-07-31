@@ -271,7 +271,9 @@ header rows, its layer paints above ordinary content and the tool rail, and narr
 Running and Attention sheets stop before the rail so their complete bounds and
 controls remain visible, pointer-clickable, and keyboard reachable. Opening either
 sheet also withholds the Master launcher and live toast region until it closes,
-including when the sheet is saturated and scrolls. Shared shell
+including when the sheet is saturated and scrolls. Running and Attention share one
+exclusive disclosure state, so keyboard activation of one closes the other before
+opening it. Shared shell
 labels use the higher-contrast label and accent-text tokens, including Work, Work
 project, and Recent chats.
 

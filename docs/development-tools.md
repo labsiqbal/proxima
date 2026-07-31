@@ -202,7 +202,8 @@ geometry. At 390px it opens Running and Attention, verifies viewport and tool-ra
 clearance, saturated scrolling, pointer hit testing, keyboard order, target size,
 and focus rings. It injects disposable live Master toasts and verifies that both
 the toast region and launcher are withheld while each popover is open, then captures
-the live toast and both open popovers:
+the live toast and both open popovers. A direct Shift+Tab keyboard switch asserts
+that exactly one saturated status dialog remains visible and reachable:
 
 ```bash
 python3 scripts/verify_shell_safe_areas_browser.py

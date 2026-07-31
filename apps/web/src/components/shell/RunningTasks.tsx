@@ -57,6 +57,7 @@ export function runningTasksLabel(count: number, compact = false): string {
 
 export function RunningTasks({
   token,
+  open,
   sessions = [],
   onOpenJob,
   onOpenSession,
@@ -64,15 +65,15 @@ export function RunningTasks({
   onOpenChange,
 }: {
   token: string
+  open: boolean
   sessions?: ChatSession[]
   onOpenJob?: (id: number, engine?: string) => void
   onOpenSession?: (sessionId: number) => void
   onOpenTasks?: () => void
-  onOpenChange?: (open: boolean) => void
+  onOpenChange: (open: boolean) => void
 }) {
   const [sessionIds, setSessionIds] = React.useState<number[]>([])
   const [jobs, setJobs] = React.useState<Job[]>([])
-  const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
   const root = React.useRef<HTMLDivElement>(null)
@@ -102,10 +103,10 @@ export function RunningTasks({
   React.useEffect(() => {
     if (!open) return
     const dismiss = (event: MouseEvent) => {
-      if (root.current && !root.current.contains(event.target as Node)) setOpen(false)
+      if (root.current && !root.current.contains(event.target as Node)) onOpenChange(false)
     }
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') onOpenChange(false)
     }
     window.addEventListener('mousedown', dismiss)
     window.addEventListener('keydown', key)
@@ -113,10 +114,6 @@ export function RunningTasks({
       window.removeEventListener('mousedown', dismiss)
       window.removeEventListener('keydown', key)
     }
-  }, [open])
-  React.useLayoutEffect(() => {
-    onOpenChange?.(open)
-    return () => onOpenChange?.(false)
   }, [onOpenChange, open])
 
   const items = React.useMemo(
@@ -125,11 +122,11 @@ export function RunningTasks({
   )
   const count = items.length
   React.useEffect(() => {
-    if (count === 0) setOpen(false)
-  }, [count])
+    if (count === 0 && open) onOpenChange(false)
+  }, [count, onOpenChange, open])
 
   const go = (item: RunningTaskItem) => {
-    setOpen(false)
+    onOpenChange(false)
     if (item.kind === 'job') {
       onOpenJob?.(item.jobId, item.engine)
       return
@@ -148,7 +145,7 @@ export function RunningTasks({
       <button
         type="button"
         className={`running-pill ${open ? 'active' : ''}`}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => onOpenChange(!open)}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={fullLabel}
@@ -166,7 +163,7 @@ export function RunningTasks({
             </div>
             <div className="running-popover-actions">
               {onOpenTasks && (
-                <button type="button" className="text-button" onClick={() => { setOpen(false); onOpenTasks() }}>
+                <button type="button" className="text-button" onClick={() => { onOpenChange(false); onOpenTasks() }}>
                   Tasks
                 </button>
               )}

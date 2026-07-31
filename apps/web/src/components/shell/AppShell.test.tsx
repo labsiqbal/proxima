@@ -6,18 +6,20 @@ import { AppShell } from './AppShell'
 
 vi.mock('./ToolDock', () => ({ ToolDock: () => <div data-testid="tool-dock" /> }))
 vi.mock('./AttentionInbox', () => ({
-  AttentionInbox: (props: { onOpenChange?: (open: boolean) => void }) => (
+  AttentionInbox: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
     <>
-      <button type="button" onClick={() => props.onOpenChange?.(true)}>Open Attention fixture</button>
-      <button type="button" onClick={() => props.onOpenChange?.(false)}>Close Attention fixture</button>
+      <button type="button" onClick={() => props.onOpenChange(true)}>Open Attention fixture</button>
+      <button type="button" onClick={() => props.onOpenChange(false)}>Close Attention fixture</button>
+      {props.open && <div role="dialog" aria-label="Attention fixture" />}
     </>
   ),
 }))
 vi.mock('./RunningTasks', () => ({
-  RunningTasks: (props: { onOpenChange?: (open: boolean) => void }) => (
+  RunningTasks: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
     <>
-      <button type="button" onClick={() => props.onOpenChange?.(true)}>Open Running fixture</button>
-      <button type="button" onClick={() => props.onOpenChange?.(false)}>Close Running fixture</button>
+      <button type="button" onClick={() => props.onOpenChange(true)}>Open Running fixture</button>
+      <button type="button" onClick={() => props.onOpenChange(false)}>Close Running fixture</button>
+      {props.open && <div role="dialog" aria-label="Running fixture" />}
     </>
   ),
 }))
@@ -241,7 +243,7 @@ describe('AppShell mobile drawer + search', () => {
     expect(screen.queryByRole('button', { name: 'Delegate' })).not.toBeInTheDocument()
   })
 
-  it('withholds every Master overlay while either status popover is open', async () => {
+  it('owns one exclusive status popover while withholding Master overlays', async () => {
     const user = userEvent.setup()
     render(
       <AppShell
@@ -256,11 +258,17 @@ describe('AppShell mobile drawer + search', () => {
     expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('true')
 
     await user.click(screen.getByRole('button', { name: 'Open Running fixture' }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('dialog', { name: 'Running fixture' })).toBeInTheDocument()
     expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('false')
     expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('false')
 
     await user.click(screen.getByRole('button', { name: 'Open Attention fixture' }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('dialog', { name: 'Attention fixture' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Running fixture' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Close Running fixture' }))
+    expect(screen.getByRole('dialog', { name: 'Attention fixture' })).toBeInTheDocument()
     expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('false')
     expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('false')
 

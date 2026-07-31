@@ -34,6 +34,7 @@ STATUS_SCREENSHOTS = (
     "shell-safe-390x844-attention.png",
     "shell-safe-390x844-running.png",
     "shell-safe-390x844-live-toast.png",
+    "shell-safe-390x844-status-switch.png",
 )
 
 
@@ -633,6 +634,8 @@ def _assert_status_popover(
     dialog_label: str,
     screenshot: Path,
     live_toast_title: str,
+    switch_from_selector: str | None = None,
+    switch_from_dialog_label: str | None = None,
 ) -> None:
     from browser import _evaluation
 
@@ -659,14 +662,90 @@ def _assert_status_popover(
         raise AssertionError(
             f"{dialog_label} lacks live Master overlay preconditions: {precondition}"
         )
-    _keyboard_activate(connection, trigger_selector)
     dialog_selector = f"[role='dialog'][aria-label={json.dumps(dialog_label)}]"
+    source_dialog_selector = None
+    if switch_from_selector and switch_from_dialog_label:
+        _keyboard_activate(connection, switch_from_selector)
+        source_dialog_selector = (
+            f"[role='dialog'][aria-label={json.dumps(switch_from_dialog_label)}]"
+        )
+        _wait_for(
+            connection,
+            f"!!document.querySelector({json.dumps(source_dialog_selector)})",
+            message=f"{switch_from_dialog_label} did not open before keyboard switch",
+        )
+        connection.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "rawKeyDown",
+                "key": "Tab",
+                "code": "Tab",
+                "windowsVirtualKeyCode": 9,
+                "nativeVirtualKeyCode": 9,
+                "modifiers": 8,
+            },
+        )
+        connection.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyUp",
+                "key": "Tab",
+                "code": "Tab",
+                "windowsVirtualKeyCode": 9,
+                "nativeVirtualKeyCode": 9,
+                "modifiers": 8,
+            },
+        )
+        focused = _evaluation(
+            connection,
+            f"""
+            (() => {{
+              const target = document.querySelector({json.dumps(trigger_selector)});
+              if (!(target instanceof HTMLElement) || document.activeElement !== target) {{
+                return false;
+              }}
+              const style = getComputedStyle(target);
+              return parseFloat(style.outlineWidth) > 0
+                && style.outlineStyle !== "none"
+                && style.outlineColor !== "transparent";
+            }})()
+            """,
+        )
+        if not focused:
+            raise AssertionError(
+                f"Shift+Tab did not visibly focus {dialog_label}'s trigger"
+            )
+        for event_type in ("rawKeyDown", "keyUp"):
+            connection.call(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": event_type,
+                    "key": " ",
+                    "code": "Space",
+                    "windowsVirtualKeyCode": 32,
+                    "nativeVirtualKeyCode": 32,
+                },
+            )
+        time.sleep(0.15)
+    else:
+        _keyboard_activate(connection, trigger_selector)
+    source_closed_expression = (
+        f"!document.querySelector({json.dumps(source_dialog_selector)})"
+        if source_dialog_selector
+        else "true"
+    )
     _wait_for(
         connection,
         f"""
         (() => {{
           const dialog = document.querySelector({json.dumps(dialog_selector)});
+          const statusDialogs = document.querySelectorAll(
+            "[role='dialog'][aria-label='Attention inbox'], "
+              + "[role='dialog'][aria-label='Running tasks']"
+          );
           return !!dialog
+            && statusDialogs.length === 1
+            && {source_closed_expression}
             && !document.querySelector(".master-popup-trigger")
             && !document.querySelector(".master-toast-region");
         }})()
@@ -1031,6 +1110,29 @@ def _assert_activation_and_state(
         dialog_label="Running tasks",
         screenshot=output_dir / STATUS_SCREENSHOTS[1],
         live_toast_title=running_toast,
+    )
+    switch_toast = _inject_live_master_toast(
+        base_url=base_url,
+        token=token,
+        database=database,
+        project_id=project_id,
+    )
+    _wait_for(
+        connection,
+        f"""
+        Array.from(document.querySelectorAll(".master-toast strong"))
+          .some(element => element.textContent === {json.dumps(switch_toast)})
+        """,
+        message="live Master toast did not render before status keyboard switch",
+    )
+    _assert_status_popover(
+        connection,
+        trigger_selector=".mobile-topbar .running-pill",
+        dialog_label="Running tasks",
+        screenshot=output_dir / STATUS_SCREENSHOTS[3],
+        live_toast_title=switch_toast,
+        switch_from_selector=".mobile-topbar .attention-trigger",
+        switch_from_dialog_label="Attention inbox",
     )
     stable_targets = _evaluation(
         connection,
