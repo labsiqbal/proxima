@@ -950,11 +950,21 @@ class ContainerActivityLease:
             raise ContainerBoundaryError(
                 "Project process owner identity is unavailable"
             )
-        # Path mode: the guardian re-opens the lock file. This works when the
-        # child is spawned by a broker/supervisor that cannot inherit our FD
-        # (preview output broker). Independent shared flocks still block
-        # exclusive quiescence until every holder exits.
+        # Path mode lets a broker/supervisor that cannot inherit our FD
+        # (preview output broker) re-open the lock. Direct spawners still pass
+        # the live FD/handle so the shared flock stays continuous across parent
+        # exit - path re-open alone races if the owner dies before adopt.
         inherited = f"path:{self._lock_path}"
+        options: dict[str, Any] = {}
+        if os.name == "nt":
+            import msvcrt
+
+            handle = msvcrt.get_osfhandle(self._fd)
+            os.set_handle_inheritable(handle, True)
+            options = {"close_fds": False}
+        else:
+            os.set_inheritable(self._fd, True)
+            options = {"pass_fds": (self._fd,)}
         guarded = [
             sys.executable,
             "-I",
@@ -968,7 +978,7 @@ class ContainerActivityLease:
             "--",
             *command,
         ]
-        return guarded, {}
+        return guarded, options
 
     def mark_process_started(self) -> None:
         if self._fd is not None:
