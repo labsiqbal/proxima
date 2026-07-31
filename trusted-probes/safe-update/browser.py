@@ -354,6 +354,7 @@ def run_scenario(
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
+        "--disable-popup-blocking",
         "--disable-background-networking",
         "--disable-component-extensions-with-background-pages",
         "--disable-default-apps",
@@ -421,6 +422,7 @@ def run_scenario(
                     "value": auth_token,
                     "url": base_url,
                     "httpOnly": True,
+                    "secure": urlsplit(base_url).scheme == "https",
                     "sameSite": "Lax",
                 },
             )

@@ -228,16 +228,38 @@ def _capability_query(scope: Scope) -> tuple[str, str]:
     return token, clean
 
 
-def _is_external_preview_request(scope: Scope) -> bool:
-    return (
-        _header(scope, "sec-fetch-site").strip().lower()
-        in {"same-site", "cross-site"}
-        or _header(scope, "origin").strip().lower() == "null"
-    )
+@dataclass(frozen=True)
+class _PreviewFetchMetadata:
+    site: str
+    mode: str
+    destination: str
+    opaque_origin: bool
 
+    @classmethod
+    def from_scope(cls, scope: Scope) -> _PreviewFetchMetadata:
+        return cls(
+            site=_header(scope, "sec-fetch-site").strip().lower(),
+            mode=_header(scope, "sec-fetch-mode").strip().lower(),
+            destination=_header(
+                scope,
+                "sec-fetch-dest",
+            ).strip().lower(),
+            opaque_origin=(
+                _header(scope, "origin").strip().lower() == "null"
+            ),
+        )
 
-def _is_preview_navigation(scope: Scope) -> bool:
-    return _header(scope, "sec-fetch-mode").strip().lower() == "navigate"
+    def admits_area_request(self, *, capability_present: bool) -> bool:
+        if self.opaque_origin:
+            return False
+        if self.site == "same-origin":
+            return True
+        return (
+            self.site in {"same-site", "cross-site"}
+            and self.mode == "navigate"
+            and self.destination in {"iframe", "frame"}
+            and capability_present
+        )
 
 
 def _scope_origin(scope: Scope) -> str:
@@ -537,7 +559,12 @@ class TargetPreviewManager:
             if clean_query:
                 location = f"{location}?{clean_query}"
             secure = scope.get("scheme") == "https"
-            if secure:
+            host_routed = self._host_area(_header(scope, "host")) == area
+            hostname = _header(scope, "host").split(":", 1)[0].lower()
+            secure_cookie = secure or (
+                host_routed and hostname.endswith(".localhost")
+            )
+            if secure or host_routed:
                 frame_source = _frame_source(
                     str(payload.get("frame_origin") or "")
                 )
@@ -565,8 +592,8 @@ class TargetPreviewManager:
                 path="/",
                 max_age=FILE_PREVIEW_TTL_SECONDS,
                 httponly=True,
-                secure=secure,
-                samesite="none" if secure else "strict",
+                secure=secure_cookie,
+                samesite="none" if secure_cookie else "strict",
             )
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
@@ -727,19 +754,22 @@ class TargetPreviewMiddleware:
             host = _header(scope, "host")
             area = self.manager._host_area(host)
             if area is not None:
-                if _is_external_preview_request(scope):
-                    query_token, _ = _capability_query(scope)
-                    if (
-                        not _is_preview_navigation(scope)
-                        or not query_token
-                    ):
-                        await self.manager._reject(
-                            scope,
-                            send,
-                            403,
-                            "preview request must enter with a capability",
-                        )
-                        return
+                query_token, _ = _capability_query(scope)
+                cookie_token = self.manager._cookie(
+                    scope,
+                    area.cookie_name(),
+                )
+                metadata = _PreviewFetchMetadata.from_scope(scope)
+                if not metadata.admits_area_request(
+                    capability_present=bool(query_token or cookie_token),
+                ):
+                    await self.manager._reject(
+                        scope,
+                        send,
+                        403,
+                        "preview request metadata is invalid",
+                    )
+                    return
                 await self.manager.serve(area, scope, receive, send)
                 return
             label = self.manager._preview_host_label(host)
